@@ -4,6 +4,7 @@ from interface import *
 import os
 import logging
 import warnings
+import json
 
 import numpy as np
 import pandas as pd
@@ -12,6 +13,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 CONFIG_FILE = "calib_config.conf"
+DEBUG = True
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,6 +22,13 @@ logging.basicConfig(
     filemode='w'
 )
 logging.captureWarnings(True)
+
+
+def json_type_caster(s):
+    try:
+        return json.loads(s)
+    except:
+        raise ValueError('Incorrect JSON passed')
 
 
 class Controller:
@@ -58,8 +67,8 @@ class Controller:
             },
             'detector_geometry': {
                 'dist': None,
-                'wavelength': None,
-                'pixel_size': [None, None], # Stored as a list in YAML
+                'wavelength': 1.445e-10,
+                'pixel_size': [1.e-4, 1.e-4], # Stored as a list in YAML
                 'beam_center_x': None,
                 'beam_center_y': None
             }
@@ -68,61 +77,91 @@ class Controller:
             yaml.dump(default_config, f)
         return default_config
     
-    def center_refinement_step(self, **center_ref_params):
+    def center_refinement_step(self, visualize=True, **center_ref_params):
         pc = self.processor
         pc.set_center_search(**center_ref_params)
         center_y, center_x, clusters = pc.find_and_set_center()
 
-        img_data = pc._calib_data
-        ylim, xlim = img_data.shape
-        fig, axs = plt.subplots(1, 2, figsize=(16, 6))
-        
-        im = axs[0].imshow(np.log1p(img_data), cmap='viridis', origin='lower')
-        # plt.colorbar(im, ax=axs[0], label='Log(Intensity + 1)')
-        axs[0].set_title(f"2D SAXS Data: {os.path.basename(pc._calib_tiff_path)}")
-        axs[0].set_xlabel("Pixel X")
-        axs[0].set_ylabel("Pixel Y")
+        if visualize:
+            img_data = pc._calib_data
+            ylim, xlim = img_data.shape
+            fig, axs = plt.subplots(1, 2, figsize=(16, 6))
+            
+            im = axs[0].imshow(np.log1p(img_data), cmap='viridis', origin='lower')
+            # plt.colorbar(im, ax=axs[0], label='Log(Intensity + 1)')
+            axs[0].set_title(f"2D SAXS Data: {os.path.basename(pc._calib_tiff_path)}")
+            axs[0].set_xlabel("Pixel X")
+            axs[0].set_ylabel("Pixel Y")
 
-        axs[1].imshow(np.log1p(img_data), cmap='viridis', origin='lower')
-        scatter_data = pd.DataFrame(data=clusters, columns=['y', 'x', 'cluster'])
-        sns.scatterplot(data=scatter_data, y='y', x='x', hue='cluster', ax=axs[1],
-                        palette=get_bright_fire_cmap()[0])
-        axs[1].plot(center_x, center_y, 'r*')
-        axs[1].set_xlim(0, xlim)
-        axs[1].set_ylim(0, ylim)
-        axs[1].set_title(f"Apparent rings and the center")
-        axs[1].set_xlabel("Pixel X")
-        axs[1].set_ylabel("Pixel Y")
+            axs[1].imshow(np.log1p(img_data), cmap='viridis', origin='lower')
+            scatter_data = pd.DataFrame(data=clusters, columns=['y', 'x', 'cluster'])
+            sns.scatterplot(data=scatter_data, y='y', x='x', hue='cluster', ax=axs[1],
+                            palette=get_bright_fire_cmap()[0])
+            axs[1].plot(center_x, center_y, 'r*')
+            axs[1].set_xlim(0, xlim)
+            axs[1].set_ylim(0, ylim)
+            axs[1].set_title(f"Apparent rings and the center")
+            axs[1].set_xlabel("Pixel X")
+            axs[1].set_ylabel("Pixel Y")
 
-        plt.show()
+            plt.show()
     
-    def rings_refinement_step(self, **ring_search_params):
+    def rings_refinement_step(self, visualize=True, **ring_search_params):
         pc = self.processor
         pc.set_ring_search(**ring_search_params)
         rings, _, _ = pc.find_and_set_rings()
 
-        img_data = pc._calib_data
-        ylim, xlim = img_data.shape
-        fig, axs = plt.subplots(1, 2, figsize=(16, 6))
+        if visualize:
+            img_data = pc._calib_data
+            ylim, xlim = img_data.shape
+            fig, axs = plt.subplots(1, 2, figsize=(16, 6))
+            
+            im = axs[0].imshow(np.log1p(img_data), cmap='viridis', origin='lower')
+            # plt.colorbar(im, ax=axs[0], label='Log(Intensity + 1)')
+            axs[0].set_title(f"2D SAXS Data: {os.path.basename(pc._calib_tiff_path)}")
+            axs[0].set_xlabel("Pixel X")
+            axs[0].set_ylabel("Pixel Y")
+
+            axs[1].imshow(np.log1p(img_data), cmap='viridis', origin='lower')
+            scatter_data = pd.DataFrame(data=rings, columns=['y', 'x', 'ring_number'])
+            sns.scatterplot(data=scatter_data, y='y', x='x', hue='ring_number', ax=axs[1],
+                            palette=get_bright_fire_cmap()[0])
+            axs[1].set_xlim(0, xlim)
+            axs[1].set_ylim(0, ylim)
+            axs[1].set_title(f"Apparent rings, refined")
+            axs[1].set_xlabel("Pixel X")
+            axs[1].set_ylabel("Pixel Y")
+
+            plt.show()
+
+    def geometry_refinement_step(self, visualize=True, **geometry_params):
+        # print(f'geometry_refinement_step is called. Parameters are: {", ".join(geometry_params.keys())}')
+        pc = self.processor
+        pc.set_initial_point(**geometry_params)
+        refined_params, curve_calibrated, theoretical_peaks = pc.refine()
         
-        im = axs[0].imshow(np.log1p(img_data), cmap='viridis', origin='lower')
-        # plt.colorbar(im, ax=axs[0], label='Log(Intensity + 1)')
-        axs[0].set_title(f"2D SAXS Data: {os.path.basename(pc._calib_tiff_path)}")
-        axs[0].set_xlabel("Pixel X")
-        axs[0].set_ylabel("Pixel Y")
+        if visualize:
+            q_cal, i_cal = curve_calibrated
 
-        axs[1].imshow(np.log1p(img_data), cmap='viridis', origin='lower')
-        scatter_data = pd.DataFrame(data=rings, columns=['y', 'x', 'ring_number'])
-        sns.scatterplot(data=scatter_data, y='y', x='x', hue='ring_number', ax=axs[1],
-                        palette=get_bright_fire_cmap()[0])
-        axs[1].set_xlim(0, xlim)
-        axs[1].set_ylim(0, ylim)
-        axs[1].set_title(f"Apparent rings, refined")
-        axs[1].set_xlabel("Pixel X")
-        axs[1].set_ylabel("Pixel Y")
+            plt.figure(figsize=(10, 6))
+            cal_plot = plt.plot(q_cal, i_cal, label="Calibrated Curve")
 
-        plt.show()
+            # Plot theoretical peak positions
+            for q_val in theoretical_peaks:
+                plt.axvline(x=q_val, color='r', linestyle='--', label='Theoretical Peaks')
 
+            plt.xlim(0, np.max(q_cal))
+            plt.xlabel("q (nm^-1)")
+            plt.ylabel("Intensity")
+            plt.title("Calibration Result")
+            
+            # Create a legend with unique labels
+            handles, labels = plt.gca().get_legend_handles_labels()
+            by_label = dict(zip(labels, handles))
+            plt.legend(by_label.values(), by_label.keys())
+            
+            plt.grid(True)
+            plt.show()
 
     
     def pipeline(self):
@@ -148,7 +187,7 @@ class Controller:
             if exec_msg != 'ok':
                 raise RuntimeError
 
-            self.center_refinement_step(**center_ref_params)
+            self.center_refinement_step(visualize = False, **center_ref_params)
             if_adjust, exec_msg = self.interface.ask_question(
                 'Do you wish to adjust the center search parameters? (yes/no, default no) ')
             if exec_msg != 'ok':
@@ -168,7 +207,7 @@ class Controller:
             )
             if exec_msg != 'ok':
                 raise RuntimeError
-            self.rings_refinement_step(**ring_search_params)
+            self.rings_refinement_step(visualize = False, **ring_search_params)
             if_adjust, exec_msg = self.interface.ask_question(
                 'Do you wish to adjust the ring search parameters? (yes/no, default no) ')
             if exec_msg != 'ok':
@@ -180,29 +219,34 @@ class Controller:
                     func=self.rings_refinement_step
                 )
             
+            geometry_params, exec_msg = self.interface.ask_for_multiple(
+                ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3'],
+                group_name='detector geometry',
+                types=[float, float, json_type_caster, float, float, float],
+                defaults=self.config['detector_geometry']
+            )
+            if exec_msg != 'ok':
+                raise RuntimeError
+            self.geometry_refinement_step(**geometry_params)
+            if_adjust, exec_msg = self.interface.ask_question(
+                'Do you wish to adjust the detecotr geometry parameters? (yes/no, default no) ')
+            if exec_msg != 'ok':
+                raise RuntimeError
+            if if_adjust.lower().startswith('y'):
+                self.interface.interactive(
+                    geometry_params,
+                    types=[float, float, json_type_caster, float, float, float],
+                    func=self.geometry_refinement_step
+                )
+            
             self.interface.send_message('The processing of SAXS data was finished. Good luck!')
             
-            # while True:
-            #     self.get_calibration_parameters()
-            #     self.get_ring_search_parameters()
-
-            #     refined_params, calibrated_curve, q_theor = self.run_calibration(calibrant_name)
-
-            #     if refined_params:
-            #         print("\nRefined Parameters:")
-            #         for key, value in refined_params.items():
-            #             print(f"  {key}: {value}")
-
-            #     self.visualize_results(calibrated_curve, q_theor)
-
-            #     should_continue = get_user_input("\nContinue calibration? (yes/no)", default="yes").lower()
-            #     if should_continue != 'yes':
-            #         break
         except Exception as e:
             logging.exception("An unhandled exception occurred during the calibration process.")
             self.interface.send_message(f"\nAn unexpected error occurred: {e}. See calibration_app.log for details.")
 
 
 if __name__ == '__main__':
+    # image file path for debug: AgBh/100225_doubling/test/0003_AgBh1000old_or_107.3.tif
     controller = Controller(SAXSProcessor(), CLIInterface())
     controller.pipeline()

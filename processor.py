@@ -1,4 +1,4 @@
-from typing import Optional, Any, Tuple
+from typing import Optional, Any, Tuple, List
 
 import numpy as np
 import scipy.ndimage as ndi
@@ -47,7 +47,7 @@ class SAXSProcessor:
         # Initial guess/fields for measurement/calibration parameters
         self.dist: Optional[float] = None  # meters
         self.wavelength: Optional[float] = None  # meters
-        self.pixel_size: Optional[Tuple[float, float]] = None  # meters
+        self.pixel_size: List = [None, None]  # meters
         self.beam_center_y: Optional[float] = None  # pixels
         self.beam_center_x: Optional[float] = None  # pixels
         self.rot1: float = 0.
@@ -72,6 +72,7 @@ class SAXSProcessor:
             'beam_center_x', 'beam_center_y',
             'rot1', 'rot2', 'rot3'
         """
+        # print(f'set_initial_point is called. Parameters are: {", ".join(kwargs.keys())}')
         valid_keys = [
             'dist', 'wavelength', 'pixel_size',
             'beam_center_x', 'beam_center_y',
@@ -82,6 +83,8 @@ class SAXSProcessor:
                 setattr(self, k, v)
             else:
                 raise ValueError(f"Unrecognized geometry parameter: {k}")
+        # print(self.dist)
+        # print(self.pixel_size)
     
     def set_center_search(self, **kwargs):
         """
@@ -165,8 +168,10 @@ class SAXSProcessor:
           - calibrated_curve: tuple (q, I) using the refined geometry
           - q_theor: theoretical peak positions for the calibrant
         """
+        if self.pixel_size is not None:
+            self.detector = Pilatus1M(self.pixel_size[0], self.pixel_size[1])
         assert self._calib_data is not None, 'Experimental data (self.data) must be set.'
-        assert self.detector is not None and self.pixel_size, 'pixel_size must be set.'
+        assert self.detector is not None and all(s is not None for s in self.pixel_size), 'detector and pixel_size must be set.'
         assert self.wavelength, 'wavelength must be set.'
         assert self.dist is not None, 'Initial geometry guess (dist) required.'
 
@@ -176,7 +181,6 @@ class SAXSProcessor:
         # Calibrant (powder) model
         calibrant = CALIBRANT_FACTORY(self.calibrant_name)
         calibrant.set_wavelength(self.wavelength)
-        detector = Pilatus1M(self.pixel_size[0], self.pixel_size[1])
         poni1 = self.pixel_size[0] * self.beam_center_y
         poni2 = self.pixel_size[1] * self.beam_center_x
 
@@ -190,7 +194,7 @@ class SAXSProcessor:
             rot1=self.rot1,
             rot2=self.rot2,
             rot3=self.rot3,
-            detector=detector,
+            detector=self.detector,
             wavelength=self.wavelength,
         )
 
@@ -207,7 +211,7 @@ class SAXSProcessor:
         # Use refined geometry to integrate (q, I) - "calibrated" curve
         ai = pyFAI.AzimuthalIntegrator(
             **refined,
-            detector=detector,
+            detector=self.detector,
             wavelength=self.wavelength
         )
 
