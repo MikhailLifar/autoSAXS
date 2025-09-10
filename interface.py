@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from typing import Any
 import os
+import copy
 
 import numpy as np
 import matplotlib.colors as mcolors
@@ -8,7 +9,7 @@ import matplotlib.pyplot as plt
 
 
 class Interface:
-    
+
     @staticmethod
     def ask_for_parameter(param_name, type_caster, query=None, default='no default'):
         raise NotImplementedError
@@ -86,7 +87,7 @@ class CLIInterface(Interface):
                 return None, 'force_stop'
             if accept_defaults.lower().startswith('y') or not accept_defaults:
                 CLIInterface.send_message('Accepted default parameters')
-                return defaults, 'ok'
+                return {p: copy.deepcopy(defaults[p]) for p in parameters}, 'ok'
         
         assert types is not None
         new_parameters = dict()
@@ -127,6 +128,7 @@ class CLIInterface(Interface):
         continue_query += ' (yes/no, default yes) '
         run_cycle = 'yes'
         exec_msg = 'ok'
+        func_ret = None
         
         while run_cycle.startswith('y'):
             for (p, v), t in zip(parameters.items(), types):
@@ -135,30 +137,11 @@ class CLIInterface(Interface):
                     return None, exec_msg
                 parameters[p] = v
             
-            func(**parameters)
+            func_ret = func(**parameters)
 
             run_cycle = CLIInterface.ask_question(continue_query)[0].lower()
             if not run_cycle:
                 run_cycle = 'yes'
 
-        return parameters, exec_msg
-
-
-def get_bright_fire_cmap():
-    """
-    Creates and registers a custom matplotlib colormap named 'bright_fire'.
-
-    The colormap is a linear gradient from bright red, through bright orange, to bright yellow.
-    - Red: Corresponds to the lowest value.
-    - Yellow: Corresponds to the highest value.
-
-    Returns:
-        matplotlib.colors.Colormap: The created colormap object.
-    """
-    # Define bright shades of red, orange, and yellow using hex codes
-    cmap_name = 'bright_fire'
-    colors = ['#FF4136', '#FF851B', '#FFDC00']  # Bright Red -> Bright Orange -> Bright Yellow
-    bright_fire_cmap = mcolors.LinearSegmentedColormap.from_list(cmap_name, colors)
-    return bright_fire_cmap, cmap_name
-
+        return parameters, func_ret, exec_msg
 

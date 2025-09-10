@@ -119,9 +119,14 @@ class SAXSProcessor:
     
     def find_and_set_center(self):
         assert self._calib_data is not None
-        (self.beam_center_y, self.beam_center_x), apparent_rings = find_center(
+        (self.beam_center_y, self.beam_center_x), clusters = find_center(
             self._calib_data, q_start=self.q_start, q_stop=self.q_stop, min_segment_len=self.min_segment_len)
-        return self.beam_center_y, self.beam_center_x, apparent_rings
+        # print(self.beam_center_y, self.beam_center_x)
+        return {
+            'center_y': self.beam_center_y, 
+            'center_x': self.beam_center_x, 
+            'clusters': clusters
+        }
     
     def find_and_set_rings(self):
         """
@@ -159,7 +164,7 @@ class SAXSProcessor:
             raise RuntimeError("No rings found with current threshold/search parameters")
         rings = np.vstack(rings)
         self._rings = rings
-        return self._rings, r_rings, (rs, integrated)
+        return {'rings': self._rings, 'radii(px)': r_rings, 'integrated': (rs, integrated)} 
     
     def refine(self, fix: Tuple[str]=('wavelength', 'rot3'), npt: int = 1000):
         """
@@ -175,6 +180,7 @@ class SAXSProcessor:
         assert self.wavelength, 'wavelength must be set.'
         assert self.dist is not None, 'Initial geometry guess (dist) required.'
 
+        # print(self.beam_center_y, self.beam_center_x)
         assert self.beam_center_y is not None and self.beam_center_x is not None
         assert self._rings is not None
 
@@ -221,7 +227,7 @@ class SAXSProcessor:
         tth_theor = np.array(calibrant.get_2th())
         q_theor = 4 * np.pi * np.sin(tth_theor / 2) / self.wavelength * 1e-9
 
-        return refined, (q_cal, I_cal), q_theor
+        return {'refined': refined, 'curve_calibrated': (q_cal, I_cal), 'theoretical_peaks': q_theor}
     
 
 
