@@ -13,7 +13,9 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-CONFIG_FILE = "calib_config.conf"
+ATSAS_BIN_PREFIX = os.path.expanduser('~/ATSAS-3.2.1-1/bin')
+# CONFIG_FILE = "calib_config.conf"
+CALIBRATED_GEOMETRY_PATH = 'calibrated_geometry.conf'
 DEBUG = True
 
 logging.basicConfig(
@@ -42,21 +44,21 @@ class Controller:
         self.processor = processor
         self.interface = interface
         self.viewer = viewer
-        self.config = self.load_config()
+        self.config = {}
     
-    def load_config(self):
+    def load_config(self, config_file):
         '''Loads the configuration from the YAML file, or creates it if it doesn't exist.'''
-        if not os.path.exists(CONFIG_FILE):
-            return self.create_default_config()
+        if not os.path.exists(config_file):
+            return self.create_default_config(config_file)
         
-        with open(CONFIG_FILE, 'r') as f:
+        with open(config_file, 'r') as f:
             return yaml.safe_load(f)
     
-    def save_config(self):
-        with open(CONFIG_FILE, 'w') as f:
+    def save_config(self, config_file):
+        with open(config_file, 'w') as f:
             yaml.dump(self.config, f)
     
-    def create_default_config(self):
+    def create_default_config(self, config_file):
         '''Creates a default configuration file.'''
         default_config = {
             'center_refinement': {
@@ -67,6 +69,7 @@ class Controller:
             'ring_search': {
                 'q_stop': 0.995,
                 'I_threshold': 80.0,
+                'r_min': 60,
                 'r_max': 700,
                 'r_step': 3,
                 'peak_width': 60
@@ -82,25 +85,21 @@ class Controller:
                 'rot3': 0.,
             }
         }
-        with open(CONFIG_FILE, 'w') as f:
+        with open(config_file, 'w') as f:
             yaml.dump(default_config, f)
         return default_config
     
-    def update_config(self, *keys, values: dict):
+    def update_config(self, config_file, *keys, values: dict):
         keys = list(keys)
 
-        if not keys:
-            self.config.update(values)
-            self.save_config()
-            return
-        
         conf = self.config
-        if len(keys) > 1:
-            for k in keys[:-1]:
-                conf = conf[k]
+        for k in keys:
+            if k not in conf:
+                conf[k] = {}
+            conf = conf[k]
         
-        conf[keys[-1]].update(values)
-        self.save_config()
+        conf.update(values)
+        self.save_config(config_file)
     
     def center_refinement_step(self, visualize=True, **center_ref_params):
         pc = self.processor
@@ -126,7 +125,7 @@ class Controller:
     def geometry_refinement_step(self, visualize=True, **geometry_params):
         # print(f'geometry_refinement_step is called. Parameters are: {", ".join(geometry_params.keys())}')
         pc = self.processor
-        pc.set_initial_point(**geometry_params)
+        pc.set_detector_parameters(**geometry_params)
         refine_res = pc.refine()
         
         if visualize:
@@ -134,136 +133,291 @@ class Controller:
         
         return refine_res
     
-    def calibration_block(self, fast_forward=True):
-        if fast_forward:
-            self.processor.calibrant_name = "AgBh"
-            
-            image_path, exec_msg = self.interface.ask_for_file("Enter the path to the TIFF image for calibration")
-            if exec_msg != 'ok':
-                raise RuntimeError
-            
-            self.processor.set_calib_data(image_path)
+    # def calibration_block(self, fast_forward=True):
+    #     pc = self.processor
 
-            center_ref_params = {k: self.config['center_refinement'][k] 
-                                 for k in ['q_start', 'q_stop', 'min_segment_len']}
-            self.interface.send_message('Center search...')
-            center_step_ret = self.center_refinement_step(visualize=False, **center_ref_params)
+    #     if fast_forward:
+    #         self.processor.calibrant_name = "AgBh"
             
-            ring_search_params = {k: self.config['ring_search'][k] 
-                                  for k in ['q_stop', 'I_threshold', 'r_max', 'r_step', 'peak_width']}
-            self.interface.send_message('Rings identification...')
-            rings_step_ret = self.rings_refinement_step(visualize=False, **ring_search_params)
-            
-            geometry_params = {k: self.config['detector_geometry'][k] 
-                               for k in ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3']}
-            self.interface.send_message('Geometry refinement...')
-            refine_step_ret = self.geometry_refinement_step(visualize=False, **geometry_params)
+    #         image_path = self.interface.ask_for_file("Enter the path to the TIFF image for calibration")
+    #         self.processor.set_calib_data(image_path)
 
-            self.viewer.view_calibration(
-                img_data=self.processor._calib_data, tiff_path=self.processor._calib_tiff_path,
-                **center_step_ret, **rings_step_ret, **refine_step_ret
-            )
-        
-        else:
-            self.processor.calibrant_name, exec_msg = self.interface.ask_for_parameter(
-                'calibrant_name', str, query="Enter calibrator name", default="AgBh")
-            if exec_msg != 'ok':
-                raise RuntimeError
+    #         center_ref_params = {k: self.config['center_refinement'][k] 
+    #                              for k in ['q_start', 'q_stop', 'min_segment_len']}
+    #         self.interface.send_message('Center search...')
+    #         center_step_ret = self.center_refinement_step(visualize=False, **center_ref_params)
             
-            image_path, exec_msg = self.interface.ask_for_file("Enter the path to the TIFF image for calibration")
-            if exec_msg != 'ok':
-                raise RuntimeError
+    #         ring_search_params = {k: self.config['ring_search'][k] 
+    #                               for k in ['q_stop', 'I_threshold', 'r_max', 'r_step', 'peak_width']}
+    #         self.interface.send_message('Rings identification...')
+    #         rings_step_ret = self.rings_refinement_step(visualize=False, **ring_search_params)
             
-            self.processor.set_calib_data(image_path)
+    #         geometry_params = {k: self.config['detector_geometry'][k] 
+    #                            for k in ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3']}
+    #         self.interface.send_message('Geometry refinement...')
+    #         refine_step_ret = self.geometry_refinement_step(visualize=False, **geometry_params)
 
-            # print(self.config)
-            center_ref_params, exec_msg = self.interface.ask_for_multiple(
-                ['q_start', 'q_stop', 'min_segment_len'],
-                group_name='center refinement',
-                types=[float, float, int],
-                defaults=self.config['center_refinement']
-            )
-            if exec_msg != 'ok':
-                raise RuntimeError
-            self.update_config('center_refinement', values=center_ref_params)
-            center_step_ret = self.center_refinement_step(visualize = False, **center_ref_params)
-            if_adjust, exec_msg = self.interface.ask_question(
-                'Do you wish to adjust the center search parameters? (yes/no, default no) ')
-            if exec_msg != 'ok':
-                raise RuntimeError
-            if if_adjust.lower().startswith('y'):
-                center_ref_params, center_step_ret, exec_msg = self.interface.interactive(
-                    center_ref_params,
-                    types=[float, float, int],
-                    func=self.center_refinement_step
-                )
-                if exec_msg != 'ok':
-                    raise RuntimeError
-                self.update_config('center_refinement', values=center_ref_params)
+    #     else:
+    #         self.processor.calibrant_name = self.interface.ask_for_parameter(
+    #             'calibrant_name', str, query="Enter calibrator name", default="AgBh")
             
-            ring_search_params, exec_msg = self.interface.ask_for_multiple(
-                ['q_stop', 'I_threshold', 'r_max', 'r_step', 'peak_width'],
-                group_name='ring search',
-                types=[float, float, int, int, int],
-                defaults=self.config['ring_search']
-            )
-            if exec_msg != 'ok':
-                raise RuntimeError
-            self.update_config('ring_search', values=ring_search_params)
-            rings_step_ret = self.rings_refinement_step(visualize = False, **ring_search_params)
-            if_adjust, exec_msg = self.interface.ask_question(
-                'Do you wish to adjust the ring search parameters? (yes/no, default no) ')
-            if exec_msg != 'ok':
-                raise RuntimeError
-            if if_adjust.lower().startswith('y'):
-                ring_search_params, rings_step_ret, exec_msg = self.interface.interactive(
-                    ring_search_params,
-                    types=[float, float, int, int, int],
-                    func=self.rings_refinement_step
-                )
-                if exec_msg != 'ok':
-                    raise RuntimeError
-                self.update_config('ring_search', values=ring_search_params)
+    #         image_path = self.interface.ask_for_file("Enter the path to the TIFF image for calibration")
+    #         self.processor.set_calib_data(image_path)
+
+    #         # print(self.config)
+    #         center_ref_params = self.interface.ask_for_multiple(
+    #             ['q_start', 'q_stop', 'min_segment_len'],
+    #             group_name='center refinement',
+    #             types=[float, float, int],
+    #             defaults=self.config['center_refinement']
+    #         )
+    #         self.update_config('center_refinement', values=center_ref_params)
+    #         center_step_ret = self.center_refinement_step(visualize = True, **center_ref_params)
             
-            geometry_params, exec_msg = self.interface.ask_for_multiple(
-                ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3'],
-                group_name='detector geometry',
-                types=[float, float, json_type_caster, float, float, float],
-                defaults=self.config['detector_geometry']
-            )
-            if exec_msg != 'ok':
-                raise RuntimeError
-            self.update_config('detector_geometry', values=geometry_params)
-            refine_step_ret = self.geometry_refinement_step(**geometry_params)
-            if_adjust, exec_msg = self.interface.ask_question(
-                'Do you wish to adjust the detecotr geometry parameters? (yes/no, default no) ')
-            if exec_msg != 'ok':
-                raise RuntimeError
-            if if_adjust.lower().startswith('y'):
-                geometry_params, refine_step_ret, exec_msg = self.interface.interactive(
-                    geometry_params,
-                    types=[float, float, json_type_caster, float, float, float],
-                    func=self.geometry_refinement_step
-                )
-                if exec_msg != 'ok':
-                    raise RuntimeError
-                self.update_config('detector_geometry', values=geometry_params)
+    #         if_adjust = self.interface.ask_question(
+    #             'Do you wish to adjust the center search parameters? (yes/no, default no) ')
+    #         if if_adjust.lower().startswith('y'):
+    #             center_ref_params, center_step_ret = self.interface.interactive(
+    #                 center_ref_params,
+    #                 types=[float, float, int],
+    #                 func=self.center_refinement_step
+    #             )
+    #             self.update_config('center_refinement', values=center_ref_params)
             
-            self.viewer.view_calibration(
-                img_data=self.processor._calib_data, tiff_path=self.processor._calib_tiff_path,
-                **center_step_ret, **rings_step_ret, **refine_step_ret)
+    #         ring_search_params = self.interface.ask_for_multiple(
+    #             ['q_stop', 'I_threshold', 'r_max', 'r_step', 'peak_width'],
+    #             group_name='ring search',
+    #             types=[float, float, int, int, int],
+    #             defaults=self.config['ring_search']
+    #         )
+    #         self.update_config('ring_search', values=ring_search_params)
+    #         rings_step_ret = self.rings_refinement_step(visualize = True, **ring_search_params)
+            
+    #         if_adjust = self.interface.ask_question(
+    #             'Do you wish to adjust the ring search parameters? (yes/no, default no) ')
+    #         if if_adjust.lower().startswith('y'):
+    #             ring_search_params, rings_step_ret = self.interface.interactive(
+    #                 ring_search_params,
+    #                 types=[float, float, int, int, int],
+    #                 func=self.rings_refinement_step
+    #             )
+    #             self.update_config('ring_search', values=ring_search_params)
+            
+    #         geometry_params = self.interface.ask_for_multiple(
+    #             ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3'],
+    #             group_name='detector geometry',
+    #             types=[float, float, json_type_caster, float, float, float],
+    #             defaults=self.config['detector_geometry']
+    #         )
+    #         self.update_config('detector_geometry', values=geometry_params)
+    #         refine_step_ret = self.geometry_refinement_step(**geometry_params)
+            
+    #         if_adjust = self.interface.ask_question(
+    #             'Do you wish to adjust the detecotr geometry parameters? (yes/no, default no) ')
+    #         if if_adjust.lower().startswith('y'):
+    #             geometry_params, refine_step_ret = self.interface.interactive(
+    #                 geometry_params,
+    #                 types=[float, float, json_type_caster, float, float, float],
+    #                 func=self.geometry_refinement_step
+    #             )
+    #             self.update_config('detector_geometry', values=geometry_params)
+            
+    #     self.viewer.view_calibration(
+    #         img_data=self.processor._calib_data, tiff_path=self.processor._calib_tiff_path,
+    #         **center_step_ret, **rings_step_ret, **refine_step_ret)
+    #     refined = refine_step_ret['refined']
+    #     refined.update({'wavelength': pc.wavelength})
+    #     self.interface.send_message(
+    #         f'\n-- Calibrated geometry parameters --\n' + '\n'.join(f'{p}: {v}' for p, v in refined.items())  + '\n'
+    #     )
+    #     with open(CALIBRATED_GEOMETRY_PATH, 'w') as f:
+    #         yaml.dump(refined, f)
     
-    def pipeline(self):
-        try:
-            self.calibration_block(fast_forward=True)
-            self.interface.send_message('The processing of SAXS data is finished. Good luck!')
+    # def concentration_series(self):
+    #     self.interface.send_message('The concentration series begins')
+    #     self.interface.send_message('Do not forget to upload 2d data for the buffer')
+    #     self.interface.send_message('Recommended concentrations for concentration series are: 2.5, 1., 0.5, 0.25, 0.1 mg/ml')
+    #     data_path = self.interface.ask_for_file(
+    #         'Please provide the path to the base directory where /2d subdirectory with .tiff files for concentration series is placed. ' \
+    #         'The last part (parts seprated by "_") of the name of the file should be the corresponding sample concentration. ' \
+    #         'There should also be a .tiff with buffer 2d data which name should end with "_buff"')
+        
+    #     self.interface.send_message('Started processing concentration series...')
+    #     data_2d_path = os.path.join(data_path, '2d')
+    #     data_1d_path = os.path.join(data_path, '1d')
+    #     for f in os.listdir(data_2d_path):
+    #         c = os.path.splitext(f)[0].split('_')[-1]
+    #         basename = os.path.basename(f)
+    #         saxs_2d = self.processor.read_from_tiff(os.path.join(data_2d_path, f))
+    #         if c == 'buff':
+    #             metadata = {'type': 'buffer'}
+    #         else:
+    #             metadata = {'type': 'sample', 'concentration': float(c)}
+    #         q, I = self.processor.integrate_2d_to_1d(
+    #             saxs_2d, os.path.join(data_1d_path, f'{basename}.dat'), 
+    #             metadata=metadata)
+    #     self.processor.subtract_buffer(data_1d_path)
+    
+    def pipeline0(self):
+        pc = self.processor
+        
+        print(get_pipeline_description('pipeline0'))
+
+        directory = self.interface.ask_for_file('Write a path to a directory for your data')
+
+        buffer_path = calibration_path = config_path = ''
+        sample_paths = []
+        for f in os.listdir(directory):
+            if f.endswith('.conf'):
+                config_path = os.path.join(directory, f)
+            elif f.endswith('_calib.tif'):
+                calibration_path = os.path.join(directory, f)
+            elif f.endswith('_buf.tif'):
+                buffer_path = os.path.join(directory, f)
+            elif f.endswith('.tif'):
+                sample_paths.append(os.path.join(directory, f))
+        
+        assert min(len(p) for p in (buffer_path, calibration_path, config_path, sample_paths)) > 0, 'The requirements for pipeline input are not satisfied. Please reveiw your folder structure'
+        
+        self.config = self.load_config(config_path)
+
+        pc.calibrant_name = self.config['calibrant_name']
+        pc.set_calib_data(calibration_path)
+
+        center_ref_params = {k: self.config['center_refinement'][k] 
+                             for k in ['q_start', 'q_stop', 'min_segment_len']}
+        self.interface.send_message('Center search...')
+        center_step_ret = self.center_refinement_step(visualize=False, **center_ref_params)
+        
+        ring_search_params = {k: self.config['ring_search'][k] 
+                                for k in ['q_stop', 'I_threshold', 'r_max', 'r_step', 'peak_width']}
+        self.interface.send_message('Rings identification...')
+        rings_step_ret = self.rings_refinement_step(visualize=False, **ring_search_params)
+        
+        geometry_params = {k: self.config['detector_geometry'][k] 
+                            for k in ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3']}
+        self.interface.send_message('Geometry refinement...')
+        refine_step_ret = self.geometry_refinement_step(visualize=False, **geometry_params)
+
+        self.viewer.view_calibration(
+            img_data=pc._calib_data, tiff_path=pc._calib_tiff_path,
+            show=False, plotFilePath=os.path.join(directory, 'calibration.png'),
+            **center_step_ret, **rings_step_ret, **refine_step_ret)
+        refined = refine_step_ret['refined']
+        refined.update({'wavelength': pc.wavelength})
+        self.interface.send_message(
+            f'\n-- Calibrated geometry parameters --\n' + '\n'.join(f'{p}: {v}' for p, v in refined.items())  + '\n'
+        )
+        self.interface.send_message('Finished calibration')
+        self.update_config(config_path, 'refined', values=refined)
+
+        self.interface.send_message('Integration...')
+        new_sample_paths = []
+        for p in sample_paths + [buffer_path, ]:
+            root, fname = os.path.split(p)
+            fname = os.path.splitext(fname)[0]
+            destpath = os.path.join(root, f'int_{fname}.dat')
+            if p == buffer_path:
+                pc.integrate_2d_to_1d(pc.read_from_tiff(p), destpath=destpath,
+                                    metadata={'type': 'buffer'})
+                buffer_path = destpath
+            else:
+                pc.integrate_2d_to_1d(pc.read_from_tiff(p), destpath=destpath,
+                                    metadata={'type': 'sample'})
+                new_sample_paths.append(destpath)
+        sample_paths = new_sample_paths
+        
+        self.interface.send_message('Subtraction...')
+        new_sample_paths = []
+        for p in sample_paths:
+            q, sample, _ = read_saxs(p)
+            root, basename = os.path.split(p)
+            destpath = os.path.join(root, basename.replace('int_', 'sub_', 1))
+            _, _, I_buff_scaled = pc.subtract_buffer(
+                buffer_path, p, destpath, match_tail_ops={'q_range_rel': None, 'q_range_abs': self.config['sub']['q_range_abs'], })
+            self.viewer.view_curves(
+                q, sample, 'sample',
+                q, I_buff_scaled, 'buffer scaled',
+                legend=True,
+                plotFilePath=os.path.join(root, f'diff_{basename}.png'),
+                save=False
+            )
+            new_sample_paths.append(destpath)
+        sample_paths = new_sample_paths
+        
+        # TODO scaling step
+
+        self.interface.send_message('Fitting with shapes...')
+        for p in sample_paths:
+            bodies_call = os.path.join(ATSAS_BIN_PREFIX, 'bodies')
+            os.system(f"{bodies_call} --body=ellipsoid --prefix=ellipsoid_fit {p}")
+    
+    # def pipeline(self):
+    #     try:
+    #         self.load_config('calib_config.conf')
             
-        except Exception as e:
-            logging.exception("An unhandled exception occurred during the calibration process.")
-            self.interface.send_message(f"\nAn unexpected error occurred: {e}. See calibration_app.log for details.")
+    #         if os.path.exists(CALIBRATED_GEOMETRY_PATH):
+    #             if_calibrate = self.interface.ask_question(
+    #                 f'Should the detector geometry be calibrated or the parameters from {CALIBRATED_GEOMETRY_PATH} should be used?',
+    #                 options={'c': 'calibrate', 'u': 'use existent'}
+    #             )
+    #         else:
+    #             self.interface.send_message(
+    #                 'Calibrated geometry file does not exists. You need to calibrate the geometry of the detector first'
+    #                 )
+    #             if_calibrate = 'c'
+                
+    #         if if_calibrate == 'c':
+    #             self.calibration_block(fast_forward=True)
+    #             if_satisfied = self.interface.ask_question(
+    #                 'Are calibration results fine or the parameters should be adjusted?',
+    #                 options={'f': 'fine', 'a': 'adjust'}, default_op='f')
+                
+    #             while if_satisfied == 'a':
+    #                 self.calibration_block(fast_forward=False)
+    #                 if_satisfied = self.interface.ask_question(
+    #                     'Are calibration results fine or the parameters should be adjusted?',
+    #                     options={'f': 'fine', 'a': 'adjust'}, default_op='f')
+
+    #         if_liquid = self.interface.ask_question(
+    #             'Your sample is in the liquid on in the powder form? (l-liquid/p-powder) ',
+    #             options={'l': 'liquid', 'p': 'powder'}, default_op='l')
+            
+    #         dispersity = self.interface.ask_question(
+    #                 'Is your sample monodisperse or polydisperse or it is unkown?',
+    #                 options={'m': 'monodisperse', 'p': 'polydisperse', 'u': 'unknown'}
+    #             )
+            
+    #         if if_liquid == 'l':
+    #             if dispersity == 'm':
+    #                 concentration = self.interface.ask_for_parameter(
+    #                     'concentration', float, query='Enter the concentration of the substance of interest, mg/ml ',
+    #                 )
+                    
+    #                 if concentration > 5.:
+    #                     do_conc_series = self.interface.ask_question(
+    #                         'Since your sample is of high substance concentration, it is recommended for you to proceed with concentration series. '
+    #                         'Start concentration series? (yes/no, default yes) ',
+    #                         default_op='y'
+    #                         )
+    #                     if do_conc_series.lower().startswith('y'):
+    #                         self.concentration_series()
+    #             else:
+    #                 raise RuntimeError('There is yet no pipeline for samples which are monodisperse')
+    #         elif if_liquid == 'p':
+    #             raise RuntimeError('There is no pipeline for powder sample analysis yet')
+        
+    #         self.interface.send_message('The processing of SAXS data is finished. Good luck!')
+            
+    #     except Exception as e:
+    #         logging.exception("An unhandled exception occurred and interrupted the work of the app.")
+    #         self.interface.send_message(f"\nAn unexpected error occurred and interrupted the work of the app: {e}. See calibration_app.log for details.")
 
 
 if __name__ == '__main__':
-    # image file path for debug: AgBh/100225_doubling/test/0003_AgBh1000old_or_107.3.tif
+    # calib image file path for debug: AgBh/100225_doubling/test/0003_AgBh1000old_or_107.3.tif
     controller = Controller(SAXSProcessor(), CLIInterface(), PLTViewer())
-    controller.pipeline()
+    # controller.pipeline()
+    # directory path for pipeline0: debug/pipeline0
+    controller.pipeline0()
+

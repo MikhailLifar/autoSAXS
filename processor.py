@@ -1,4 +1,5 @@
 from typing import Optional, Any, Tuple, List
+import os
 
 import numpy as np
 import scipy.ndimage as ndi
@@ -10,6 +11,8 @@ from pyFAI.detectors import Pilatus1M
 from pyFAI.geometryRefinement import GeometryRefinement
 from pyFAI.calibrant import CALIBRANT_FACTORY
 from pyFAI.io import image
+
+from utils import *
 
 
 class SAXSProcessor:
@@ -33,6 +36,7 @@ class SAXSProcessor:
         self.q_stop: float = 0.995
         self.min_segment_len: int = 50
         self.I_threshold: float = 80.
+        self.r_min: float = 60  # pixels
         self.r_max: float = 700  # pixels
         self.r_step: float = 3  # pixels
         self.peak_width: int = 60  # pixels
@@ -42,7 +46,7 @@ class SAXSProcessor:
         self.detector = None
         self.calibrant_name = 'AgBh'
         self._rings = None
-        self._ai = None  # azimutal integrator
+        self.ai = None  # azimutal integrator
 
         # Initial guess/fields for measurement/calibration parameters
         self.dist: Optional[float] = None  # meters
@@ -50,6 +54,8 @@ class SAXSProcessor:
         self.pixel_size: List = [None, None]  # meters
         self.beam_center_y: Optional[float] = None  # pixels
         self.beam_center_x: Optional[float] = None  # pixels
+        self.poni1 = None
+        self.poni2 = None
         self.rot1: float = 0.
         self.rot2: float = 0.
         self.rot3: float = 0.
@@ -61,7 +67,7 @@ class SAXSProcessor:
         self._calib_data = self.read_from_tiff(tiff_path=tiff_path)
         self._calib_tiff_path = tiff_path
     
-    def set_initial_point(self, **kwargs):
+    def set_detector_parameters(self, **kwargs):
         """
         Set initial geometry parameters for the detector calibration.
         
@@ -75,6 +81,7 @@ class SAXSProcessor:
         # print(f'set_initial_point is called. Parameters are: {", ".join(kwargs.keys())}')
         valid_keys = [
             'dist', 'wavelength', 'pixel_size',
+            'poni1', 'poni2',
             'beam_center_x', 'beam_center_y',
             'rot1', 'rot2', 'rot3'
         ]
@@ -109,7 +116,7 @@ class SAXSProcessor:
         """
         valid_keys = [
             'q_stop', 'I_threshold',
-            'r_max', 'r_step', 'peak_width'
+            'r_min', 'r_max', 'r_step', 'peak_width'
         ]
         for k, v in kwargs.items():
             if k in valid_keys:
@@ -140,7 +147,7 @@ class SAXSProcessor:
         data[data > np.quantile(data, self.q_stop)] = 0
         center = np.array([self.beam_center_y, self.beam_center_x]).reshape(1, -1)
         # radial distances
-        rs = np.arange(0, self.r_max + 1, self.r_step).reshape(-1, 1)
+        rs = np.arange(self.r_min, self.r_max + 1, self.r_step).reshape(-1, 1)
         pixel_coords = np.fromfunction(
             lambda i, j: (i // data.shape[1]) * (j == 0) + (i % data.shape[1]) * (j == 1),
             (data.shape[0] * data.shape[1], 2),
@@ -214,14 +221,20 @@ class SAXSProcessor:
             'rot2': gr._rot2,
             'rot3': gr._rot3 % (2 * np.pi)
         }
+        for k, v in refined.items():
+            refined[k] = float(v)
+
+        self.set_detector_parameters(**refined)
+
         # Use refined geometry to integrate (q, I) - "calibrated" curve
         ai = pyFAI.AzimuthalIntegrator(
             **refined,
             detector=self.detector,
             wavelength=self.wavelength
         )
+        self.ai = ai
 
-        q_cal, I_cal = ai.integrate1d(self._calib_data, npt=npt)
+        q_cal, I_cal = self.ai.integrate1d(self._calib_data, npt=npt)
 
         # Get theoretical/"ideal" calibrant ring positions
         tth_theor = np.array(calibrant.get_2th())
@@ -229,6 +242,78 @@ class SAXSProcessor:
 
         return {'refined': refined, 'curve_calibrated': (q_cal, I_cal), 'theoretical_peaks': q_theor}
     
+    def integrate_2d_to_1d(self, saxs_2d, npt=1000, 
+                           destpath=None, metadata=None):
+        q, I = self.ai.integrate1d(saxs_2d, npt=npt)
+        if destpath is not None:
+            if metadata is None:
+                metadata = dict()
+            write_saxs(destpath, q, I, metadata)
+        return q, I
+    
+    @staticmethod
+    def subtract_buffer(
+        buffer_path, src_path, destpath,
+        image_path=None, 
+        method='match_tail', match_tail_ops=None, 
+        ):
+        q_buff, I_buff, _ = read_saxs(buffer_path)
+
+        scaling_factor = 1.
+
+        q, I, _ = read_saxs(src_path)
+        if method == 'match_tail':
+            algo_ops = {'q_range_abs': None, 
+                        'q_range_rel': (0.8, None), 
+                        'approach_factor': 0.98}
+            if match_tail_ops is None:
+                match_tail_ops = dict()
+            algo_ops.update(match_tail_ops)
+
+            assert algo_ops['q_range_abs'] is None or algo_ops['q_range_rel'] is None, 'cant set both q_range_abs and q_range_rel'
+
+            if not np.array_equal(q, q_buff):
+                # If not, we need to interpolate the buffer to match sample q-values
+                I_buff = np.interp(q, q_buff, I_buff)
+
+            q_max = np.max(q)
+            if algo_ops['q_range_rel'] is not None:
+                q0, q1 = algo_ops['q_range_rel']
+                if q1 is None:
+                    q1 = 1.
+                algo_ops['q_range_abs'] = q0 * q_max, q1 * q_max
+            q0, q1 = algo_ops['q_range_abs']
+            if q1 is None:
+                q1 = q_max
+            idx = (q0 < q) & (q < q1)
+
+            q_tail = q[idx]
+            I_tail = I[idx]
+            I_buff_tail = I_buff[idx]
+
+            I_tail = whittaker_smooth(I_tail, lmbd=1.e+10, d=3)
+            I_buff_tail = whittaker_smooth(I_buff_tail, lmbd=1.e+10, d=3)
+            
+            # idx = I_buff_tail > 1.e-4 * np.max(I_buff)
+            # q_tail = q_tail[idx]
+            # I_tail = I_tail[idx]
+            # I_buff_tail = I_buff_tail[idx]
+
+            ratios = I_tail / I_buff_tail
+            scaling_factor = np.min(ratios)
+
+        scaling_factor *= algo_ops['approach_factor']
+        I_buffer_scaled = I_buff * scaling_factor
+        I_sub = I - I_buffer_scaled
+
+        write_saxs(destpath, q, I_sub, metadata={
+                    'type': 'sub',
+                    'sample_path': src_path,
+                    'buffer_path': buffer_path
+                } 
+            )
+        
+        return q, I_sub, I_buffer_scaled
 
 
 def fit_circle(points: np.ndarray):

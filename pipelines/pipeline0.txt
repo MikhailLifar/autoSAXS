@@ -1,0 +1,21 @@
+<Description>
+</Description>
+<Purpose>
+Analysis of monodisperse liquid system
+</Purpose>
+<Steps>
+Calibration -> Integration -> Subtraction -> Scaling -> Fit with bodies [-> LLM analysing which form is the most likely based on context]
+</Steps>
+<Input Structure>
+.conf  # configuration file
+_calib.tif  # calibrant image
+_buf.tif  # buffer image
+.tif inf  # sample images
+</Input Structure>
+<Output Structure>
+calibration.png  # visualization of calibration results
+int_*.dat inf  # integrated curve for each image
+sub_*.dat inf  # subtracted curve for each sample
+scaled_*.dat inf  # scaled curve for each sample
+fit_*.png inf  # fitting results for each sample
+</Output Structure>

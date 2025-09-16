@@ -29,6 +29,10 @@ class Viewer:
     def view_calibration(*args, **kwargs):
         pass
 
+    @staticmethod
+    def view_curves(*args, **kwargs):
+        pass
+
 
 class PLTViewer(Viewer):
     @staticmethod
@@ -125,10 +129,9 @@ class PLTViewer(Viewer):
         img_data, tiff_path, 
         center_y, center_x, clusters,
         rings, curve_calibrated, theoretical_peaks, 
-        fig_axs=None,
+        fig_axs=None, show=True, plotFilePath=None,
         **kwargs):
         
-        show = fig_axs is None
         if fig_axs is None:
             fig, axs = plt.subplots(2, 2, figsize=(16, 12))
         else:
@@ -140,7 +143,7 @@ class PLTViewer(Viewer):
         axs[1, 0].imshow(np.log1p(img_data), cmap='viridis', origin='lower')
         scatter_data = pd.DataFrame(data=rings, columns=['y', 'x', 'ring_number'])
         sns.scatterplot(data=scatter_data, y='y', x='x', hue='ring_number', ax=axs[1, 0],
-                        palette=get_bright_fire_cmap()[0])
+                        palette=get_bright_fire_cmap()[1])
         axs[1, 0].set_title(f"Apparent rings, refined")
         axs[1, 0].set_xlabel("Pixel X")
         axs[1, 0].set_ylabel("Pixel Y")
@@ -150,10 +153,16 @@ class PLTViewer(Viewer):
 
         if show:
             plt.show()
+        if plotFilePath is not None:
+            fig.savefig(plotFilePath)
+    
+    @staticmethod
+    def view_curves(*args, **kwargs):
+        plotLines(*args, xlabel='q (nm^-1)', ylabel='I (a.u.)', **kwargs)
 
 
 def get_bright_fire_cmap():
     cmap_name = 'bright_fire'
     colors = ['#FF4136', '#FF851B', '#FFDC00']  # Bright Red -> Bright Orange -> Bright Yellow
     bright_fire_cmap = mcolors.LinearSegmentedColormap.from_list(cmap_name, colors)
-    return bright_fire_cmap, cmap_name
+    return bright_fire_cmap, colors, cmap_name

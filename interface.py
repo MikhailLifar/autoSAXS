@@ -1,11 +1,16 @@
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Optional
 import os
 import copy
 
 import numpy as np
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+
+
+class PipelineInterrupt(Exception):
+    """Exception raised when user wants to force early program termination."""
+    pass
 
 
 class Interface:
@@ -23,7 +28,7 @@ class Interface:
         raise NotImplementedError
 
     @staticmethod
-    def ask_question(query, options=None):
+    def ask_question(query, options=None, default_op=None):
         raise NotImplementedError
 
     @staticmethod
@@ -65,9 +70,9 @@ class CLIInterface(Interface):
                 print(error_msg)
         
         if value != 'no value':
-            return value, 'ok'
+            return value
         else:
-            return None, 'force stop'
+            raise PipelineInterrupt(f"User terminated parameter input for '{param_name}'")
     
     @staticmethod
     def ask_for_multiple(parameters, types=None, group_name=None, defaults=None):
@@ -81,23 +86,19 @@ class CLIInterface(Interface):
 
         if defaults is not None and all(p in defaults for p in parameters):
             CLIInterface.send_message('Default parameters available:\n' + '\n'.join(f'{p}: {defaults[p]}' for p in parameters) + '\n')
-            accept_defaults, exec_msg = CLIInterface.ask_question(
+            accept_defaults = CLIInterface.ask_question(
                 f'Do you accept the default parameters? (yes/no, default is yes) ')
-            if exec_msg == 'force_stop':
-                return None, 'force_stop'
             if accept_defaults.lower().startswith('y') or not accept_defaults:
                 CLIInterface.send_message('Accepted default parameters')
-                return {p: copy.deepcopy(defaults[p]) for p in parameters}, 'ok'
+                return {p: copy.deepcopy(defaults[p]) for p in parameters}
         
         assert types is not None
         new_parameters = dict()
         for p, t in zip(parameters, types):
-            v, exec_msg = CLIInterface.ask_for_parameter(p, t, default=defaults.get(p, 'no default'))
-            if exec_msg == 'force_stop':
-                return None, 'force_stop'
+            v = CLIInterface.ask_for_parameter(p, t, default=defaults.get(p, 'no default'))
             new_parameters[p] = v
         
-        return new_parameters, 'ok'
+        return new_parameters
 
     @staticmethod
     def ask_for_file(query=None):
@@ -111,13 +112,31 @@ class CLIInterface(Interface):
                 break
         
         if filepath:
-            return filepath, 'ok'
+            return filepath
         else:
-            return None, 'force stop'
+            raise PipelineInterrupt("User terminated file selection")
 
     @staticmethod
-    def ask_question(query, options=None):
-        return input(query), 'ok'
+    def ask_question(query, options: Optional[dict] = None, default_op='no default'):
+        if options is None:
+            options = dict()
+        query += ' '
+        if options:
+            query += '(' + '/'.join(f'{op_short}: {op}' for op_short, op in options.items()) \
+            + f', default: {default_op}' * (default_op != 'no default') + ') '
+        answ = input(query)
+        if not answ and default_op != 'no default':
+            CLIInterface.send_message(f'Set to default: {default_op}')
+            answ = default_op
+        if options is not None:
+            while answ not in options and answ != default_op:
+                if answ or default_op == 'no default':
+                    CLIInterface.send_message(f'Answer {answ} is not valid!')
+                    answ = input(query)
+                else:
+                    CLIInterface.send_message(f'Set to default: {default_op}')
+                    answ = default_op
+        return answ
 
     @staticmethod
     def send_message(msg):
@@ -127,21 +146,17 @@ class CLIInterface(Interface):
     def interactive(parameters: dict, types: list, func: Callable[..., Any], continue_query: str = 'Adjust parameters?'):
         continue_query += ' (yes/no, default yes) '
         run_cycle = 'yes'
-        exec_msg = 'ok'
         func_ret = None
         
         while run_cycle.startswith('y'):
             for (p, v), t in zip(parameters.items(), types):
-                v, exec_msg = CLIInterface.ask_for_parameter(p, t, default=v)
-                if exec_msg != 'ok':
-                    return None, exec_msg
+                v = CLIInterface.ask_for_parameter(p, t, default=v)
                 parameters[p] = v
             
             func_ret = func(**parameters)
 
-            run_cycle = CLIInterface.ask_question(continue_query)[0].lower()
+            run_cycle = CLIInterface.ask_question(continue_query).lower()
             if not run_cycle:
                 run_cycle = 'yes'
 
-        return parameters, func_ret, exec_msg
-
+        return parameters, func_ret
