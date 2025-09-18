@@ -3,6 +3,7 @@ from processor import *
 from interface import *
 from viewer import *
 import os
+import sys
 import logging
 import warnings
 import json
@@ -12,6 +13,13 @@ import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import seaborn as sns
+
+sys.path.append(os.path.expanduser('~/LLM/LLMAssistant'))
+sys.path.append(os.path.expanduser('~/LLM/LLMAssistant/aiAssistantFramework'))
+
+from aiAssistantFramework import lib as ai_lib
+from aiAssistantFramework.lib import llm, telegram
+import controller as ai_controller
 
 ATSAS_BIN_PREFIX = os.path.expanduser('~/ATSAS-3.2.1-1/bin')
 # CONFIG_FILE = "calib_config.conf"
@@ -259,6 +267,9 @@ class Controller:
     #     self.processor.subtract_buffer(data_1d_path)
     
     def pipeline0(self):
+        model = 'GLM-4.5'
+        # model = 'DeepSeek-V3.1'
+        vision_model = 'GLM-4.5V'
         pc = self.processor
         
         print(get_pipeline_description('pipeline0'))
@@ -281,22 +292,24 @@ class Controller:
         
         self.config = self.load_config(config_path)
 
+        self.interface.send_message('Autocalibration...')
+        
         pc.calibrant_name = self.config['calibrant_name']
         pc.set_calib_data(calibration_path)
 
         center_ref_params = {k: self.config['center_refinement'][k] 
                              for k in ['q_start', 'q_stop', 'min_segment_len']}
-        self.interface.send_message('Center search...')
+        self.interface.send_message('    Center search...')
         center_step_ret = self.center_refinement_step(visualize=False, **center_ref_params)
         
         ring_search_params = {k: self.config['ring_search'][k] 
                                 for k in ['q_stop', 'I_threshold', 'r_max', 'r_step', 'peak_width']}
-        self.interface.send_message('Rings identification...')
+        self.interface.send_message('    Rings identification...')
         rings_step_ret = self.rings_refinement_step(visualize=False, **ring_search_params)
         
         geometry_params = {k: self.config['detector_geometry'][k] 
                             for k in ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3']}
-        self.interface.send_message('Geometry refinement...')
+        self.interface.send_message('    Geometry refinement...')
         refine_step_ret = self.geometry_refinement_step(visualize=False, **geometry_params)
 
         self.viewer.view_calibration(
@@ -332,7 +345,8 @@ class Controller:
         for p in sample_paths:
             q, sample, _ = read_saxs(p)
             root, basename = os.path.split(p)
-            destpath = os.path.join(root, basename.replace('int_', 'sub_', 1))
+            basename, _ = os.path.splitext(basename)
+            destpath = os.path.join(root, f"{basename.replace('int_', 'sub_', 1)}.dat")
             _, _, I_buff_scaled = pc.subtract_buffer(
                 buffer_path, p, destpath, match_tail_ops={'q_range_rel': None, 'q_range_abs': self.config['sub']['q_range_abs'], })
             self.viewer.view_curves(
@@ -347,10 +361,121 @@ class Controller:
         
         # TODO scaling step
 
-        self.interface.send_message('Fitting with shapes...')
+        self.interface.send_message('Calculating the parameters...')
+        context = []
         for p in sample_paths:
-            bodies_call = os.path.join(ATSAS_BIN_PREFIX, 'bodies')
-            os.system(f"{bodies_call} --body=ellipsoid --prefix=ellipsoid_fit {p}")
+            root, basename = os.path.split(p)
+            basename, _ = os.path.splitext(basename)
+            results_file = os.path.join(root, f'{basename}_results.txt')
+            os.system(f'''INPUT_FILE={p}
+BASENAME={os.path.join(root, basename)}
+RESULTS_FILE="{results_file}"
+
+# Create output file
+echo "SAXS Analysis Results" > "$RESULTS_FILE"
+echo "====================" >> "$RESULTS_FILE"
+echo "Input file: $INPUT_FILE" >> "$RESULTS_FILE"
+echo "Analysis date: $(date)" >> "$RESULTS_FILE"
+echo "" >> "$RESULTS_FILE"
+
+# Step 1: Calculate Rg and I(0) using AUTORG
+AUTORG_OUTPUT=$({os.path.join(ATSAS_BIN_PREFIX, 'autorg')} "$INPUT_FILE")
+RG_VALUE=$(echo "$AUTORG_OUTPUT" | grep "Rg   =" | awk '{{print $3}}')
+I0_VALUE=$(echo "$AUTORG_OUTPUT" | grep "I(0) =" | awk '{{print $3}}')
+QUALITY=$(echo "$AUTORG_OUTPUT" | grep "Quality:" | awk '{{print $2}}')
+
+echo "AUTORG Results:" >> "$RESULTS_FILE"
+echo "  Rg = $RG_VALUE nm" >> "$RESULTS_FILE"
+echo "  I(0) = $I0_VALUE" >> "$RESULTS_FILE"
+echo "  Quality = $QUALITY" >> "$RESULTS_FILE"
+echo "" >> "$RESULTS_FILE"
+
+# Step 2: Calculate Porod invariant using DATPOROD
+# DATPOROD_OUTPUT=$({os.path.join(ATSAS_BIN_PREFIX, 'datporod')} "$INPUT_FILE")
+# POROD_INV=$(echo "$DATPOROD_OUTPUT" | grep "Porod invariant" | awk '{{print $4}}')
+# POROD_VOL=$(echo "$DATPOROD_OUTPUT" | grep "Porod volume" | awk '{{print $4}}')
+
+# echo "DATPOROD Results:" >> "$RESULTS_FILE"
+# echo "  Porod invariant = $POROD_INV" >> "$RESULTS_FILE"
+# echo "  Porod volume = $POROD_VOL nm^3" >> "$RESULTS_FILE"
+# echo "" >> "$RESULTS_FILE"
+
+# Step 3: Calculate molecular weight estimates
+# Method 1: From I(0) and Porod volume
+# MW = I(0) * N_A / (c * (Δρ)^2 * V_porod)
+# This is a simplified formula; actual implementation depends on your sample conditions
+# MW_POROD=$(echo "scale=2; $I0_VALUE * 6.022e23 / (1 * 2.82e23 * $POROD_VOL)" | bc -l | awk '{{printf "%.2e", $1}}')
+
+# Method 2: From Rg (empirical relationship for globular proteins)
+# MW = (Rg / 0.715)^3 * 1e3 (kDa)
+MW_RG=$(echo "scale=2; ($RG_VALUE / 0.715)^3 * 1000" | bc -l | awk '{{printf "%.2f", $1}}')
+
+echo "Molecular Weight Estimates:" >> "$RESULTS_FILE"
+# echo "  From Porod volume: $MW_POROD g/mol" >> "$RESULTS_FILE"
+echo "  From Rg (globular): $MW_RG kDa" >> "$RESULTS_FILE"
+echo "" >> "$RESULTS_FILE"
+
+# Print summary to console
+echo ""
+echo "===== Analysis Summary ====="
+echo "Radius of gyration (Rg): $RG_VALUE nm"
+echo "Forward scattering (I(0)): $I0_VALUE"
+# echo "Porod invariant: $POROD_INV"
+# echo "Porod volume: $POROD_VOL nm^3"
+echo ""
+echo "Molecular weight estimates:"
+# echo "  From Porod volume: $MW_POROD g/mol"
+echo "  From Rg (globular): $MW_RG kDa"
+echo ""
+echo "Plots"
+echo "  - Guinier plot"
+echo "  - Kratky plot"
+echo ""
+echo "Full results saved to: $RESULTS_FILE"
+''')
+            
+            with open(results_file, 'r') as fread:
+                context.append(f'{basename} sample analysis results:\n{fread.read()}')
+            
+            # plots
+            q, I, _ = read_saxs(p)
+
+            self.viewer.view_curves(
+                q*q, np.log(I), 'log(I) vs q^2',
+                xlabel='q^2 (nm-2)', ylabel='log(I) (a.u.)',
+                legend=True,
+                plotFilePath=os.path.join(root, f'guinier_{basename}.png'),
+                save=False
+            )
+
+            self.viewer.view_curves(
+                q, q * q * I, 'I * q^2 vs q',
+                xlabel='q (nm-1)', ylabel='I * q^2 (a.u.)',
+                legend=True,
+                plotFilePath=os.path.join(root, f'kratky_{basename}.png'),
+                save=False
+            )
+
+        # LLM
+        # I dont want to analyze each plot separately. If there are many plots, 
+        # I would rather combine the information coming from them.
+        if len(context) == 1:  
+            context, = context
+            self.interface.send_message('Now the results of your data processing are sent to LLM for the intelligent analysis.')
+            user_query = self.interface.ask_question('What is your query to LLM?')
+            answer, _ = llm.send_request_to_llm(
+                model=model, 
+                messages=[
+                    {'role': 'user', 'content': [{'type': 'text', 'text': f'{context}\n\nUser query: {user_query}'}]}
+                ],
+            )
+            self.interface.send_message(f'LLM asnwer:\n{answer}')
+
+        # TODO accelerate the fit
+        # self.interface.send_message('Fitting with shapes...')
+        # for p in sample_paths:
+        #     bodies_call = os.path.join(ATSAS_BIN_PREFIX, 'bodies')
+        #     os.system(f"{bodies_call} --body=ellipsoid --prefix=ellipsoid_fit {p}")
     
     # def pipeline(self):
     #     try:
@@ -419,5 +544,6 @@ if __name__ == '__main__':
     controller = Controller(SAXSProcessor(), CLIInterface(), PLTViewer())
     # controller.pipeline()
     # directory path for pipeline0: debug/pipeline0
+    # LLM query: It is known that the subject of the investigation is a protein dissolved in water. Which protein it could be based on available information?
     controller.pipeline0()
 

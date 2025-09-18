@@ -158,7 +158,9 @@ class PLTViewer(Viewer):
     
     @staticmethod
     def view_curves(*args, **kwargs):
-        plotLines(*args, xlabel='q (nm^-1)', ylabel='I (a.u.)', **kwargs)
+        kw = dict(xlabel='q (nm^-1)', ylabel='I (a.u.)')
+        kw.update(kwargs)
+        plotLines(*args, **kw)
 
 
 def get_bright_fire_cmap():

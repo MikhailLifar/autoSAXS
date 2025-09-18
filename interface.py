@@ -128,10 +128,10 @@ class CLIInterface(Interface):
         if not answ and default_op != 'no default':
             CLIInterface.send_message(f'Set to default: {default_op}')
             answ = default_op
-        if options is not None:
+        if options:
             while answ not in options and answ != default_op:
                 if answ or default_op == 'no default':
-                    CLIInterface.send_message(f'Answer {answ} is not valid!')
+                    CLIInterface.send_message(f'Answer "{answ}" is not valid!')
                     answ = input(query)
                 else:
                     CLIInterface.send_message(f'Set to default: {default_op}')
