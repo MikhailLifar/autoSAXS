@@ -24,6 +24,8 @@ import controller as ai_controller
 ATSAS_BIN_PREFIX = os.path.expanduser('~/ATSAS-3.2.1-1/bin')
 # CONFIG_FILE = "calib_config.conf"
 CALIBRATED_GEOMETRY_PATH = 'calibrated_geometry.conf'
+ROOT_DIR = os.path.expanduser('~/KurchatovCoop')
+PROMPTS_DIR = os.path.join(ROOT_DIR, 'repos', 'prompts')
 DEBUG = True
 
 logging.basicConfig(
@@ -265,8 +267,8 @@ class Controller:
     #             saxs_2d, os.path.join(data_1d_path, f'{basename}.dat'), 
     #             metadata=metadata)
     #     self.processor.subtract_buffer(data_1d_path)
-    
-    def pipeline0(self):
+
+    def pipeline0(self, debug=False):
         model = 'GLM-4.5'
         # model = 'DeepSeek-V3.1'
         vision_model = 'GLM-4.5V'
@@ -292,37 +294,45 @@ class Controller:
         
         self.config = self.load_config(config_path)
 
-        self.interface.send_message('Autocalibration...')
+        # Check if calibration results exist in debug mode
+        calibration_results_file = os.path.join(directory, 'calibration.png')
+        refined_config_exists = 'refined' in self.config
         
-        pc.calibrant_name = self.config['calibrant_name']
-        pc.set_calib_data(calibration_path)
+        if debug and refined_config_exists and os.path.exists(calibration_results_file):
+            self.interface.send_message('Debug mode: Skipping calibration (results already exist)')
+            refined = self.config['refined']
+        else:
+            self.interface.send_message('Autocalibration...')
+            
+            pc.calibrant_name = self.config['calibrant_name']
+            pc.set_calib_data(calibration_path)
 
-        center_ref_params = {k: self.config['center_refinement'][k] 
-                             for k in ['q_start', 'q_stop', 'min_segment_len']}
-        self.interface.send_message('    Center search...')
-        center_step_ret = self.center_refinement_step(visualize=False, **center_ref_params)
-        
-        ring_search_params = {k: self.config['ring_search'][k] 
-                                for k in ['q_stop', 'I_threshold', 'r_max', 'r_step', 'peak_width']}
-        self.interface.send_message('    Rings identification...')
-        rings_step_ret = self.rings_refinement_step(visualize=False, **ring_search_params)
-        
-        geometry_params = {k: self.config['detector_geometry'][k] 
-                            for k in ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3']}
-        self.interface.send_message('    Geometry refinement...')
-        refine_step_ret = self.geometry_refinement_step(visualize=False, **geometry_params)
+            center_ref_params = {k: self.config['center_refinement'][k] 
+                                for k in ['q_start', 'q_stop', 'min_segment_len']}
+            self.interface.send_message('    Center search...')
+            center_step_ret = self.center_refinement_step(visualize=False, **center_ref_params)
+            
+            ring_search_params = {k: self.config['ring_search'][k] 
+                                    for k in ['q_stop', 'I_threshold', 'r_max', 'r_step', 'peak_width']}
+            self.interface.send_message('    Rings identification...')
+            rings_step_ret = self.rings_refinement_step(visualize=False, **ring_search_params)
+            
+            geometry_params = {k: self.config['detector_geometry'][k] 
+                                for k in ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3']}
+            self.interface.send_message('    Geometry refinement...')
+            refine_step_ret = self.geometry_refinement_step(visualize=False, **geometry_params)
 
-        self.viewer.view_calibration(
-            img_data=pc._calib_data, tiff_path=pc._calib_tiff_path,
-            show=False, plotFilePath=os.path.join(directory, 'calibration.png'),
-            **center_step_ret, **rings_step_ret, **refine_step_ret)
-        refined = refine_step_ret['refined']
-        refined.update({'wavelength': pc.wavelength})
-        self.interface.send_message(
-            f'\n-- Calibrated geometry parameters --\n' + '\n'.join(f'{p}: {v}' for p, v in refined.items())  + '\n'
-        )
-        self.interface.send_message('Finished calibration')
-        self.update_config(config_path, 'refined', values=refined)
+            self.viewer.view_calibration(
+                img_data=pc._calib_data, tiff_path=pc._calib_tiff_path,
+                show=False, plotFilePath=calibration_results_file,
+                **center_step_ret, **rings_step_ret, **refine_step_ret)
+            refined = refine_step_ret['refined']
+            refined.update({'wavelength': pc.wavelength})
+            self.interface.send_message(
+                f'\n-- Calibrated geometry parameters --\n' + '\n'.join(f'{p}: {v}' for p, v in refined.items())  + '\n'
+            )
+            self.interface.send_message('Finished calibration')
+            self.update_config(config_path, 'refined', values=refined)
 
         self.interface.send_message('Integration...')
         new_sample_paths = []
@@ -330,6 +340,16 @@ class Controller:
             root, fname = os.path.split(p)
             fname = os.path.splitext(fname)[0]
             destpath = os.path.join(root, f'int_{fname}.dat')
+            
+            # Check if integration results exist in debug mode
+            if debug and os.path.exists(destpath):
+                self.interface.send_message(f'Debug mode: Skipping integration for {p} (results already exist)')
+                if p == buffer_path:
+                    buffer_path = destpath
+                else:
+                    new_sample_paths.append(destpath)
+                continue
+                
             if p == buffer_path:
                 pc.integrate_2d_to_1d(pc.read_from_tiff(p), destpath=destpath,
                                     metadata={'type': 'buffer'})
@@ -346,14 +366,30 @@ class Controller:
             q, sample, _ = read_saxs(p)
             root, basename = os.path.split(p)
             basename, _ = os.path.splitext(basename)
-            destpath = os.path.join(root, f"{basename.replace('int_', 'sub_', 1)}.dat")
-            _, _, I_buff_scaled = pc.subtract_buffer(
+            basename = basename.replace('int_', '', 1)
+            destpath = os.path.join(root, f"sub_{basename}.dat")
+            diff_plot_path = os.path.join(root, f'diff_{basename}.png')
+            sub_plot_path = os.path.join(root, f'sub_{basename}.png')
+            
+            # Check if subtraction results exist in debug mode
+            if debug and all(os.path.exists(p) for p in (destpath, diff_plot_path, sub_plot_path)):
+                self.interface.send_message(f'Debug mode: Skipping subtraction for {p} (results already exist)')
+                new_sample_paths.append(destpath)
+                continue
+                
+            _, I_sub, I_buff_scaled = pc.subtract_buffer(
                 buffer_path, p, destpath, match_tail_ops={'q_range_rel': None, 'q_range_abs': self.config['sub']['q_range_abs'], })
             self.viewer.view_curves(
                 q, sample, 'sample',
                 q, I_buff_scaled, 'buffer scaled',
                 legend=True,
-                plotFilePath=os.path.join(root, f'diff_{basename}.png'),
+                plotFilePath=diff_plot_path,
+                save=False
+            )
+            self.viewer.view_curves(
+                q, I_sub, 'sample',
+                legend=True,
+                plotFilePath=sub_plot_path,
                 save=False
             )
             new_sample_paths.append(destpath)
@@ -367,6 +403,18 @@ class Controller:
             root, basename = os.path.split(p)
             basename, _ = os.path.splitext(basename)
             results_file = os.path.join(root, f'{basename}_results.txt')
+            sub_plot_path = os.path.join(root, f'{basename}.png')
+            guinier_plot_path = os.path.join(root, f'guinier_{basename}.png')
+            kratky_plot_path = os.path.join(root, f'kratky_{basename}.png')
+            loglog_plot_path = os.path.join(root, f'loglog_{basename}.png')
+            
+            # Check if analysis results exist in debug mode
+            if debug and all(os.path.exists(p) for p in (results_file, guinier_plot_path, kratky_plot_path, loglog_plot_path)):
+                self.interface.send_message(f'Debug mode: Skipping analysis for {p} (results already exist)')
+                with open(results_file, 'r') as fread:
+                    context.append(f'{basename} sample analysis results:\n{fread.read()}')
+                continue
+                
             os.system(f'''INPUT_FILE={p}
 BASENAME={os.path.join(root, basename)}
 RESULTS_FILE="{results_file}"
@@ -433,28 +481,64 @@ echo "  - Kratky plot"
 echo ""
 echo "Full results saved to: $RESULTS_FILE"
 ''')
-            
+        
+            sample_context = []
             with open(results_file, 'r') as fread:
-                context.append(f'{basename} sample analysis results:\n{fread.read()}')
+                sample_context.append(f'{basename} sample analysis results:\n{fread.read()}')
+
+            with open(os.path.join(PROMPTS_DIR, 'visual', 'saxs_1d.txt'), 'r') as fread:
+                saxs_prompt = fread.read()
+            with open(os.path.join(PROMPTS_DIR, 'visual', 'guinier_plot.txt'), 'r') as fread:
+                guinier_prompt = fread.read()
+            with open(os.path.join(PROMPTS_DIR, 'visual', 'kratky_plot.txt'), 'r') as fread:
+                kratky_prompt = fread.read()
+            with open(os.path.join(PROMPTS_DIR, 'visual', 'loglog_plot.txt'), 'r') as fread:
+                loglog_prompt = fread.read()
             
             # plots
             q, I, _ = read_saxs(p)
+
+            messages = get_image_messages(sub_plot_path, saxs_prompt)
+            sub_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
+            sample_context.append(f'The description of 1d raw SAXS curve:\n{sub_description}')
 
             self.viewer.view_curves(
                 q*q, np.log(I), 'log(I) vs q^2',
                 xlabel='q^2 (nm-2)', ylabel='log(I) (a.u.)',
                 legend=True,
-                plotFilePath=os.path.join(root, f'guinier_{basename}.png'),
+                plotFilePath=guinier_plot_path,
                 save=False
             )
+            messages = get_image_messages(guinier_plot_path, guinier_prompt)
+            guinier_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
+            sample_context.append(f'The description of Guinier plot:\n{guinier_description}')
 
             self.viewer.view_curves(
                 q, q * q * I, 'I * q^2 vs q',
                 xlabel='q (nm-1)', ylabel='I * q^2 (a.u.)',
                 legend=True,
-                plotFilePath=os.path.join(root, f'kratky_{basename}.png'),
+                plotFilePath=kratky_plot_path,
                 save=False
             )
+            messages = get_image_messages(kratky_plot_path, kratky_prompt)
+            kratky_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
+            sample_context.append(f'The description of Kratky plot:\n{kratky_description}')
+
+            self.viewer.view_curves(
+                np.log(q), np.log(I), 'log(I) vs log(q)',
+                xlabel='log(q)', ylabel='log(I)',
+                legend=True,
+                plotFilePath=loglog_plot_path,
+                save=False
+            )
+            messages = get_image_messages(loglog_plot_path, loglog_prompt)
+            loglog_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
+            sample_context.append(f'The description of log-log plot:\n{loglog_description}')
+
+            sample_context = '\n\n'.join(sample_context)
+            with open(os.path.join(directory, f'{basename}_context.txt'), 'w') as fwrite:
+                fwrite.write(sample_context)
+            context.append(sample_context)
 
         # LLM
         # I dont want to analyze each plot separately. If there are many plots, 
@@ -469,6 +553,8 @@ echo "Full results saved to: $RESULTS_FILE"
                     {'role': 'user', 'content': [{'type': 'text', 'text': f'{context}\n\nUser query: {user_query}'}]}
                 ],
             )
+            with open(os.path.join(directory, f'{basename}_llm_answer.txt'), 'w') as fwrite:
+                fwrite.write(answer)
             self.interface.send_message(f'LLM asnwer:\n{answer}')
 
         # TODO accelerate the fit
@@ -545,5 +631,5 @@ if __name__ == '__main__':
     # controller.pipeline()
     # directory path for pipeline0: debug/pipeline0
     # LLM query: It is known that the subject of the investigation is a protein dissolved in water. Which protein it could be based on available information?
-    controller.pipeline0()
+    controller.pipeline0(debug=True)
 

@@ -1,0 +1,24 @@
+Analyze this Guinier plot (ln(I) vs q²). Focus on parameters best determined from this representation:
+
+1. **Radius of Gyration (Rg)**:
+   - Identify the linear Guinier region (typically q·Rg < 1.3)
+   - Calculate the slope of the linear region: slope = -Rg²/3
+   - Compute Rg = √(-3 × slope)
+   - Specify the q-range used for analysis
+
+2. **Guinier Analysis**:
+   - Determine the intercept (ln(I₀)) and calculate I₀
+   - Assess linearity quality (R² value if possible)
+   - Identify deviations from linearity at higher q²
+   - Note any upward curvature suggesting aggregation
+
+3. **Forward Scattering**:
+   - Estimate I(0) from the intercept
+   - Note any systematic deviations at very low q²
+
+4. **Sample Quality Indicators**:
+   - Evaluate data quality in Guinier region
+   - Identify signs of interparticle interference
+   - Note evidence of sample polydispersity
+
+Report Rg with uncertainty (e.g., Rg = 4.52 ± 0.15 nm) and specify the q-range used for analysis. Include the calculated slope and intercept values.

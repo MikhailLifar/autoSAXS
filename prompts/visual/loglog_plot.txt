@@ -1,0 +1,27 @@
+Analyze this log-log SAXS plot (log(I) vs log(q)). Focus on parameters best determined from this representation:
+
+1. **Power-Law Analysis**:
+   - Identify distinct linear regions and their q-ranges
+   - Calculate slopes (p) for each region: I ∝ q⁻ᵖ
+   - Determine the crossover points between regimes
+   - Assign physical interpretations to each slope value
+
+2. **Fractal Dimension**:
+   - For mass fractals (1 < p < 3): Dₘ = p
+   - For surface fractals (3 < p < 4): Dₛ = 6 - p
+   - Calculate fractal dimensions with uncertainty
+   - Note the q-range over which fractal behavior holds
+
+3. **Structural Transitions**:
+   - Identify Guinier region (slope ≈ 0 at low q)
+   - Locate the Porod region (slope = -4 for smooth interfaces)
+   - Find intermediate slope regions
+   - Measure the q-values where transitions occur
+
+4. **Size Parameters**:
+   - Estimate particle size from crossover positions
+   - Calculate correlation lengths from transition points
+   - Identify any oscillations and estimate their periodicity
+   - Note deviations from ideal power-law behavior
+
+Report all slope values with uncertainty (e.g., p = 2.15 ± 0.10) and corresponding q-ranges. Interpret each slope in terms of structural features.

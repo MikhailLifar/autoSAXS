@@ -7,6 +7,8 @@ import os
 import sys
 import re
 
+import base64
+
 sys.path.append(os.path.expanduser('~/SupervisedML/repos'))
 
 from supervised_ml.whittaker_smooth import whittaker_smooth
@@ -184,3 +186,29 @@ def get_pipeline_description(pipeline_name: str) -> str:
         return content.strip()
 
     return "\n\n".join(description_parts)
+
+
+def encode_image(image_path):
+    """Encode image to base64 string"""
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+
+def get_image_messages(image_path, text):
+    base64_image = encode_image(image_path)
+    messages = [
+        {'role': 'user',
+         'content': [{
+             'type': 'text',
+             'text': text
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{base64_image}"
+                }
+            }]
+        }
+    ]
+
+    return messages

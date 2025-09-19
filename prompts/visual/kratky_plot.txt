@@ -1,0 +1,26 @@
+Analyze this Kratky plot (I·q² vs q). Focus on parameters best determined from this representation:
+
+1. **Folding/Unfolding Analysis**:
+   - Identify the peak position (q_max) and height
+   - Calculate the position of maximum: q_max ≈ 2.8/Rg for globular proteins
+   - Estimate Rg from peak position: Rg ≈ 2.8/q_max
+   - Characterize peak shape (sharp, broad, asymmetric)
+
+2. **Conformation Assessment**:
+   - Determine if the curve reaches a plateau (indicative of folded proteins)
+   - Identify the plateau height and q-range
+   - Note any upward trend at high q (suggesting flexibility)
+   - Calculate the ratio: (I·q²)_plateau / (I·q²)_max
+
+3. **Flexibility Indicators**:
+   - Measure the slope in the high-q region
+   - Identify any local minima or maxima
+   - Estimate the crossover point between folded and unfolded behavior
+   - Characterize the decay behavior beyond the peak
+
+4. **Dimensional Analysis**:
+   - Compare to theoretical curves for different conformations
+   - Identify features suggesting rod-like or coil-like behavior
+   - Note any oscillations indicating structured domains
+
+Report q_max and derived Rg with uncertainty. Characterize the overall shape as typical for folded, partially folded, or unfolded states.

@@ -1,0 +1,25 @@
+Analyze this raw 1D SAXS curve (Intensity vs q). Focus on parameters best determined from this representation:
+
+1. **Peak Analysis**:
+   - Precisely identify all peak positions (q-values in nm⁻¹)
+   - Measure peak intensities
+   - Estimate Full Width at Half Maximum (FWHM) for primary peaks
+   - Calculate d-spacing from first peak: d = 2π/q₁
+
+2. **Qualitative Features**:
+   - Describe overall curve shape (monotonic decay, multiple peaks, plateau regions)
+   - Identify shoulders, inflection points, or discontinuities
+   - Note any oscillations and estimate their periodicity
+   - Characterize low-q behavior (upturn, flat region)
+
+3. **Relative Intensities**:
+   - Measure intensity ratios between peaks
+   - Estimate background scattering level
+   - Identify any abrupt intensity changes
+
+4. **Morphological Indicators**:
+   - Infer possible particle shapes based on peak positions
+   - Note evidence of aggregation (low-q upturn)
+   - Identify features suggesting ordering (multiple peaks)
+
+Format your response with numerical values and units. For all measurements, specify the uncertainty range (e.g., q₁ = 3.2 ± 0.2 nm⁻¹).
