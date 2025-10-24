@@ -14,6 +14,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from ase.io import read
+
 sys.path.append(os.path.expanduser('~/LLM/LLMAssistant'))
 sys.path.append(os.path.expanduser('~/LLM/LLMAssistant/aiAssistantFramework'))
 
@@ -23,10 +25,16 @@ import controller as ai_controller
 
 ATSAS_BIN_PREFIX = os.path.expanduser('~/ATSAS-3.2.1-1/bin')
 # CONFIG_FILE = "calib_config.conf"
-CALIBRATED_GEOMETRY_PATH = 'calibrated_geometry.conf'
+# CALIBRATED_GEOMETRY_PATH = 'calibrated_geometry.conf'
 ROOT_DIR = os.path.expanduser('~/KurchatovCoop')
 PROMPTS_DIR = os.path.join(ROOT_DIR, 'repos', 'prompts')
 DEBUG = True
+
+BODIES_SHAPES = (
+    'cylinder', 'dumbbell', 'ellipsoid', 
+    'elliptic-cylinder', 'hollow-cylinder', 'hollow-sphere',
+    'parallelepiped', 'rotation-ellipsoid'
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,335 +58,135 @@ class Controller:
     Model is SAXSProcessor and Viewer is Interface
     """
     
-    def __init__(self, processor: SAXSProcessor, interface: Interface, viewer: Viewer):
-        self.processor = processor
+    def __init__(self, interface: Interface, viewer: Viewer):
         self.interface = interface
         self.viewer = viewer
-        self.config = {}
     
-    def load_config(self, config_file):
-        '''Loads the configuration from the YAML file, or creates it if it doesn't exist.'''
-        if not os.path.exists(config_file):
-            return self.create_default_config(config_file)
-        
-        with open(config_file, 'r') as f:
-            return yaml.safe_load(f)
-    
-    def save_config(self, config_file):
-        with open(config_file, 'w') as f:
-            yaml.dump(self.config, f)
-    
-    def create_default_config(self, config_file):
-        '''Creates a default configuration file.'''
-        default_config = {
-            'center_refinement': {
-                'q_start': 0.95,
-                'q_stop': 0.995,
-                'min_segment_len': 50,
-            },
-            'ring_search': {
-                'q_stop': 0.995,
-                'I_threshold': 80.0,
-                'r_min': 60,
-                'r_max': 700,
-                'r_step': 3,
-                'peak_width': 60
-            },
-            'detector_geometry': {
-                'dist': None,
-                'wavelength': 1.445e-10,
-                'pixel_size': [1.e-4, 1.e-4], # Stored as a list in YAML
-                # 'beam_center_x': None,
-                # 'beam_center_y': None,
-                'rot1': 0.,
-                'rot2': 0.,
-                'rot3': 0.,
-            }
-        }
-        with open(config_file, 'w') as f:
-            yaml.dump(default_config, f)
-        return default_config
-    
-    def update_config(self, config_file, *keys, values: dict):
-        keys = list(keys)
-
-        conf = self.config
-        for k in keys:
-            if k not in conf:
-                conf[k] = {}
-            conf = conf[k]
-        
-        conf.update(values)
-        self.save_config(config_file)
-    
-    def center_refinement_step(self, visualize=True, **center_ref_params):
-        pc = self.processor
-        pc.set_center_search(**center_ref_params)
-        center_search_res = pc.find_and_set_center()
-
+    def center_refinement_step(self, calib_data, visualize=True, calib_tiff_path='', **center_ref_params):
+        center_search_res = find_center(calib_data, **center_ref_params)
         if visualize:
-            self.viewer.view_center(pc._calib_data, pc._calib_tiff_path, 
+            self.viewer.view_center(calib_data, calib_tiff_path, 
                                     **center_search_res)
-        
         return center_search_res
     
-    def rings_refinement_step(self, visualize=True, **ring_search_params):
-        pc = self.processor
-        pc.set_ring_search(**ring_search_params)
-        rings = pc.find_and_set_rings()['rings']
-
+    def rings_refinement_step(self, calib_data, visualize=True, calib_tiff_path='', **ring_search_params):
+        find_rings_res = find_rings(calib_data, **ring_search_params)
         if visualize:
-            self.viewer.view_rings(pc._calib_data, pc._calib_tiff_path, rings=rings)
+            self.viewer.view_rings(calib_data, calib_tiff_path, rings=find_rings_res['rings'])
+        return find_rings_res
 
-        return {'rings': rings}
-
-    def geometry_refinement_step(self, visualize=True, **geometry_params):
+    def geometry_refinement_step(self, calib_data, rings, visualize=True, **geometry_params):
         # print(f'geometry_refinement_step is called. Parameters are: {", ".join(geometry_params.keys())}')
-        pc = self.processor
-        pc.set_detector_parameters(**geometry_params)
-        refine_res = pc.refine()
-        
+        refine_res = refine(calib_data, rings, **geometry_params)
         if visualize:
             self.viewer.view_refined_curve(refine_res['curve_calibrated'], refine_res['theoretical_peaks'])
-        
         return refine_res
-    
-    # def calibration_block(self, fast_forward=True):
-    #     pc = self.processor
 
-    #     if fast_forward:
-    #         self.processor.calibrant_name = "AgBh"
-            
-    #         image_path = self.interface.ask_for_file("Enter the path to the TIFF image for calibration")
-    #         self.processor.set_calib_data(image_path)
-
-    #         center_ref_params = {k: self.config['center_refinement'][k] 
-    #                              for k in ['q_start', 'q_stop', 'min_segment_len']}
-    #         self.interface.send_message('Center search...')
-    #         center_step_ret = self.center_refinement_step(visualize=False, **center_ref_params)
-            
-    #         ring_search_params = {k: self.config['ring_search'][k] 
-    #                               for k in ['q_stop', 'I_threshold', 'r_max', 'r_step', 'peak_width']}
-    #         self.interface.send_message('Rings identification...')
-    #         rings_step_ret = self.rings_refinement_step(visualize=False, **ring_search_params)
-            
-    #         geometry_params = {k: self.config['detector_geometry'][k] 
-    #                            for k in ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3']}
-    #         self.interface.send_message('Geometry refinement...')
-    #         refine_step_ret = self.geometry_refinement_step(visualize=False, **geometry_params)
-
-    #     else:
-    #         self.processor.calibrant_name = self.interface.ask_for_parameter(
-    #             'calibrant_name', str, query="Enter calibrator name", default="AgBh")
-            
-    #         image_path = self.interface.ask_for_file("Enter the path to the TIFF image for calibration")
-    #         self.processor.set_calib_data(image_path)
-
-    #         # print(self.config)
-    #         center_ref_params = self.interface.ask_for_multiple(
-    #             ['q_start', 'q_stop', 'min_segment_len'],
-    #             group_name='center refinement',
-    #             types=[float, float, int],
-    #             defaults=self.config['center_refinement']
-    #         )
-    #         self.update_config('center_refinement', values=center_ref_params)
-    #         center_step_ret = self.center_refinement_step(visualize = True, **center_ref_params)
-            
-    #         if_adjust = self.interface.ask_question(
-    #             'Do you wish to adjust the center search parameters? (yes/no, default no) ')
-    #         if if_adjust.lower().startswith('y'):
-    #             center_ref_params, center_step_ret = self.interface.interactive(
-    #                 center_ref_params,
-    #                 types=[float, float, int],
-    #                 func=self.center_refinement_step
-    #             )
-    #             self.update_config('center_refinement', values=center_ref_params)
-            
-    #         ring_search_params = self.interface.ask_for_multiple(
-    #             ['q_stop', 'I_threshold', 'r_max', 'r_step', 'peak_width'],
-    #             group_name='ring search',
-    #             types=[float, float, int, int, int],
-    #             defaults=self.config['ring_search']
-    #         )
-    #         self.update_config('ring_search', values=ring_search_params)
-    #         rings_step_ret = self.rings_refinement_step(visualize = True, **ring_search_params)
-            
-    #         if_adjust = self.interface.ask_question(
-    #             'Do you wish to adjust the ring search parameters? (yes/no, default no) ')
-    #         if if_adjust.lower().startswith('y'):
-    #             ring_search_params, rings_step_ret = self.interface.interactive(
-    #                 ring_search_params,
-    #                 types=[float, float, int, int, int],
-    #                 func=self.rings_refinement_step
-    #             )
-    #             self.update_config('ring_search', values=ring_search_params)
-            
-    #         geometry_params = self.interface.ask_for_multiple(
-    #             ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3'],
-    #             group_name='detector geometry',
-    #             types=[float, float, json_type_caster, float, float, float],
-    #             defaults=self.config['detector_geometry']
-    #         )
-    #         self.update_config('detector_geometry', values=geometry_params)
-    #         refine_step_ret = self.geometry_refinement_step(**geometry_params)
-            
-    #         if_adjust = self.interface.ask_question(
-    #             'Do you wish to adjust the detecotr geometry parameters? (yes/no, default no) ')
-    #         if if_adjust.lower().startswith('y'):
-    #             geometry_params, refine_step_ret = self.interface.interactive(
-    #                 geometry_params,
-    #                 types=[float, float, json_type_caster, float, float, float],
-    #                 func=self.geometry_refinement_step
-    #             )
-    #             self.update_config('detector_geometry', values=geometry_params)
-            
-    #     self.viewer.view_calibration(
-    #         img_data=self.processor._calib_data, tiff_path=self.processor._calib_tiff_path,
-    #         **center_step_ret, **rings_step_ret, **refine_step_ret)
-    #     refined = refine_step_ret['refined']
-    #     refined.update({'wavelength': pc.wavelength})
-    #     self.interface.send_message(
-    #         f'\n-- Calibrated geometry parameters --\n' + '\n'.join(f'{p}: {v}' for p, v in refined.items())  + '\n'
-    #     )
-    #     with open(CALIBRATED_GEOMETRY_PATH, 'w') as f:
-    #         yaml.dump(refined, f)
-    
-    # def concentration_series(self):
-    #     self.interface.send_message('The concentration series begins')
-    #     self.interface.send_message('Do not forget to upload 2d data for the buffer')
-    #     self.interface.send_message('Recommended concentrations for concentration series are: 2.5, 1., 0.5, 0.25, 0.1 mg/ml')
-    #     data_path = self.interface.ask_for_file(
-    #         'Please provide the path to the base directory where /2d subdirectory with .tiff files for concentration series is placed. ' \
-    #         'The last part (parts seprated by "_") of the name of the file should be the corresponding sample concentration. ' \
-    #         'There should also be a .tiff with buffer 2d data which name should end with "_buff"')
-        
-    #     self.interface.send_message('Started processing concentration series...')
-    #     data_2d_path = os.path.join(data_path, '2d')
-    #     data_1d_path = os.path.join(data_path, '1d')
-    #     for f in os.listdir(data_2d_path):
-    #         c = os.path.splitext(f)[0].split('_')[-1]
-    #         basename = os.path.basename(f)
-    #         saxs_2d = self.processor.read_from_tiff(os.path.join(data_2d_path, f))
-    #         if c == 'buff':
-    #             metadata = {'type': 'buffer'}
-    #         else:
-    #             metadata = {'type': 'sample', 'concentration': float(c)}
-    #         q, I = self.processor.integrate_2d_to_1d(
-    #             saxs_2d, os.path.join(data_1d_path, f'{basename}.dat'), 
-    #             metadata=metadata)
-    #     self.processor.subtract_buffer(data_1d_path)
-
-    def pipeline0(self, debug=False):
-        model = 'GLM-4.5'
-        # model = 'DeepSeek-V3.1'
-        vision_model = 'GLM-4.5V'
-        pc = self.processor
-        
-        print(get_pipeline_description('pipeline0'))
-
-        directory = self.interface.ask_for_file('Write a path to a directory for your data')
-
-        buffer_path = calibration_path = config_path = ''
-        sample_paths = []
-        for f in os.listdir(directory):
-            if f.endswith('.conf'):
-                config_path = os.path.join(directory, f)
-            elif f.endswith('_calib.tif'):
-                calibration_path = os.path.join(directory, f)
-            elif f.endswith('_buf.tif'):
-                buffer_path = os.path.join(directory, f)
-            elif f.endswith('.tif'):
-                sample_paths.append(os.path.join(directory, f))
-        
-        assert min(len(p) for p in (buffer_path, calibration_path, config_path, sample_paths)) > 0, 'The requirements for pipeline input are not satisfied. Please reveiw your folder structure'
-        
-        self.config = self.load_config(config_path)
-
+    def autocalib(self, directory, calibrant_path, config, config_path, debug=False):
         # Check if calibration results exist in debug mode
         calibration_results_file = os.path.join(directory, 'calibration.png')
-        refined_config_exists = 'refined' in self.config
+        integrator_subd = os.path.join(directory, 'integrator_params')
+        refined_config_exists = 'refined' in config
         
-        if debug and refined_config_exists and os.path.exists(calibration_results_file):
+        calibrant_name = config['calibrant_name']
+        calib_data = read_from_tiff(calibrant_path)
+        
+        if debug and refined_config_exists and all(
+            os.path.exists(p) for p in (calibration_results_file, integrator_subd)
+        ):
             self.interface.send_message('Debug mode: Skipping calibration (results already exist)')
-            refined = self.config['refined']
+            refined = config['refined']
+            integrator = IntegratorExtended.from_disk(integrator_subd)
+            return {'integrator': integrator, 'refined': refined}
         else:
             self.interface.send_message('Autocalibration...')
-            
-            pc.calibrant_name = self.config['calibrant_name']
-            pc.set_calib_data(calibration_path)
 
-            center_ref_params = {k: self.config['center_refinement'][k] 
+            center_ref_params = {k: config['center_refinement'][k] 
                                 for k in ['q_start', 'q_stop', 'min_segment_len']}
             self.interface.send_message('    Center search...')
-            center_step_ret = self.center_refinement_step(visualize=False, **center_ref_params)
+            center_step_ret = self.center_refinement_step(calib_data, visualize=False, calib_tiff_path=calibrant_path, **center_ref_params)
             
-            ring_search_params = {k: self.config['ring_search'][k] 
-                                    for k in ['q_stop', 'I_threshold', 'r_max', 'r_step', 'peak_width']}
+            d_geom = config['detector_geometry']
+            interring_dist_px = get_interring_dist_px(
+                d_geom['dist'], d_geom['wavelength'], d_geom['pixel_size'][0]
+            )
+
+            ring_search_params = {k: config['ring_search'][k] 
+                                  for k in ['q_stop', 'ring_I_threshold', 'r_max_px', 'r_step_px']}
+            ring_search_params.update({
+                'r_beam_px': config['r_beam_px'],
+                'center_y_px': center_step_ret['center_y_px'],
+                'center_x_px': center_step_ret['center_x_px'],
+                'interring_dist_px': interring_dist_px
+            })
             self.interface.send_message('    Rings identification...')
-            rings_step_ret = self.rings_refinement_step(visualize=False, **ring_search_params)
+            rings_step_ret = self.rings_refinement_step(calib_data, visualize=False, calib_tiff_path=calibrant_path, **ring_search_params)
             
-            geometry_params = {k: self.config['detector_geometry'][k] 
+            geometry_params = {k: config['detector_geometry'][k] 
                                 for k in ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3']}
+            geometry_params.update({
+                'r_beam_px': config['r_beam_px'],
+                'center_y_px': center_step_ret['center_y_px'],
+                'center_x_px': center_step_ret['center_x_px'],
+                'calibrant_name': calibrant_name,
+            })
             self.interface.send_message('    Geometry refinement...')
-            refine_step_ret = self.geometry_refinement_step(visualize=False, **geometry_params)
+            refine_step_ret = self.geometry_refinement_step(
+                calib_data, rings_step_ret['rings'], visualize=False, **geometry_params)
+            
+            refine_step_ret['integrator'].to_disk(integrator_subd)
 
             self.viewer.view_calibration(
-                img_data=pc._calib_data, tiff_path=pc._calib_tiff_path,
+                img_data=calib_data, tiff_path=calibrant_path,
                 show=False, plotFilePath=calibration_results_file,
                 **center_step_ret, **rings_step_ret, **refine_step_ret)
             refined = refine_step_ret['refined']
-            refined.update({'wavelength': pc.wavelength})
+            refined.update({'wavelength': config['detector_geometry']['wavelength']})
             self.interface.send_message(
                 f'\n-- Calibrated geometry parameters --\n' + '\n'.join(f'{p}: {v}' for p, v in refined.items())  + '\n'
             )
             self.interface.send_message('Finished calibration')
-            self.update_config(config_path, 'refined', values=refined)
-
-        self.interface.send_message('Integration...')
-        new_sample_paths = []
-        for p in sample_paths + [buffer_path, ]:
+            update_config(config, config_path, 'refined', values=refined)
+            return {k: refine_step_ret[k] for k in ('refined', 'integrator')}
+        
+    def integrate(self, ai, to_int_paths, dest_dir, metadata, debug=False):
+        integrated_paths = []
+        for p, meta in zip(to_int_paths, metadata):
             root, fname = os.path.split(p)
             fname = os.path.splitext(fname)[0]
-            destpath = os.path.join(root, f'int_{fname}.dat')
+            destpath = os.path.join(dest_dir, f'int_{fname}.dat')
             
             # Check if integration results exist in debug mode
             if debug and os.path.exists(destpath):
                 self.interface.send_message(f'Debug mode: Skipping integration for {p} (results already exist)')
-                if p == buffer_path:
-                    buffer_path = destpath
-                else:
-                    new_sample_paths.append(destpath)
+                integrated_paths.append(destpath)
                 continue
                 
-            if p == buffer_path:
-                pc.integrate_2d_to_1d(pc.read_from_tiff(p), destpath=destpath,
-                                    metadata={'type': 'buffer'})
-                buffer_path = destpath
-            else:
-                pc.integrate_2d_to_1d(pc.read_from_tiff(p), destpath=destpath,
-                                    metadata={'type': 'sample'})
-                new_sample_paths.append(destpath)
-        sample_paths = new_sample_paths
+            integrate_2d_to_1d(ai, read_from_tiff(p), destpath=destpath,
+                               metadata={'type': 'sample'})
+            integrated_paths.append(destpath)
         
-        self.interface.send_message('Subtraction...')
-        new_sample_paths = []
-        for p in sample_paths:
+        return integrated_paths
+    
+    def subtract(self, to_sub_paths, buffer_path, dest_dir, config_sub, debug=False):
+        subtracted_paths = []
+        for p in to_sub_paths:
             q, sample, _ = read_saxs(p)
             root, basename = os.path.split(p)
             basename, _ = os.path.splitext(basename)
             basename = basename.replace('int_', '', 1)
-            destpath = os.path.join(root, f"sub_{basename}.dat")
-            diff_plot_path = os.path.join(root, f'diff_{basename}.png')
-            sub_plot_path = os.path.join(root, f'sub_{basename}.png')
+            destpath = os.path.join(dest_dir, f"sub_{basename}.dat")
+            diff_plot_path = os.path.join(dest_dir, f'diff_{basename}.png')
+            sub_plot_path = os.path.join(dest_dir, f'sub_{basename}.png')
             
             # Check if subtraction results exist in debug mode
             if debug and all(os.path.exists(p) for p in (destpath, diff_plot_path, sub_plot_path)):
                 self.interface.send_message(f'Debug mode: Skipping subtraction for {p} (results already exist)')
-                new_sample_paths.append(destpath)
+                subtracted_paths.append(destpath)
                 continue
                 
-            _, I_sub, I_buff_scaled = pc.subtract_buffer(
-                buffer_path, p, destpath, match_tail_ops={'q_range_rel': None, 'q_range_abs': self.config['sub']['q_range_abs'], })
+            _, I_sub, I_buff_scaled = subtract_buffer(
+                buffer_path, p, destpath, match_tail_ops={'q_range_rel': None, 'q_range_abs': config_sub['q_range_abs'], })
             self.viewer.view_curves(
                 q, sample, 'sample',
                 q, I_buff_scaled, 'buffer scaled',
@@ -392,27 +200,20 @@ class Controller:
                 plotFilePath=sub_plot_path,
                 save=False
             )
-            new_sample_paths.append(destpath)
-        sample_paths = new_sample_paths
-        
-        # TODO scaling step
-
-        self.interface.send_message('Calculating the parameters...')
-        context = []
-        for p in sample_paths:
+            subtracted_paths.append(destpath)
+        return subtracted_paths
+    
+    def get_descriptors(self, to_analyze_paths, dest_dir, debug=False):
+        analyzis_res_paths = []
+        for p in to_analyze_paths:
             root, basename = os.path.split(p)
             basename, _ = os.path.splitext(basename)
-            results_file = os.path.join(root, f'{basename}_results.txt')
-            sub_plot_path = os.path.join(root, f'{basename}.png')
-            guinier_plot_path = os.path.join(root, f'guinier_{basename}.png')
-            kratky_plot_path = os.path.join(root, f'kratky_{basename}.png')
-            loglog_plot_path = os.path.join(root, f'loglog_{basename}.png')
+            results_file = os.path.join(dest_dir, f'{basename}_results.txt')
             
             # Check if analysis results exist in debug mode
-            if debug and all(os.path.exists(p) for p in (results_file, guinier_plot_path, kratky_plot_path, loglog_plot_path)):
+            if debug and os.path.exists(results_file):
                 self.interface.send_message(f'Debug mode: Skipping analysis for {p} (results already exist)')
-                with open(results_file, 'r') as fread:
-                    context.append(f'{basename} sample analysis results:\n{fread.read()}')
+                analyzis_res_paths.append(results_file)
                 continue
                 
             os.system(f'''INPUT_FILE={p}
@@ -481,7 +282,105 @@ echo "  - Kratky plot"
 echo ""
 echo "Full results saved to: $RESULTS_FILE"
 ''')
+            analyzis_res_paths.append(results_file)
         
+        return analyzis_res_paths
+    
+    def plots(self, to_plot_paths, dest_dir, debug=False):
+        plot_paths = []
+        for p in to_plot_paths:
+            root, basename = os.path.split(p)
+            basename, _ = os.path.splitext(basename)
+            sub_plot_path = os.path.join(root, f'{basename}.png')
+            guinier_plot_path = os.path.join(dest_dir, f'guinier_{basename}.png')
+            kratky_plot_path = os.path.join(dest_dir, f'kratky_{basename}.png')
+            loglog_plot_path = os.path.join(dest_dir, f'loglog_{basename}.png')
+            
+            if debug and all(os.path.exists(p) for p in (sub_plot_path, guinier_plot_path, kratky_plot_path, loglog_plot_path)):
+                self.interface.send_message(f'Debug mode: Skipping plots for {p} (results already exist)')
+                continue
+
+            # plots
+            q, I, _ = read_saxs(p)
+
+            self.viewer.view_curves(
+                q*q, np.log(I), 'log(I) vs q^2',
+                xlabel='q^2 (nm-2)', ylabel='log(I) (a.u.)',
+                legend=True,
+                plotFilePath=guinier_plot_path,
+                save=False
+            )
+
+            self.viewer.view_curves(
+                q, q * q * I, 'I * q^2 vs q',
+                xlabel='q (nm-1)', ylabel='I * q^2 (a.u.)',
+                legend=True,
+                plotFilePath=kratky_plot_path,
+                save=False
+            )
+
+            self.viewer.view_curves(
+                np.log(q), np.log(I), 'log(I) vs log(q)',
+                xlabel='log(q)', ylabel='log(I)',
+                legend=True,
+                plotFilePath=loglog_plot_path,
+                save=False
+            )
+
+            plot_paths.append([sub_plot_path, guinier_plot_path, kratky_plot_path, loglog_plot_path])
+        
+        return plot_paths
+    
+    def fit_geometry(self, to_fit_paths, dest_dir, debug=False):
+        self.interface.send_message('Fitting with shapes...')
+        for p in to_fit_paths:
+            root, basename = os.path.split(p)
+            basename, _ = os.path.splitext(basename)
+            bodies_subdir = os.path.join(dest_dir, f'bodies_{basename}')
+            os.makedirs(bodies_subdir, exist_ok=True)
+            bodies_call = os.path.join(ATSAS_BIN_PREFIX, 'bodies')
+            file_prefix = os.path.join(bodies_subdir, 'bodies_fit')
+            
+            if debug and all(os.path.exists(os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')) for shape in BODIES_SHAPES):
+                self.interface.send_message(f'Debug mode: Skipping BODIES fit for {p} (results already exist)')
+                continue
+
+            os.system(f"{bodies_call} --prefix={file_prefix} {p}")
+
+            q, I, _ = read_saxs(p)
+            to_plot = [q, I, {'label': 'exp', 'lw': 4}]
+            for shape in BODIES_SHAPES:
+                fir_path = os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')
+                # cif_path = os.path.join(bodies_subdir, f'bodies_fit-{shape}-damstart.cif')
+
+                data = np.loadtxt(fir_path, skiprows=1, dtype=np.float64)
+                q_fit, I_fit, sigma_exp = data[:, 0], data[:, 3], data[:, 2]
+                idx_intersection = (q <= q_fit[-1])
+                q_intersetcion, I_intersection = q[idx_intersection], I[idx_intersection]
+                I_fit_interp = np.interp(q_intersetcion, q_fit, I_fit)
+                sigma_interp = np.interp(q_intersetcion, q_fit, sigma_exp)
+
+                chi2 = calc_chi2(I_intersection, I_fit_interp, sigma_interp)
+                to_plot.extend([q_intersetcion, I_fit_interp, f'{shape}; chi2: {chi2:.5f}'])
+
+                # atoms = read_bodies_cif(cif_path)
+                # self.viewer.plot_structure_and_scattering(
+                #     atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
+                #     plotFilePath=os.path.join(bodies_subdir, f'{shape}_view.png'))
+            
+            self.viewer.view_curves(*to_plot,
+                                    title=f'Fits comparison for {basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
+                                    plotFilePath=os.path.join(bodies_subdir, f'{basename}_fits.png'))
+    
+    def ai_analysis(self, atsas_analysis_paths, plots_paths, dest_dir,
+                    text_model, vision_model,
+                    debug=False):
+        context = []
+        for results_file, plots in zip(atsas_analysis_paths, plots_paths):
+            sub_plot_path, guinier_plot_path, kratky_plot_path, loglog_plot_path = plots
+            p, basename = os.path.split(sub_plot_path)
+            basename, _ = os.path.splitext(basename)
+            
             sample_context = []
             with open(results_file, 'r') as fread:
                 sample_context.append(f'{basename} sample analysis results:\n{fread.read()}')
@@ -495,48 +394,24 @@ echo "Full results saved to: $RESULTS_FILE"
             with open(os.path.join(PROMPTS_DIR, 'visual', 'loglog_plot.txt'), 'r') as fread:
                 loglog_prompt = fread.read()
             
-            # plots
-            q, I, _ = read_saxs(p)
-
             messages = get_image_messages(sub_plot_path, saxs_prompt)
             sub_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
             sample_context.append(f'The description of 1d raw SAXS curve:\n{sub_description}')
 
-            self.viewer.view_curves(
-                q*q, np.log(I), 'log(I) vs q^2',
-                xlabel='q^2 (nm-2)', ylabel='log(I) (a.u.)',
-                legend=True,
-                plotFilePath=guinier_plot_path,
-                save=False
-            )
             messages = get_image_messages(guinier_plot_path, guinier_prompt)
             guinier_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
             sample_context.append(f'The description of Guinier plot:\n{guinier_description}')
 
-            self.viewer.view_curves(
-                q, q * q * I, 'I * q^2 vs q',
-                xlabel='q (nm-1)', ylabel='I * q^2 (a.u.)',
-                legend=True,
-                plotFilePath=kratky_plot_path,
-                save=False
-            )
             messages = get_image_messages(kratky_plot_path, kratky_prompt)
             kratky_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
             sample_context.append(f'The description of Kratky plot:\n{kratky_description}')
 
-            self.viewer.view_curves(
-                np.log(q), np.log(I), 'log(I) vs log(q)',
-                xlabel='log(q)', ylabel='log(I)',
-                legend=True,
-                plotFilePath=loglog_plot_path,
-                save=False
-            )
             messages = get_image_messages(loglog_plot_path, loglog_prompt)
             loglog_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
             sample_context.append(f'The description of log-log plot:\n{loglog_description}')
 
             sample_context = '\n\n'.join(sample_context)
-            with open(os.path.join(directory, f'{basename}_context.txt'), 'w') as fwrite:
+            with open(os.path.join(dest_dir, f'{basename}_context.txt'), 'w') as fwrite:
                 fwrite.write(sample_context)
             context.append(sample_context)
 
@@ -548,20 +423,49 @@ echo "Full results saved to: $RESULTS_FILE"
             self.interface.send_message('Now the results of your data processing are sent to LLM for the intelligent analysis.')
             user_query = self.interface.ask_question('What is your query to LLM?')
             answer, _ = llm.send_request_to_llm(
-                model=model, 
+                model=text_model, 
                 messages=[
                     {'role': 'user', 'content': [{'type': 'text', 'text': f'{context}\n\nUser query: {user_query}'}]}
                 ],
             )
-            with open(os.path.join(directory, f'{basename}_llm_answer.txt'), 'w') as fwrite:
+            with open(os.path.join(dest_dir, f'{basename}_llm_answer.txt'), 'w') as fwrite:
                 fwrite.write(answer)
             self.interface.send_message(f'LLM asnwer:\n{answer}')
 
-        # TODO accelerate the fit
-        # self.interface.send_message('Fitting with shapes...')
-        # for p in sample_paths:
-        #     bodies_call = os.path.join(ATSAS_BIN_PREFIX, 'bodies')
-        #     os.system(f"{bodies_call} --body=ellipsoid --prefix=ellipsoid_fit {p}")
+    def pipeline0(self, debug=False):
+        model = 'GLM-4.5'
+        # model = 'DeepSeek-V3.1'
+        vision_model = 'GLM-4.5V'
+        
+        descr, descr_path = get_pipeline_description('pipeline0')
+        print(descr)
+        directory = self.interface.ask_for_file('Write a path to a directory for your data')
+        paths = get_necessary_paths(descr_path, directory)
+        config = load_config(paths['config'])
+
+        res_calib = self.autocalib(directory, paths['calib_2d'], config=config, config_path=paths['config'], debug=debug)
+        ai = res_calib['integrator']
+        
+        self.interface.send_message('Integration...')
+        paths['buffer_1d'], = self.integrate(ai, [paths['buffer_2d'], ], directory, [{'type': 'buffer'}, ], debug=debug)
+        paths['sample_1d'] = self.integrate(
+            ai, paths['sample_2d'], directory, [{'type': 'sample'} for _ in range(len(paths['sample_2d']))], debug=debug)
+        
+        self.interface.send_message('Subtraction...')
+        paths['sample_sub'] = self.subtract(paths['sample_1d'], paths['buffer_1d'], dest_dir=directory,
+                                            config_sub=config['sub'])
+        
+        # TODO scaling step
+
+        self.interface.send_message('Calculating the parameters...')
+        paths['atsas_analysis']  = self.get_descriptors(paths['sample_sub'], dest_dir=directory, debug=debug)
+
+        paths['plots'] = self.plots(paths['sample_sub'], dest_dir=directory, debug=debug)
+
+        self.fit_geometry(paths['sample_sub'], dest_dir=directory, debug=debug)
+
+        # self.ai_analysis(paths['atsas_analysis'], paths['plots'], dest_dir=directory, 
+        #                  text_model=model, vision_model=vision_model, debug=debug)
     
     # def pipeline(self):
     #     try:
@@ -627,7 +531,7 @@ echo "Full results saved to: $RESULTS_FILE"
 
 if __name__ == '__main__':
     # calib image file path for debug: AgBh/100225_doubling/test/0003_AgBh1000old_or_107.3.tif
-    controller = Controller(SAXSProcessor(), CLIInterface(), PLTViewer())
+    controller = Controller(CLIInterface(), PLTViewer())
     # controller.pipeline()
     # directory path for pipeline0: debug/pipeline0
     # LLM query: It is known that the subject of the investigation is a protein dissolved in water. Which protein it could be based on available information?

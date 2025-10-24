@@ -7,10 +7,10 @@ Analysis of monodisperse liquid system
 Calibration -> Integration -> Subtraction -> Scaling -> Fit with bodies [-> LLM analysing which form is the most likely based on context]
 </Steps>
 <Input Structure>
-.conf  # configuration file
-_calib.tif  # calibrant image
-_buf.tif  # buffer image
-.tif inf  # sample images
+config *.conf  # configuration file
+calib_2d *_calib.tif  # calibrant image
+buffer_2d *_buf.tif
+sample_2d *.tif +
 </Input Structure>
 <Output Structure>
 calibration.png  # visualization of calibration results

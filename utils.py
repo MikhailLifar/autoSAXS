@@ -6,12 +6,25 @@ from io import StringIO
 import os
 import sys
 import re
+import glob
+import itertools
+
+from ase import Atoms
+
+from pyFAI.io import image
 
 import base64
 
 sys.path.append(os.path.expanduser('~/SupervisedML/repos'))
 
 from supervised_ml.whittaker_smooth import whittaker_smooth
+
+
+##### READING/WRITING FUNCTIONS ######
+
+
+def read_from_tiff(tiff_path) -> np.ndarray:
+    return image.read_image_data(tiff_path)
 
 
 def write_saxs(filename, wavenumber, intensity, metadata):
@@ -50,10 +63,10 @@ def read_saxs(filename) -> Tuple[np.ndarray, np.ndarray, dict]:
     filename (str): Input file path
     
     Returns:
-    tuple: (metadata, wavenumber, intensity)
-        metadata (dict): Dictionary containing metadata
+    tuple: (wavenumber, intensity, metadata)
         wavenumber (numpy.ndarray): Array of q-values
         intensity (numpy.ndarray): Array of intensity values
+        metadata (dict): Dictionary containing metadata
     """
     with open(filename, 'r') as f:
         content = f.read()
@@ -81,6 +94,7 @@ def read_saxs(filename) -> Tuple[np.ndarray, np.ndarray, dict]:
     intensity = df['intensity'].to_numpy()
     
     return wavenumber, intensity, metadata
+
 
 def get_pipeline_description(pipeline_name: str) -> str:
     """
@@ -185,7 +199,182 @@ def get_pipeline_description(pipeline_name: str) -> str:
     if not description_parts:
         return content.strip()
 
-    return "\n\n".join(description_parts)
+    return "\n\n".join(description_parts), pipeline_file
+
+
+def get_necessary_paths(description_file, directory_path):
+    """
+    Check if a directory satisfies the structure described in a file and return matching file paths.
+    
+    Args:
+        description_file: Path to the file containing the structure description
+        directory_path: Path to the directory to check
+        
+    Raises:
+        AssertionError: If the directory doesn't satisfy the description or the description file has an invalid format
+        
+    Returns:
+        Dictionary with path names as keys and lists of matching file paths as values
+    """
+    # Read the description file
+    with open(description_file, 'r') as f:
+        content = f.read()
+    
+    # Extract the content between <Input Structure> tags
+    match = re.search(r'<Input Structure>(.*?)</Input Structure>', content, re.DOTALL)
+    if not match:
+        raise AssertionError("No <Input Structure> tags found in the description file")
+    
+    lines = match.group(1).strip().split('\n')
+    result = {}
+    
+    # Process each line in the description
+    for line in lines:
+        # Skip empty lines
+        line = line.strip()
+        if not line:
+            continue
+        
+        # Split the line into parts, removing comments
+        parts = line.split('#', 1)[0].strip()
+        if not parts:
+            continue
+            
+        parts = parts.split()
+        if len(parts) < 2:
+            raise AssertionError(f"Invalid line format: {line}")
+            
+        # Extract path name and file mask
+        path_name = parts[0]
+        file_mask = parts[1]
+        
+        # Extract count specification if present
+        count_spec = None
+        if len(parts) > 2:
+            count_spec = parts[2]
+        
+        # Determine expected count range
+        if count_spec is None:
+            min_count, max_count = 1, 1
+        elif count_spec == '*':
+            min_count, max_count = 0, float('inf')
+        elif count_spec == '+':
+            min_count, max_count = 1, float('inf')
+        elif count_spec.startswith('[') and count_spec.endswith(']'):
+            # Range format [n, m]
+            range_match = re.match(r'\[(\d+),\s*(\d+)\]', count_spec)
+            if range_match:
+                min_count, max_count = int(range_match.group(1)), int(range_match.group(2))
+            else:
+                raise AssertionError(f"Invalid range specification: {count_spec}")
+        else:
+            # Single integer
+            try:
+                min_count = max_count = int(count_spec)
+            except ValueError:
+                raise AssertionError(f"Invalid count specification: {count_spec}")
+        
+        # Find files matching the mask in the directory
+        pattern = os.path.join(directory_path, file_mask)
+        matching_files = glob.glob(pattern)
+        actual_count = len(matching_files)
+        
+        # Check if the actual count is within the expected range
+        if not (min_count <= actual_count <= max_count):
+            raise AssertionError(f"Directory structure mismatch: Expected {min_count}-{max_count} files matching '{file_mask}', found {actual_count}")
+        
+        # Add to result dictionary with the list of matching files
+        if min_count == max_count == 1:
+            result[path_name] = matching_files[0]
+        else:
+            result[path_name] = matching_files
+    
+    # some files may be present in several groups simultaneously
+    # if a single file is present in larger group then it should be deleted from larger group
+    # if two groups have an intersection or both groups are singular and conicide - throw an error
+    for group_name_0, group_name_1 in itertools.combinations(result.keys(), 2):
+        entry0, entry1 = result[group_name_0], result[group_name_1]
+        
+        to_str_1 = to_str_0 = False
+        if isinstance(entry0, str):
+            entry0 = [entry0, ]
+            to_str_0 = True
+        if isinstance(entry1, str):
+            entry1 = [entry1, ]
+            to_str_1 = True
+        entry0_set, entry1_set = set(entry0), set(entry1)
+        assert entry0_set < entry1_set or entry1_set < entry0_set or not (entry0_set & entry1_set), 'Description contains overlapping masks!'
+        
+        if entry1_set < entry0_set:
+            entry0_set, entry1_set = entry1_set, entry0_set
+        if entry0_set < entry1_set:
+            for e0 in entry0:
+                entry1.remove(e0)
+        
+        if to_str_0:
+            entry0 = entry0[0]
+        if to_str_1:
+            entry1 = entry1[0]
+        result[group_name_0] = entry0
+        result[group_name_1] = entry1
+        
+    return result
+
+
+def load_config(src_path):
+    with open(src_path, 'r') as f:
+        return yaml.safe_load(f)
+
+
+def save_config(config, dest_path):
+    with open(dest_path, 'w') as f:
+        yaml.dump(config, f)
+
+
+def update_config(config, config_file, *keys, values: dict):
+    keys = list(keys)
+
+    conf = config
+    for k in keys:
+        if k not in conf:
+            conf[k] = {}
+        conf = conf[k]
+    
+    conf.update(values)
+    save_config(config, config_file)
+
+
+def read_bodies_cif(src_path):
+    coords = []
+    with open(src_path, 'r') as fread:
+        lines = fread.readlines()
+
+    # Find the start of the _atom_site loop
+    in_atom_site = False
+    for line in lines:
+        if line.startswith('_atom_site.Cartn_x'):
+            in_atom_site = True
+            continue
+        if in_atom_site and (line.strip() == '' or line.startswith('#')):
+            break
+        if in_atom_site and line.startswith('_'):
+            continue
+        if in_atom_site and line.strip():
+            parts = line.strip().split()
+            if len(parts) >= 12:  # Ensure enough columns
+                x, y, z = float(parts[-7]), float(parts[-6]), float(parts[-5])
+                coords.append([x, y, z])
+
+    coords = np.array(coords)
+    print(f"Loaded {len(coords)} dummy atoms.")
+
+    # Create ASE Atoms object with dummy atoms (e.g., all Carbon)
+    atoms = Atoms('C' * len(coords), positions=coords)
+
+    return atoms
+
+
+##### LLM UTILS ######
 
 
 def encode_image(image_path):
@@ -212,3 +401,10 @@ def get_image_messages(image_path, text):
     ]
 
     return messages
+
+
+##### MATH UTILS ######
+
+
+def calc_chi2(I0, I1, sigma_exp):
+    return 1 / (I0.shape[0] - 1) * np.sum( ((I0 - I1) / sigma_exp) ** 2 )

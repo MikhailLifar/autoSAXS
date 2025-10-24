@@ -1,5 +1,6 @@
 from typing import Optional, Any, Tuple, List
 import os
+import json
 
 import numpy as np
 import scipy.ndimage as ndi
@@ -10,310 +11,46 @@ import pyFAI.calibrant
 from pyFAI.detectors import Pilatus1M
 from pyFAI.geometryRefinement import GeometryRefinement
 from pyFAI.calibrant import CALIBRANT_FACTORY
-from pyFAI.io import image
 
 from utils import *
 
 
-class SAXSProcessor:
-    """
-    The class should contain the logic of the app, which should be independent from specific interface (CLI, GUI, Jupyter, etc) for better transferability between interfaces.
-    Each object of the class includes an object of Interface class which implements specific interfaces which is not concerned about the logic of the app.
-    The main rule for this class - each method is only one logical block, blocks are chained together in another class - Pipeline
-    """
-
-    def __init__(self):
-        """
-        Calibrator maintains experimental data and ring search configuration.
-        Core fields are initialized to None; use set_ring_search to configure.
-        """
-        # Experimental image data
-        self._calib_tiff_path: Optional[str] = None
-        self._calib_data: Optional[np.ndarray] = None
+class IntegratorExtended:
+    def __init__(self, ai_params, detector_params, mask):
+        self.detector_params = detector_params
+        self.ai_params = ai_params
+        self.mask = mask
         
-        # Ring search algorithm parameters
-        self.q_start: float = 0.95
-        self.q_stop: float = 0.995
-        self.min_segment_len: int = 50
-        self.I_threshold: float = 80.
-        self.r_min: float = 60  # pixels
-        self.r_max: float = 700  # pixels
-        self.r_step: float = 3  # pixels
-        self.peak_width: int = 60  # pixels
-        # You may add other ring detection algorithm internals if needed
+        self.detector = get_detector(**detector_params)
+        self.ai = pyFAI.AzimuthalIntegrator(detector=self.detector, **self.ai_params)
 
-        # detector
-        self.detector = None
-        self.calibrant_name = 'AgBh'
-        self._rings = None
-        self.ai = None  # azimutal integrator
-
-        # Initial guess/fields for measurement/calibration parameters
-        self.dist: Optional[float] = None  # meters
-        self.wavelength: Optional[float] = None  # meters
-        self.pixel_size: List = [None, None]  # meters
-        self.beam_center_y: Optional[float] = None  # pixels
-        self.beam_center_x: Optional[float] = None  # pixels
-        self.poni1 = None
-        self.poni2 = None
-        self.rot1: float = 0.
-        self.rot2: float = 0.
-        self.rot3: float = 0.
+    def to_disk(self, directory):
+        os.makedirs(directory, exist_ok=True)  # Ensure the subdir exists
+        with open(os.path.join(directory, 'detector_params.json'), 'w') as fwrite:
+            json.dump(self.detector_params, fwrite)
+        with open(os.path.join(directory, 'ai_params.json'), 'w') as fwrite:
+            json.dump(self.ai_params, fwrite)
+        if self.mask is not None:
+            np.save(os.path.join(directory, 'mask.npy'), self.mask)
     
-    def read_from_tiff(self, tiff_path) -> np.ndarray:
-        return image.read_image_data(tiff_path)
-    
-    def set_calib_data(self, tiff_path=None):
-        self._calib_data = self.read_from_tiff(tiff_path=tiff_path)
-        self._calib_tiff_path = tiff_path
-    
-    def set_detector_parameters(self, **kwargs):
-        """
-        Set initial geometry parameters for the detector calibration.
+    @classmethod
+    def from_disk(cls, directory):
+        with open(os.path.join(directory, 'detector_params.json'), 'r') as fread:
+            detector_params = json.load(fread)
+        with open(os.path.join(directory, 'ai_params.json'), 'r') as fread:
+            ai_params = json.load(fread)
         
-        Parameters:
-        -----------
-        **kwargs : key-value pairs
-            Valid parameters: 'dist', 'wavelength', 'pixel_size', 
-            'beam_center_x', 'beam_center_y',
-            'rot1', 'rot2', 'rot3'
-        """
-        # print(f'set_initial_point is called. Parameters are: {", ".join(kwargs.keys())}')
-        valid_keys = [
-            'dist', 'wavelength', 'pixel_size',
-            'poni1', 'poni2',
-            'beam_center_x', 'beam_center_y',
-            'rot1', 'rot2', 'rot3'
-        ]
-        for k, v in kwargs.items():
-            if k in valid_keys:
-                setattr(self, k, v)
-            else:
-                raise ValueError(f"Unrecognized geometry parameter: {k}")
-        # print(self.dist)
-        # print(self.pixel_size)
-    
-    def set_center_search(self, **kwargs):
-        """
-        Set parameters for the ring search/detection algorithm.
-        All key-value pairs provided as kwargs will overwrite attributes
-        if they are recognized ring search algorithm fields.
-        """
-        valid_keys = [
-            'q_start', 'q_stop', 'min_segment_len'
-        ]
-        for k, v in kwargs.items():
-            if k in valid_keys:
-                setattr(self, k, v)
-            else:
-                raise ValueError(f"Unrecognized center search parameter: {k}")
+        mask_path = os.path.join(directory, 'mask.npy')
+        if os.path.exists(mask_path):
+            mask = np.load(mask_path)
+        else:
+            mask = None
         
-    def set_ring_search(self, **kwargs):
-        """
-        Set parameters for the ring search/detection algorithm.
-        All key-value pairs provided as kwargs will overwrite attributes
-        if they are recognized ring search algorithm fields.
-        """
-        valid_keys = [
-            'q_stop', 'I_threshold',
-            'r_min', 'r_max', 'r_step', 'peak_width'
-        ]
-        for k, v in kwargs.items():
-            if k in valid_keys:
-                setattr(self, k, v)
-            else:
-                raise ValueError(f"Unrecognized ring search parameter: {k}")
+        return cls(mask=mask, detector_params=detector_params, ai_params=ai_params)
     
-    def find_and_set_center(self):
-        assert self._calib_data is not None
-        (self.beam_center_y, self.beam_center_x), clusters = find_center(
-            self._calib_data, q_start=self.q_start, q_stop=self.q_stop, min_segment_len=self.min_segment_len)
-        # print(self.beam_center_y, self.beam_center_x)
-        return {
-            'center_y': self.beam_center_y, 
-            'center_x': self.beam_center_x, 
-            'clusters': clusters
-        }
-    
-    def find_and_set_rings(self):
-        """
-        Locates detector rings via azimuthal search and local maxima.
-        Returns (ring pixel array, radii used, integrated profile).
-        """
-        assert self._calib_data is not None
-        assert self.beam_center_y is not None and self.beam_center_x is not None
-        
-        data = np.copy(self._calib_data)
-        data[data > np.quantile(data, self.q_stop)] = 0
-        center = np.array([self.beam_center_y, self.beam_center_x]).reshape(1, -1)
-        # radial distances
-        rs = np.arange(self.r_min, self.r_max + 1, self.r_step).reshape(-1, 1)
-        pixel_coords = np.fromfunction(
-            lambda i, j: (i // data.shape[1]) * (j == 0) + (i % data.shape[1]) * (j == 1),
-            (data.shape[0] * data.shape[1], 2),
-            dtype=int)
-        r_i = cdist(center, pixel_coords)
-        # integration
-        I_i = (data[pixel_coords[:, 0], pixel_coords[:, 1]]).reshape(-1, 1)
-        integrated = np.maximum(10. - np.abs(rs - r_i), 0) @ I_i / (rs + 10.)
-        integrated = integrated.flatten()
-
-        # finding rings through peaks
-        idx_rings = find_local_maxima(
-            integrated, int(self.peak_width // self.r_step), int(self.peak_width // self.r_step))
-        r_rings = rs[idx_rings]
-        rings = []
-        for i, r in enumerate(r_rings):
-            ring = pixel_coords[((10. - np.abs(r - r_i)) > 0.).flatten() & (I_i > self.I_threshold).flatten()]
-            if len(ring) > self.min_segment_len:
-                rings.append(np.hstack([ring, np.full((len(ring), 1), i)]))
-        if len(rings) == 0:
-            raise RuntimeError("No rings found with current threshold/search parameters")
-        rings = np.vstack(rings)
-        self._rings = rings
-        return {'rings': self._rings, 'radii(px)': r_rings, 'integrated': (rs, integrated)} 
-    
-    def refine(self, fix: Tuple[str]=('wavelength', 'rot3'), npt: int = 1000):
-        """
-        Refine the detector geometry to calibrant rings, returning:
-          - refined_params: [dist, poni1, poni2, rot1, rot2, rot3]
-          - calibrated_curve: tuple (q, I) using the refined geometry
-          - q_theor: theoretical peak positions for the calibrant
-        """
-        if self.pixel_size is not None:
-            self.detector = Pilatus1M(self.pixel_size[0], self.pixel_size[1])
-        assert self._calib_data is not None, 'Experimental data (self.data) must be set.'
-        assert self.detector is not None and all(s is not None for s in self.pixel_size), 'detector and pixel_size must be set.'
-        assert self.wavelength, 'wavelength must be set.'
-        assert self.dist is not None, 'Initial geometry guess (dist) required.'
-
-        # print(self.beam_center_y, self.beam_center_x)
-        assert self.beam_center_y is not None and self.beam_center_x is not None
-        assert self._rings is not None
-
-        # Calibrant (powder) model
-        calibrant = CALIBRANT_FACTORY(self.calibrant_name)
-        calibrant.set_wavelength(self.wavelength)
-        poni1 = self.pixel_size[0] * self.beam_center_y
-        poni2 = self.pixel_size[1] * self.beam_center_x
-
-        # GeometryRefinement
-        gr = GeometryRefinement(
-            self._rings,
-            calibrant=calibrant,
-            dist=self.dist,
-            poni1=poni1,
-            poni2=poni2,
-            rot1=self.rot1,
-            rot2=self.rot2,
-            rot3=self.rot3,
-            detector=self.detector,
-            wavelength=self.wavelength,
-        )
-
-        # Refine geometry, fixing selected parameters (e.g., wavelength, rot3)
-        gr.refine3(fix=fix)
-        refined = {
-            'dist': gr._dist,
-            'poni1': gr._poni1,
-            'poni2': gr._poni2,
-            'rot1': gr._rot1,
-            'rot2': gr._rot2,
-            'rot3': gr._rot3 % (2 * np.pi)
-        }
-        for k, v in refined.items():
-            refined[k] = float(v)
-
-        self.set_detector_parameters(**refined)
-
-        # Use refined geometry to integrate (q, I) - "calibrated" curve
-        ai = pyFAI.AzimuthalIntegrator(
-            **refined,
-            detector=self.detector,
-            wavelength=self.wavelength
-        )
-        self.ai = ai
-
-        q_cal, I_cal = self.ai.integrate1d(self._calib_data, npt=npt)
-
-        # Get theoretical/"ideal" calibrant ring positions
-        tth_theor = np.array(calibrant.get_2th())
-        q_theor = 4 * np.pi * np.sin(tth_theor / 2) / self.wavelength * 1e-9
-
-        return {'refined': refined, 'curve_calibrated': (q_cal, I_cal), 'theoretical_peaks': q_theor}
-    
-    def integrate_2d_to_1d(self, saxs_2d, npt=1000, 
-                           destpath=None, metadata=None):
-        q, I = self.ai.integrate1d(saxs_2d, npt=npt)
-        if destpath is not None:
-            if metadata is None:
-                metadata = dict()
-            write_saxs(destpath, q, I, metadata)
+    def integrate1d(self, saxs_2d, npt):
+        q, I = self.ai.integrate1d(saxs_2d, npt=npt, mask=self.mask)
         return q, I
-    
-    @staticmethod
-    def subtract_buffer(
-        buffer_path, src_path, destpath,
-        image_path=None, 
-        method='match_tail', match_tail_ops=None, 
-        ):
-        q_buff, I_buff, _ = read_saxs(buffer_path)
-
-        scaling_factor = 1.
-
-        q, I, _ = read_saxs(src_path)
-        if method == 'match_tail':
-            algo_ops = {'q_range_abs': None, 
-                        'q_range_rel': (0.8, None), 
-                        'approach_factor': 0.98}
-            if match_tail_ops is None:
-                match_tail_ops = dict()
-            algo_ops.update(match_tail_ops)
-
-            assert algo_ops['q_range_abs'] is None or algo_ops['q_range_rel'] is None, 'cant set both q_range_abs and q_range_rel'
-
-            if not np.array_equal(q, q_buff):
-                # If not, we need to interpolate the buffer to match sample q-values
-                I_buff = np.interp(q, q_buff, I_buff)
-
-            q_max = np.max(q)
-            if algo_ops['q_range_rel'] is not None:
-                q0, q1 = algo_ops['q_range_rel']
-                if q1 is None:
-                    q1 = 1.
-                algo_ops['q_range_abs'] = q0 * q_max, q1 * q_max
-            q0, q1 = algo_ops['q_range_abs']
-            if q1 is None:
-                q1 = q_max
-            idx = (q0 < q) & (q < q1)
-
-            q_tail = q[idx]
-            I_tail = I[idx]
-            I_buff_tail = I_buff[idx]
-
-            I_tail = whittaker_smooth(I_tail, lmbd=1.e+10, d=3)
-            I_buff_tail = whittaker_smooth(I_buff_tail, lmbd=1.e+10, d=3)
-            
-            # idx = I_buff_tail > 1.e-4 * np.max(I_buff)
-            # q_tail = q_tail[idx]
-            # I_tail = I_tail[idx]
-            # I_buff_tail = I_buff_tail[idx]
-
-            ratios = I_tail / I_buff_tail
-            scaling_factor = np.min(ratios)
-
-        scaling_factor *= algo_ops['approach_factor']
-        I_buffer_scaled = I_buff * scaling_factor
-        I_sub = I - I_buffer_scaled
-
-        write_saxs(destpath, q, I_sub, metadata={
-                    'type': 'sub',
-                    'sample_path': src_path,
-                    'buffer_path': buffer_path
-                } 
-            )
-        
-        return q, I_sub, I_buffer_scaled
 
 
 def fit_circle(points: np.ndarray):
@@ -373,7 +110,11 @@ def find_center(
         center_y, center_x, _ = fit_circle(ring)
         centers.append((center_y, center_x))
     center = np.median(centers, axis=0)
-    return center, ring_pixels
+    return {
+        'center_y_px': center[0], 
+        'center_x_px': center[1], 
+        'clusters': ring_pixels
+    }
 
 
 def find_local_maxima(arr, left_neighbors=1, right_neighbors=1):
@@ -388,3 +129,209 @@ def find_local_maxima(arr, left_neighbors=1, right_neighbors=1):
     centers = windows[:, center]
     is_max = np.all(centers[:, None] >= np.delete(windows, center, axis=1), axis=1)
     return np.where(is_max)[0] + left_neighbors
+
+
+def get_interring_dist_px(dist_guess, lmbd, px_size, calibrant_name='AgBh'):
+    # # for some reason the formula does not work
+    # d = CALIBRANT_FACTORY(calibrant_name=calibrant_name).get_dSpacing()[0] * 1.e-10
+    # interring_dist = dist_guess * lmbd / d / px_size
+    # # print(f'D-spacing: {d}')
+    # # print(f'Interring dist: {interring_dist}')
+
+    # so have to use some crutch here
+    interring_dist = 40 * dist_guess / 0.7 * lmbd / 1.445e-10
+
+    return interring_dist
+
+
+def find_rings(
+    calib_data, center_y_px, center_x_px, r_max_px,
+    interring_dist_px, 
+    q_stop=0.995, r_beam_px=35, r_step_px=3, ring_I_threshold=80.0, min_segment_len=50,
+    ):
+    """
+    Locates detector rings via azimuthal search and local maxima.
+    Returns (ring pixel array, radii used, integrated profile).
+    """
+    
+    data = np.copy(calib_data)
+    data[data > np.quantile(data, q_stop)] = 0
+    center = np.array([center_y_px, center_x_px]).reshape(1, -1)
+    # radial distances
+    rs = np.arange(r_beam_px, r_max_px + 1, r_step_px).reshape(-1, 1)
+    pixel_coords = np.fromfunction(
+        lambda i, j: (i // data.shape[1]) * (j == 0) + (i % data.shape[1]) * (j == 1),
+        (data.shape[0] * data.shape[1], 2),
+        dtype=int)
+    r_i = cdist(center, pixel_coords)
+    # integration
+    I_i = (data[pixel_coords[:, 0], pixel_coords[:, 1]]).reshape(-1, 1)
+    integrated = np.maximum(10. - np.abs(rs - r_i), 0) @ I_i / (rs + 10.)
+    integrated = integrated.flatten()
+
+    # finding rings through peaks
+    peak_width_estim = int(0.9 * interring_dist_px / r_step_px)
+    idx_rings = find_local_maxima(
+        integrated, peak_width_estim, peak_width_estim)
+    r_rings = rs[idx_rings]
+    rings = []
+    for i, r in enumerate(r_rings):
+        ring = pixel_coords[((10. - np.abs(r - r_i)) > 0.).flatten() & (I_i > ring_I_threshold).flatten()]
+        if len(ring) > min_segment_len:
+            rings.append(np.hstack([ring, np.full((len(ring), 1), i)]))
+    if len(rings) == 0:
+        raise RuntimeError("No rings found with current threshold/search parameters")
+    rings = np.vstack(rings)
+    return {'rings': rings, 'radii_px': r_rings, 'integrated': (rs, integrated)}
+
+
+def get_mask(data, center_y_px, center_x_px, r_beam_px):
+    return np.fromfunction(lambda i, j: np.linalg.norm([i - center_y_px, j - center_x_px], axis=0) <= r_beam_px,
+                           data.shape)
+
+
+def get_detector(detector_name='Pilatus1M', pixel_size=None):
+    assert pixel_size is not None
+    if detector_name == 'Pilatus1M':
+        return Pilatus1M(pixel_size[0], pixel_size[1])
+    else:
+        raise ValueError(f'Unknown detector: {detector_name}')
+
+
+def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_x_px,
+           calibrant_name,
+           r_beam_px,
+           rot1=0, rot2=0, rot3=0, detector_name='Pilatus1M', 
+           fix: Tuple[str]=('wavelength', 'rot3'), npt: int = 1000):
+    """
+    Refine the detector geometry to calibrant rings, returning:
+        - refined_params: [dist, poni1, poni2, rot1, rot2, rot3]
+        - calibrated_curve: tuple (q, I) using the refined geometry
+        - q_theor: theoretical peak positions for the calibrant
+    """
+    assert detector_name is not None and all(s is not None for s in pixel_size), 'detector and pixel_size must be set.'
+    assert wavelength is not None, 'wavelength must be set.'
+
+    detector = get_detector(detector_name, pixel_size)
+
+    # Calibrant (powder) model
+    calibrant = CALIBRANT_FACTORY(calibrant_name)
+    calibrant.set_wavelength(wavelength)
+    poni1 = pixel_size[0] * center_y_px
+    poni2 = pixel_size[1] * center_x_px
+
+    # GeometryRefinement
+    gr = GeometryRefinement(
+        rings,
+        calibrant=calibrant,
+        dist=dist,
+        poni1=poni1,
+        poni2=poni2,
+        rot1=rot1,
+        rot2=rot2,
+        rot3=rot3,
+        detector=detector,
+        wavelength=wavelength,
+    )
+
+    # Refine geometry, fixing selected parameters (e.g., wavelength, rot3)
+    gr.refine3(fix=fix)
+    refined = {
+        'dist': gr._dist,
+        'poni1': gr._poni1,
+        'poni2': gr._poni2,
+        'rot1': gr._rot1,
+        'rot2': gr._rot2,
+        'rot3': gr._rot3 % (2 * np.pi)
+    }
+    for k, v in refined.items():
+        refined[k] = float(v)
+
+    # Use refined geometry to integrate (q, I) - "calibrated" curve
+    integrator = IntegratorExtended(
+        ai_params={'wavelength': wavelength, **refined},
+        detector_params={'detector_name': detector_name, 'pixel_size': pixel_size},
+        mask=get_mask(calib_data, center_y_px, center_x_px, r_beam_px)
+        # mask=None
+    )
+
+    q_cal, I_cal = integrator.integrate1d(calib_data, npt=npt)
+
+    # Get theoretical/"ideal" calibrant ring positions
+    tth_theor = np.array(calibrant.get_2th())
+    q_theor = 4 * np.pi * np.sin(tth_theor / 2) / wavelength * 1e-9
+
+    return {'integrator': integrator, 'refined': refined, 'curve_calibrated': (q_cal, I_cal), 'theoretical_peaks': q_theor}
+
+
+def integrate_2d_to_1d(integrator, saxs_2d, npt=1000, destpath=None, metadata=None):
+    q, I = integrator.integrate1d(saxs_2d, npt=npt)
+    if destpath is not None:
+        if metadata is None:
+            metadata = dict()
+        write_saxs(destpath, q, I, metadata)
+    return q, I
+
+
+def subtract_buffer(
+    buffer_path, src_path, destpath,
+    image_path=None, 
+    method='match_tail', match_tail_ops=None, 
+    ):
+    q_buff, I_buff, _ = read_saxs(buffer_path)
+
+    scaling_factor = 1.
+
+    q, I, _ = read_saxs(src_path)
+    if method == 'match_tail':
+        algo_ops = {'q_range_abs': None, 
+                    'q_range_rel': (0.8, None), 
+                    'approach_factor': 0.98}
+        if match_tail_ops is None:
+            match_tail_ops = dict()
+        algo_ops.update(match_tail_ops)
+
+        assert algo_ops['q_range_abs'] is None or algo_ops['q_range_rel'] is None, 'cant set both q_range_abs and q_range_rel'
+
+        if not np.array_equal(q, q_buff):
+            # If not, we need to interpolate the buffer to match sample q-values
+            I_buff = np.interp(q, q_buff, I_buff)
+
+        q_max = np.max(q)
+        if algo_ops['q_range_rel'] is not None:
+            q0, q1 = algo_ops['q_range_rel']
+            if q1 is None:
+                q1 = 1.
+            algo_ops['q_range_abs'] = q0 * q_max, q1 * q_max
+        q0, q1 = algo_ops['q_range_abs']
+        if q1 is None:
+            q1 = q_max
+        idx = (q0 < q) & (q < q1)
+
+        q_tail = q[idx]
+        I_tail = I[idx]
+        I_buff_tail = I_buff[idx]
+
+        I_tail = whittaker_smooth(I_tail, lmbd=1.e+10, d=3)
+        I_buff_tail = whittaker_smooth(I_buff_tail, lmbd=1.e+10, d=3)
+        
+        # idx = I_buff_tail > 1.e-4 * np.max(I_buff)
+        # q_tail = q_tail[idx]
+        # I_tail = I_tail[idx]
+        # I_buff_tail = I_buff_tail[idx]
+
+        ratios = I_tail / I_buff_tail
+        scaling_factor = np.min(ratios)
+
+    scaling_factor *= algo_ops['approach_factor']
+    I_buffer_scaled = I_buff * scaling_factor
+    I_sub = I - I_buffer_scaled
+
+    write_saxs(destpath, q, I_sub, metadata={
+                'type': 'sub',
+                'sample_path': src_path,
+                'buffer_path': buffer_path
+            } 
+        )
+    
+    return q, I_sub, I_buffer_scaled

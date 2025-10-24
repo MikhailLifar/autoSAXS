@@ -8,8 +8,12 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from collections import defaultdict
+
 sys.path.append(os.path.expanduser('~/SupervisedML/repos'))
 from supervised_ml.plot_util import *
+
+from utils import calc_chi2
 
 
 class Viewer:
@@ -33,10 +37,17 @@ class Viewer:
     def view_curves(*args, **kwargs):
         pass
 
+    @staticmethod
+    def plot_structure_and_scattering(*args, **kwargs):
+        pass
+
 
 class PLTViewer(Viewer):
+    def __init__(self):
+        setPlotDefaults()
+
     @staticmethod
-    def view_center(img_data, tiff_path, center_y, center_x, clusters, 
+    def view_center(img_data, tiff_path, center_y_px, center_x_px, clusters, 
                     fig_axs=None):
         show = fig_axs is None
         if fig_axs is None:
@@ -54,7 +65,7 @@ class PLTViewer(Viewer):
         scatter_data = pd.DataFrame(data=clusters, columns=['y', 'x', 'cluster'])
         sns.scatterplot(data=scatter_data, y='y', x='x', hue='cluster', ax=axs[1],
                         palette=get_bright_fire_cmap()[0])
-        axs[1].plot(center_x, center_y, 'r*')
+        axs[1].plot(center_x_px, center_y_px, 'r*')
         axs[1].set_title(f"Apparent rings and the center")
         axs[1].set_xlabel("Pixel X")
         axs[1].set_ylabel("Pixel Y")
@@ -127,7 +138,7 @@ class PLTViewer(Viewer):
     def view_calibration(
         *,
         img_data, tiff_path, 
-        center_y, center_x, clusters,
+        center_y_px, center_x_px, clusters,
         rings, curve_calibrated, theoretical_peaks, 
         fig_axs=None, show=True, plotFilePath=None,
         **kwargs):
@@ -138,7 +149,7 @@ class PLTViewer(Viewer):
             fig, axs = fig_axs
         
         PLTViewer.view_center(img_data, tiff_path, fig_axs=(fig, axs[0]),
-                              center_y=center_y, center_x=center_x, clusters=clusters)
+                              center_y_px=center_y_px, center_x_px=center_x_px, clusters=clusters)
 
         axs[1, 0].imshow(np.log1p(img_data), cmap='viridis', origin='lower')
         scatter_data = pd.DataFrame(data=rings, columns=['y', 'x', 'ring_number'])
@@ -161,6 +172,74 @@ class PLTViewer(Viewer):
         kw = dict(xlabel='q (nm^-1)', ylabel='I (a.u.)')
         kw.update(kwargs)
         plotLines(*args, **kw)
+    
+    @staticmethod
+    def plot_structure_and_scattering(atoms, q, I, sigma, I_fit, fig_axs=None,
+                                      plotFilePath=None):
+        """
+        Plot 2D projections of an ASE Atoms object and optional scattering data.
+
+        Parameters:
+        -----------
+        atoms : ase.Atoms
+            Atomic structure to visualize.
+        q, I : array-like, optional
+            Experimental scattering data (q-values and intensities).
+        q_fit, I_fit : array-like, optional
+            Fitted scattering curve.
+        """
+        positions = atoms.positions  # (N, 3)
+        symbols = atoms.get_chemical_symbols()
+        symbols_set = set(symbols)
+        assert len(symbols_set) < 2, f'Expected one atom symbol for dummy model or empty model, but got atom symbols {list(symbols_set)}'
+        
+        # # Group atoms by element for coloring
+        # atom_groups = defaultdict(list)
+        # for sym, pos in zip(symbols, positions):
+        #     atom_groups[sym].append(pos)
+        # for sym in atom_groups:
+        #     atom_groups[sym] = np.array(atom_groups[sym])
+
+        # Create 2x2 subplots
+        if fig_axs is None:
+            fig, axs = plt.subplots(2, 2, figsize=(30, 24))
+        else:
+            fig, axs = fig_axs
+        (ax_front, ax_side), (ax_top, ax_saxs) = axs
+
+        # --- Projections ---
+        for ax, (x, y, title) in zip(
+            [ax_front, ax_side, ax_top],
+            [
+                (positions[:, 0], positions[:, 1], 'Front (x–y)'),
+                (positions[:, 1], positions[:, 2], 'Side (y–z)'),
+                (positions[:, 0], positions[:, 2], 'Top (x–z)')
+            ]
+        ):
+            # for sym, coords in atom_groups.items():
+            #     ax.scatter(coords[:, 0] if 'x' in title else coords[:, 1 if 'y' in title else 0],
+            #                coords[:, 1 if 'y' in title else 2],
+            #                label=sym, s=80, edgecolor='k', linewidth=0.5)
+            ax.scatter(x, y, s=80, edgecolor='k', linewidth=0.5)
+            ax.set_xlabel('x' if 'x' in title else 'y')
+            ax.set_ylabel('y' if 'x–y' in title else 'z')
+            ax.set_title(title)
+            ax.set_aspect('equal', adjustable='datalim')
+
+        # --- Scattering plot (subplot 1,1) ---
+        ax_saxs.plot(q, I, 'o', label='Experimental', markersize=4, alpha=0.7)
+        ax_saxs.plot(q, I_fit, '-', label='Fit', linewidth=2)
+        ax_saxs.set_xlabel(r'$q$ (nm$^{-1}$)')
+        ax_saxs.set_ylabel(r'$I(q)$ (a.u.)')
+        ax_saxs.set_title(f'Experiment vs fit comparison\n$\\chi^2$: {calc_chi2(I, I_fit, sigma):.5f}')
+        ax_saxs.set_yscale('log')
+        ax_saxs.legend()
+
+        # plt.tight_layout()
+        # plt.show()
+
+        if plotFilePath is not None:
+            savefig(fig, plotFilePath)
 
 
 def get_bright_fire_cmap():
