@@ -52,6 +52,127 @@ def json_type_caster(s):
         raise ValueError('Incorrect JSON passed')
 
 
+# class Paths:
+#     def __init__(self, interface: Interface, paths: Optional[dict] = None):
+#         self.interface = interface
+#         if paths is None:
+#             paths = dict()
+#         self.paths = paths
+    
+#     def get_paths(self, group_name, mode, obligatory=True):
+#         assert mode in ('online', 'offline')
+#         if mode == 'online':
+#             new_path = self.interface.ask_for_file(
+#                 f'Upload one or more "{group_name}" files' + ' (Press Enter to skip)' * (not obligatory), 
+#                 obligatory=obligatory)
+#             while new_path:
+#                 if group_name not in self.paths:
+#                     self.paths[group_name] = []
+#                 self.paths[group_name].append(new_path)
+#         return self.paths.get(group_name, []), group_name in self.paths
+
+
+# class Block:
+#     def __init__(self, interface: Interface, viewer: Viewer, required_paths: list):
+#         self.interface = interface
+#         self.viewer = viewer
+#         self.required_paths = required_paths
+    
+#     def __call__(self, paths: Paths, dest_dir, config, *args, **kwargs):
+#         raise NotImplementedError
+    
+#     def check_paths(self, paths: Paths):
+#         return all(paths_group in paths.paths for paths_group in self.required_paths)
+
+
+# class Autocalib(Block):
+#     def __init__(self, *args, required_paths=None, **kwargs):
+#         if required_paths is None:
+#             required_paths = ['calibrant_2d', 'config']
+#         Block.__init__(self, *args, required_paths=required_paths, **kwargs)
+
+#     def __call__(self, paths: Paths, dest_dir, config, paths_mode, debug=False):
+#         config_path = paths.get_paths('config', paths_mode)
+#         calibrant_path = paths.get_paths('calibrant_2d', paths_mode)
+        
+#         # Check if calibration results exist in debug mode
+#         calibration_results_file = os.path.join(dest_dir, 'calibration.png')
+#         integrator_subd = os.path.join(dest_dir, 'integrator_params')
+#         refined_config_exists = 'refined' in config
+        
+#         calibrant_name = config['calibrant_name']
+#         calib_data = read_from_tiff(calibrant_path)
+        
+#         if debug and refined_config_exists and all(
+#             os.path.exists(p) for p in (calibration_results_file, integrator_subd)
+#         ):
+#             self.interface.send_message('Debug mode: Skipping calibration (results already exist)')
+#             refined = config['refined']
+#             integrator = IntegratorExtended.from_disk(integrator_subd)
+#             return {'integrator': integrator, 'refined': refined}
+#         else:
+#             self.interface.send_message('Autocalibration...')
+
+#             center_ref_params = {k: config['center_refinement'][k] 
+#                                 for k in ['q_start', 'q_stop', 'min_segment_len']}
+#             self.interface.send_message('    Center search...')
+#             center_step_ret = find_center(calib_data, **center_ref_params)
+#             # self.viewer.view_center(calib_data, calibrant_path, **center_search_res)
+            
+#             d_geom = config['detector_geometry']
+#             interring_dist_px = get_interring_dist_px(
+#                 d_geom['dist'], d_geom['wavelength'], d_geom['pixel_size'][0]
+#             )
+
+#             ring_search_params = {k: config['ring_search'][k] 
+#                                   for k in ['q_stop', 'ring_I_threshold', 'r_max_px', 'r_step_px']}
+#             ring_search_params.update({
+#                 'r_beam_px': config['r_beam_px'],
+#                 'center_y_px': center_step_ret['center_y_px'],
+#                 'center_x_px': center_step_ret['center_x_px'],
+#                 'interring_dist_px': interring_dist_px
+#             })
+#             self.interface.send_message('    Rings identification...')
+#             rings_step_ret = find_rings(calib_data, **ring_search_params)
+#             # self.viewer.view_rings(calib_data, calibrant_path, rings=find_rings_res['rings'])
+            
+#             geometry_params = {k: config['detector_geometry'][k] 
+#                                 for k in ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3']}
+#             geometry_params.update({
+#                 'r_beam_px': config['r_beam_px'],
+#                 'center_y_px': center_step_ret['center_y_px'],
+#                 'center_x_px': center_step_ret['center_x_px'],
+#                 'calibrant_name': calibrant_name,
+#             })
+#             self.interface.send_message('    Geometry refinement...')
+#             refine_step_ret = refine(calib_data, rings_step_ret['rings'], **geometry_params)
+#             # self.viewer.view_refined_curve(refine_step_ret['curve_calibrated'], refine_step_ret['theoretical_peaks'])
+            
+#             refine_step_ret['integrator'].to_disk(integrator_subd)
+
+#             self.viewer.view_calibration(
+#                 img_data=calib_data, tiff_path=calibrant_path,
+#                 show=False, plotFilePath=calibration_results_file,
+#                 **center_step_ret, **rings_step_ret, **refine_step_ret)
+#             refined = refine_step_ret['refined']
+#             refined.update({'wavelength': config['detector_geometry']['wavelength']})
+#             self.interface.send_message(
+#                 f'\n-- Calibrated geometry parameters --\n' + '\n'.join(f'{p}: {v}' for p, v in refined.items())  + '\n'
+#             )
+#             self.interface.send_message('Finished calibration')
+#             update_config(config, config_path, 'refined', values=refined)
+#             return None, {k: refine_step_ret[k] for k in ('refined', 'integrator')}
+
+
+# class Ingegration(Block):
+#     def __init__(self, *args, **kwargs):
+#         required_paths = ['calibrant_2d', 'config']
+#         Block.__init__(self, *args, required_paths=required_paths, **kwargs)
+
+#     def __call__(self, paths: Paths, dest_dir, config, paths_mode, debug=False):
+#         pass
+
+
 class Controller:
     """
     This class should combine an interface and a processor. In fact, it looks like the MVC model:
@@ -205,15 +326,18 @@ class Controller:
     
     def get_descriptors(self, to_analyze_paths, dest_dir, debug=False):
         analyzis_res_paths = []
+        gnom_out_paths = []
         for p in to_analyze_paths:
             root, basename = os.path.split(p)
             basename, _ = os.path.splitext(basename)
             results_file = os.path.join(dest_dir, f'{basename}_results.txt')
+            gnom_file = os.path.join(dest_dir, f'{basename}.out')
             
             # Check if analysis results exist in debug mode
-            if debug and os.path.exists(results_file):
+            if debug and all(os.path.exists(pp) for pp in (results_file, gnom_file)):
                 self.interface.send_message(f'Debug mode: Skipping analysis for {p} (results already exist)')
                 analyzis_res_paths.append(results_file)
+                gnom_out_paths.append(gnom_file)
                 continue
                 
             os.system(f'''INPUT_FILE={p}
@@ -238,6 +362,9 @@ echo "  Rg = $RG_VALUE nm" >> "$RESULTS_FILE"
 echo "  I(0) = $I0_VALUE" >> "$RESULTS_FILE"
 echo "  Quality = $QUALITY" >> "$RESULTS_FILE"
 echo "" >> "$RESULTS_FILE"
+
+# Step 1.5 Calculate P(R)
+{os.path.join(ATSAS_BIN_PREFIX, 'datgnom')} "$INPUT_FILE" -r $RG_VALUE -o {gnom_file}
 
 # Step 2: Calculate Porod invariant using DATPOROD
 # DATPOROD_OUTPUT=$({os.path.join(ATSAS_BIN_PREFIX, 'datporod')} "$INPUT_FILE")
@@ -283,10 +410,11 @@ echo ""
 echo "Full results saved to: $RESULTS_FILE"
 ''')
             analyzis_res_paths.append(results_file)
+            gnom_out_paths.append(gnom_file)
         
-        return analyzis_res_paths
+        return analyzis_res_paths, gnom_out_paths
     
-    def plots(self, to_plot_paths, dest_dir, debug=False):
+    def plot(self, to_plot_paths, dest_dir, debug=False):
         plot_paths = []
         for p in to_plot_paths:
             root, basename = os.path.split(p)
@@ -331,23 +459,36 @@ echo "Full results saved to: $RESULTS_FILE"
         
         return plot_paths
     
-    def fit_geometry(self, to_fit_paths, dest_dir, debug=False):
+    def fit_geometry(self, saxs_1d_paths, gnom_paths, dest_dir, debug=False):
         self.interface.send_message('Fitting with shapes...')
-        for p in to_fit_paths:
+        for p, gnom_p in zip(saxs_1d_paths, gnom_paths):
             root, basename = os.path.split(p)
             basename, _ = os.path.splitext(basename)
+            
             bodies_subdir = os.path.join(dest_dir, f'bodies_{basename}')
             os.makedirs(bodies_subdir, exist_ok=True)
             bodies_call = os.path.join(ATSAS_BIN_PREFIX, 'bodies')
-            file_prefix = os.path.join(bodies_subdir, 'bodies_fit')
+            bodies_prefix = os.path.join(bodies_subdir, 'bodies_fit')
+
+            dammif_subdir = os.path.join(dest_dir, f'dammif_{basename}')
+            os.makedirs(dammif_subdir, exist_ok=True)
+            dammif_call = os.path.join(ATSAS_BIN_PREFIX, "dammif")
+            dammif_prefix = os.path.join(dammif_subdir, 'dammif')
+            dammif_reps_num = 2 if debug else 5
+
+            bodies_fits_png = os.path.join(bodies_subdir, f'{basename}_fits.png')
+            dammin_fits_png = os.path.join(dammif_subdir, f'{basename}_fits.png')
             
-            if debug and all(os.path.exists(os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')) for shape in BODIES_SHAPES):
-                self.interface.send_message(f'Debug mode: Skipping BODIES fit for {p} (results already exist)')
+            exists_bodies = all(os.path.exists(os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')) for shape in BODIES_SHAPES)
+            exists_dammif = all(os.path.exists(os.path.join(dammif_subdir, f'dammif-{i}.fir')) for i in range(dammif_reps_num))
+            if debug and exists_bodies and exists_dammif and all(os.path.exists(p) for p in (bodies_fits_png, dammin_fits_png)):
+                self.interface.send_message(f'Debug mode: Skipping BODIES and DAMMIF fit for {p} (results already exist)')
                 continue
 
-            os.system(f"{bodies_call} --prefix={file_prefix} {p}")
+            os.system(f"{bodies_call} --prefix={bodies_prefix} {p}")
 
             q, I, _ = read_saxs(p)
+            
             to_plot = [q, I, {'label': 'exp', 'lw': 4}]
             for shape in BODIES_SHAPES:
                 fir_path = os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')
@@ -371,6 +512,42 @@ echo "Full results saved to: $RESULTS_FILE"
             self.viewer.view_curves(*to_plot,
                                     title=f'Fits comparison for {basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
                                     plotFilePath=os.path.join(bodies_subdir, f'{basename}_fits.png'))
+            
+            os.system(f'for i in `seq 1 {dammif_reps_num}`; do {dammif_call} --prefix={dammif_prefix}-$i --mode=fast {gnom_p}; done')
+            to_plot = [q, I, {'label': 'exp', 'lw': 4}]
+            for i in range(dammif_reps_num):
+                fir_path = f'{dammif_prefix}-{i+1}.fir'
+                cif_path = f'{dammif_prefix}-{i+1}-1.cif'
+
+                data = np.loadtxt(fir_path, skiprows=1, dtype=np.float64)
+                q_fit, I_fit, sigma_exp = data[:, 0], data[:, 3], data[:, 2]
+                q_fit = q_fit * 10.0  # from A^-1 to nm ^-1
+
+                # self.viewer.view_curves(q_fit, I_fit, 'fitted curve', 
+                #                         plotFilePath=os.path.join(dammif_subdir, f'{basename}_{i}_shit_here_0.png'))
+
+                idx_intersection = (q <= q_fit[-1])
+                q_intersetcion, I_intersection = q[idx_intersection], I[idx_intersection]
+                I_fit_interp = np.interp(q_intersetcion, q_fit, I_fit)
+                sigma_interp = np.interp(q_intersetcion, q_fit, sigma_exp)
+
+                # self.viewer.view_curves(q_intersetcion, I_fit_interp, 'fitted curve', 
+                #                         plotFilePath=os.path.join(dammif_subdir, f'{basename}_{i}_shit_here_1.png'))
+
+                chi2 = calc_chi2(I_intersection, I_fit_interp, sigma_interp)
+                to_plot.extend([q_intersetcion, I_fit_interp, f'dammif-{i}; chi2: {chi2:.5f}'])
+
+                atoms = read_bodies_cif(cif_path)
+                # self.viewer.plot_structure_and_scattering(
+                #     atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
+                #     plotFilePath=os.path.join(dammif_subdir, f'dammif-{i}_view.png'))
+                self.viewer.plot_3d_views_and_scattering(
+                    atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
+                    plotFilePath=os.path.join(dammif_subdir, f'dammif-{i}_view.png'))
+            
+            self.viewer.view_curves(*to_plot,
+                                    title=f'Fits comparison for {basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
+                                    plotFilePath=os.path.join(dammif_subdir, f'{basename}_fits.png'))
     
     def ai_analysis(self, atsas_analysis_paths, plots_paths, dest_dir,
                     text_model, vision_model,
@@ -458,11 +635,11 @@ echo "Full results saved to: $RESULTS_FILE"
         # TODO scaling step
 
         self.interface.send_message('Calculating the parameters...')
-        paths['atsas_analysis']  = self.get_descriptors(paths['sample_sub'], dest_dir=directory, debug=debug)
+        paths['atsas_analysis'], paths['p(R)']  = self.get_descriptors(paths['sample_sub'], dest_dir=directory, debug=debug)
 
-        paths['plots'] = self.plots(paths['sample_sub'], dest_dir=directory, debug=debug)
+        paths['plots'] = self.plot(paths['sample_sub'], dest_dir=directory, debug=debug)
 
-        self.fit_geometry(paths['sample_sub'], dest_dir=directory, debug=debug)
+        self.fit_geometry(paths['sample_sub'], paths['p(R)'], dest_dir=directory, debug=debug)
 
         # self.ai_analysis(paths['atsas_analysis'], paths['plots'], dest_dir=directory, 
         #                  text_model=model, vision_model=vision_model, debug=debug)

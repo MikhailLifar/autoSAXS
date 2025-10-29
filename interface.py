@@ -24,7 +24,7 @@ class Interface:
         raise NotImplementedError
 
     @staticmethod
-    def ask_for_file(query=None):
+    def ask_for_file(query=None, obligatory=True):
         raise NotImplementedError
 
     @staticmethod
@@ -101,20 +101,23 @@ class CLIInterface(Interface):
         return new_parameters
 
     @staticmethod
-    def ask_for_file(query=None):
+    def ask_for_file(query=None, obligatory=True):
         assert query is not None
         query += ': '
         filepath = input(query)
-        while not os.path.exists(filepath):
+        run_condition = not os.path.exists(filepath) and (obligatory or filepath)
+        while run_condition:
             print(f'{filepath} does not exist')
             filepath = input(query)
-            if not filepath:
+            run_condition = not os.path.exists(filepath) and (obligatory or filepath)
+            if not filepath and obligatory:
                 break
         
         if filepath:
             return filepath
-        else:
+        elif obligatory:
             raise PipelineInterrupt("User terminated file selection")
+        return ''
 
     @staticmethod
     def ask_question(query, options: Optional[dict] = None, default_op='no default'):

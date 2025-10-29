@@ -10,6 +10,9 @@ import seaborn as sns
 
 from collections import defaultdict
 
+import ase
+from ase.geometry import get_distances
+
 sys.path.append(os.path.expanduser('~/SupervisedML/repos'))
 from supervised_ml.plot_util import *
 
@@ -39,6 +42,10 @@ class Viewer:
 
     @staticmethod
     def plot_structure_and_scattering(*args, **kwargs):
+        pass
+
+    @staticmethod
+    def plot_3d_views_and_scattering(*args, **kwargs):
         pass
 
 
@@ -234,6 +241,87 @@ class PLTViewer(Viewer):
         ax_saxs.set_title(f'Experiment vs fit comparison\n$\\chi^2$: {calc_chi2(I, I_fit, sigma):.5f}')
         ax_saxs.set_yscale('log')
         ax_saxs.legend()
+
+        # plt.tight_layout()
+        # plt.show()
+
+        if plotFilePath is not None:
+            savefig(fig, plotFilePath)
+
+    @staticmethod
+    def plot_3d_views_and_scattering(atoms: ase.Atoms, q, I, sigma, I_fit, fig_axs=None,
+                                     plotFilePath=None, r_max=30.0):
+        """
+        Plot 3D atomic structure from front, side, and top views,
+        colored by distance from center of mass (fixed 0–r_max scale).
+        Optionally overlay scattering data in the fourth subplot.
+
+        Parameters:
+        -----------
+        atoms : ase.Atoms
+            Atomic structure.
+        q, I : array-like, optional
+            Experimental scattering data.
+        q_fit, I_fit : array-like, optional
+            Fitted scattering curve.
+        r_max : float, default 30.0
+            Maximum distance (in Å) for color scale normalization.
+        """
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+
+        # Compute center of mass and distances
+        com = atoms.get_center_of_mass()
+        positions = atoms.positions
+        dists = np.linalg.norm(positions - com, axis=1)
+
+        # Create figure
+        if fig_axs is not None:
+            raise RuntimeError
+        fig = plt.figure(figsize=(30, 24))
+        views = [
+            (221, 'Front (x–y)', (0, 1, 2), (90, 0)),      # front: look along z
+            (222, 'Side (y–z)', (1, 2, 0), (0, 0)),        # side: look along x
+            (223, 'Top (x–z)', (0, 2, 1), (0, 90)),        # top: look along y
+            (224, 'Scattering', None, None)
+        ]
+
+        for subplot_spec, title, axes_order, view_angle in views:
+            if title == 'Scattering':
+                ax = fig.add_subplot(subplot_spec)
+                ax.plot(q, I, 'o', label='Experimental', markersize=4, alpha=0.7)
+                ax.plot(q, I_fit, '-', label='Fit', linewidth=2)
+                ax.set_xlabel(r'$q$ (Å$^{-1}$)')
+                ax.set_ylabel(r'$I(q)$ (a.u.)')
+                ax.set_yscale('log')
+                ax.set_title(f'Experiment vs fit comparison\n$\\chi^2$: {calc_chi2(I, I_fit, sigma):.5f}')
+                ax.legend()
+                continue
+
+            ax = fig.add_subplot(subplot_spec, projection='3d')
+            x, y, z = positions.T
+            # Reorder for correct view orientation
+            if axes_order == (0, 1, 2):  # front
+                xs, ys, zs = x, y, z
+            elif axes_order == (1, 2, 0):  # side
+                xs, ys, zs = y, z, x
+            elif axes_order == (0, 2, 1):  # top
+                xs, ys, zs = x, z, y
+
+            sc = ax.scatter(xs, ys, zs, c=dists, cmap='viridis', vmin=0, vmax=r_max,
+                            s=120, edgecolor='k', linewidth=0.5, depthshade=True)
+
+            ax.view_init(elev=view_angle[0], azim=view_angle[1])
+            ax.set_title(title)
+            ax.set_box_aspect([1, 1, 1])  # equal aspect
+
+            # Hide axes ticks for cleaner look (optional)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_zticks([])
+
+        # # Add a single colorbar for all 3D plots
+        # cbar = plt.colorbar(sc, ax=fig.axes[:3], shrink=0.6, aspect=20, pad=0.1)
+        # cbar.set_label('Distance from COM (Å)', rotation=270, labelpad=20)
 
         # plt.tight_layout()
         # plt.show()
