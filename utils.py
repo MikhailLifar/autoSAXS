@@ -290,8 +290,8 @@ def get_necessary_paths(description_file, directory_path):
             result[path_name] = matching_files
     
     # some files may be present in several groups simultaneously
-    # if a single file is present in larger group then it should be deleted from larger group
-    # if two groups have an intersection or both groups are singular and conicide - throw an error
+    # if a smaller group is included to a larger group then it should be deleted from the larger group
+    # if two groups have an intersection or both groups are singular and coincide - throw an error
     for group_name_0, group_name_1 in itertools.combinations(result.keys(), 2):
         entry0, entry1 = result[group_name_0], result[group_name_1]
         

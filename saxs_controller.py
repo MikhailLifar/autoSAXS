@@ -270,44 +270,36 @@ class Controller:
             update_config(config, config_path, 'refined', values=refined)
             return {k: refine_step_ret[k] for k in ('refined', 'integrator')}
         
-    def integrate(self, ai, to_int_paths, dest_dir, metadata, debug=False):
-        integrated_paths = []
-        for p, meta in zip(to_int_paths, metadata):
-            root, fname = os.path.split(p)
-            fname = os.path.splitext(fname)[0]
-            destpath = os.path.join(dest_dir, f'int_{fname}.dat')
-            
-            # Check if integration results exist in debug mode
-            if debug and os.path.exists(destpath):
-                self.interface.send_message(f'Debug mode: Skipping integration for {p} (results already exist)')
-                integrated_paths.append(destpath)
-                continue
-                
-            integrate_2d_to_1d(ai, read_from_tiff(p), destpath=destpath,
-                               metadata={'type': 'sample'})
-            integrated_paths.append(destpath)
+    def integrate(self, ai, to_int_path, dest_dir, metadata, debug=False):
+        root, fname = os.path.split(to_int_path)
+        fname = os.path.splitext(fname)[0]
+        int_path = os.path.join(dest_dir, f'int_{fname}.dat')
         
-        return integrated_paths
+        # Check if integration results exist in debug mode
+        if debug and os.path.exists(int_path):
+            self.interface.send_message(f'Debug mode: Skipping integration for {to_int_path} (results already exist)')
+        else:
+            integrate_2d_to_1d(ai, read_from_tiff(to_int_path), destpath=int_path,
+                                metadata=metadata)
+        
+        return int_path
     
-    def subtract(self, to_sub_paths, buffer_path, dest_dir, config_sub, debug=False):
-        subtracted_paths = []
-        for p in to_sub_paths:
-            q, sample, _ = read_saxs(p)
-            root, basename = os.path.split(p)
-            basename, _ = os.path.splitext(basename)
-            basename = basename.replace('int_', '', 1)
-            destpath = os.path.join(dest_dir, f"sub_{basename}.dat")
-            diff_plot_path = os.path.join(dest_dir, f'diff_{basename}.png')
-            sub_plot_path = os.path.join(dest_dir, f'sub_{basename}.png')
+    def subtract(self, to_sub_path, buffer_path, dest_dir, config_sub, debug=False):
+        q, sample, _ = read_saxs(to_sub_path)
+        root, basename = os.path.split(to_sub_path)
+        basename, _ = os.path.splitext(basename)
+        basename = basename.replace('int_', '', 1)
+        sub_path = os.path.join(dest_dir, f"sub_{basename}.dat")
+        diff_plot_path = os.path.join(dest_dir, f'diff_{basename}.png')
+        sub_plot_path = os.path.join(dest_dir, f'sub_{basename}.png')
+        
+        # Check if subtraction results exist in debug mode
+        if debug and all(os.path.exists(p) for p in (sub_path, diff_plot_path, sub_plot_path)):
+            self.interface.send_message(f'Debug mode: Skipping subtraction for {to_sub_path} (results already exist)')
             
-            # Check if subtraction results exist in debug mode
-            if debug and all(os.path.exists(p) for p in (destpath, diff_plot_path, sub_plot_path)):
-                self.interface.send_message(f'Debug mode: Skipping subtraction for {p} (results already exist)')
-                subtracted_paths.append(destpath)
-                continue
-                
+        else:
             _, I_sub, I_buff_scaled = subtract_buffer(
-                buffer_path, p, destpath, match_tail_ops={'q_range_rel': None, 'q_range_abs': config_sub['q_range_abs'], })
+                buffer_path, to_sub_path, sub_path, match_tail_ops={'q_range_rel': None, 'q_range_abs': config_sub['q_range_abs'], })
             self.viewer.view_curves(
                 q, sample, 'sample',
                 q, I_buff_scaled, 'buffer scaled',
@@ -321,26 +313,21 @@ class Controller:
                 plotFilePath=sub_plot_path,
                 save=False
             )
-            subtracted_paths.append(destpath)
-        return subtracted_paths
+        
+        return sub_path, sub_plot_path
     
-    def get_descriptors(self, to_analyze_paths, dest_dir, debug=False):
-        analyzis_res_paths = []
-        gnom_out_paths = []
-        for p in to_analyze_paths:
-            root, basename = os.path.split(p)
-            basename, _ = os.path.splitext(basename)
-            results_file = os.path.join(dest_dir, f'{basename}_results.txt')
-            gnom_file = os.path.join(dest_dir, f'{basename}.out')
-            
-            # Check if analysis results exist in debug mode
-            if debug and all(os.path.exists(pp) for pp in (results_file, gnom_file)):
-                self.interface.send_message(f'Debug mode: Skipping analysis for {p} (results already exist)')
-                analyzis_res_paths.append(results_file)
-                gnom_out_paths.append(gnom_file)
-                continue
-                
-            os.system(f'''INPUT_FILE={p}
+    def get_descriptors(self, to_analyze_path, dest_dir, debug=False):
+        root, basename = os.path.split(to_analyze_path)
+        basename, _ = os.path.splitext(basename)
+        results_file = os.path.join(dest_dir, f'{basename}_results.txt')
+        gnom_file = os.path.join(dest_dir, f'{basename}.out')
+        
+        # Check if analysis results exist in debug mode
+        if debug and all(os.path.exists(pp) for pp in (results_file, gnom_file)):
+            self.interface.send_message(f'Debug mode: Skipping analysis for {to_analyze_path} (results already exist)')
+        
+        else:            
+            os.system(f'''INPUT_FILE={to_analyze_path}
 BASENAME={os.path.join(root, basename)}
 RESULTS_FILE="{results_file}"
 
@@ -409,27 +396,33 @@ echo "  - Kratky plot"
 echo ""
 echo "Full results saved to: $RESULTS_FILE"
 ''')
-            analyzis_res_paths.append(results_file)
-            gnom_out_paths.append(gnom_file)
         
-        return analyzis_res_paths, gnom_out_paths
+        return results_file, gnom_file
     
-    def plot(self, to_plot_paths, dest_dir, debug=False):
-        plot_paths = []
-        for p in to_plot_paths:
-            root, basename = os.path.split(p)
-            basename, _ = os.path.splitext(basename)
-            sub_plot_path = os.path.join(root, f'{basename}.png')
-            guinier_plot_path = os.path.join(dest_dir, f'guinier_{basename}.png')
-            kratky_plot_path = os.path.join(dest_dir, f'kratky_{basename}.png')
-            loglog_plot_path = os.path.join(dest_dir, f'loglog_{basename}.png')
-            
-            if debug and all(os.path.exists(p) for p in (sub_plot_path, guinier_plot_path, kratky_plot_path, loglog_plot_path)):
-                self.interface.send_message(f'Debug mode: Skipping plots for {p} (results already exist)')
-                continue
+    def plot(self, to_plot_path, dest_dir, debug=False):
+        root, basename = os.path.split(to_plot_path)
+        basename, _ = os.path.splitext(basename)
+        # sub_plot_path = os.path.join(dest_dir, f'{basename}.png')
+        guinier_plot_path = os.path.join(dest_dir, f'guinier_{basename}.png')
+        kratky_plot_path = os.path.join(dest_dir, f'kratky_{basename}.png')
+        loglog_plot_path = os.path.join(dest_dir, f'loglog_{basename}.png')
+        
+        if debug and all(os.path.exists(p) for p in (
+            # sub_plot_path, 
+            guinier_plot_path, kratky_plot_path, loglog_plot_path)):
+            self.interface.send_message(f'Debug mode: Skipping plots for {to_plot_path} (results already exist)')
 
+        else:
             # plots
-            q, I, _ = read_saxs(p)
+            q, I, _ = read_saxs(to_plot_path)
+
+            # self.viewer.view_curves(
+            #     q, I, 'I vs q',
+            #     xlabel='q (nm-1)', ylabel='I (a.u.)',
+            #     legend=True,
+            #     plotFilePath=sub_plot_path,
+            #     save=False
+            # )
 
             self.viewer.view_curves(
                 q*q, np.log(I), 'log(I) vs q^2',
@@ -454,40 +447,41 @@ echo "Full results saved to: $RESULTS_FILE"
                 plotFilePath=loglog_plot_path,
                 save=False
             )
-
-            plot_paths.append([sub_plot_path, guinier_plot_path, kratky_plot_path, loglog_plot_path])
         
-        return plot_paths
+        return [
+            # sub_plot_path, 
+            guinier_plot_path, kratky_plot_path, loglog_plot_path
+        ]
     
-    def fit_geometry(self, saxs_1d_paths, gnom_paths, dest_dir, debug=False):
+    def fit_geometry(self, saxs_1d_path, gnom_path, dest_dir, debug=False):
         self.interface.send_message('Fitting with shapes...')
-        for p, gnom_p in zip(saxs_1d_paths, gnom_paths):
-            root, basename = os.path.split(p)
-            basename, _ = os.path.splitext(basename)
-            
-            bodies_subdir = os.path.join(dest_dir, f'bodies_{basename}')
-            os.makedirs(bodies_subdir, exist_ok=True)
-            bodies_call = os.path.join(ATSAS_BIN_PREFIX, 'bodies')
-            bodies_prefix = os.path.join(bodies_subdir, 'bodies_fit')
+        root, basename = os.path.split(saxs_1d_path)
+        basename, _ = os.path.splitext(basename)
+        
+        bodies_subdir = os.path.join(dest_dir, f'bodies_{basename}')
+        os.makedirs(bodies_subdir, exist_ok=True)
+        bodies_call = os.path.join(ATSAS_BIN_PREFIX, 'bodies')
+        bodies_prefix = os.path.join(bodies_subdir, 'bodies_fit')
 
-            dammif_subdir = os.path.join(dest_dir, f'dammif_{basename}')
-            os.makedirs(dammif_subdir, exist_ok=True)
-            dammif_call = os.path.join(ATSAS_BIN_PREFIX, "dammif")
-            dammif_prefix = os.path.join(dammif_subdir, 'dammif')
-            dammif_reps_num = 2 if debug else 5
+        dammif_subdir = os.path.join(dest_dir, f'dammif_{basename}')
+        os.makedirs(dammif_subdir, exist_ok=True)
+        dammif_call = os.path.join(ATSAS_BIN_PREFIX, "dammif")
+        dammif_prefix = os.path.join(dammif_subdir, 'dammif')
+        dammif_reps_num = 2 if debug else 5
 
-            bodies_fits_png = os.path.join(bodies_subdir, f'{basename}_fits.png')
-            dammin_fits_png = os.path.join(dammif_subdir, f'{basename}_fits.png')
-            
-            exists_bodies = all(os.path.exists(os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')) for shape in BODIES_SHAPES)
-            exists_dammif = all(os.path.exists(os.path.join(dammif_subdir, f'dammif-{i}.fir')) for i in range(dammif_reps_num))
-            if debug and exists_bodies and exists_dammif and all(os.path.exists(p) for p in (bodies_fits_png, dammin_fits_png)):
-                self.interface.send_message(f'Debug mode: Skipping BODIES and DAMMIF fit for {p} (results already exist)')
-                continue
+        bodies_fits_png = os.path.join(bodies_subdir, f'{basename}_fits.png')
+        dammif_fits_png = os.path.join(dammif_subdir, f'{basename}_fits.png')
+        
+        exists_bodies = all(os.path.exists(os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')) for shape in BODIES_SHAPES)
+        exists_dammif = all(os.path.exists(os.path.join(dammif_subdir, f'dammif-{i}.fir')) for i in range(dammif_reps_num))
+        
+        if debug and exists_bodies and os.path.exists(bodies_fits_png):
+            self.interface.send_message(f'Debug mode: Skipping BODIES fit for {saxs_1d_path} (results already exist)')
 
-            os.system(f"{bodies_call} --prefix={bodies_prefix} {p}")
+        else:
+            os.system(f"{bodies_call} --prefix={bodies_prefix} {saxs_1d_path}")
 
-            q, I, _ = read_saxs(p)
+            q, I, _ = read_saxs(saxs_1d_path)
             
             to_plot = [q, I, {'label': 'exp', 'lw': 4}]
             for shape in BODIES_SHAPES:
@@ -513,7 +507,11 @@ echo "Full results saved to: $RESULTS_FILE"
                                     title=f'Fits comparison for {basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
                                     plotFilePath=os.path.join(bodies_subdir, f'{basename}_fits.png'))
             
-            os.system(f'for i in `seq 1 {dammif_reps_num}`; do {dammif_call} --prefix={dammif_prefix}-$i --mode=fast {gnom_p}; done')
+        if debug and exists_dammif and os.path.exists(dammif_fits_png):
+            self.interface.send_message(f'Debug mode: Skipping DAMMIF fit for {saxs_1d_path} (results already exist)')
+        
+        else:
+            os.system(f'for i in `seq 1 {dammif_reps_num}`; do {dammif_call} --prefix={dammif_prefix}-$i --mode=fast {gnom_path}; done')
             to_plot = [q, I, {'label': 'exp', 'lw': 4}]
             for i in range(dammif_reps_num):
                 fir_path = f'{dammif_prefix}-{i+1}.fir'
@@ -548,18 +546,26 @@ echo "Full results saved to: $RESULTS_FILE"
             self.viewer.view_curves(*to_plot,
                                     title=f'Fits comparison for {basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
                                     plotFilePath=os.path.join(dammif_subdir, f'{basename}_fits.png'))
+        
+        return bodies_subdir, dammif_subdir
     
-    def ai_analysis(self, atsas_analysis_paths, plots_paths, dest_dir,
+    def ai_analysis(self, atsas_analysis_path, plot_paths, dest_dir,
                     text_model, vision_model,
                     debug=False):
-        context = []
-        for results_file, plots in zip(atsas_analysis_paths, plots_paths):
-            sub_plot_path, guinier_plot_path, kratky_plot_path, loglog_plot_path = plots
-            p, basename = os.path.split(sub_plot_path)
-            basename, _ = os.path.splitext(basename)
-            
+        sub_plot_path, guinier_plot_path, kratky_plot_path, loglog_plot_path = plot_paths
+        p, basename = os.path.split(sub_plot_path)
+        basename, _ = os.path.splitext(basename)
+        context_path = os.path.join(dest_dir, f'{basename}_context.txt')
+        llm_answer_path = os.path.join(dest_dir, f'{basename}_llm_answer.txt')
+
+        if debug and os.path.exists(context_path):
+            with open(context_path, 'r') as fread:
+                sample_context = fread.read()
+            self.interface.send_message(f'Debug mode: Skipping visual analysis for {basename} (results already exist)')
+        
+        else:
             sample_context = []
-            with open(results_file, 'r') as fread:
+            with open(atsas_analysis_path, 'r') as fread:
                 sample_context.append(f'{basename} sample analysis results:\n{fread.read()}')
 
             with open(os.path.join(PROMPTS_DIR, 'visual', 'saxs_1d.txt'), 'r') as fread:
@@ -588,15 +594,19 @@ echo "Full results saved to: $RESULTS_FILE"
             sample_context.append(f'The description of log-log plot:\n{loglog_description}')
 
             sample_context = '\n\n'.join(sample_context)
-            with open(os.path.join(dest_dir, f'{basename}_context.txt'), 'w') as fwrite:
+            with open(context_path, 'w') as fwrite:
                 fwrite.write(sample_context)
-            context.append(sample_context)
 
         # LLM
         # I dont want to analyze each plot separately. If there are many plots, 
         # I would rather combine the information coming from them.
-        if len(context) == 1:  
-            context, = context
+        if debug and os.path.exists(llm_answer_path):
+            with open(llm_answer_path, 'r') as fread:
+                answer = fread.read()
+            self.interface.send_message(f'Debug mode: Skipping LLM analysis for {basename} (results already exist)')
+
+        else:
+            context = sample_context
             self.interface.send_message('Now the results of your data processing are sent to LLM for the intelligent analysis.')
             user_query = self.interface.ask_question('What is your query to LLM?')
             answer, _ = llm.send_request_to_llm(
@@ -605,41 +615,113 @@ echo "Full results saved to: $RESULTS_FILE"
                     {'role': 'user', 'content': [{'type': 'text', 'text': f'{context}\n\nUser query: {user_query}'}]}
                 ],
             )
-            with open(os.path.join(dest_dir, f'{basename}_llm_answer.txt'), 'w') as fwrite:
+            with open(llm_answer_path, 'w') as fwrite:
                 fwrite.write(answer)
             self.interface.send_message(f'LLM asnwer:\n{answer}')
+        
+        return answer
 
-    def pipeline0(self, debug=False):
-        model = 'GLM-4.5'
+    def protein_v0(self, debug=False):
+        model = 'GLM-4.6'
         # model = 'DeepSeek-V3.1'
         vision_model = 'GLM-4.5V'
         
-        descr, descr_path = get_pipeline_description('pipeline0')
-        print(descr)
+        # descr, descr_path = get_pipeline_description('protein_v0')
+        # print(descr)
         directory = self.interface.ask_for_file('Write a path to a directory for your data')
-        paths = get_necessary_paths(descr_path, directory)
+        # paths = get_necessary_paths(descr_path, directory)
+
+        paths = dict()
+        # paths['config'] = os.path.join(directory, 'config.conf')
+        # assert os.path.exists(paths['config']), f'There should be .conf file in you directory ({directory})'
+        paths['config'] = self.interface.wait_for_file(
+                directory,
+                query='Drop configuration file (.conf extension) to the directory',
+                filepattern='*.conf', 
+                )
         config = load_config(paths['config'])
 
+        paths['calib_2d'] = self.interface.wait_for_file(
+                directory,
+                query='Drop calibrant 2d data (.tiff extension) to the directory',
+                filepattern='*.tif', 
+                )
         res_calib = self.autocalib(directory, paths['calib_2d'], config=config, config_path=paths['config'], debug=debug)
         ai = res_calib['integrator']
-        
-        self.interface.send_message('Integration...')
-        paths['buffer_1d'], = self.integrate(ai, [paths['buffer_2d'], ], directory, [{'type': 'buffer'}, ], debug=debug)
-        paths['sample_1d'] = self.integrate(
-            ai, paths['sample_2d'], directory, [{'type': 'sample'} for _ in range(len(paths['sample_2d']))], debug=debug)
-        
-        self.interface.send_message('Subtraction...')
-        paths['sample_sub'] = self.subtract(paths['sample_1d'], paths['buffer_1d'], dest_dir=directory,
-                                            config_sub=config['sub'])
-        
-        # TODO scaling step
 
-        self.interface.send_message('Calculating the parameters...')
-        paths['atsas_analysis'], paths['p(R)']  = self.get_descriptors(paths['sample_sub'], dest_dir=directory, debug=debug)
+        run_load_cycle = True
+        buffer_loaded = False
+        for k in ('buffer_2d', 'sample_2d', 'buffer_1d', 'sample_1d', 'sub', 'atsas_analysis', 'p(R)', 'plots'):
+            paths[k] = []
+        while run_load_cycle:
+            buffer_path = self.interface.wait_for_file(
+                directory,
+                query='Drop buffer 2d data (.tiff extension) to the directory',
+                filepattern='*.tif', 
+                obligatory=not buffer_loaded,
+                )
+            if not buffer_path and buffer_loaded:
+                buffer_path = paths['buffer_2d'][-1]
+            else:
+                buffer_loaded = True
+            
+            sample_path = self.interface.wait_for_file(
+                directory,
+                query='Drop sample 2d data (.tiff extension) to the directory', 
+                filepattern='*.tif')
+            basename, _ = os.path.splitext(os.path.split(sample_path)[1])
+            
+            paths['buffer_2d'].append(buffer_path)
+            paths['sample_2d'].append(sample_path)
 
-        paths['plots'] = self.plot(paths['sample_sub'], dest_dir=directory, debug=debug)
+            buffer_path_1d = self.integrate(ai, buffer_path, directory, {'type': 'buffer'}, debug=debug)
+            sample_path_1d = self.integrate(ai, sample_path, directory, {'type': 'sample'}, debug=debug)
+            paths['buffer_1d'].append(buffer_path)
+            paths['sample_1d'].append(sample_path)
 
-        self.fit_geometry(paths['sample_sub'], paths['p(R)'], dest_dir=directory, debug=debug)
+            profile_path, profile_pic_path = self.subtract(sample_path_1d, buffer_path_1d, directory, config['sub'], debug=debug)
+            paths['sub'].append(profile_path)
+
+            # profile_path = self.scale(...)
+
+            q, I, _ = read_saxs(profile_path)
+            self.viewer.view_curves(q, I, basename,
+                                    xlabel='q, (nm-1)', ylabel='I, (a.u.)',
+                                    title=f'{basename} SAXS profile',
+                                    show=True)
+            
+            if_file_is_good = self.interface.ask_question(
+                f'Should I continue to analyze {basename} SAXS profile? type Enter to proceed, type "No" to skip'
+            )
+            if not if_file_is_good.lower().startswith('n'):
+                atsas_res_path, gnom_path = self.get_descriptors(profile_path, directory, debug=debug)
+                paths['atsas_analysis'].append(atsas_res_path)
+                paths['p(R)'].append(gnom_path)
+                
+                plot_paths = self.plot(profile_path, directory, debug=debug)
+                plot_paths = [profile_pic_path, ] + plot_paths
+                paths['plots'].append(plot_paths)
+                
+                self.fit_geometry(profile_path, gnom_path, directory, debug=debug)
+                # self.ai_analysis(atsas_res_path, plot_paths, directory, text_model=model, vision_model=vision_model)
+        
+        # # self.interface.send_message('Integration...')
+        # paths['buffer_1d'], = self.integrate(ai, [paths['buffer_2d'], ], directory, [{'type': 'buffer'}, ], debug=debug)
+        # paths['sample_1d'] = self.integrate(
+        #     ai, paths['sample_2d'], directory, [{'type': 'sample'} for _ in range(len(paths['sample_2d']))], debug=debug)
+        
+        # # self.interface.send_message('Subtraction...')
+        # paths['sample_sub'] = self.subtract(paths['sample_1d'], paths['buffer_1d'], dest_dir=directory,
+        #                                     config_sub=config['sub'])
+        
+        # # TODO scaling step
+
+        # # self.interface.send_message('Calculating the parameters...')
+        # paths['atsas_analysis'], paths['p(R)']  = self.get_descriptors(paths['sample_sub'], dest_dir=directory, debug=debug)
+
+        # paths['plots'] = self.plot(paths['sample_sub'], dest_dir=directory, debug=debug)
+
+        # self.fit_geometry(paths['sample_sub'], paths['p(R)'], dest_dir=directory, debug=debug)
 
         # self.ai_analysis(paths['atsas_analysis'], paths['plots'], dest_dir=directory, 
         #                  text_model=model, vision_model=vision_model, debug=debug)
@@ -710,7 +792,7 @@ if __name__ == '__main__':
     # calib image file path for debug: AgBh/100225_doubling/test/0003_AgBh1000old_or_107.3.tif
     controller = Controller(CLIInterface(), PLTViewer())
     # controller.pipeline()
-    # directory path for pipeline0: debug/pipeline0
+    # directory path for pipeline0: debug/protein_v0, debug/protein_v0_interactive
     # LLM query: It is known that the subject of the investigation is a protein dissolved in water. Which protein it could be based on available information?
-    controller.pipeline0(debug=True)
+    controller.protein_v0(debug=True)
 

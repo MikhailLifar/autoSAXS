@@ -9,7 +9,7 @@ Calibration -> Integration -> Subtraction -> Scaling -> Fit with bodies [-> LLM 
 <Input Structure>
 config *.conf  # configuration file
 calib_2d *_calib.tif  # calibrant image
-buffer_2d *_buf.tif
+buffer_2d *_buf.tif +
 sample_2d *.tif +
 </Input Structure>
 <Output Structure>

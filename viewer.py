@@ -151,7 +151,7 @@ class PLTViewer(Viewer):
         **kwargs):
         
         if fig_axs is None:
-            fig, axs = plt.subplots(2, 2, figsize=(16, 12))
+            fig, axs = plt.subplots(2, 2, figsize=(32, 24))
         else:
             fig, axs = fig_axs
         
@@ -173,12 +173,15 @@ class PLTViewer(Viewer):
             plt.show()
         if plotFilePath is not None:
             fig.savefig(plotFilePath)
+        plt.close(fig)
     
     @staticmethod
-    def view_curves(*args, **kwargs):
-        kw = dict(xlabel='q (nm^-1)', ylabel='I (a.u.)')
+    def view_curves(*args, show=False, **kwargs):
+        kw = dict(xlabel='$q (nm^-1)$', ylabel='I (a.u.)')
         kw.update(kwargs)
         plotLines(*args, **kw)
+        if show:
+            plt.show()
     
     @staticmethod
     def plot_structure_and_scattering(atoms, q, I, sigma, I_fit, fig_axs=None,
