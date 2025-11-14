@@ -52,24 +52,87 @@ def json_type_caster(s):
         raise ValueError('Incorrect JSON passed')
 
 
-# class Paths:
-#     def __init__(self, interface: Interface, paths: Optional[dict] = None):
-#         self.interface = interface
-#         if paths is None:
-#             paths = dict()
-#         self.paths = paths
+class Context:
+    def __init__(self, directory, pipe_descr_path, interface: Interface):
+        self.directory = directory
+        self.pipe_descr_path = pipe_descr_path
+        self.interface = interface
+        
+        self.paths = get_pipeline_paths(self.pipe_descr_path, self.directory, check=False)
+        self.group_names = list(self.paths.keys())
+        self.path_iterators = [0, ] * len(self.group_names)
+        
+        self.config_path = self.paths['config'][0][0]
+        try:
+            self.config = load_config(self.config_path)
+        except FileNotFoundError:
+            raise FileNotFoundError(f'Probably there is no configuration (.conf) file in the provided directory: {self.directory}')
     
-#     def get_paths(self, group_name, mode, obligatory=True):
-#         assert mode in ('online', 'offline')
-#         if mode == 'online':
-#             new_path = self.interface.ask_for_file(
-#                 f'Upload one or more "{group_name}" files' + ' (Press Enter to skip)' * (not obligatory), 
-#                 obligatory=obligatory)
-#             while new_path:
-#                 if group_name not in self.paths:
-#                     self.paths[group_name] = []
-#                 self.paths[group_name].append(new_path)
-#         return self.paths.get(group_name, []), group_name in self.paths
+    def get_path(self, group_name, obligatory=False, query=None, pattern='*', interaction_mode='offline'):
+        assert interaction_mode in ('online', 'offline')
+        
+        if interaction_mode == 'offline':
+            idx0 = self.group_names.index(group_name)
+            idx1 = self.path_iterators[idx0]
+            group_paths = self.paths[group_name][0] 
+            if idx1 < len(group_paths):
+                ret = group_paths[idx1]
+                self.path_iterators[idx0] += 1
+                return ret
+            else:
+                return ''
+        
+        if interaction_mode == 'online':
+            ret = self.interface.wait_for_file(
+                self.directory, obligatory=obligatory, query=query,
+                filepattern=pattern)
+            if ret:
+                self.paths[group_name][0].append(ret)
+            return ret
+    
+    def append_path(self, group_name, path):
+        if group_name not in self.paths:
+            self.paths[group_name] = [[], (1, float('inf')), os.path.join(self.directory, '*')]
+        self.paths[group_name][0].append(path)
+    
+    def __getitem__(self, keys):
+        if not isinstance(keys, tuple):
+            keys = (keys, )
+        
+        ret = self.config
+        for k in keys:
+            ret = ret[k]
+        
+        return ret
+    
+    def __setitem__(self, keys, value):
+        if not isinstance(keys, tuple):
+            keys = (keys, )
+        
+        keys, final_key = keys[:-1], keys[-1]
+        data = self.config
+        for k in keys:
+            if k not in data:
+                data[k] = {}
+            data = data[k]
+        data[final_key] = value
+
+        save_config(self.config, self.config_path)
+    
+    def update_config(self, *keys, values: dict):
+        keys = list(keys)
+
+        conf = self.config
+        for k in keys:
+            if k not in conf:
+                conf[k] = {}
+            conf = conf[k]
+        
+        conf.update(values)
+        save_config(self.config, self.config_path)
+    
+    def __contains__(self, key):
+        return key in self.config
 
 
 # class Block:
@@ -203,39 +266,44 @@ class Controller:
             self.viewer.view_refined_curve(refine_res['curve_calibrated'], refine_res['theoretical_peaks'])
         return refine_res
 
-    def autocalib(self, directory, calibrant_path, config, config_path, debug=False):
+    def autocalib(self, calibrant_path, context: Context, fast_forward=False):
+        directory = context.directory
+        
         # Check if calibration results exist in debug mode
         calibration_results_file = os.path.join(directory, 'calibration.png')
         integrator_subd = os.path.join(directory, 'integrator_params')
-        refined_config_exists = 'refined' in config
+        refined_config_exists = 'refined' in context
         
-        calibrant_name = config['calibrant_name']
-        calib_data = read_from_tiff(calibrant_path)
-        
-        if debug and refined_config_exists and all(
+        if fast_forward and refined_config_exists and all(
             os.path.exists(p) for p in (calibration_results_file, integrator_subd)
         ):
-            self.interface.send_message('Debug mode: Skipping calibration (results already exist)')
-            refined = config['refined']
+            self.interface.send_message('Fast-forward mode: Skipping calibration (results already exist)')
+            refined = context['refined']
             integrator = IntegratorExtended.from_disk(integrator_subd)
             return {'integrator': integrator, 'refined': refined}
         else:
+            if not calibrant_path:
+                return {'integrator': None, 'refined': None}
+
+            calibrant_name = context['calibrant_name']
+            calib_data = read_from_tiff(calibrant_path)
+            
             self.interface.send_message('Autocalibration...')
 
-            center_ref_params = {k: config['center_refinement'][k] 
+            center_ref_params = {k: context['center_refinement', k] 
                                 for k in ['q_start', 'q_stop', 'min_segment_len']}
             self.interface.send_message('    Center search...')
             center_step_ret = self.center_refinement_step(calib_data, visualize=False, calib_tiff_path=calibrant_path, **center_ref_params)
             
-            d_geom = config['detector_geometry']
+            d_geom = context['detector_geometry']
             interring_dist_px = get_interring_dist_px(
                 d_geom['dist'], d_geom['wavelength'], d_geom['pixel_size'][0]
             )
 
-            ring_search_params = {k: config['ring_search'][k] 
+            ring_search_params = {k: context['ring_search', k] 
                                   for k in ['q_stop', 'ring_I_threshold', 'r_max_px', 'r_step_px']}
             ring_search_params.update({
-                'r_beam_px': config['r_beam_px'],
+                'r_beam_px': context['r_beam_px'],
                 'center_y_px': center_step_ret['center_y_px'],
                 'center_x_px': center_step_ret['center_x_px'],
                 'interring_dist_px': interring_dist_px
@@ -243,10 +311,10 @@ class Controller:
             self.interface.send_message('    Rings identification...')
             rings_step_ret = self.rings_refinement_step(calib_data, visualize=False, calib_tiff_path=calibrant_path, **ring_search_params)
             
-            geometry_params = {k: config['detector_geometry'][k] 
+            geometry_params = {k: context['detector_geometry', k] 
                                 for k in ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3']}
             geometry_params.update({
-                'r_beam_px': config['r_beam_px'],
+                'r_beam_px': context['r_beam_px'],
                 'center_y_px': center_step_ret['center_y_px'],
                 'center_x_px': center_step_ret['center_x_px'],
                 'calibrant_name': calibrant_name,
@@ -262,72 +330,95 @@ class Controller:
                 show=False, plotFilePath=calibration_results_file,
                 **center_step_ret, **rings_step_ret, **refine_step_ret)
             refined = refine_step_ret['refined']
-            refined.update({'wavelength': config['detector_geometry']['wavelength']})
+            refined.update({'wavelength': context['detector_geometry', 'wavelength']})
             self.interface.send_message(
                 f'\n-- Calibrated geometry parameters --\n' + '\n'.join(f'{p}: {v}' for p, v in refined.items())  + '\n'
             )
             self.interface.send_message('Finished calibration')
-            update_config(config, config_path, 'refined', values=refined)
+            context['refined'] = refined
+            context.update_config('refined', values=refined)
             return {k: refine_step_ret[k] for k in ('refined', 'integrator')}
         
-    def integrate(self, ai, to_int_path, dest_dir, metadata, debug=False):
-        root, fname = os.path.split(to_int_path)
-        fname = os.path.splitext(fname)[0]
-        int_path = os.path.join(dest_dir, f'int_{fname}.dat')
+    def integrate(self, ai, context: Context, to_int_path, dest_dir, metadata, 
+                  fast_forward=False):
+        int_path = ''
         
-        # Check if integration results exist in debug mode
-        if debug and os.path.exists(int_path):
-            self.interface.send_message(f'Debug mode: Skipping integration for {to_int_path} (results already exist)')
-        else:
-            integrate_2d_to_1d(ai, read_from_tiff(to_int_path), destpath=int_path,
-                                metadata=metadata)
+        if to_int_path:
+            os.makedirs(dest_dir, exist_ok=True)
+
+            root, fname = os.path.split(to_int_path)
+            fname = os.path.splitext(fname)[0]
+            int_path = os.path.join(dest_dir, f'int_{fname}.dat')
+            
+            # Check if integration results exist in debug mode
+            if fast_forward and os.path.exists(int_path):
+                self.interface.send_message(f'Debug mode: Skipping integration for {to_int_path} (results already exist)')
+            else:
+                integrate_2d_to_1d(ai, read_from_tiff(to_int_path), destpath=int_path,
+                                    metadata=metadata)
         
         return int_path
     
-    def subtract(self, to_sub_path, buffer_path, dest_dir, config_sub, debug=False):
-        q, sample, _ = read_saxs(to_sub_path)
-        root, basename = os.path.split(to_sub_path)
-        basename, _ = os.path.splitext(basename)
-        basename = basename.replace('int_', '', 1)
-        sub_path = os.path.join(dest_dir, f"sub_{basename}.dat")
-        diff_plot_path = os.path.join(dest_dir, f'diff_{basename}.png')
-        sub_plot_path = os.path.join(dest_dir, f'sub_{basename}.png')
+    def subtract(self, context: Context, to_sub_path, buffer_path, dest_dir, fast_forward=False):
+        sub_path, sub_plot_path = '', ''
         
-        # Check if subtraction results exist in debug mode
-        if debug and all(os.path.exists(p) for p in (sub_path, diff_plot_path, sub_plot_path)):
-            self.interface.send_message(f'Debug mode: Skipping subtraction for {to_sub_path} (results already exist)')
+        if to_sub_path:
+            os.makedirs(dest_dir, exist_ok=True)
+
+            q, sample, _ = read_saxs(to_sub_path)
+            root, basename = os.path.split(to_sub_path)
+            basename, _ = os.path.splitext(basename)
+            basename = basename.replace('int_', '', 1)
+            sub_path = os.path.join(dest_dir, f"sub_{basename}.dat")
+            diff_plot_path = os.path.join(dest_dir, f'diff_{basename}.png')
+            sub_plot_path = os.path.join(dest_dir, f'sub_{basename}.png')
             
-        else:
-            _, I_sub, I_buff_scaled = subtract_buffer(
-                buffer_path, to_sub_path, sub_path, match_tail_ops={'q_range_rel': None, 'q_range_abs': config_sub['q_range_abs'], })
-            self.viewer.view_curves(
-                q, sample, 'sample',
-                q, I_buff_scaled, 'buffer scaled',
-                legend=True,
-                plotFilePath=diff_plot_path,
-                save=False
-            )
-            self.viewer.view_curves(
-                q, I_sub, 'sample',
-                legend=True,
-                plotFilePath=sub_plot_path,
-                save=False
-            )
+            # Check if subtraction results exist in debug mode
+            if fast_forward and all(os.path.exists(p) for p in (sub_path, diff_plot_path, sub_plot_path)):
+                self.interface.send_message(f'Debug mode: Skipping subtraction for {to_sub_path} (results already exist)')
+                
+            else:
+                _, I_sub, I_buff_scaled = subtract_buffer(
+                    buffer_path, to_sub_path, sub_path, 
+                    match_tail_ops={
+                        'q_range_rel': None, 
+                        'q_range_abs': context['sub', 'q_range_abs'], 
+                    })
+                self.viewer.view_curves(
+                    q, sample, 'sample',
+                    q, I_buff_scaled, 'buffer scaled',
+                    legend=True,
+                    plotFilePath=diff_plot_path,
+                    save=False
+                )
+                self.viewer.view_curves(
+                    q, I_sub, 'sample',
+                    legend=True,
+                    plotFilePath=sub_plot_path,
+                    save=False
+                )
         
         return sub_path, sub_plot_path
     
-    def get_descriptors(self, to_analyze_path, dest_dir, debug=False):
-        root, basename = os.path.split(to_analyze_path)
-        basename, _ = os.path.splitext(basename)
-        results_file = os.path.join(dest_dir, f'{basename}_results.txt')
-        gnom_file = os.path.join(dest_dir, f'{basename}.out')
-        
-        # Check if analysis results exist in debug mode
-        if debug and all(os.path.exists(pp) for pp in (results_file, gnom_file)):
-            self.interface.send_message(f'Debug mode: Skipping analysis for {to_analyze_path} (results already exist)')
-        
-        else:            
-            os.system(f'''INPUT_FILE={to_analyze_path}
+    def get_descriptors(self, context: Context, to_analyze_path, 
+                        dest_dir, fast_forward=False,
+                        ):
+        results_file, gnom_file = '', ''
+
+        if to_analyze_path:
+            os.makedirs(dest_dir, exist_ok=True)
+
+            root, basename = os.path.split(to_analyze_path)
+            basename, _ = os.path.splitext(basename)
+            results_file = os.path.join(dest_dir, f'{basename}_results.txt')
+            gnom_file = os.path.join(dest_dir, f'{basename}.out')
+            
+            # Check if analysis results exist in debug mode
+            if fast_forward and all(os.path.exists(pp) for pp in (results_file, gnom_file)):
+                self.interface.send_message(f'Debug mode: Skipping analysis for {to_analyze_path} (results already exist)')
+            
+            else:            
+                os.system(f'''INPUT_FILE={to_analyze_path}
 BASENAME={os.path.join(root, basename)}
 RESULTS_FILE="{results_file}"
 
@@ -399,311 +490,480 @@ echo "Full results saved to: $RESULTS_FILE"
         
         return results_file, gnom_file
     
-    def plot(self, to_plot_path, dest_dir, debug=False):
-        root, basename = os.path.split(to_plot_path)
-        basename, _ = os.path.splitext(basename)
-        # sub_plot_path = os.path.join(dest_dir, f'{basename}.png')
-        guinier_plot_path = os.path.join(dest_dir, f'guinier_{basename}.png')
-        kratky_plot_path = os.path.join(dest_dir, f'kratky_{basename}.png')
-        loglog_plot_path = os.path.join(dest_dir, f'loglog_{basename}.png')
+    def plot(self, context: Context, to_plot_path, dest_dir, fast_forward=False):
+        guinier_plot_path = kratky_plot_path = loglog_plot_path = ''
         
-        if debug and all(os.path.exists(p) for p in (
-            # sub_plot_path, 
-            guinier_plot_path, kratky_plot_path, loglog_plot_path)):
-            self.interface.send_message(f'Debug mode: Skipping plots for {to_plot_path} (results already exist)')
+        if to_plot_path:
+            os.makedirs(dest_dir, exist_ok=True)
 
-        else:
-            # plots
-            q, I, _ = read_saxs(to_plot_path)
+            root, basename = os.path.split(to_plot_path)
+            basename, _ = os.path.splitext(basename)
+            # sub_plot_path = os.path.join(dest_dir, f'{basename}.png')
+            guinier_plot_path = os.path.join(dest_dir, f'guinier_{basename}.png')
+            kratky_plot_path = os.path.join(dest_dir, f'kratky_{basename}.png')
+            loglog_plot_path = os.path.join(dest_dir, f'loglog_{basename}.png')
+            
+            if fast_forward and all(os.path.exists(p) for p in (
+                # sub_plot_path, 
+                guinier_plot_path, kratky_plot_path, loglog_plot_path)):
+                self.interface.send_message(f'Debug mode: Skipping plots for {to_plot_path} (results already exist)')
 
-            # self.viewer.view_curves(
-            #     q, I, 'I vs q',
-            #     xlabel='q (nm-1)', ylabel='I (a.u.)',
-            #     legend=True,
-            #     plotFilePath=sub_plot_path,
-            #     save=False
-            # )
+            else:
+                # plots
+                q, I, _ = read_saxs(to_plot_path)
 
-            self.viewer.view_curves(
-                q*q, np.log(I), 'log(I) vs q^2',
-                xlabel='q^2 (nm-2)', ylabel='log(I) (a.u.)',
-                legend=True,
-                plotFilePath=guinier_plot_path,
-                save=False
-            )
+                # self.viewer.view_curves(
+                #     q, I, 'I vs q',
+                #     xlabel='q (nm-1)', ylabel='I (a.u.)',
+                #     legend=True,
+                #     plotFilePath=sub_plot_path,
+                #     save=False
+                # )
 
-            self.viewer.view_curves(
-                q, q * q * I, 'I * q^2 vs q',
-                xlabel='q (nm-1)', ylabel='I * q^2 (a.u.)',
-                legend=True,
-                plotFilePath=kratky_plot_path,
-                save=False
-            )
+                self.viewer.view_curves(
+                    q*q, np.log(I), 'log(I) vs q^2',
+                    xlabel='q^2 (nm-2)', ylabel='log(I) (a.u.)',
+                    legend=True,
+                    plotFilePath=guinier_plot_path,
+                    save=False
+                )
 
-            self.viewer.view_curves(
-                np.log(q), np.log(I), 'log(I) vs log(q)',
-                xlabel='log(q)', ylabel='log(I)',
-                legend=True,
-                plotFilePath=loglog_plot_path,
-                save=False
-            )
+                self.viewer.view_curves(
+                    q, q * q * I, 'I * q^2 vs q',
+                    xlabel='q (nm-1)', ylabel='I * q^2 (a.u.)',
+                    legend=True,
+                    plotFilePath=kratky_plot_path,
+                    save=False
+                )
+
+                self.viewer.view_curves(
+                    np.log(q), np.log(I), 'log(I) vs log(q)',
+                    xlabel='log(q)', ylabel='log(I)',
+                    legend=True,
+                    plotFilePath=loglog_plot_path,
+                    save=False
+                )
         
-        return [
+        ret = [
             # sub_plot_path, 
             guinier_plot_path, kratky_plot_path, loglog_plot_path
         ]
+        return ret
     
-    def fit_geometry(self, saxs_1d_path, gnom_path, dest_dir, debug=False):
-        self.interface.send_message('Fitting with shapes...')
-        root, basename = os.path.split(saxs_1d_path)
-        basename, _ = os.path.splitext(basename)
-        
-        bodies_subdir = os.path.join(dest_dir, f'bodies_{basename}')
-        os.makedirs(bodies_subdir, exist_ok=True)
-        bodies_call = os.path.join(ATSAS_BIN_PREFIX, 'bodies')
-        bodies_prefix = os.path.join(bodies_subdir, 'bodies_fit')
-
-        dammif_subdir = os.path.join(dest_dir, f'dammif_{basename}')
-        os.makedirs(dammif_subdir, exist_ok=True)
-        dammif_call = os.path.join(ATSAS_BIN_PREFIX, "dammif")
-        dammif_prefix = os.path.join(dammif_subdir, 'dammif')
-        dammif_reps_num = 2 if debug else 5
-
-        bodies_fits_png = os.path.join(bodies_subdir, f'{basename}_fits.png')
-        dammif_fits_png = os.path.join(dammif_subdir, f'{basename}_fits.png')
-        
-        exists_bodies = all(os.path.exists(os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')) for shape in BODIES_SHAPES)
-        exists_dammif = all(os.path.exists(os.path.join(dammif_subdir, f'dammif-{i}.fir')) for i in range(dammif_reps_num))
-        
-        if debug and exists_bodies and os.path.exists(bodies_fits_png):
-            self.interface.send_message(f'Debug mode: Skipping BODIES fit for {saxs_1d_path} (results already exist)')
-
-        else:
-            os.system(f"{bodies_call} --prefix={bodies_prefix} {saxs_1d_path}")
-
-            q, I, _ = read_saxs(saxs_1d_path)
+    def bodies_fit(self, context: Context, saxs_1d_path, dest_dir, fast_forward=False):
+        if saxs_1d_path:
+            self.interface.send_message('BODIES fit...')
+            root, basename = os.path.split(saxs_1d_path)
+            basename, _ = os.path.splitext(basename)
             
-            to_plot = [q, I, {'label': 'exp', 'lw': 4}]
-            for shape in BODIES_SHAPES:
-                fir_path = os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')
-                # cif_path = os.path.join(bodies_subdir, f'bodies_fit-{shape}-damstart.cif')
+            bodies_subdir = os.path.join(dest_dir, f'bodies_{basename}')
+            os.makedirs(bodies_subdir, exist_ok=True)
+            bodies_call = os.path.join(ATSAS_BIN_PREFIX, 'bodies')
+            bodies_prefix = os.path.join(bodies_subdir, 'bodies_fit')
 
-                data = np.loadtxt(fir_path, skiprows=1, dtype=np.float64)
-                q_fit, I_fit, sigma_exp = data[:, 0], data[:, 3], data[:, 2]
-                idx_intersection = (q <= q_fit[-1])
-                q_intersetcion, I_intersection = q[idx_intersection], I[idx_intersection]
-                I_fit_interp = np.interp(q_intersetcion, q_fit, I_fit)
-                sigma_interp = np.interp(q_intersetcion, q_fit, sigma_exp)
-
-                chi2 = calc_chi2(I_intersection, I_fit_interp, sigma_interp)
-                to_plot.extend([q_intersetcion, I_fit_interp, f'{shape}; chi2: {chi2:.5f}'])
-
-                # atoms = read_bodies_cif(cif_path)
-                # self.viewer.plot_structure_and_scattering(
-                #     atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
-                #     plotFilePath=os.path.join(bodies_subdir, f'{shape}_view.png'))
+            bodies_fits_png = os.path.join(bodies_subdir, f'{basename}_fits.png')
             
-            self.viewer.view_curves(*to_plot,
-                                    title=f'Fits comparison for {basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
-                                    plotFilePath=os.path.join(bodies_subdir, f'{basename}_fits.png'))
+            exists_bodies = all(os.path.exists(os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')) for shape in BODIES_SHAPES)
             
-        if debug and exists_dammif and os.path.exists(dammif_fits_png):
-            self.interface.send_message(f'Debug mode: Skipping DAMMIF fit for {saxs_1d_path} (results already exist)')
+            if fast_forward and exists_bodies and os.path.exists(bodies_fits_png):
+                self.interface.send_message(f'Debug mode: Skipping BODIES fit for {saxs_1d_path} (results already exist)')
+
+            else:
+                os.system(f"{bodies_call} --prefix={bodies_prefix} {saxs_1d_path}")
+
+                q, I, _ = read_saxs(saxs_1d_path)
+                
+                to_plot = [q, I, {'label': 'exp', 'lw': 4}]
+                for shape in BODIES_SHAPES:
+                    fir_path = os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')
+                    # cif_path = os.path.join(bodies_subdir, f'bodies_fit-{shape}-damstart.cif')
+
+                    data = np.loadtxt(fir_path, skiprows=1, dtype=np.float64)
+                    q_fit, I_fit, sigma_exp = data[:, 0], data[:, 3], data[:, 2]
+                    idx_intersection = (q <= q_fit[-1])
+                    q_intersetcion, I_intersection = q[idx_intersection], I[idx_intersection]
+                    I_fit_interp = np.interp(q_intersetcion, q_fit, I_fit)
+                    sigma_interp = np.interp(q_intersetcion, q_fit, sigma_exp)
+
+                    chi2 = calc_chi2(I_intersection, I_fit_interp, sigma_interp)
+                    to_plot.extend([q_intersetcion, I_fit_interp, f'{shape}; chi2: {chi2:.5f}'])
+
+                    # atoms = read_bodies_cif(cif_path)
+                    # self.viewer.plot_structure_and_scattering(
+                    #     atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
+                    #     plotFilePath=os.path.join(bodies_subdir, f'{shape}_view.png'))
+                
+                self.viewer.view_curves(*to_plot,
+                                        title=f'Fits comparison for {basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
+                                        plotFilePath=os.path.join(bodies_subdir, f'{basename}_fits.png'))
         
-        else:
-            os.system(f'for i in `seq 1 {dammif_reps_num}`; do {dammif_call} --prefix={dammif_prefix}-$i --mode=fast {gnom_path}; done')
-            to_plot = [q, I, {'label': 'exp', 'lw': 4}]
-            for i in range(dammif_reps_num):
-                fir_path = f'{dammif_prefix}-{i+1}.fir'
-                cif_path = f'{dammif_prefix}-{i+1}-1.cif'
-
-                data = np.loadtxt(fir_path, skiprows=1, dtype=np.float64)
-                q_fit, I_fit, sigma_exp = data[:, 0], data[:, 3], data[:, 2]
-                q_fit = q_fit * 10.0  # from A^-1 to nm ^-1
-
-                # self.viewer.view_curves(q_fit, I_fit, 'fitted curve', 
-                #                         plotFilePath=os.path.join(dammif_subdir, f'{basename}_{i}_shit_here_0.png'))
-
-                idx_intersection = (q <= q_fit[-1])
-                q_intersetcion, I_intersection = q[idx_intersection], I[idx_intersection]
-                I_fit_interp = np.interp(q_intersetcion, q_fit, I_fit)
-                sigma_interp = np.interp(q_intersetcion, q_fit, sigma_exp)
-
-                # self.viewer.view_curves(q_intersetcion, I_fit_interp, 'fitted curve', 
-                #                         plotFilePath=os.path.join(dammif_subdir, f'{basename}_{i}_shit_here_1.png'))
-
-                chi2 = calc_chi2(I_intersection, I_fit_interp, sigma_interp)
-                to_plot.extend([q_intersetcion, I_fit_interp, f'dammif-{i}; chi2: {chi2:.5f}'])
-
-                atoms = read_bodies_cif(cif_path)
-                # self.viewer.plot_structure_and_scattering(
-                #     atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
-                #     plotFilePath=os.path.join(dammif_subdir, f'dammif-{i}_view.png'))
-                self.viewer.plot_3d_views_and_scattering(
-                    atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
-                    plotFilePath=os.path.join(dammif_subdir, f'dammif-{i}_view.png'))
+        return bodies_subdir
+    
+    def dammif_fit(self, context: Context, gnom_path, dest_dir, fast_forward=False):
+        if gnom_path:
+            self.interface.send_message('DAMMIF fit...')
+            root, basename = os.path.split(gnom_path)
+            basename, _ = os.path.splitext(basename)
             
-            self.viewer.view_curves(*to_plot,
-                                    title=f'Fits comparison for {basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
-                                    plotFilePath=os.path.join(dammif_subdir, f'{basename}_fits.png'))
+            dammif_subdir = os.path.join(dest_dir, f'dammif_{basename}')
+            os.makedirs(dammif_subdir, exist_ok=True)
+            dammif_call = os.path.join(ATSAS_BIN_PREFIX, "dammif")
+            dammif_prefix = os.path.join(dammif_subdir, 'dammif')
+            dammif_reps_num = 2 if fast_forward else 5
+
+            dammif_fits_png = os.path.join(dammif_subdir, f'{basename}_fits.png')
+            
+            exists_dammif = all(os.path.exists(os.path.join(dammif_subdir, f'dammif-{i}.fir')) for i in range(dammif_reps_num))
+            
+            if fast_forward and exists_dammif and os.path.exists(dammif_fits_png):
+                self.interface.send_message(f'Debug mode: Skipping DAMMIF fit for {gnom_path} (results already exist)')
+            
+            else:
+                os.system(f'for i in `seq 1 {dammif_reps_num}`; do {dammif_call} --prefix={dammif_prefix}-$i --mode=fast {gnom_path}; done')
+                to_plot = [q, I, {'label': 'exp', 'lw': 4}]
+                for i in range(dammif_reps_num):
+                    fir_path = f'{dammif_prefix}-{i+1}.fir'
+                    cif_path = f'{dammif_prefix}-{i+1}-1.cif'
+
+                    data = np.loadtxt(fir_path, skiprows=1, dtype=np.float64)
+                    q_fit, I_fit, sigma_exp = data[:, 0], data[:, 3], data[:, 2]
+                    q_fit = q_fit * 10.0  # from A^-1 to nm ^-1
+
+                    # self.viewer.view_curves(q_fit, I_fit, 'fitted curve', 
+                    #                         plotFilePath=os.path.join(dammif_subdir, f'{basename}_{i}_shit_here_0.png'))
+
+                    idx_intersection = (q <= q_fit[-1])
+                    q_intersetcion, I_intersection = q[idx_intersection], I[idx_intersection]
+                    I_fit_interp = np.interp(q_intersetcion, q_fit, I_fit)
+                    sigma_interp = np.interp(q_intersetcion, q_fit, sigma_exp)
+
+                    # self.viewer.view_curves(q_intersetcion, I_fit_interp, 'fitted curve', 
+                    #                         plotFilePath=os.path.join(dammif_subdir, f'{basename}_{i}_shit_here_1.png'))
+
+                    chi2 = calc_chi2(I_intersection, I_fit_interp, sigma_interp)
+                    to_plot.extend([q_intersetcion, I_fit_interp, f'dammif-{i}; chi2: {chi2:.5f}'])
+
+                    atoms = read_bodies_cif(cif_path)
+                    # self.viewer.plot_structure_and_scattering(
+                    #     atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
+                    #     plotFilePath=os.path.join(dammif_subdir, f'dammif-{i}_view.png'))
+                    self.viewer.plot_3d_views_and_scattering(
+                        atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
+                        plotFilePath=os.path.join(dammif_subdir, f'dammif-{i}_view.png'))
+                
+                self.viewer.view_curves(*to_plot,
+                                        title=f'Fits comparison for {basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
+                                        plotFilePath=os.path.join(dammif_subdir, f'{basename}_fits.png'))
         
-        return bodies_subdir, dammif_subdir
+        return dammif_subdir
     
     def ai_analysis(self, atsas_analysis_path, plot_paths, dest_dir,
                     text_model, vision_model,
-                    debug=False):
-        sub_plot_path, guinier_plot_path, kratky_plot_path, loglog_plot_path = plot_paths
-        p, basename = os.path.split(sub_plot_path)
-        basename, _ = os.path.splitext(basename)
-        context_path = os.path.join(dest_dir, f'{basename}_context.txt')
-        llm_answer_path = os.path.join(dest_dir, f'{basename}_llm_answer.txt')
+                    fast_forward=False):
+        answer = ''
+        llm_answer_path = ''
 
-        if debug and os.path.exists(context_path):
-            with open(context_path, 'r') as fread:
-                sample_context = fread.read()
-            self.interface.send_message(f'Debug mode: Skipping visual analysis for {basename} (results already exist)')
-        
-        else:
-            sample_context = []
-            with open(atsas_analysis_path, 'r') as fread:
-                sample_context.append(f'{basename} sample analysis results:\n{fread.read()}')
+        if atsas_analysis_path:
+            os.makedirs(dest_dir, exist_ok=True)
 
-            with open(os.path.join(PROMPTS_DIR, 'visual', 'saxs_1d.txt'), 'r') as fread:
-                saxs_prompt = fread.read()
-            with open(os.path.join(PROMPTS_DIR, 'visual', 'guinier_plot.txt'), 'r') as fread:
-                guinier_prompt = fread.read()
-            with open(os.path.join(PROMPTS_DIR, 'visual', 'kratky_plot.txt'), 'r') as fread:
-                kratky_prompt = fread.read()
-            with open(os.path.join(PROMPTS_DIR, 'visual', 'loglog_plot.txt'), 'r') as fread:
-                loglog_prompt = fread.read()
+            sub_plot_path, guinier_plot_path, kratky_plot_path, loglog_plot_path = plot_paths
+            p, basename = os.path.split(sub_plot_path)
+            basename, _ = os.path.splitext(basename)
+            context_path = os.path.join(dest_dir, f'{basename}_context.txt')
+            llm_answer_path = os.path.join(dest_dir, f'{basename}_llm_answer.txt')
+
+            if fast_forward and os.path.exists(context_path):
+                with open(context_path, 'r') as fread:
+                    sample_context = fread.read()
+                self.interface.send_message(f'Debug mode: Skipping visual analysis for {basename} (results already exist)')
             
-            messages = get_image_messages(sub_plot_path, saxs_prompt)
-            sub_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
-            sample_context.append(f'The description of 1d raw SAXS curve:\n{sub_description}')
+            else:
+                sample_context = []
+                with open(atsas_analysis_path, 'r') as fread:
+                    sample_context.append(f'{basename} sample analysis results:\n{fread.read()}')
 
-            messages = get_image_messages(guinier_plot_path, guinier_prompt)
-            guinier_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
-            sample_context.append(f'The description of Guinier plot:\n{guinier_description}')
+                with open(os.path.join(PROMPTS_DIR, 'visual', 'saxs_1d.txt'), 'r') as fread:
+                    saxs_prompt = fread.read()
+                with open(os.path.join(PROMPTS_DIR, 'visual', 'guinier_plot.txt'), 'r') as fread:
+                    guinier_prompt = fread.read()
+                with open(os.path.join(PROMPTS_DIR, 'visual', 'kratky_plot.txt'), 'r') as fread:
+                    kratky_prompt = fread.read()
+                with open(os.path.join(PROMPTS_DIR, 'visual', 'loglog_plot.txt'), 'r') as fread:
+                    loglog_prompt = fread.read()
+                
+                messages = get_image_messages(sub_plot_path, saxs_prompt)
+                sub_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
+                sample_context.append(f'The description of 1d raw SAXS curve:\n{sub_description}')
 
-            messages = get_image_messages(kratky_plot_path, kratky_prompt)
-            kratky_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
-            sample_context.append(f'The description of Kratky plot:\n{kratky_description}')
+                messages = get_image_messages(guinier_plot_path, guinier_prompt)
+                guinier_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
+                sample_context.append(f'The description of Guinier plot:\n{guinier_description}')
 
-            messages = get_image_messages(loglog_plot_path, loglog_prompt)
-            loglog_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
-            sample_context.append(f'The description of log-log plot:\n{loglog_description}')
+                messages = get_image_messages(kratky_plot_path, kratky_prompt)
+                kratky_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
+                sample_context.append(f'The description of Kratky plot:\n{kratky_description}')
 
-            sample_context = '\n\n'.join(sample_context)
-            with open(context_path, 'w') as fwrite:
-                fwrite.write(sample_context)
+                messages = get_image_messages(loglog_plot_path, loglog_prompt)
+                loglog_description, _ = llm.send_request_to_llm(model=vision_model, messages=messages)
+                sample_context.append(f'The description of log-log plot:\n{loglog_description}')
 
-        # LLM
-        # I dont want to analyze each plot separately. If there are many plots, 
-        # I would rather combine the information coming from them.
-        if debug and os.path.exists(llm_answer_path):
-            with open(llm_answer_path, 'r') as fread:
-                answer = fread.read()
-            self.interface.send_message(f'Debug mode: Skipping LLM analysis for {basename} (results already exist)')
+                sample_context = '\n\n'.join(sample_context)
+                with open(context_path, 'w') as fwrite:
+                    fwrite.write(sample_context)
 
-        else:
-            context = sample_context
-            self.interface.send_message('Now the results of your data processing are sent to LLM for the intelligent analysis.')
-            user_query = self.interface.ask_question('What is your query to LLM?')
-            answer, _ = llm.send_request_to_llm(
-                model=text_model, 
-                messages=[
-                    {'role': 'user', 'content': [{'type': 'text', 'text': f'{context}\n\nUser query: {user_query}'}]}
-                ],
-            )
-            with open(llm_answer_path, 'w') as fwrite:
-                fwrite.write(answer)
-            self.interface.send_message(f'LLM asnwer:\n{answer}')
+            # LLM
+            # I dont want to analyze each plot separately. If there are many plots, 
+            # I would rather combine the information coming from them.
+            if fast_forward and os.path.exists(llm_answer_path):
+                with open(llm_answer_path, 'r') as fread:
+                    answer = fread.read()
+                self.interface.send_message(f'Debug mode: Skipping LLM analysis for {basename} (results already exist)')
+
+            else:
+                context = sample_context
+                self.interface.send_message('Now the results of your data processing are sent to LLM for the intelligent analysis.')
+                user_query = self.interface.ask_question('What is your query to LLM?')
+                answer, _ = llm.send_request_to_llm(
+                    model=text_model, 
+                    messages=[
+                        {'role': 'user', 'content': [{'type': 'text', 'text': f'{context}\n\nUser query: {user_query}'}]}
+                    ],
+                )
+                with open(llm_answer_path, 'w') as fwrite:
+                    fwrite.write(answer)
+                self.interface.send_message(f'LLM asnwer:\n{answer}')
         
-        return answer
+        return answer, llm_answer_path
 
-    def protein_v0(self, debug=False):
+    def protein_interactive(self, fast_forward=False):
         model = 'GLM-4.6'
         # model = 'DeepSeek-V3.1'
         vision_model = 'GLM-4.5V'
         
-        # descr, descr_path = get_pipeline_description('protein_v0')
+        descr, descr_path = get_pipeline_description('protein_v0')
         # print(descr)
         directory = self.interface.ask_for_file('Write a path to a directory for your data')
-        # paths = get_necessary_paths(descr_path, directory)
 
-        paths = dict()
-        # paths['config'] = os.path.join(directory, 'config.conf')
-        # assert os.path.exists(paths['config']), f'There should be .conf file in you directory ({directory})'
-        paths['config'] = self.interface.wait_for_file(
-                directory,
-                query='Drop configuration file (.conf extension) to the directory',
-                filepattern='*.conf', 
-                )
-        config = load_config(paths['config'])
+        config_path = self.interface.wait_for_file(
+            directory, 
+            query='Upload config file config.conf to your directory',
+            filepattern='config.conf',
+            obligatory=True
+        )
 
-        paths['calib_2d'] = self.interface.wait_for_file(
-                directory,
-                query='Drop calibrant 2d data (.tiff extension) to the directory',
-                filepattern='*.tif', 
-                )
-        res_calib = self.autocalib(directory, paths['calib_2d'], config=config, config_path=paths['config'], debug=debug)
-        ai = res_calib['integrator']
+        context = Context(directory, descr_path, interface=self.interface)
+        
+        starting_point = self.interface.ask_question(
+            'From which step to start the pipeline?',
+            options={
+                '1': 'calibration and integration', 
+                '2': 'buffer subtraction', 
+                '3': 'analysis'},
+        )
+        starting_point = int(starting_point)
+        
+        if starting_point == 1:
+            calibrant_path = self.interface.wait_for_file(
+                directory, 
+                query='Upload raw/*_calib.tif file with calibration data',
+                filepattern='raw/*_calib.tif',
+            )
+            res_calib = self.autocalib(
+                calibrant_path, context=context, fast_forward=fast_forward)
+            ai = res_calib['integrator']
 
         run_load_cycle = True
         buffer_loaded = False
-        for k in ('buffer_2d', 'sample_2d', 'buffer_1d', 'sample_1d', 'sub', 'atsas_analysis', 'p(R)', 'plots'):
-            paths[k] = []
         while run_load_cycle:
-            buffer_path = self.interface.wait_for_file(
-                directory,
-                query='Drop buffer 2d data (.tiff extension) to the directory',
-                filepattern='*.tif', 
-                obligatory=not buffer_loaded,
-                )
-            if not buffer_path and buffer_loaded:
-                buffer_path = paths['buffer_2d'][-1]
+            if starting_point == 1:
+                buffer_path = self.interface.wait_for_file(
+                    directory,
+                    query='Upload buffer 2d data to "raw" subdirectory raw/*_buffer.tif',
+                    filepattern='raw/*_buffer.tif')
+                if not buffer_path and buffer_loaded:
+                    buffer_path = context.paths['buffer_2d'][-1]
+                else:
+                    buffer_loaded = True
+                
+                sample_path = self.interface.wait_for_file(
+                    directory, 
+                    query='Upload sample 2d data to "raw" subdirectory raw/*_sample.tif',
+                    filepattern='raw/*_sample.tif')
+                if sample_path:
+                    basename, _ = os.path.splitext(os.path.split(sample_path)[1])
+            
+                buffer_path_1d = self.integrate(
+                    ai, context, 
+                    buffer_path, dest_dir=os.path.join(directory, 'int'), 
+                    metadata={'type': 'buffer'}, 
+                    fast_forward=fast_forward)
+                sample_path_1d = self.integrate(
+                    ai, context, 
+                    sample_path, dest_dir=os.path.join(directory, 'int'), 
+                    metadata={'type': 'sample'}, 
+                    fast_forward=fast_forward)
+
+            elif starting_point == 2:
+                buffer_path_1d = self.interface.wait_for_file(
+                    directory,
+                    query='Upload buffer 1d data to "int" subdirectory int/*_buffer.dat', 
+                    filepattern='int/*_buffer.dat',
+                    )            
+                sample_path_1d = self.interface.wait_for_file(
+                    directory,
+                    query='Upload sample 1d data to "int" subdirectory int/*_sample.dat', 
+                    filepattern='int/*_sample.dat')
+                if sample_path_1d:
+                    basename, _ = os.path.splitext(os.path.split(sample_path_1d)[1])            
+            
+            if starting_point < 3:
+                profile_path, profile_pic_path = self.subtract(
+                    context, sample_path_1d, buffer_path_1d, 
+                    directory, fast_forward=fast_forward)
             else:
-                buffer_loaded = True
-            
-            sample_path = self.interface.wait_for_file(
-                directory,
-                query='Drop sample 2d data (.tiff extension) to the directory', 
-                filepattern='*.tif')
-            basename, _ = os.path.splitext(os.path.split(sample_path)[1])
-            
-            paths['buffer_2d'].append(buffer_path)
-            paths['sample_2d'].append(sample_path)
-
-            buffer_path_1d = self.integrate(ai, buffer_path, directory, {'type': 'buffer'}, debug=debug)
-            sample_path_1d = self.integrate(ai, sample_path, directory, {'type': 'sample'}, debug=debug)
-            paths['buffer_1d'].append(buffer_path)
-            paths['sample_1d'].append(sample_path)
-
-            profile_path, profile_pic_path = self.subtract(sample_path_1d, buffer_path_1d, directory, config['sub'], debug=debug)
-            paths['sub'].append(profile_path)
-
-            # profile_path = self.scale(...)
+                profile_path = self.interface.wait_for_file(
+                    directory, 
+                    query='Upload sample data to "sub" subdirectory sub/*.dat', 
+                    filepattern='sub/*.dat')
+                if profile_path:
+                    root, filename = os.path.split(profile_path)
+                    basename, _ = os.path.splitext(filename)
+                    profile_pic_path = os.path.join(root, f'{basename}.png')                
+                    q, I, _ = read_saxs(profile_path)
+                    self.viewer.view_curves(q, I, basename,
+                                            xlabel='q, (nm-1)', ylabel='I, (a.u.)',
+                                            title=f'{basename} SAXS profile',
+                                            show=False, save=False,
+                                            plotFilePath=profile_pic_path)
 
             q, I, _ = read_saxs(profile_path)
             self.viewer.view_curves(q, I, basename,
                                     xlabel='q, (nm-1)', ylabel='I, (a.u.)',
                                     title=f'{basename} SAXS profile',
                                     show=True)
-            
             if_file_is_good = self.interface.ask_question(
                 f'Should I continue to analyze {basename} SAXS profile? type Enter to proceed, type "No" to skip'
             )
+            
             if not if_file_is_good.lower().startswith('n'):
-                atsas_res_path, gnom_path = self.get_descriptors(profile_path, directory, debug=debug)
-                paths['atsas_analysis'].append(atsas_res_path)
-                paths['p(R)'].append(gnom_path)
+                atsas_res_path, gnom_path = self.get_descriptors(context, profile_path, directory, fast_forward=fast_forward)
                 
-                plot_paths = self.plot(profile_path, directory, debug=debug)
+                plot_paths = self.plot(context, profile_path, directory, fast_forward=fast_forward)
                 plot_paths = [profile_pic_path, ] + plot_paths
-                paths['plots'].append(plot_paths)
                 
-                self.fit_geometry(profile_path, gnom_path, directory, debug=debug)
+                self.bodies_fit(context, profile_path, directory, fast_forward=fast_forward)
+                # self.dammif_fit(context, gnom_path, directory, fast_forward=fast_forward)
                 # self.ai_analysis(atsas_res_path, plot_paths, directory, text_model=model, vision_model=vision_model)
+    
+    # def protein_v0(self, fast_forward=False):
+    #     model = 'GLM-4.6'
+    #     # model = 'DeepSeek-V3.1'
+    #     vision_model = 'GLM-4.5V'
+        
+    #     descr, descr_path = get_pipeline_description('protein_v0')
+    #     # print(descr)
+    #     directory = self.interface.ask_for_file('Write a path to a directory for your data')
+    #     online_or_offline = self.interface.ask_question(
+    #         'Do you want to run a pipeline in "online" or "offline" mode? Type 1 for "online" mode and "2" for "offline" mode'
+    #     )
+    #     data_load_mode = 'online' if online_or_offline.startswith('1') else 'offline'
+    #     self.interface.send_message(f'Interaction mode is set to {data_load_mode}')
+
+    #     context = Context(directory, descr_path, interface=self.interface)
+        
+    #     calibrant_path = context.get_path(
+    #         'calib_2d', 
+    #         query='Drop raw/*_calib.tif file with calibration data your directory',
+    #         pattern='raw/*_calib.tif',
+    #         interaction_mode=data_load_mode
+    #     )
+    #     res_calib = self.autocalib(
+    #         calibrant_path, context=context, fast_forward=fast_forward)
+    #     ai = res_calib['integrator']
+
+    #     run_load_cycle = True
+    #     buffer_loaded = False
+    #     while run_load_cycle:
+    #         buffer_path = context.get_path(
+    #             'buffer_2d', 
+    #             query='Drop buffer 2d data raw/*_buffer.tif to the directory',
+    #             pattern='raw/*_buffer.tif',
+    #             interaction_mode=data_load_mode)
+    #         if not buffer_path and buffer_loaded:
+    #             buffer_path = context.paths['buffer_2d'][-1]
+    #         else:
+    #             buffer_loaded = True
+            
+    #         sample_path = context.get_path(
+    #             'sample_2d', query='Drop sample 2d data raw/*_sample.tif to the directory',
+    #             pattern='raw/*_sample.tif',
+    #             interaction_mode=data_load_mode)
+    #         if sample_path:
+    #             basename, _ = os.path.splitext(os.path.split(sample_path)[1])
+            
+    #         buffer_path_1d = self.integrate(
+    #             ai, context, 
+    #             buffer_path, dest_dir=os.path.join(directory, 'int'), 
+    #             metadata={'type': 'buffer'}, 
+    #             fast_forward=fast_forward)
+    #         sample_path_1d = self.integrate(
+    #             ai, context, 
+    #             sample_path, dest_dir=os.path.join(directory, 'int'), 
+    #             metadata={'type': 'sample'}, 
+    #             fast_forward=fast_forward)
+    #         if sample_path_1d and buffer_path_1d:
+    #             # print('Paths are added to context')
+    #             context.append_path('buffer_1d', buffer_path_1d)
+    #             context.append_path('sample_1d', sample_path_1d)
+    #             # print('Check paths', context.paths['buffer_1d'])
+    #             # print('Check paths', context.paths['sample_1d'])
+             
+    #         # print('Check paths 0:', buffer_path_1d, sample_path_1d)
+
+    #         load_mode_1d = 'online' if data_load_mode == 'online' and not sample_path_1d and not buffer_path_1d else 'offline'
+    #         # print('Check iterators:', context.path_iterators)
+    #         buffer_path_1d = context.get_path(
+    #             'buffer_1d', query='Drop buffer 1d data int/*_buffer.dat to the directory', pattern='int/*_buffer.dat',
+    #             interaction_mode=load_mode_1d)            
+    #         sample_path_1d = context.get_path(
+    #             'sample_1d', query='Drop sample 1d data int/*_sample.dat to the directory', pattern='int/*_sample.dat',
+    #             interaction_mode=load_mode_1d)            
+    #         # print('Check paths 1', buffer_path_1d, sample_path_1d)
+    #         profile_path, profile_pic_path = self.subtract(
+    #             context, sample_path_1d, buffer_path_1d, 
+    #             directory, fast_forward=fast_forward)
+    #         if profile_path:
+    #             context.append_path('sub', profile_path)
+
+    #         # profile_path = self.scale(...)
+            
+    #         load_mode_1d = 'online' if data_load_mode == 'online' and not profile_path else 'offline'
+    #         profile_path = context.get_path(
+    #             'sub', query='Drop sample data sub/*.dat to the directory', pattern='sub/*.dat',
+    #             interaction_mode=load_mode_1d)
+
+    #         if_file_is_good = 'yes'
+    #         if data_load_mode == 'online':
+    #             q, I, _ = read_saxs(profile_path)
+    #             self.viewer.view_curves(q, I, basename,
+    #                                     xlabel='q, (nm-1)', ylabel='I, (a.u.)',
+    #                                     title=f'{basename} SAXS profile',
+    #                                     show=True)
+    #             if_file_is_good = self.interface.ask_question(
+    #                 f'Should I continue to analyze {basename} SAXS profile? type Enter to proceed, type "No" to skip'
+    #             )
+            
+    #         if not if_file_is_good.lower().startswith('n'):
+    #             atsas_res_path, gnom_path = self.get_descriptors(context, profile_path, directory, fast_forward=fast_forward)
+    #             context.append_path('atsas_analysis', atsas_res_path)
+    #             context.append_path('p(R)', gnom_path)
+                
+    #             plot_paths = self.plot(context, profile_path, directory, fast_forward=fast_forward)
+    #             plot_paths = [profile_pic_path, ] + plot_paths
+    #             context.append_path('plots', plot_paths)
+                
+    #             self.fit_geometry(context, profile_path, gnom_path, directory, fast_forward=fast_forward)
+    #             # self.ai_analysis(atsas_res_path, plot_paths, directory, text_model=model, vision_model=vision_model)
         
         # # self.interface.send_message('Integration...')
         # paths['buffer_1d'], = self.integrate(ai, [paths['buffer_2d'], ], directory, [{'type': 'buffer'}, ], debug=debug)
@@ -794,5 +1054,6 @@ if __name__ == '__main__':
     # controller.pipeline()
     # directory path for pipeline0: debug/protein_v0, debug/protein_v0_interactive
     # LLM query: It is known that the subject of the investigation is a protein dissolved in water. Which protein it could be based on available information?
-    controller.protein_v0(debug=True)
+    # controller.protein_v0(fast_forward=True)
+    controller.protein_interactive(fast_forward=True)
 

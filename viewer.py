@@ -179,9 +179,11 @@ class PLTViewer(Viewer):
     def view_curves(*args, show=False, **kwargs):
         kw = dict(xlabel='$q (nm^-1)$', ylabel='I (a.u.)')
         kw.update(kwargs)
-        plotLines(*args, **kw)
+        fig, ax = plotLines(*args, **kw)
         if show:
-            plt.show()
+            plt.show(block=False)
+            input("Press Enter to close the figure...")
+            plt.close(fig)
     
     @staticmethod
     def plot_structure_and_scattering(atoms, q, I, sigma, I_fit, fig_axs=None,

@@ -33,7 +33,7 @@ class Interface:
         raise NotImplementedError
 
     @staticmethod
-    def wait_for_file(directory, obligatory=True, query=None, wait=2.0, wait_to_end_loading=2.0, filepattern='*'):
+    def wait_for_file(directory, obligatory=False, query=None, wait=2.0, wait_to_end_loading=2.0, filepattern='*'):
         raise NotImplementedError
 
     @staticmethod
@@ -129,14 +129,17 @@ class CLIInterface(Interface):
         return ''
     
     @staticmethod
-    def wait_for_file(directory, query=None, obligatory=True, wait=2.0, wait_to_end_loading=2.0, filepattern='*'):
+    def wait_for_file(directory, query=None, obligatory=False, wait=2.0, wait_to_end_loading=2.0, filepattern='*'):
         assert query is not None
-        
-        def _get_files():
-            return glob.glob(os.path.join(directory, filepattern), recursive=True)
 
-        old_files = _get_files()
-        
+        def _get_all_files():
+            return set(glob.glob(os.path.join(directory, '**/*'), recursive=True))
+
+        def _get_pattern_files():
+            return set(glob.glob(os.path.join(directory, filepattern), recursive=True))
+
+        old_files = _get_all_files()
+
         query += ': '
         print(query, flush=True)
 
@@ -145,30 +148,37 @@ class CLIInterface(Interface):
         stop_event = threading.Event()
 
         def monitor_files():
+            nonlocal old_files
             while not stop_event.is_set():
-                current_files = set(_get_files())
-                old_files_set = set(old_files)
-                if current_files != old_files_set:
-                    diff = current_files - old_files_set
-                    if len(diff) == 1:
-                        new_file = diff.pop()
-                        # Wait a bit more to ensure file is fully written
+                current_files = _get_all_files()
+                # print('Old: ', old_files)
+                # print('Current: ', current_files)
+                added_files = current_files - old_files
+                # print('Added: ', added_files)
+                if added_files:
+                    # Prefer to process one file at a time
+                    pattern_files = [p for p in _get_pattern_files() if p in added_files]
+                    if len(pattern_files) == 1:
+                        new_file_path, = pattern_files
                         time.sleep(wait_to_end_loading)
-                        result['new_file'] = new_file
+                        result['new_file'] = new_file_path
                         stop_event.set()
+                        CLIInterface.send_message(f"Uploaded file {new_file_path}")
                         return
-                    elif len(diff) > 1:
-                        # Multiple files appeared - this violates the assumption
-                        result['new_file'] = None
-                        stop_event.set()
-                        return
+                    elif len(pattern_files) > 1:
+                        raise AssertionError(f"Multiple files match the required pattern '{filepattern}': {pattern_files}. This is not supported yet.")
+                    else:
+                        CLIInterface.send_message(f"No files match the required pattern '{filepattern}'. Please upload a correct file.")
+                old_files = current_files
                 time.sleep(wait)
 
         def wait_for_input():
             """Wait for the user to press Enter."""
             try:
                 input()
+                # Only process input if stop_event hasn't been set yet (file not detected)
                 if not stop_event.is_set():
+                    CLIInterface.send_message('User interrupted file selection')
                     result['user_interrupted'] = True
                     stop_event.set()
             except EOFError:
@@ -178,12 +188,16 @@ class CLIInterface(Interface):
         # Start both threads
         file_thread = threading.Thread(target=monitor_files, daemon=True)
         input_thread = threading.Thread(target=wait_for_input, daemon=True)
-        
+
         file_thread.start()
         input_thread.start()
 
         # Wait until one of the threads signals completion
         stop_event.wait()
+
+        # Give a small moment for threads to finish their current operations
+        # This ensures result dict is fully updated before we check it
+        time.sleep(0.1)
 
         # Clean up threads
         # Note: daemon=True means they'll be killed when main thread exits
@@ -196,10 +210,10 @@ class CLIInterface(Interface):
             # This shouldn't happen under normal circumstances due to the assertion
             # that only one file can be processed, but we handle it gracefully
             raise RuntimeError("Multiple files appeared simultaneously or unexpected error occurred")
-        
+
         if obligatory and not ret:
             raise PipelineInterrupt('The user interrupted the pipeline execution')
-        
+
         return ret
 
 

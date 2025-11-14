@@ -202,7 +202,7 @@ def get_pipeline_description(pipeline_name: str) -> str:
     return "\n\n".join(description_parts), pipeline_file
 
 
-def get_necessary_paths(description_file, directory_path):
+def get_pipeline_paths(description_file, directory_path, check=True):
     """
     Check if a directory satisfies the structure described in a file and return matching file paths.
     
@@ -280,43 +280,36 @@ def get_necessary_paths(description_file, directory_path):
         actual_count = len(matching_files)
         
         # Check if the actual count is within the expected range
-        if not (min_count <= actual_count <= max_count):
+        if check and not (min_count <= actual_count <= max_count):
             raise AssertionError(f"Directory structure mismatch: Expected {min_count}-{max_count} files matching '{file_mask}', found {actual_count}")
         
         # Add to result dictionary with the list of matching files
-        if min_count == max_count == 1:
-            result[path_name] = matching_files[0]
-        else:
-            result[path_name] = matching_files
+        result[path_name] = [matching_files, (min_count, max_count), pattern]
     
     # some files may be present in several groups simultaneously
     # if a smaller group is included to a larger group then it should be deleted from the larger group
     # if two groups have an intersection or both groups are singular and coincide - throw an error
     for group_name_0, group_name_1 in itertools.combinations(result.keys(), 2):
-        entry0, entry1 = result[group_name_0], result[group_name_1]
+        entry0, entry1 = result[group_name_0][0], result[group_name_1][0]
         
-        to_str_1 = to_str_0 = False
-        if isinstance(entry0, str):
-            entry0 = [entry0, ]
-            to_str_0 = True
-        if isinstance(entry1, str):
-            entry1 = [entry1, ]
-            to_str_1 = True
         entry0_set, entry1_set = set(entry0), set(entry1)
         assert entry0_set < entry1_set or entry1_set < entry0_set or not (entry0_set & entry1_set), 'Description contains overlapping masks!'
         
         if entry1_set < entry0_set:
-            entry0_set, entry1_set = entry1_set, entry0_set
-        if entry0_set < entry1_set:
+            for e1 in entry1:
+                entry0.remove(e1)
+        elif entry0_set < entry1_set:
             for e0 in entry0:
                 entry1.remove(e0)
         
-        if to_str_0:
-            entry0 = entry0[0]
-        if to_str_1:
-            entry1 = entry1[0]
-        result[group_name_0] = entry0
-        result[group_name_1] = entry1
+        result[group_name_0][0] = entry0
+        result[group_name_1][0] = entry1
+    
+    for group_name in result:
+        entry, (_, max_count), _ = result[group_name]
+        actual_count = len(entry)
+        if actual_count > max_count:
+            raise AssertionError(f"Directory structure mismatch: Expected at maximum {max_count} files matching '{file_mask}', found {actual_count}")
         
     return result
 
