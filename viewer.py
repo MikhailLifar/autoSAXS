@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -54,9 +55,21 @@ class PLTViewer(Viewer):
         setPlotDefaults()
 
     @staticmethod
-    def view_center(img_data, tiff_path, center_y_px, center_x_px, clusters, 
-                    fig_axs=None):
-        show = fig_axs is None
+    def show(duration: Optional[float] = None):
+        """
+        Unified non-blocking show helper.
+        If duration is None, do nothing (caller only saves/updates figures).
+        Otherwise, show for `duration` seconds and close all figures.
+        """
+        if duration is None:
+            return
+        plt.show(block=False)
+        plt.pause(duration)
+        plt.close("all")
+
+    @staticmethod
+    def view_center(img_data, tiff_path, center_y_px, center_x_px, clusters,
+                    fig_axs=None, show_duration: Optional[float] = None):
         if fig_axs is None:
             fig, axs = plt.subplots(1, 2, figsize=(16, 6))
         else:
@@ -77,14 +90,13 @@ class PLTViewer(Viewer):
         axs[1].set_xlabel("Pixel X")
         axs[1].set_ylabel("Pixel Y")
 
-        if show:
-            plt.show()
+        if fig_axs is None:
+            PLTViewer.show(show_duration)
 
         return fig, axs
     
     @staticmethod
-    def view_rings(img_data, tiff_path, rings, fig_axs=None):
-        show = fig_axs is None
+    def view_rings(img_data, tiff_path, rings, fig_axs=None, show_duration: Optional[float] = None):
         if fig_axs is None:
             fig, axs = plt.subplots(1, 2, figsize=(16, 6))
         else:
@@ -104,15 +116,14 @@ class PLTViewer(Viewer):
         axs[1].set_xlabel("Pixel X")
         axs[1].set_ylabel("Pixel Y")
 
-        if show:
-            plt.show()
+        if fig_axs is None:
+            PLTViewer.show(show_duration)
 
         return fig, axs
     
     @staticmethod
-    def view_refined_curve(curve_calibrated, theoretical_peaks, 
-                           fig_axs=None):
-        show = fig_axs is None
+    def view_refined_curve(curve_calibrated, theoretical_peaks,
+                           fig_axs=None, show_duration: Optional[float] = None):
         if fig_axs is None:
             fig, axs = plt.subplots(figsize=(10, 6))
             axs = np.array([axs, ])
@@ -138,8 +149,9 @@ class PLTViewer(Viewer):
         axs[0].legend(by_label.values(), by_label.keys())
         
         axs[0].grid(True)
-        if show:
-            plt.show()
+
+        if fig_axs is None:
+            PLTViewer.show(show_duration)
     
     @staticmethod
     def view_calibration(
@@ -147,7 +159,7 @@ class PLTViewer(Viewer):
         img_data, tiff_path, 
         center_y_px, center_x_px, clusters,
         rings, curve_calibrated, theoretical_peaks, 
-        fig_axs=None, show=True, plotFilePath=None,
+        fig_axs=None, show_duration: Optional[float] = None, plotFilePath=None,
         **kwargs):
         
         if fig_axs is None:
@@ -155,8 +167,14 @@ class PLTViewer(Viewer):
         else:
             fig, axs = fig_axs
         
-        PLTViewer.view_center(img_data, tiff_path, fig_axs=(fig, axs[0]),
-                              center_y_px=center_y_px, center_x_px=center_x_px, clusters=clusters)
+        PLTViewer.view_center(
+            img_data,
+            tiff_path,
+            center_y_px=center_y_px,
+            center_x_px=center_x_px,
+            clusters=clusters,
+            fig_axs=(fig, axs[0]),
+        )
 
         axs[1, 0].imshow(np.log1p(img_data), cmap='viridis', origin='lower')
         scatter_data = pd.DataFrame(data=rings, columns=['y', 'x', 'ring_number'])
@@ -166,23 +184,28 @@ class PLTViewer(Viewer):
         axs[1, 0].set_xlabel("Pixel X")
         axs[1, 0].set_ylabel("Pixel Y")
 
-        PLTViewer.view_refined_curve(curve_calibrated, theoretical_peaks,
-                                     fig_axs=(fig, axs[[1, ], [1, ]]))
+        PLTViewer.view_refined_curve(
+            curve_calibrated,
+            theoretical_peaks,
+            fig_axs=(fig, axs[[1, ], [1, ]]),
+        )
 
-        if show:
-            plt.show()
+        if show_duration is not None:
+            PLTViewer.show(show_duration)
         if plotFilePath is not None:
             fig.savefig(plotFilePath)
-        plt.close(fig)
+        if fig_axs is None and show_duration is None:
+            # No external figure management and no timed show – close to avoid leaks
+            plt.close(fig)
     
     @staticmethod
-    def view_curves(*args, show=False, **kwargs):
+    def view_curves(*args, show_duration: Optional[float] = None, **kwargs):
         kw = dict(xlabel='$q (nm^-1)$', ylabel='I (a.u.)')
         kw.update(kwargs)
         fig, ax = plotLines(*args, **kw)
-        if show:
-            plt.show(block=False)
-            input("Press Enter to close the figure...")
+        if show_duration is not None:
+            PLTViewer.show(show_duration)
+        else:
             plt.close(fig)
     
     @staticmethod
