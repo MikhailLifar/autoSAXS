@@ -9,11 +9,12 @@ Calibration -> Integration -> Subtraction -> Scaling -> Fit with bodies and DAMM
 <Input Structure>
 config *.conf  # configuration file
 calib_2d raw/*_calib.tif  # calibrant image
-buffer_2d raw/*_buf.tif +
+buffer_2d raw/*_buffer.tif +
 sample_2d raw/*_sample.tif +
-buffer_1d int/*_buf.data +
-sample_1d int/*_sample.dat +
-sub sub/*.dat +
+buffer_1d averaged/*_buffer.dat +
+sample_1d averaged/*_sample.dat +
+sub subtracted/*.dat +
+sub_picture subtracted/sub_*.png +
 </Input Structure>
 <Output Structure>
 calibration.png  # visualization of calibration results

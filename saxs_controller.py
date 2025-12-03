@@ -2,6 +2,7 @@ import yaml
 from processor import *
 from interface import *
 from viewer import *
+from context import Context
 import os
 import sys
 import logging
@@ -50,89 +51,6 @@ def json_type_caster(s):
         return json.loads(s)
     except:
         raise ValueError('Incorrect JSON passed')
-
-
-class Context:
-    def __init__(self, directory, pipe_descr_path, interface: Interface):
-        self.directory = directory
-        self.pipe_descr_path = pipe_descr_path
-        self.interface = interface
-        
-        self.paths = get_pipeline_paths(self.pipe_descr_path, self.directory, check=False)
-        self.group_names = list(self.paths.keys())
-        self.path_iterators = [0, ] * len(self.group_names)
-        
-        self.config_path = self.paths['config'][0][0]
-        try:
-            self.config = load_config(self.config_path)
-        except FileNotFoundError:
-            raise FileNotFoundError(f'Probably there is no configuration (.conf) file in the provided directory: {self.directory}')
-    
-    def get_path(self, group_name, obligatory=False, query=None, pattern='*', interaction_mode='offline'):
-        assert interaction_mode in ('online', 'offline')
-        
-        if interaction_mode == 'offline':
-            idx0 = self.group_names.index(group_name)
-            idx1 = self.path_iterators[idx0]
-            group_paths = self.paths[group_name][0] 
-            if idx1 < len(group_paths):
-                ret = group_paths[idx1]
-                self.path_iterators[idx0] += 1
-                return ret
-            else:
-                return ''
-        
-        if interaction_mode == 'online':
-            ret = self.interface.wait_for_file(
-                self.directory, obligatory=obligatory, query=query,
-                filepattern=pattern)
-            if ret:
-                self.paths[group_name][0].append(ret)
-            return ret
-    
-    def append_path(self, group_name, path):
-        if group_name not in self.paths:
-            self.paths[group_name] = [[], (1, float('inf')), os.path.join(self.directory, '*')]
-        self.paths[group_name][0].append(path)
-    
-    def __getitem__(self, keys):
-        if not isinstance(keys, tuple):
-            keys = (keys, )
-        
-        ret = self.config
-        for k in keys:
-            ret = ret[k]
-        
-        return ret
-    
-    def __setitem__(self, keys, value):
-        if not isinstance(keys, tuple):
-            keys = (keys, )
-        
-        keys, final_key = keys[:-1], keys[-1]
-        data = self.config
-        for k in keys:
-            if k not in data:
-                data[k] = {}
-            data = data[k]
-        data[final_key] = value
-
-        save_config(self.config, self.config_path)
-    
-    def update_config(self, *keys, values: dict):
-        keys = list(keys)
-
-        conf = self.config
-        for k in keys:
-            if k not in conf:
-                conf[k] = {}
-            conf = conf[k]
-        
-        conf.update(values)
-        save_config(self.config, self.config_path)
-    
-    def __contains__(self, key):
-        return key in self.config
 
 
 # class Block:
@@ -326,9 +244,14 @@ class Controller:
             refine_step_ret['integrator'].to_disk(integrator_subd)
 
             self.viewer.view_calibration(
-                img_data=calib_data, tiff_path=calibrant_path,
-                show=False, plotFilePath=calibration_results_file,
-                **center_step_ret, **rings_step_ret, **refine_step_ret)
+                img_data=calib_data,
+                tiff_path=calibrant_path,
+                show_duration=None,
+                plotFilePath=calibration_results_file,
+                **center_step_ret,
+                **rings_step_ret,
+                **refine_step_ret,
+            )
             refined = refine_step_ret['refined']
             refined.update({'wavelength': context['detector_geometry', 'wavelength']})
             self.interface.send_message(
@@ -520,6 +443,11 @@ echo "Full results saved to: $RESULTS_FILE"
                 #     save=False
                 # )
 
+                write_data(
+                    os.path.join(dest_dir, f'guinier_{basename}.dat'),
+                    pd.DataFrame(np.stack([q*q, np.log(I)], axis=-1), columns=['q^2', 'log(I)']),
+                    metadata={'type': 'guinier', 'parent': to_plot_path}
+                )
                 self.viewer.view_curves(
                     q*q, np.log(I), 'log(I) vs q^2',
                     xlabel='q^2 (nm-2)', ylabel='log(I) (a.u.)',
@@ -528,6 +456,11 @@ echo "Full results saved to: $RESULTS_FILE"
                     save=False
                 )
 
+                write_data(
+                    os.path.join(dest_dir, f'kratky_{basename}.dat'),
+                    pd.DataFrame(np.stack([q, q * q * I], axis=-1), columns=['q', 'I * q^2']),
+                    metadata={'type': 'kratky', 'parent': to_plot_path}
+                )
                 self.viewer.view_curves(
                     q, q * q * I, 'I * q^2 vs q',
                     xlabel='q (nm-1)', ylabel='I * q^2 (a.u.)',
@@ -536,6 +469,11 @@ echo "Full results saved to: $RESULTS_FILE"
                     save=False
                 )
 
+                write_data(
+                    os.path.join(dest_dir, f'loglog_{basename}.dat'),
+                    pd.DataFrame(np.stack([np.log(q), np.log(I)], axis=-1), columns=['log(q)', 'log(q)']),
+                    metadata={'type': 'loglog', 'parent': to_plot_path}
+                )
                 self.viewer.view_curves(
                     np.log(q), np.log(I), 'log(I) vs log(q)',
                     xlabel='log(q)', ylabel='log(I)',
@@ -599,7 +537,7 @@ echo "Full results saved to: $RESULTS_FILE"
         
         return bodies_subdir
     
-    def dammif_fit(self, context: Context, gnom_path, dest_dir, fast_forward=False):
+    def dammif_fit(self, context: Context, saxs_1d_path, gnom_path, dest_dir, fast_forward=False):
         if gnom_path:
             self.interface.send_message('DAMMIF fit...')
             root, basename = os.path.split(gnom_path)
@@ -620,7 +558,10 @@ echo "Full results saved to: $RESULTS_FILE"
             
             else:
                 os.system(f'for i in `seq 1 {dammif_reps_num}`; do {dammif_call} --prefix={dammif_prefix}-$i --mode=fast {gnom_path}; done')
+
+                q, I, _ = read_saxs(saxs_1d_path)
                 to_plot = [q, I, {'label': 'exp', 'lw': 4}]
+                
                 for i in range(dammif_reps_num):
                     fir_path = f'{dammif_prefix}-{i+1}.fir'
                     cif_path = f'{dammif_prefix}-{i+1}-1.cif'
@@ -735,7 +676,9 @@ echo "Full results saved to: $RESULTS_FILE"
         
         return answer, llm_answer_path
 
-    def protein_interactive(self, fast_forward=False):
+    def pipeline_interactive(self, fast_forward=False):
+        # TODO currently the pipeline is oriented on proteins. Since the pipeline for other samples is sort of similar, I think, there will be only one pipeline in the end
+
         model = 'GLM-4.6'
         # model = 'DeepSeek-V3.1'
         vision_model = 'GLM-4.5V'
@@ -837,10 +780,15 @@ echo "Full results saved to: $RESULTS_FILE"
                                             plotFilePath=profile_pic_path)
 
             q, I, _ = read_saxs(profile_path)
-            self.viewer.view_curves(q, I, basename,
-                                    xlabel='q, (nm-1)', ylabel='I, (a.u.)',
-                                    title=f'{basename} SAXS profile',
-                                    show=True)
+            self.viewer.view_curves(
+                q,
+                I,
+                basename,
+                xlabel='q, (nm-1)',
+                ylabel='I, (a.u.)',
+                title=f'{basename} SAXS profile',
+                show_duration=None,
+            )
             if_file_is_good = self.interface.ask_question(
                 f'Should I continue to analyze {basename} SAXS profile? type Enter to proceed, type "No" to skip'
             )
@@ -854,6 +802,94 @@ echo "Full results saved to: $RESULTS_FILE"
                 self.bodies_fit(context, profile_path, directory, fast_forward=fast_forward)
                 # self.dammif_fit(context, gnom_path, directory, fast_forward=fast_forward)
                 # self.ai_analysis(atsas_res_path, plot_paths, directory, text_model=model, vision_model=vision_model)
+            
+            upload_more = self.interface.ask_question(
+                'Upload more data? Type "no" to exit program, type Enter or "yes" to continue',
+            )
+            run_load_cycle = not upload_more.lower().startswith('n')
+    
+    def pipeline_batch(self, fast_forward=False):
+        # TODO currently the pipeline is oriented on proteins. Since the pipeline for other samples is sort of similar, I think, there will be only one pipeline in the end
+
+        model = 'GLM-4.6'
+        # model = 'DeepSeek-V3.1'
+        vision_model = 'GLM-4.5V'
+        
+        descr, descr_path = get_pipeline_description('protein_v0')
+        # print(descr)
+        directory = self.interface.ask_for_file('Write a path to a directory for your data')
+
+        context = Context(directory, descr_path, interface=self.interface)
+        
+        if context['paths', 'calib_2d']:
+            starting_point = 0
+        elif context['paths', 'buffer_1d'] and context.paths['sample_1d']:
+            starting_point = 1
+        elif context['paths', 'sub'] and context['paths', 'sub_picture']:
+            starting_point = 2
+        else:
+            raise RuntimeError('Data for pipeline was not provided')
+        
+        ai = None
+        if starting_point < 1:
+            assert context['paths', 'buffer_2d'] and context.paths['sample_2d']
+            calibrant_path = context['paths', 'calib_2d', 0]
+            res_calib = self.autocalib(
+                calibrant_path, context=context, fast_forward=fast_forward)
+            ai = res_calib['integrator']
+
+            # TODO for now integrated go directly to "averaged" subdir, should be fixed in the future
+            for p in context['paths', 'buffer_2d']:
+                int_p = self.integrate(
+                    ai, context, p, metadata={'type': 'buffer'}, 
+                    dest_dir=os.path.join(directory, 'averaged'), 
+                    fast_forward=fast_forward)
+                context.append_path('buffer_1d', int_p)
+            
+            for p in context['paths', 'sample_2d']:
+                int_p = self.integrate(
+                    ai, context, p, metadata={'type': 'sample'}, 
+                    dest_dir=os.path.join(directory, 'averaged'), 
+                    fast_forward=fast_forward)
+                context.append_path('sample_1d', int_p)
+            
+        if starting_point < 2:
+            for b_path, s_path in zip(context['paths', 'buffer_1d'], context['paths', 'sample_1d']):
+                sub_path, sub_pic_path = self.subtract(
+                    context, s_path, b_path, 
+                    dest_dir=os.path.join(directory, 'subtracted'), fast_forward=fast_forward
+                )
+                context.append_path('sub', sub_path)
+                context.append_path('sub_picture', sub_pic_path)
+        
+        for p in context['paths', 'sub']:
+            atsas_res_path, gnom_path = self.get_descriptors(
+                context, p, 
+                dest_dir=os.path.join(directory, 'descriptors'), fast_forward=fast_forward)
+            context.append_path('astas_analysis', atsas_res_path)
+            context.append_path('p(R)', gnom_path)
+        
+        for sub_path, sub_pic_path in zip(context['paths', 'sub'], context['paths', 'sub_picture']):
+            plot_paths = self.plot(
+                context, sub_path, dest_dir=os.path.join(directory, 'plots'), fast_forward=fast_forward)
+            plot_paths = [sub_pic_path, ] + plot_paths
+            context.append_path('plot', plot_paths)
+        
+        if context['fit_bodies']:
+            for p in context['paths', 'sub']:
+                self.bodies_fit(
+                    context, p, os.path.join(directory, 'bodies'), fast_forward=fast_forward
+                )
+        
+        if context['fit_dammif']:
+            for sub_path, gnom_path in zip(context['paths', 'sub'], context['paths', 'p(R)']):
+                self.dammif_fit(
+                    context, sub_path, gnom_path, os.path.join(directory, 'dammif'),
+                    fast_forward=fast_forward
+                )
+        
+        # if context['analyze_with_ai']:
+        #     self.ai_analysis(atsas_res_path, plot_paths, directory, text_model=model, vision_model=vision_model)
     
     # def protein_v0(self, fast_forward=False):
     #     model = 'GLM-4.6'
@@ -1055,5 +1091,6 @@ if __name__ == '__main__':
     # directory path for pipeline0: debug/protein_v0, debug/protein_v0_interactive
     # LLM query: It is known that the subject of the investigation is a protein dissolved in water. Which protein it could be based on available information?
     # controller.protein_v0(fast_forward=True)
-    controller.protein_interactive(fast_forward=True)
+    # controller.pipeline_interactive(fast_forward=True)
+    controller.pipeline_batch(fast_forward=True)
 

@@ -42,18 +42,9 @@ def write_saxs(filename, wavenumber, intensity, metadata):
         'q': wavenumber,
         'intensity': intensity
     })
-    
-    with open(filename, 'w') as f:
-        # Write metadata in YAML format
-        f.write("# SAXS Data File\n")
-        f.write("# Metadata in YAML format\n")
-        f.write("---\n")
-        yaml.dump(metadata, f, default_flow_style=False)
-        f.write("...\n")
-        
-        # Write data in CSV format
-        f.write("\n# Data in CSV format\n")
-        df.to_csv(f, index=False)
+
+    # Delegate actual writing to generic helper
+    write_data(filename, df, metadata)
 
 def read_saxs(filename) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
@@ -68,32 +59,75 @@ def read_saxs(filename) -> Tuple[np.ndarray, np.ndarray, dict]:
         intensity (numpy.ndarray): Array of intensity values
         metadata (dict): Dictionary containing metadata
     """
-    with open(filename, 'r') as f:
-        content = f.read()
-    
-    # Split content into YAML and CSV sections
-    yaml_start = content.find("---\n") + 4
-    yaml_end = content.find("\n...\n")
-    
-    if yaml_start == 3 or yaml_end == -1:
-        raise ValueError("Invalid file format: YAML delimiters not found")
-    
-    # Extract and parse YAML metadata
-    yaml_text = content[yaml_start:yaml_end]
-    metadata = yaml.safe_load(yaml_text)
-    
-    # Extract and parse CSV data
-    csv_start = content.find("\n# Data in CSV format\n") + len("\n# Data in CSV format\n")
-    csv_text = content[csv_start:]
-    
-    # Use pandas to read CSV data
-    df = pd.read_csv(StringIO(csv_text))
-    
+    df, _, metadata = read_data(filename)
+
     # Extract arrays
     wavenumber = df['q'].to_numpy()
     intensity = df['intensity'].to_numpy()
     
     return wavenumber, intensity, metadata
+
+
+def write_data(filename, data: pd.DataFrame, metadata):
+    """
+    Write generic tabular data and metadata to a file using YAML for metadata and CSV for data.
+
+    Parameters:
+    filename (str): Output file path
+    data (pd.DataFrame): Tabular data to be written as CSV
+    metadata (dict): Dictionary containing metadata
+    """
+    with open(filename, 'w') as f:
+        # Write metadata in YAML format
+        f.write("# Data File\n")
+        f.write("# Metadata in YAML format\n")
+        f.write("---\n")
+        yaml.dump(metadata, f, default_flow_style=False)
+        f.write("...\n")
+
+        # Write data in CSV format
+        f.write("\n# Data in CSV format\n")
+        data.to_csv(f, index=False)
+
+
+def read_data(filename):
+    """
+    Read generic tabular data and metadata from a file with YAML metadata and CSV data.
+
+    Parameters:
+    filename (str): Input file path
+
+    Returns:
+    tuple: (data, columns_as_arrays, metadata)
+        data (pd.DataFrame): Tabular data
+        columns_as_arrays (tuple): Tuple of NumPy arrays corresponding to DataFrame columns
+        metadata (dict): Dictionary containing metadata
+    """
+    with open(filename, 'r') as f:
+        content = f.read()
+
+    # Split content into YAML and CSV sections
+    yaml_start = content.find("---\n") + 4
+    yaml_end = content.find("\n...\n")
+
+    if yaml_start == 3 or yaml_end == -1:
+        raise ValueError("Invalid file format: YAML delimiters not found")
+
+    # Extract and parse YAML metadata
+    yaml_text = content[yaml_start:yaml_end]
+    metadata = yaml.safe_load(yaml_text)
+
+    # Extract and parse CSV data
+    csv_start = content.find("\n# Data in CSV format\n") + len("\n# Data in CSV format\n")
+    csv_text = content[csv_start:]
+
+    # Use pandas to read CSV data
+    df = pd.read_csv(StringIO(csv_text))
+
+    # Return DataFrame and tuple of its columns as NumPy arrays
+    columns_as_arrays = tuple(df[col].to_numpy() for col in df.columns)
+
+    return df, columns_as_arrays, metadata
 
 
 def get_pipeline_description(pipeline_name: str) -> str:
