@@ -72,7 +72,7 @@ def wait_for_keypress(timeout_sec: float) -> bool:
     return False
 
 
-def run_calibration_cycle(interface: CLIInterface, viewer: PLTViewer):
+def run_calibration_cycle(interface: CLIInterface, viewer: PLTViewer, directory, context: Context):
     """
     One calibration cycle:
       - ask for working directory
@@ -81,26 +81,13 @@ def run_calibration_cycle(interface: CLIInterface, viewer: PLTViewer):
       - perform calibration, show plots for 5s, print refined parameters
     Returns (context, integrator) or (None, None) if calibration was not performed.
     """
-    # Working directory
-    directory = interface.ask_for_file("Write a path to the working directory", obligatory=True)
-
-    # Create a minimal Context: only config from <directory>/config.conf is used
-    context = Context(directory, pipe_descr_path=None, interface=interface)
-
-    # Calibrant type with timeout and default
-    calibrant_type = timed_input(
-        "Enter calibrant type (default AgBh, 2 seconds to change): ",
-        timeout_sec=2.0,
-        default="AgBh",
-    )
-    context["calibrant_name"] = calibrant_type
 
     # Calibrant image path
     calibrant_path = interface.wait_for_file(
         directory, 
         query="Upload a _calib.tif file with calibration image",
         obligatory=True,
-        filepattern="*.tif"
+        filepattern="*_calib.tif"
     )
 
     # Prepare calibration data
@@ -146,7 +133,7 @@ def run_calibration_cycle(interface: CLIInterface, viewer: PLTViewer):
             "r_beam_px": context["r_beam_px"],
             "center_y_px": center_step_ret["center_y_px"],
             "center_x_px": center_step_ret["center_x_px"],
-            "calibrant_name": calibrant_type,
+            "calibrant_name": context['calibrant_name'],
         }
     )
     interface.send_message("    Geometry refinement...")
@@ -161,7 +148,7 @@ def run_calibration_cycle(interface: CLIInterface, viewer: PLTViewer):
     viewer.view_calibration(
         img_data=calib_data,
         tiff_path=calibrant_path,
-        show_duration=5.0,
+        show_duration=10.0,
         plotFilePath=calibration_results_file,
         **center_step_ret,
         **rings_step_ret,
@@ -199,8 +186,22 @@ def calibration_loop(interface: CLIInterface, viewer: PLTViewer):
     context = None
     integrator = None
 
+    # Working directory
+    directory = interface.ask_for_file("Write a path to the working directory", obligatory=True)
+
+    # Create a minimal Context: only config from <directory>/config.conf is used
+    context = Context(directory, pipe_descr_path=None, interface=interface)
+
+    # Calibrant type with timeout and default
+    calibrant_name = timed_input(
+        "Enter calibrant name (default AgBh, 5 seconds to change): ",
+        timeout_sec=5.0,
+        default="AgBh",
+    )
+    context["calibrant_name"] = calibrant_name
+
     while True:
-        context, integrator = run_calibration_cycle(interface, viewer)
+        context, integrator = run_calibration_cycle(interface, viewer, directory=directory, context=context)
 
         # 5s pause during which user can decide to redo calibration
         if wait_for_keypress(timeout_sec=5.0):

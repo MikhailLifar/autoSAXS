@@ -190,10 +190,9 @@ class PLTViewer(Viewer):
             fig_axs=(fig, axs[[1, ], [1, ]]),
         )
 
-        if show_duration is not None:
-            PLTViewer.show(show_duration)
         if plotFilePath is not None:
             fig.savefig(plotFilePath)
+        PLTViewer.show(show_duration)
         if fig_axs is None and show_duration is None:
             # No external figure management and no timed show – close to avoid leaks
             plt.close(fig)

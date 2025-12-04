@@ -7,6 +7,7 @@ import glob
 
 import threading
 import sys
+import select
 
 import numpy as np
 import matplotlib.colors as mcolors
@@ -173,17 +174,49 @@ class CLIInterface(Interface):
                 time.sleep(wait)
 
         def wait_for_input():
-            """Wait for the user to press Enter."""
-            try:
-                input()
-                # Only process input if stop_event hasn't been set yet (file not detected)
-                if not stop_event.is_set():
-                    CLIInterface.send_message('User interrupted file selection')
-                    result['user_interrupted'] = True
-                    stop_event.set()
-            except EOFError:
-                # Handle cases where input() might not work (e.g., in some IDEs)
-                pass
+            """
+            Wait for the user to press Enter in a way that does not leave
+            a background thread blocking on input() after wait_for_file
+            has already returned.
+
+            We use select.select on sys.stdin with a timeout so that:
+            - The thread periodically checks stop_event and exits promptly
+              once a file has been detected.
+            - Exactly one logical "Enter" press is consumed for the
+              interruption, avoiding interference with later input() calls.
+            """
+            # Reuse the same polling interval as the file monitor.
+            timeout = wait
+
+            while not stop_event.is_set():
+                try:
+                    # Wait until there is something to read on stdin, or timeout.
+                    rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+                except (OSError, ValueError):
+                    # In unusual environments stdin might not be selectable;
+                    # in that case, just exit and don't attempt interactive interrupt.
+                    return
+
+                if stop_event.is_set():
+                    # File thread already finished; do not consume user input.
+                    return
+
+                if not rlist:
+                    # Timeout expired; loop again to re-check stop_event.
+                    continue
+
+                # There is input available on stdin; read one line.
+                line = sys.stdin.readline()
+
+                if stop_event.is_set():
+                    # A file appeared around the same time; ignore this line.
+                    return
+
+                # Treat any line (including just Enter) as user interruption.
+                CLIInterface.send_message('User interrupted file selection')
+                result['user_interrupted'] = True
+                stop_event.set()
+                return
 
         # Start both threads
         file_thread = threading.Thread(target=monitor_files, daemon=True)

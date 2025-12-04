@@ -20,9 +20,10 @@ from ase.io import read
 sys.path.append(os.path.expanduser('~/LLM/LLMAssistant'))
 sys.path.append(os.path.expanduser('~/LLM/LLMAssistant/aiAssistantFramework'))
 
-from aiAssistantFramework import lib as ai_lib
-from aiAssistantFramework.lib import llm, telegram
+# from aiAssistantFramework import lib as ai_lib
+# from aiAssistantFramework.lib import llm, telegram
 import controller as ai_controller
+from gui import get_pipeline_spec_gui
 
 ATSAS_BIN_PREFIX = os.path.expanduser('~/ATSAS-3.2.1-1/bin')
 # CONFIG_FILE = "calib_config.conf"
@@ -682,8 +683,10 @@ echo "Full results saved to: $RESULTS_FILE"
         model = 'GLM-4.6'
         # model = 'DeepSeek-V3.1'
         vision_model = 'GLM-4.5V'
-        
-        descr, descr_path = get_pipeline_description('protein_v0')
+
+        pipeline_choice, steps = get_pipeline_spec_gui()
+
+        descr, descr_path = get_pipeline_description(pipeline_choice)
         # print(descr)
         directory = self.interface.ask_for_file('Write a path to a directory for your data')
 
@@ -696,16 +699,7 @@ echo "Full results saved to: $RESULTS_FILE"
 
         context = Context(directory, descr_path, interface=self.interface)
         
-        starting_point = self.interface.ask_question(
-            'From which step to start the pipeline?',
-            options={
-                '1': 'calibration and integration', 
-                '2': 'buffer subtraction', 
-                '3': 'analysis'},
-        )
-        starting_point = int(starting_point)
-        
-        if starting_point == 1:
+        if 'calibration' in steps:
             calibrant_path = self.interface.wait_for_file(
                 directory, 
                 query='Upload raw/*_calib.tif file with calibration data',
@@ -714,11 +708,37 @@ echo "Full results saved to: $RESULTS_FILE"
             res_calib = self.autocalib(
                 calibrant_path, context=context, fast_forward=fast_forward)
             ai = res_calib['integrator']
+        
+        if 'integration' in steps and 'calibration' not in steps:
+            ai_subdir = 'integrator_params'
+            def exit_condition():
+                return all(os.path.exists(os.path.join(directory, ai_subdir, p)) 
+                for p in ['ai_params.json', 'detector_params.json', 'mask.npy']) 
+            
+            while not exit_condition(): 
+                self.interface.send_message(
+                    f'Integration requires calibrated geometry parameters and a mask.\n' 
+                    f'Provide them by uploading directory named "{ai_subdir}" which contains:\n'
+                    f'ai_params.json\n'
+                    f'detector_params.json\n'
+                    f'mask.npy\n'
+                )
+                self.interface.wait_for_file(
+                    directory, 
+                    query=f'Upload directory named "{ai_subdir}" to your working directory',
+                    filepattern='integrator_params',
+                    obligatory=True
+                )
+                time.sleep(2.0)
+                if not exit_condition():
+                    self.interface.send_message(f'Wrong "{ai_subdir}" directory structure. Reupload')
+            ai = IntegratorExtended.from_disk(os.path.join(directory, ai_subdir))
 
         run_load_cycle = True
         buffer_loaded = False
         while run_load_cycle:
-            if starting_point == 1:
+            buffer_path_1d = sample_path_1d = None
+            if 'integration' in steps:
                 buffer_path = self.interface.wait_for_file(
                     directory,
                     query='Upload buffer 2d data to "raw" subdirectory raw/*_buffer.tif',
@@ -737,47 +757,52 @@ echo "Full results saved to: $RESULTS_FILE"
             
                 buffer_path_1d = self.integrate(
                     ai, context, 
-                    buffer_path, dest_dir=os.path.join(directory, 'int'), 
+                    buffer_path, dest_dir=os.path.join(directory, 'averaged'), 
                     metadata={'type': 'buffer'}, 
                     fast_forward=fast_forward)
                 sample_path_1d = self.integrate(
                     ai, context, 
-                    sample_path, dest_dir=os.path.join(directory, 'int'), 
+                    sample_path, dest_dir=os.path.join(directory, 'averaged'), 
                     metadata={'type': 'sample'}, 
                     fast_forward=fast_forward)
+                # print('DEBUG: integration finished')
 
-            elif starting_point == 2:
+            if 'subtraction' in steps and 'integration' not in steps:
                 buffer_path_1d = self.interface.wait_for_file(
                     directory,
-                    query='Upload buffer 1d data to "int" subdirectory int/*_buffer.dat', 
-                    filepattern='int/*_buffer.dat',
+                    query='Upload buffer 1d data to "averaged" subdirectory averaged/*_buffer.dat', 
+                    filepattern='averaged/*_buffer.dat',
                     )            
                 sample_path_1d = self.interface.wait_for_file(
                     directory,
-                    query='Upload sample 1d data to "int" subdirectory int/*_sample.dat', 
-                    filepattern='int/*_sample.dat')
+                    query='Upload sample 1d data to "averaged" subdirectory averaged/*_sample.dat', 
+                    filepattern='averaged/*_sample.dat')
                 if sample_path_1d:
                     basename, _ = os.path.splitext(os.path.split(sample_path_1d)[1])            
             
-            if starting_point < 3:
+            if 'subtraction' in steps:
+                # print('DEBUG: subtraction started')
                 profile_path, profile_pic_path = self.subtract(
                     context, sample_path_1d, buffer_path_1d, 
-                    directory, fast_forward=fast_forward)
+                    dest_dir=os.path.join(directory, 'subtracted'), fast_forward=fast_forward)
+                # print('DEBUG: subtraction finished')
             else:
+                # print('DEBUG: subtraction ommited')
                 profile_path = self.interface.wait_for_file(
                     directory, 
-                    query='Upload sample data to "sub" subdirectory sub/*.dat', 
-                    filepattern='sub/*.dat')
+                    query='Upload sample data to "subtracted" subdirectory subtracted/*.dat', 
+                    filepattern='subtracted/*.dat')
                 if profile_path:
                     root, filename = os.path.split(profile_path)
                     basename, _ = os.path.splitext(filename)
-                    profile_pic_path = os.path.join(root, f'{basename}.png')                
+                    profile_pic_path = os.path.join(root, 'subtracted', f'{basename}.png')                
                     q, I, _ = read_saxs(profile_path)
                     self.viewer.view_curves(q, I, basename,
                                             xlabel='q, (nm-1)', ylabel='I, (a.u.)',
                                             title=f'{basename} SAXS profile',
                                             show=False, save=False,
                                             plotFilePath=profile_pic_path)
+                # print('DEBUG: profile loading and plotting finished')
 
             q, I, _ = read_saxs(profile_path)
             self.viewer.view_curves(
@@ -787,20 +812,25 @@ echo "Full results saved to: $RESULTS_FILE"
                 xlabel='q, (nm-1)',
                 ylabel='I, (a.u.)',
                 title=f'{basename} SAXS profile',
-                show_duration=None,
+                show_duration=5.0,
             )
             if_file_is_good = self.interface.ask_question(
                 f'Should I continue to analyze {basename} SAXS profile? type Enter to proceed, type "No" to skip'
             )
             
             if not if_file_is_good.lower().startswith('n'):
-                atsas_res_path, gnom_path = self.get_descriptors(context, profile_path, directory, fast_forward=fast_forward)
-                
-                plot_paths = self.plot(context, profile_path, directory, fast_forward=fast_forward)
-                plot_paths = [profile_pic_path, ] + plot_paths
-                
-                self.bodies_fit(context, profile_path, directory, fast_forward=fast_forward)
-                # self.dammif_fit(context, gnom_path, directory, fast_forward=fast_forward)
+                if 'simple_analysis' in steps:
+                    atsas_res_path, gnom_path = self.get_descriptors(
+                        context, profile_path, dest_dir=os.path.join(directory, 'descriptors'), fast_forward=fast_forward)
+                if 'plots' in steps:
+                    plot_paths = self.plot(context, profile_path, dest_dir=os.path.join(directory, 'plots'), fast_forward=fast_forward)
+                    plot_paths = [profile_pic_path, ] + plot_paths
+                if 'bodies' in steps:
+                    self.bodies_fit(context, profile_path, dest_dir=os.path.join(directory, 'bodies'), fast_forward=fast_forward)
+                if 'dammif' in steps:
+                    assert 'simple_analysis' in steps
+                    self.dammif_fit(
+                        context, profile_path, gnom_path, dest_dir=os.path.join(directory, 'dammif'), fast_forward=fast_forward)
                 # self.ai_analysis(atsas_res_path, plot_paths, directory, text_model=model, vision_model=vision_model)
             
             upload_more = self.interface.ask_question(
@@ -1091,6 +1121,6 @@ if __name__ == '__main__':
     # directory path for pipeline0: debug/protein_v0, debug/protein_v0_interactive
     # LLM query: It is known that the subject of the investigation is a protein dissolved in water. Which protein it could be based on available information?
     # controller.protein_v0(fast_forward=True)
-    # controller.pipeline_interactive(fast_forward=True)
-    controller.pipeline_batch(fast_forward=True)
+    controller.pipeline_interactive(fast_forward=True)
+    # controller.pipeline_batch(fast_forward=True)
 
