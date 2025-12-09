@@ -12,6 +12,11 @@ from pyFAI.detectors import Pilatus1M
 from pyFAI.geometryRefinement import GeometryRefinement
 from pyFAI.calibrant import CALIBRANT_FACTORY
 
+import matplotlib as mpl
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 from utils import *
 
 
@@ -47,6 +52,9 @@ class IntegratorExtended:
             mask = None
         
         return cls(mask=mask, detector_params=detector_params, ai_params=ai_params)
+    
+    def set_mask(self, mask_path: str):
+        self.mask = np.load(mask_path)
     
     def integrate1d(self, saxs_2d, npt):
         q, I = self.ai.integrate1d(saxs_2d, npt=npt, mask=self.mask)
@@ -185,9 +193,63 @@ def find_rings(
     return {'rings': rings, 'radii_px': r_rings, 'integrated': (rs, integrated)}
 
 
-def get_mask(data, center_y_px, center_x_px, r_beam_px):
-    return np.fromfunction(lambda i, j: np.linalg.norm([i - center_y_px, j - center_x_px], axis=0) <= r_beam_px,
-                           data.shape)
+def calc_beam_abnormal_mask(
+    data,
+    center_y_px,
+    center_x_px,
+    r_beam_px,
+    window_size: int = 7,
+    iqr_tol: float = 1.5,
+):
+    """
+    Build a mask that combines the beam-stop region with statistical outlier
+    detection in log-intensity space using a local IQR test.
+
+    Args:
+        data: 2D detector image.
+        center_y_px/center_x_px: beam center in pixels.
+        r_beam_px: radius of the beam-stop mask (pixels).
+        window_size: odd side length of the local neighborhood for IQR stats.
+        iqr_tol: multiplier for the IQR fence; higher is more permissive.
+    """
+    if window_size % 2 == 0:
+        raise ValueError("window_size must be odd for symmetric neighborhood")
+
+    data = np.asarray(data, dtype=float)
+
+    # Base geometric mask for the beam stop.
+    beam_mask = np.fromfunction(
+        lambda i, j: np.linalg.norm(
+            [i - center_y_px, j - center_x_px], axis=0
+        )
+        <= r_beam_px,
+        data.shape,
+    )
+
+    # # debug: since log is performed, we need to avoid negative intensity values to not get mistakes
+    # plt.hist(data[data<1.0].flatten())
+    # plt.show()
+    
+    # Log transform to stabilize the exponential intensity decay.
+    data = data - min(np.min(data), 0.0)  # to avoid numerical mistakes in log
+    log_data = np.log1p(data)
+
+    # Local quartiles with reflection padding for correct edge handling.
+    q1 = ndi.percentile_filter(
+        log_data, percentile=25, size=window_size, mode="reflect"
+    )
+    q3 = ndi.percentile_filter(
+        log_data, percentile=75, size=window_size, mode="reflect"
+    )
+    iqr = q3 - q1
+
+    # Fence thresholds; small epsilon avoids divide-by-zero in flat regions.
+    eps = 1e-12
+    lower = q1 - iqr_tol * iqr
+    upper = q3 + iqr_tol * iqr
+    abnormal_mask = (log_data < lower - eps) | (log_data > upper + eps)
+
+    return beam_mask | abnormal_mask
 
 
 def get_detector(detector_name='Pilatus1M', pixel_size=None):
@@ -202,7 +264,7 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
            calibrant_name,
            r_beam_px,
            rot1=0, rot2=0, rot3=0, detector_name='Pilatus1M', 
-           fix: Tuple[str]=('wavelength', 'rot3'), npt: int = 1000):
+           fix: Tuple[str]=('wavelength', 'rot3'), npt: int = 1000, automask = True):
     """
     Refine the detector geometry to calibrant rings, returning:
         - refined_params: [dist, poni1, poni2, rot1, rot2, rot3]
@@ -248,11 +310,24 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
         refined[k] = float(v)
 
     # Use refined geometry to integrate (q, I) - "calibrated" curve
+    mask = None
+    if automask is not None:
+        if automask is True:
+            automask = {}
+        mask = calc_beam_abnormal_mask(calib_data, center_y_px, center_x_px, r_beam_px, **automask)
+
+        # debug
+        print(f'Center: ({center_y_px}, {center_x_px})')
+        fig, ax = plt.subplots()
+        im = ax.imshow(mask, cmap='gray')
+        ax.set_title("Beam + Abnormal Pixels Mask")
+        # plt.show()
+        fig.savefig('debug/mask_debug.png', dpi=400)
+    
     integrator = IntegratorExtended(
         ai_params={'wavelength': wavelength, **refined},
         detector_params={'detector_name': detector_name, 'pixel_size': pixel_size},
-        mask=get_mask(calib_data, center_y_px, center_x_px, r_beam_px)
-        # mask=None
+        mask=mask
     )
 
     q_cal, I_cal = integrator.integrate1d(calib_data, npt=npt)

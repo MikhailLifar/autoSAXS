@@ -23,20 +23,63 @@ sys.path.append(os.path.expanduser('~/LLM/LLMAssistant/aiAssistantFramework'))
 # from aiAssistantFramework import lib as ai_lib
 # from aiAssistantFramework.lib import llm, telegram
 import controller as ai_controller
-from gui import get_pipeline_spec_gui
+from gui import get_pipeline_spec_gui, choose_profiles
 
 ATSAS_BIN_PREFIX = os.path.expanduser('~/ATSAS-3.2.1-1/bin')
 # CONFIG_FILE = "calib_config.conf"
 # CALIBRATED_GEOMETRY_PATH = 'calibrated_geometry.conf'
 ROOT_DIR = os.path.expanduser('~/KurchatovCoop')
 PROMPTS_DIR = os.path.join(ROOT_DIR, 'repos', 'prompts')
+LATEST_STEPS_PATH = os.path.join(ROOT_DIR, 'temp', 'latest_steps.yml')
 DEBUG = True
 
-BODIES_SHAPES = (
-    'cylinder', 'dumbbell', 'ellipsoid', 
-    'elliptic-cylinder', 'hollow-cylinder', 'hollow-sphere',
-    'parallelepiped', 'rotation-ellipsoid'
-)
+BODIES_SHAPES = {
+    # radius r, height h
+    'cylinder': {
+        'r': 'radius',
+        'h': 'height',
+    },
+    # radius of the first ball r1, radius of the second ball r2, their center-to-center distance d
+    'dumbbell': {
+        'r1': 'radius-1',
+        'r2': 'radius-2',
+        'd': 'center-to-center distance',
+    },
+    # semiaxes a, b, c
+    'ellipsoid': {
+        'a': 'semiaxis a',
+        'b': 'semiaxis b',
+        'c': 'semiaxis c',
+    },
+    # radii semiaxes a, c, height h
+    'elliptic-cylinder': {
+        'a': 'semiaxis a',
+        'c': 'semiaxis c',
+        'h': 'height',
+    },
+    # outer radius ro, inner radius ri, height h
+    'hollow-cylinder': {
+        'ro': 'outer radius',
+        'ri': 'inner radius',
+        'h': 'height',
+    },
+    # outer radius ro, inner radius ri
+    'hollow-sphere': {
+        'ro': 'outer radius',
+        'ri': 'inner radius',
+    },
+    # sides a, b, c
+    'parallelepiped': {
+        'a': 'side a',
+        'b': 'side b',
+        'c': 'side c',
+    },
+    # semiaxes a, c
+    'rotation-ellipsoid': {
+        'a': 'semiaxis a',
+        'c': 'semiaxis c',
+    },
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,6 +95,15 @@ def json_type_caster(s):
         return json.loads(s)
     except:
         raise ValueError('Incorrect JSON passed')
+
+
+def save_latest_steps(pipeline_choice, steps):
+    """
+    Persist the last selected steps so they can be offered as a default later.
+    """
+    os.makedirs(os.path.dirname(LATEST_STEPS_PATH), exist_ok=True)
+    with open(LATEST_STEPS_PATH, 'w') as f:
+        yaml.safe_dump({'pipeline': pipeline_choice, 'steps': list(steps)}, f)
 
 
 # class Block:
@@ -502,21 +554,55 @@ echo "Full results saved to: $RESULTS_FILE"
 
             bodies_fits_png = os.path.join(bodies_subdir, f'{basename}_fits.png')
             
-            exists_bodies = all(os.path.exists(os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')) for shape in BODIES_SHAPES)
+            exists_bodies = all(
+                os.path.exists(os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir'))
+                for shape in BODIES_SHAPES
+            )
             
             if fast_forward and exists_bodies and os.path.exists(bodies_fits_png):
                 self.interface.send_message(f'Debug mode: Skipping BODIES fit for {saxs_1d_path} (results already exist)')
 
             else:
-                os.system(f"{bodies_call} --prefix={bodies_prefix} {saxs_1d_path}")
-
                 q, I, _ = read_saxs(saxs_1d_path)
                 
+                first_nm, last_nm = context['bodies', 'q_range_nm']
+                first_chnl, last_chnl = context['bodies', 'q_range_channels']
+                if first_nm is not None and last_nm is not None:
+                    assert first_chnl is None and last_chnl is None
+                    first_chnl = np.argmin(np.abs(q - first_nm)) + 1
+                    last_chnl = np.argmin(np.abs(q - last_nm)) + 1
+                assert first_chnl is not None and last_chnl is not None
+
+                print(f'DEBUG - how BODIES is called: {bodies_call} --prefix={bodies_prefix} --first={first_chnl} --last={last_chnl} {saxs_1d_path}')
+                # os.system(f"{bodies_call} --prefix={bodies_prefix} {saxs_1d_path} --first={first_chnl} --last={last_chnl}")
+                os.system(f"{bodies_call} --prefix={bodies_prefix} {saxs_1d_path}")
+
                 to_plot = [q, I, {'label': 'exp', 'lw': 4}]
                 for shape in BODIES_SHAPES:
                     fir_path = os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')
                     # cif_path = os.path.join(bodies_subdir, f'bodies_fit-{shape}-damstart.cif')
+                    
+                    with open(fir_path, 'r') as f:
+                        first_line = f.readline().strip()
+                        # Example line: 'elliptic-cylinder: a=2.20304, c=1.30633, h=2.43344, scale=0.488440'
+                        import re
+                        params_dict = {}
+                        # Match pattern: <shape_name>: <param1>=<value1>, <param2>=<value2>, ...
+                        match = re.match(r'^(?P<shape>[\w\-]+):\s*(?P<params>.+)$', first_line)
+                        if match:
+                            params_str = match.group('params')
+                            # Split by comma, then extract param=value for each
+                            for param_assignment in params_str.split(','):
+                                param_assignment = param_assignment.strip()
+                                kv_match = re.match(r'^(\w+)\s*=\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)$', param_assignment)
+                                if kv_match:
+                                    key, value = kv_match.group(1), kv_match.group(2)
+                                    params_dict[key] = float(value)
+                        else:
+                            params_dict = {}
 
+                    structure = (shape, params_dict)
+                    
                     data = np.loadtxt(fir_path, skiprows=1, dtype=np.float64)
                     q_fit, I_fit, sigma_exp = data[:, 0], data[:, 3], data[:, 2]
                     idx_intersection = (q <= q_fit[-1])
@@ -527,6 +613,10 @@ echo "Full results saved to: $RESULTS_FILE"
                     chi2 = calc_chi2(I_intersection, I_fit_interp, sigma_interp)
                     to_plot.extend([q_intersetcion, I_fit_interp, f'{shape}; chi2: {chi2:.5f}'])
 
+                    self.viewer.plot_3d_views_and_scattering(
+                        structure, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
+                        plotFilePath=os.path.join(bodies_subdir, f'{shape}_view.png')
+                    )
                     # atoms = read_bodies_cif(cif_path)
                     # self.viewer.plot_structure_and_scattering(
                     #     atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
@@ -685,25 +775,28 @@ echo "Full results saved to: $RESULTS_FILE"
         vision_model = 'GLM-4.5V'
 
         pipeline_choice, steps = get_pipeline_spec_gui()
+        save_latest_steps(pipeline_choice, steps)
 
         descr, descr_path = get_pipeline_description(pipeline_choice)
         # print(descr)
         directory = self.interface.ask_for_file('Write a path to a directory for your data')
 
-        config_path = self.interface.wait_for_file(
+        config_path, = self.interface.wait_for_file(
             directory, 
             query='Upload config file config.conf to your directory',
             filepattern='config.conf',
-            obligatory=True
+            obligatory=True,
+            skip_if_exists=True, allow_same_time=(1, 1)
         )
 
         context = Context(directory, descr_path, interface=self.interface)
         
         if 'calibration' in steps:
-            calibrant_path = self.interface.wait_for_file(
+            calibrant_path, = self.interface.wait_for_file(
                 directory, 
                 query='Upload raw/*_calib.tif file with calibration data',
                 filepattern='raw/*_calib.tif',
+                skip_if_exists=True, allow_same_time=(1, 1)
             )
             res_calib = self.autocalib(
                 calibrant_path, context=context, fast_forward=fast_forward)
@@ -727,7 +820,8 @@ echo "Full results saved to: $RESULTS_FILE"
                     directory, 
                     query=f'Upload directory named "{ai_subdir}" to your working directory',
                     filepattern='integrator_params',
-                    obligatory=True
+                    obligatory=True,
+                    skip_if_exists=True, allow_same_time=(1, 1)
                 )
                 time.sleep(2.0)
                 if not exit_condition():
@@ -735,90 +829,129 @@ echo "Full results saved to: $RESULTS_FILE"
             ai = IntegratorExtended.from_disk(os.path.join(directory, ai_subdir))
 
         run_load_cycle = True
-        buffer_loaded = False
+        iteration_number = 0
         while run_load_cycle:
             buffer_path_1d = sample_path_1d = None
+            basename_list = []
             if 'integration' in steps:
-                buffer_path = self.interface.wait_for_file(
+                buffer_paths = self.interface.wait_for_file(
                     directory,
                     query='Upload buffer 2d data to "raw" subdirectory raw/*_buffer.tif',
-                    filepattern='raw/*_buffer.tif')
-                if not buffer_path and buffer_loaded:
-                    buffer_path = context.paths['buffer_2d'][-1]
-                else:
-                    buffer_loaded = True
+                    filepattern='raw/*_buffer.tif',
+                    skip_if_exists=iteration_number==0)
                 
-                sample_path = self.interface.wait_for_file(
+                sample_paths = self.interface.wait_for_file(
                     directory, 
                     query='Upload sample 2d data to "raw" subdirectory raw/*_sample.tif',
-                    filepattern='raw/*_sample.tif')
-                if sample_path:
-                    basename, _ = os.path.splitext(os.path.split(sample_path)[1])
+                    filepattern='raw/*_sample.tif',
+                    skip_if_exists=iteration_number==0)
+                if sample_paths:
+                    basename_list = [
+                        os.path.splitext(os.path.split(sample_path)[1])[0]
+                        for sample_path in sample_paths
+                    ]
             
-                buffer_path_1d = self.integrate(
-                    ai, context, 
-                    buffer_path, dest_dir=os.path.join(directory, 'averaged'), 
-                    metadata={'type': 'buffer'}, 
-                    fast_forward=fast_forward)
-                sample_path_1d = self.integrate(
-                    ai, context, 
-                    sample_path, dest_dir=os.path.join(directory, 'averaged'), 
-                    metadata={'type': 'sample'}, 
-                    fast_forward=fast_forward)
+                buffer_paths_1d = [
+                    self.integrate(
+                        ai, context, buffer_path, 
+                        dest_dir=os.path.join(directory, 'averaged'), metadata={'type': 'buffer'}, fast_forward=fast_forward)
+                        for buffer_path in buffer_paths
+                    ]
+                sample_paths_1d = [
+                    self.integrate(
+                        ai, context, 
+                        sample_path, dest_dir=os.path.join(directory, 'averaged'), 
+                        metadata={'type': 'sample'}, 
+                        fast_forward=fast_forward)
+                        for sample_path in sample_paths
+                    ]
                 # print('DEBUG: integration finished')
 
             if 'subtraction' in steps and 'integration' not in steps:
-                buffer_path_1d = self.interface.wait_for_file(
+                buffer_paths_1d = self.interface.wait_for_file(
                     directory,
                     query='Upload buffer 1d data to "averaged" subdirectory averaged/*_buffer.dat', 
                     filepattern='averaged/*_buffer.dat',
+                    skip_if_exists=iteration_number==0
                     )            
-                sample_path_1d = self.interface.wait_for_file(
+                sample_paths_1d = self.interface.wait_for_file(
                     directory,
                     query='Upload sample 1d data to "averaged" subdirectory averaged/*_sample.dat', 
-                    filepattern='averaged/*_sample.dat')
-                if sample_path_1d:
-                    basename, _ = os.path.splitext(os.path.split(sample_path_1d)[1])            
+                    filepattern='averaged/*_sample.dat',
+                    skip_if_exists=iteration_number==0)
+                if sample_paths_1d:
+                    basename_list = [
+                        os.path.splitext(os.path.split(sample_path)[1])[0]
+                        for sample_path in sample_paths_1d
+                    ]            
             
+            profile_paths = []
+            profile_pic_paths = []
             if 'subtraction' in steps:
                 # print('DEBUG: subtraction started')
-                profile_path, profile_pic_path = self.subtract(
-                    context, sample_path_1d, buffer_path_1d, 
-                    dest_dir=os.path.join(directory, 'subtracted'), fast_forward=fast_forward)
+
+                # Align sample and buffer 1D paths by base name, matching sample name containing buffer name
+                # name convention - buffer path ends with "_buffer.data", sample path wiht "_sample.dat"
+                aligned_pairs = []
+                for sample_path in sample_paths_1d:
+                    sample_base = os.path.basename(sample_path).replace('_sample.dat', '')
+                    for buffer_path in buffer_paths_1d:
+                        buffer_base = os.path.basename(buffer_path).replace('_buffer.dat', '')
+                        if buffer_base in sample_base:
+                            aligned_pairs.append((sample_path, buffer_path))
+                    assert len(aligned_pairs) == len(sample_paths_1d)
+
+                for s_p, b_p in aligned_pairs:
+                    profile_path, profile_pic_path = self.subtract(
+                        context, s_p, b_p, 
+                        dest_dir=os.path.join(directory, 'subtracted'), fast_forward=fast_forward)
+                    profile_paths.append(profile_path)
+                    profile_pic_paths.append(profile_pic_path)
                 # print('DEBUG: subtraction finished')
             else:
                 # print('DEBUG: subtraction ommited')
-                profile_path = self.interface.wait_for_file(
+                profile_paths = self.interface.wait_for_file(
                     directory, 
                     query='Upload sample data to "subtracted" subdirectory subtracted/*.dat', 
-                    filepattern='subtracted/*.dat')
-                if profile_path:
-                    root, filename = os.path.split(profile_path)
-                    basename, _ = os.path.splitext(filename)
-                    profile_pic_path = os.path.join(root, 'subtracted', f'{basename}.png')                
-                    q, I, _ = read_saxs(profile_path)
-                    self.viewer.view_curves(q, I, basename,
-                                            xlabel='q, (nm-1)', ylabel='I, (a.u.)',
-                                            title=f'{basename} SAXS profile',
-                                            show=False, save=False,
-                                            plotFilePath=profile_pic_path)
+                    filepattern='subtracted/*.dat',
+                    skip_if_exists=iteration_number==0
+                    )
+                if profile_paths:
+                    for profile_path in profile_paths:
+                        root, filename = os.path.split(profile_path)
+                        basename, _ = os.path.splitext(filename)
+                        profile_pic_path = os.path.join(root, f'{basename}.png')                
+                        q, I, _ = read_saxs(profile_path)
+                        self.viewer.view_curves(q, I, basename,
+                                                xlabel='q, (nm-1)', ylabel='I, (a.u.)',
+                                                title=f'{basename} SAXS profile',
+                                                show_duration=None, save=False,
+                                                plotFilePath=profile_pic_path)
+                        basename_list.append(basename)
+                        profile_pic_paths.append(profile_pic_path)
                 # print('DEBUG: profile loading and plotting finished')
 
-            q, I, _ = read_saxs(profile_path)
-            self.viewer.view_curves(
-                q,
-                I,
-                basename,
-                xlabel='q, (nm-1)',
-                ylabel='I, (a.u.)',
-                title=f'{basename} SAXS profile',
-                show_duration=5.0,
-            )
-            if_file_is_good = self.interface.ask_question(
-                f'Should I continue to analyze {basename} SAXS profile? type Enter to proceed, type "No" to skip'
-            )
-            
-            if not if_file_is_good.lower().startswith('n'):
+            profiles_data = []
+            for basename, (idx, profile_path), plot_path in zip(
+                basename_list, enumerate(profile_paths), profile_pic_paths):
+                q, I, metadata = read_saxs(profile_path)
+                profiles_data.append(
+                    {
+                        'basename': basename,
+                        'path': profile_path,
+                        'q': q,
+                        'I': I,
+                        'metadata': metadata,
+                        'plot_path': plot_path,
+                    }
+                )
+
+            selected_profiles = choose_profiles(profiles_data)
+
+            for basename, profile in selected_profiles.items():
+                profile_path = profile['path']
+                profile_pic_path = profile.get('plot_path')
+
                 if 'simple_analysis' in steps:
                     atsas_res_path, gnom_path = self.get_descriptors(
                         context, profile_path, dest_dir=os.path.join(directory, 'descriptors'), fast_forward=fast_forward)

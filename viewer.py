@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Optional
+from typing import Optional, Union, Tuple, Dict
 
 import numpy as np
 import pandas as pd
@@ -17,7 +17,11 @@ from ase.geometry import get_distances
 sys.path.append(os.path.expanduser('~/SupervisedML/repos'))
 from supervised_ml.plot_util import *
 
-from utils import calc_chi2
+from utils import (
+    calc_chi2,
+    calculate_atoms_density_and_isosurface,
+    calculate_shape_density_and_isosurface
+)
 
 
 class Viewer:
@@ -276,31 +280,86 @@ class PLTViewer(Viewer):
             savefig(fig, plotFilePath)
 
     @staticmethod
-    def plot_3d_views_and_scattering(atoms: ase.Atoms, q, I, sigma, I_fit, fig_axs=None,
-                                     plotFilePath=None, r_max=30.0):
+    def plot_3d_views_and_scattering(
+        structure: Union[ase.Atoms, Tuple[str, Dict[str, float]]], q, I, sigma, I_fit, 
+        fig_axs=None, plotFilePath=None, r_max=30.0, grid_size=64, isosurface_sigma=1.5, 
+        isosurface_level=None, alpha_transparency=0.8):
         """
-        Plot 3D atomic structure from front, side, and top views,
-        colored by distance from center of mass (fixed 0–r_max scale).
-        Optionally overlay scattering data in the fourth subplot.
+        Plot 3D structure from front, side, and top views using isosurface visualization,
+        colored by distance from center of mass, and overlay scattering data in the fourth subplot.
 
         Parameters:
         -----------
-        atoms : ase.Atoms
-            Atomic structure.
-        q, I : array-like, optional
+        structure : ase.Atoms or tuple
+            Either an atomic structure (ase.Atoms) or a tuple (shape_name, shape_params_dict)
+            where shape_name is a string from BODIES_SHAPES and shape_params_dict contains
+            the shape parameters.
+        q, I : array-like
             Experimental scattering data.
-        q_fit, I_fit : array-like, optional
+        sigma : array-like
+            Uncertainties for experimental data.
+        I_fit : array-like
             Fitted scattering curve.
         r_max : float, default 30.0
             Maximum distance (in Å) for color scale normalization.
+        grid_size : int, default 64
+            Grid resolution for isosurface calculation.
+        isosurface_sigma : float, default 1.5
+            Standard deviation for Gaussian kernel in isosurface calculation (only for atoms).
+        isosurface_level : float, optional
+            Density level for isosurface. If None, auto-calculated for atoms or 0.5 for shapes.
+        alpha_transparency : float, default 0.8
+            Transparency of the isosurface (0-1).
         """
         from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-
-        # Compute center of mass and distances
-        com = atoms.get_center_of_mass()
-        positions = atoms.positions
-        dists = np.linalg.norm(positions - com, axis=1)
-
+        from skimage.measure import marching_cubes
+        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+        from matplotlib import cm
+        from matplotlib.colors import Normalize
+        
+        # Determine input type and calculate density accordingly
+        if isinstance(structure, ase.Atoms):
+            # Atoms structure
+            density, isosurface_level, min_coords, max_coords = calculate_atoms_density_and_isosurface(
+                structure, grid_size=grid_size, isosurface_sigma=isosurface_sigma,
+                isosurface_level=isosurface_level
+            )
+            # Calculate center of mass for coloring
+            com = structure.get_center_of_mass()
+        elif isinstance(structure, tuple) and len(structure) == 2:
+            # Shape tuple (shape_name, shape_params_dict)
+            density, isosurface_level, min_coords, max_coords = calculate_shape_density_and_isosurface(
+                structure, grid_size=grid_size, isosurface_level=isosurface_level
+            )
+            # For shapes, center is at origin
+            com = np.array([0.0, 0.0, 0.0])
+        else:
+            raise TypeError(
+                f"structure must be either ase.Atoms or tuple (shape_name, shape_params_dict), "
+                f"got {type(structure)}"
+            )
+        
+        # Extract isosurface
+        verts, faces, _, _ = marching_cubes(density, level=isosurface_level)
+        
+        # Scale vertices back to original coordinate system
+        scale = (max_coords - min_coords) / (np.array(density.shape) - 1)
+        verts = verts * scale + min_coords
+        
+        # Normalize distances for coloring
+        norm = Normalize(vmin=0, vmax=r_max)
+        cmap = cm.viridis
+        
+        # Calculate colors for each face based on average distance of its vertices from center
+        face_colors = []
+        for face in faces:
+            # Get vertices of this face
+            face_verts = verts[face]
+            # Calculate average distance of these vertices from center
+            avg_dist = np.mean(np.linalg.norm(face_verts - com, axis=1))
+            # Get color from colormap
+            face_colors.append(cmap(norm(avg_dist)))
+        
         # Create figure
         if fig_axs is not None:
             raise RuntimeError
@@ -325,33 +384,25 @@ class PLTViewer(Viewer):
                 continue
 
             ax = fig.add_subplot(subplot_spec, projection='3d')
-            x, y, z = positions.T
-            # Reorder for correct view orientation
-            if axes_order == (0, 1, 2):  # front
-                xs, ys, zs = x, y, z
-            elif axes_order == (1, 2, 0):  # side
-                xs, ys, zs = y, z, x
-            elif axes_order == (0, 2, 1):  # top
-                xs, ys, zs = x, z, y
-
-            sc = ax.scatter(xs, ys, zs, c=dists, cmap='viridis', vmin=0, vmax=r_max,
-                            s=120, edgecolor='k', linewidth=0.5, depthshade=True)
-
+            
+            # Create mesh for this view with colors based on distance from center
+            mesh = Poly3DCollection(verts[faces], alpha=alpha_transparency, 
+                                    facecolors=face_colors, edgecolor='k', linewidth=0.2)
+            ax.add_collection3d(mesh)
+            
             ax.view_init(elev=view_angle[0], azim=view_angle[1])
             ax.set_title(title)
             ax.set_box_aspect([1, 1, 1])  # equal aspect
-
-            # Hide axes ticks for cleaner look (optional)
+            
+            # Set limits
+            ax.set_xlim(min_coords[0], max_coords[0])
+            ax.set_ylim(min_coords[1], max_coords[1])
+            ax.set_zlim(min_coords[2], max_coords[2])
+            
+            # Hide axes ticks for cleaner look
             ax.set_xticks([])
             ax.set_yticks([])
             ax.set_zticks([])
-
-        # # Add a single colorbar for all 3D plots
-        # cbar = plt.colorbar(sc, ax=fig.axes[:3], shrink=0.6, aspect=20, pad=0.1)
-        # cbar.set_label('Distance from COM (Å)', rotation=270, labelpad=20)
-
-        # plt.tight_layout()
-        # plt.show()
 
         if plotFilePath is not None:
             savefig(fig, plotFilePath)

@@ -68,7 +68,8 @@ class Context:
                 filepattern=pattern,
             )
             if ret:
-                self.paths[group_name][0].append(ret)
+                assert len(ret) == 1
+                self.paths[group_name][0].append(ret[0])
             return ret
 
     def append_path(self, group_name, path):

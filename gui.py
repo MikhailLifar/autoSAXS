@@ -2,10 +2,18 @@ import io
 import sys
 import os
 import json
+import yaml
 import subprocess
 import contextlib
+import itertools
+from pathlib import Path
 
 import customtkinter as ctk
+from matplotlib import rcParams
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+# from viewer import setPlotDefaults
 
 
 def _center_window(win):
@@ -20,6 +28,27 @@ def _center_window(win):
     x = int((screen_width - width) / 2)
     y = int((screen_height - height) / 2)
     win.geometry(f"+{x}+{y}")
+
+
+LATEST_STEPS_PATH = Path(os.path.expanduser("~/KurchatovCoop")) / "temp" / "latest_steps.yml"
+
+
+def _load_latest_steps():
+    """
+    Load previously saved steps configuration if it exists.
+    Returns a dict with optional 'steps' and 'pipeline' keys or {}.
+    """
+    if LATEST_STEPS_PATH.exists():
+        with LATEST_STEPS_PATH.open("r") as f:
+            data = yaml.safe_load(f) or {}
+            # Only keep list entries that look like steps
+            steps = data.get("steps")
+            if isinstance(steps, (list, tuple)):
+                return {
+                    "steps": list(steps),
+                    "pipeline": data.get("pipeline"),
+                }
+    return {}
 
 
 def _run_gui_interactive():
@@ -55,8 +84,12 @@ def _run_gui_interactive():
         },
     }
 
+    latest_cfg = _load_latest_steps()
+    has_latest_cfg = bool(latest_cfg.get("steps"))
+
     selected_pipeline_key = {"value": None}
     selected_steps = []
+    use_latest_steps = {"value": False}
 
     ctk.set_appearance_mode("System")
     ctk.set_default_color_theme("blue")
@@ -78,9 +111,10 @@ def _run_gui_interactive():
     button_frame.grid(row=1, column=0, padx=24, pady=(0, 24), sticky="nsew")
     button_frame.grid_columnconfigure(0, weight=1)
 
-    def make_pipeline_callback(key):
+    def make_pipeline_callback(key, use_latest=False):
         def _callback():
             selected_pipeline_key["value"] = key
+            use_latest_steps["value"] = use_latest
             pipeline_window.destroy()
 
         return _callback
@@ -91,6 +125,19 @@ def _run_gui_interactive():
             master=button_frame,
             text=cfg["label"],
             command=make_pipeline_callback(key),
+            width=240,
+            height=40,
+            font=ctk.CTkFont(size=16, weight="normal"),
+        )
+        btn.grid(row=row, column=0, padx=12, pady=8, sticky="ew")
+        row += 1
+
+    if has_latest_cfg:
+        latest_pipeline_key = latest_cfg.get("pipeline") or next(iter(PIPELINES))
+        btn = ctk.CTkButton(
+            master=button_frame,
+            text="latest configuration",
+            command=make_pipeline_callback(latest_pipeline_key, use_latest=True),
             width=240,
             height=40,
             font=ctk.CTkFont(size=16, weight="normal"),
@@ -130,9 +177,16 @@ def _run_gui_interactive():
     steps_frame.grid_columnconfigure(0, weight=1)
 
     checkbox_vars = {}
+    if use_latest_steps["value"]:
+        default_selected_steps = [
+            s for s in latest_cfg["steps"]
+        ]
+    else:
+        default_selected_steps = list(pipeline_cfg["default_steps"])
+
     for i, step in enumerate(pipeline_cfg["steps"]):
         var = ctk.BooleanVar(
-            value=step in pipeline_cfg["default_steps"],
+            value=step in default_selected_steps,
         )
         cb = ctk.CTkCheckBox(
             master=steps_frame,
@@ -166,6 +220,114 @@ def _run_gui_interactive():
     steps_window.mainloop()
 
     return pipeline_choice, selected_steps
+
+
+def choose_profiles(profiles):
+    """
+    Show all provided SAXS profiles and let the user choose which to keep.
+
+    Args:
+        profiles (list[dict]): Each dict should contain:
+            - basename: str
+            - q: array-like
+            - I: array-like
+            - metadata (optional)
+            - path (optional)
+            - plot_path (optional)
+
+    Returns:
+        dict: {basename: profile_dict} for selected profiles.
+    """
+    if not profiles:
+        return {}
+
+    ctk.set_appearance_mode("System")
+    ctk.set_default_color_theme("blue")
+
+    window = ctk.CTk()
+    window.title("Choose SAXS profiles")
+    window.grid_columnconfigure(0, weight=1)
+    window.grid_rowconfigure(1, weight=5, minsize=360)
+    window.grid_rowconfigure(2, weight=2, minsize=180)
+    window.grid_rowconfigure(3, weight=0)
+    window.geometry("1180x820")
+    window.minsize(1000, 700)
+
+    title_label = ctk.CTkLabel(
+        master=window,
+        text="Select SAXS profiles to process",
+        font=ctk.CTkFont(size=18, weight="bold"),
+    )
+    title_label.grid(row=0, column=0, padx=24, pady=(24, 12), sticky="nsew")
+
+    fig = Figure(dpi=100)
+    ax = fig.add_subplot(111)
+    prop_cycle = rcParams.get("axes.prop_cycle")
+    color_cycle = (
+        itertools.cycle(prop_cycle.by_key().get("color", []))
+        if prop_cycle is not None
+        else None
+    )
+
+    for profile in profiles:
+        color = next(color_cycle) if color_cycle else None
+        ax.plot(profile["q"], profile["I"], label=profile["basename"], color=color)
+
+    ax.set_xlabel("q, (nm-1)")
+    ax.set_ylabel("I, (a.u.)")
+    ax.set_title("SAXS profiles")
+    # ax.legend(loc="best")
+    fig.tight_layout()
+
+    canvas = FigureCanvasTkAgg(fig, master=window)
+    canvas.draw()
+    canvas_widget = canvas.get_tk_widget()
+    canvas_widget.grid(row=1, column=0, padx=24, pady=(0, 12), sticky="nsew")
+
+    checkbox_frame = ctk.CTkScrollableFrame(master=window, width=480, height=220)
+    checkbox_frame.grid(row=2, column=0, padx=24, pady=(0, 12), sticky="ew")
+    for col in range(4):
+        checkbox_frame.grid_columnconfigure(col, weight=1)
+
+    checkbox_vars = {}
+    for i, profile in enumerate(profiles):
+        var = ctk.BooleanVar(value=True)
+        cb = ctk.CTkCheckBox(
+            master=checkbox_frame,
+            text=profile["basename"],
+            variable=var,
+            font=ctk.CTkFont(size=15),
+            height=28,
+        )
+        cb.grid(row=i // 4, column=i % 4, padx=12, pady=4, sticky="w")
+        checkbox_vars[profile["basename"]] = (var, profile)
+
+    selected = {}
+
+    def on_confirm():
+        nonlocal selected
+        selected = {
+            name: profile
+            for name, (var, profile) in checkbox_vars.items()
+            if var.get()
+        }
+        window.destroy()
+
+    confirm_button = ctk.CTkButton(
+        master=window,
+        text="Confirm",
+        command=on_confirm,
+        width=140,
+        height=40,
+        font=ctk.CTkFont(size=16, weight="bold"),
+    )
+    confirm_button.grid(row=3, column=0, padx=24, pady=(12, 24))
+
+    window.protocol("WM_DELETE_WINDOW", on_confirm)
+    _center_window(window)
+    window.mainloop()
+
+    return selected
 
 
 def get_pipeline_spec_gui():

@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Union, Dict, Optional
 import yaml
 import pandas as pd
 import numpy as np
@@ -14,6 +14,7 @@ from ase import Atoms
 from pyFAI.io import image
 
 import base64
+from scipy.ndimage import gaussian_filter
 
 sys.path.append(os.path.expanduser('~/SupervisedML/repos'))
 
@@ -435,3 +436,245 @@ def get_image_messages(image_path, text):
 
 def calc_chi2(I0, I1, sigma_exp):
     return 1 / (I0.shape[0] - 1) * np.sum( ((I0 - I1) / sigma_exp) ** 2 )
+
+
+##### DENSITY AND ISOSURFACE CALCULATION UTILS ######
+
+
+def calculate_atoms_density_and_isosurface(
+    atoms: Atoms, grid_size: int = 64, isosurface_sigma: float = 1.5,
+    isosurface_level: Optional[float] = None, padding_factor: float = 3.0
+) -> Tuple[np.ndarray, float, np.ndarray, np.ndarray]:
+    """
+    Calculate density grid and isosurface level for an ASE Atoms object.
+    
+    Parameters:
+    -----------
+    atoms : ase.Atoms
+        Atomic structure.
+    grid_size : int, default 64
+        Grid resolution for density calculation.
+    isosurface_sigma : float, default 1.5
+        Standard deviation for Gaussian kernel in density calculation.
+    isosurface_level : float, optional
+        Density level for isosurface. If None, auto-calculated as 0.2 * density.max().
+    padding_factor : float, default 3.0
+        Padding factor multiplied by isosurface_sigma to extend the grid.
+    
+    Returns:
+    --------
+    tuple: (density, isosurface_level, min_coords, max_coords)
+        density : np.ndarray
+            3D density grid
+        isosurface_level : float
+            Density level for isosurface extraction
+        min_coords : np.ndarray
+            Minimum coordinates of the grid
+        max_coords : np.ndarray
+            Maximum coordinates of the grid
+    """
+    points = atoms.get_positions()
+    min_coords = points.min(axis=0)
+    max_coords = points.max(axis=0)
+    
+    # Add padding
+    padding = padding_factor * isosurface_sigma
+    min_coords -= padding
+    max_coords += padding
+    
+    # Create 3D grid
+    grid, edges = np.histogramdd(points, bins=grid_size, range=list(zip(min_coords, max_coords)))
+    
+    # Apply Gaussian filter
+    density = gaussian_filter(grid, sigma=isosurface_sigma)
+    
+    # Determine isovalue if not provided
+    if isosurface_level is None:
+        isosurface_level = 0.2 * density.max()
+    
+    return density, isosurface_level, min_coords, max_coords
+
+
+def _point_in_cylinder(x: np.ndarray, y: np.ndarray, z: np.ndarray, r: float, h: float) -> np.ndarray:
+    """Check if points are inside a cylinder (radius r, height h along z-axis, centered at origin)."""
+    r_xy = np.sqrt(x**2 + y**2)
+    in_radius = r_xy <= r
+    in_height = (z >= -h/2) & (z <= h/2)
+    return in_radius & in_height
+
+
+def _point_in_dumbbell(x: np.ndarray, y: np.ndarray, z: np.ndarray, 
+                       r1: float, r2: float, d: float) -> np.ndarray:
+    """Check if points are inside a dumbbell (two spheres connected)."""
+    # Center of first sphere at (-d/2, 0, 0), second at (d/2, 0, 0)
+    dist1 = np.sqrt((x + d/2)**2 + y**2 + z**2)
+    dist2 = np.sqrt((x - d/2)**2 + y**2 + z**2)
+    return (dist1 <= r1) | (dist2 <= r2)
+
+
+def _point_in_ellipsoid(x: np.ndarray, y: np.ndarray, z: np.ndarray,
+                        a: float, b: float, c: float) -> np.ndarray:
+    """Check if points are inside an ellipsoid (semiaxes a, b, c)."""
+    return (x/a)**2 + (y/b)**2 + (z/c)**2 <= 1.0
+
+
+def _point_in_elliptic_cylinder(x: np.ndarray, y: np.ndarray, z: np.ndarray,
+                                a: float, c: float, h: float) -> np.ndarray:
+    """Check if points are inside an elliptic cylinder (semiaxes a, c, height h along z-axis)."""
+    r_xy = (x/a)**2 + (y/c)**2
+    in_radius = r_xy <= 1.0
+    in_height = (z >= -h/2) & (z <= h/2)
+    return in_radius & in_height
+
+
+def _point_in_hollow_cylinder(x: np.ndarray, y: np.ndarray, z: np.ndarray,
+                              ro: float, ri: float, h: float) -> np.ndarray:
+    """Check if points are inside a hollow cylinder (outer radius ro, inner radius ri, height h)."""
+    r_xy = np.sqrt(x**2 + y**2)
+    in_outer = r_xy <= ro
+    in_inner = r_xy >= ri
+    in_height = (z >= -h/2) & (z <= h/2)
+    return in_outer & in_inner & in_height
+
+
+def _point_in_hollow_sphere(x: np.ndarray, y: np.ndarray, z: np.ndarray,
+                            ro: float, ri: float) -> np.ndarray:
+    """Check if points are inside a hollow sphere (outer radius ro, inner radius ri)."""
+    r = np.sqrt(x**2 + y**2 + z**2)
+    return (r <= ro) & (r >= ri)
+
+
+def _point_in_parallelepiped(x: np.ndarray, y: np.ndarray, z: np.ndarray,
+                             a: float, b: float, c: float) -> np.ndarray:
+    """Check if points are inside a parallelepiped (sides a, b, c, centered at origin)."""
+    return ((x >= -a/2) & (x <= a/2) & 
+            (y >= -b/2) & (y <= b/2) &
+            (z >= -c/2) & (z <= c/2))
+
+
+def _point_in_rotation_ellipsoid(x: np.ndarray, y: np.ndarray, z: np.ndarray,
+                                 a: float, c: float) -> np.ndarray:
+    """Check if points are inside a rotation ellipsoid (semiaxes a, a, c - rotation around z)."""
+    r_xy = np.sqrt(x**2 + y**2)
+    return (r_xy/a)**2 + (z/c)**2 <= 1.0
+
+
+def calculate_shape_density_and_isosurface(
+    shape_tuple: Tuple[str, Dict[str, float]], grid_size: int = 64,
+    isosurface_level: Optional[float] = None, padding: float = 1.0
+) -> Tuple[np.ndarray, float, np.ndarray, np.ndarray]:
+    """
+    Calculate density grid and isosurface level for a shape from BODIES_SHAPES.
+    
+    Parameters:
+    -----------
+    shape_tuple : tuple
+        Tuple containing (shape_name, shape_params_dict) where:
+        - shape_name: str, name of the shape from BODIES_SHAPES
+        - shape_params_dict: dict, parameters for the shape
+    grid_size : int, default 64
+        Grid resolution for density calculation.
+    isosurface_level : float, optional
+        Density level for isosurface. If None, defaults to 0.5.
+    padding : float, default 1.0
+        Padding (in Å) to extend the grid beyond the shape boundaries.
+    
+    Returns:
+    --------
+    tuple: (density, isosurface_level, min_coords, max_coords)
+        density : np.ndarray
+            3D density grid (1 inside shape, 0 outside)
+        isosurface_level : float
+            Density level for isosurface extraction (default 0.5)
+        min_coords : np.ndarray
+            Minimum coordinates of the grid
+        max_coords : np.ndarray
+            Maximum coordinates of the grid
+    """
+    shape_name, shape_params = shape_tuple
+    
+    # Determine bounding box based on shape type and parameters
+    if shape_name == 'cylinder':
+        r, h = shape_params['r'], shape_params['h']
+        max_dim = max(2*r, h)
+        min_coords = np.array([-max_dim/2 - padding, -max_dim/2 - padding, -h/2 - padding])
+        max_coords = np.array([max_dim/2 + padding, max_dim/2 + padding, h/2 + padding])
+    elif shape_name == 'dumbbell':
+        r1, r2, d = shape_params['r1'], shape_params['r2'], shape_params['d']
+        max_r = max(r1, r2)
+        min_coords = np.array([-d/2 - max_r - padding, -max_r - padding, -max_r - padding])
+        max_coords = np.array([d/2 + max_r + padding, max_r + padding, max_r + padding])
+    elif shape_name == 'ellipsoid':
+        a, b, c = shape_params['a'], shape_params['b'], shape_params['c']
+        min_coords = np.array([-a - padding, -b - padding, -c - padding])
+        max_coords = np.array([a + padding, b + padding, c + padding])
+    elif shape_name == 'elliptic-cylinder':
+        a, c_semiaxis, h = shape_params['a'], shape_params['c'], shape_params['h']
+        max_r = max(a, c_semiaxis)
+        min_coords = np.array([-max_r - padding, -max_r - padding, -h/2 - padding])
+        max_coords = np.array([max_r + padding, max_r + padding, h/2 + padding])
+    elif shape_name == 'hollow-cylinder':
+        ro, ri, h = shape_params['ro'], shape_params['ri'], shape_params['h']
+        min_coords = np.array([-ro - padding, -ro - padding, -h/2 - padding])
+        max_coords = np.array([ro + padding, ro + padding, h/2 + padding])
+    elif shape_name == 'hollow-sphere':
+        ro = shape_params['ro']
+        min_coords = np.array([-ro - padding, -ro - padding, -ro - padding])
+        max_coords = np.array([ro + padding, ro + padding, ro + padding])
+    elif shape_name == 'parallelepiped':
+        a, b, c = shape_params['a'], shape_params['b'], shape_params['c']
+        min_coords = np.array([-a/2 - padding, -b/2 - padding, -c/2 - padding])
+        max_coords = np.array([a/2 + padding, b/2 + padding, c/2 + padding])
+    elif shape_name == 'rotation-ellipsoid':
+        a, c = shape_params['a'], shape_params['c']
+        min_coords = np.array([-a - padding, -a - padding, -c - padding])
+        max_coords = np.array([a + padding, a + padding, c + padding])
+    else:
+        raise ValueError(f"Unknown shape name: {shape_name}")
+    
+    # Create grid coordinates
+    x_coords = np.linspace(min_coords[0], max_coords[0], grid_size)
+    y_coords = np.linspace(min_coords[1], max_coords[1], grid_size)
+    z_coords = np.linspace(min_coords[2], max_coords[2], grid_size)
+    
+    # Create meshgrid
+    X, Y, Z = np.meshgrid(x_coords, y_coords, z_coords, indexing='ij')
+    
+    # Check which points are inside the shape
+    if shape_name == 'cylinder':
+        inside = _point_in_cylinder(X, Y, Z, shape_params['r'], shape_params['h'])
+    elif shape_name == 'dumbbell':
+        inside = _point_in_dumbbell(X, Y, Z, shape_params['r1'], shape_params['r2'], shape_params['d'])
+    elif shape_name == 'ellipsoid':
+        inside = _point_in_ellipsoid(X, Y, Z, shape_params['a'], shape_params['b'], shape_params['c'])
+    elif shape_name == 'elliptic-cylinder':
+        inside = _point_in_elliptic_cylinder(X, Y, Z, shape_params['a'], shape_params['c'], shape_params['h'])
+    elif shape_name == 'hollow-cylinder':
+        inside = _point_in_hollow_cylinder(X, Y, Z, shape_params['ro'], shape_params['ri'], shape_params['h'])
+    elif shape_name == 'hollow-sphere':
+        inside = _point_in_hollow_sphere(X, Y, Z, shape_params['ro'], shape_params['ri'])
+    elif shape_name == 'parallelepiped':
+        inside = _point_in_parallelepiped(X, Y, Z, shape_params['a'], shape_params['b'], shape_params['c'])
+    elif shape_name == 'rotation-ellipsoid':
+        inside = _point_in_rotation_ellipsoid(X, Y, Z, shape_params['a'], shape_params['c'])
+    else:
+        raise ValueError(f"Unknown shape name: {shape_name}")
+    
+    # Create density grid (1 inside, 0 outside)
+    density = inside.astype(float)
+    
+    # Set isosurface level (default 0.5 for binary density)
+    if isosurface_level is None:
+        isosurface_level = 0.5
+    
+    return density, isosurface_level, min_coords, max_coords
+
+
+# def get_closest_idx(sorted_arr_1d, scalar, side=None):
+#     assert np.all(sorted_arr_1d[:-1] <= sorted_arr_1d[1:]), 'Sorted arrays only'
+#     if side is None or np.any(sorted_arr_1d == scalar):
+#         return np.argmin(np.abs(sorted_arr_1d - scalar))
+#     else:
+#         idx = np.where(sorted_arr_1d > scalar)[0].tolist()
+#         if not idx:
+#             idx = len(sorted_arr_1d)

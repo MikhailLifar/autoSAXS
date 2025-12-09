@@ -34,7 +34,10 @@ class Interface:
         raise NotImplementedError
 
     @staticmethod
-    def wait_for_file(directory, obligatory=False, query=None, wait=2.0, wait_to_end_loading=2.0, filepattern='*'):
+    def wait_for_file(
+        directory, obligatory=False, query=None, 
+        wait=2.0, wait_to_end_loading=2.0, filepattern='*', skip_if_exists=False,
+        allow_same_time=(1, float('inf'))):
         raise NotImplementedError
 
     @staticmethod
@@ -130,7 +133,10 @@ class CLIInterface(Interface):
         return ''
     
     @staticmethod
-    def wait_for_file(directory, query=None, obligatory=False, wait=2.0, wait_to_end_loading=2.0, filepattern='*'):
+    def wait_for_file(
+        directory, query=None, obligatory=False, 
+        wait=2.0, wait_to_end_loading=2.0, filepattern='*', skip_if_exists=False,
+        allow_same_time=(1, float('inf'))):
         assert query is not None
 
         def _get_all_files():
@@ -138,6 +144,14 @@ class CLIInterface(Interface):
 
         def _get_pattern_files():
             return set(glob.glob(os.path.join(directory, filepattern), recursive=True))
+        
+        min_allowed, max_allowed = allow_same_time
+        
+        if skip_if_exists:
+            pattern_files = list(_get_pattern_files())
+            if min_allowed <= len(pattern_files) <= max_allowed:
+                CLIInterface.send_message(f"Skipped file uploading for pattern '{filepattern}', since found existing files")
+                return pattern_files
 
         old_files = _get_all_files()
 
@@ -145,9 +159,9 @@ class CLIInterface(Interface):
         print(query, flush=True)
 
         # Shared state between threads
-        result = {'new_file': None, 'user_interrupted': False}
+        result = {'new_files': None, 'user_interrupted': False}
         stop_event = threading.Event()
-
+        
         def monitor_files():
             nonlocal old_files
             while not stop_event.is_set():
@@ -159,17 +173,17 @@ class CLIInterface(Interface):
                 if added_files:
                     # Prefer to process one file at a time
                     pattern_files = [p for p in _get_pattern_files() if p in added_files]
-                    if len(pattern_files) == 1:
-                        new_file_path, = pattern_files
-                        time.sleep(wait_to_end_loading)
-                        result['new_file'] = new_file_path
+                    if min_allowed <= len(pattern_files) <= max_allowed:
+                        time.sleep(wait_to_end_loading * (1.0 + np.log(len(pattern_files))))
+                        result['new_files'] = pattern_files
                         stop_event.set()
-                        CLIInterface.send_message(f"Uploaded file {new_file_path}")
+                        pattern_files_str = '\n  '.join(pattern_files)
+                        CLIInterface.send_message(f"Uploaded files:\n{pattern_files_str}")
                         return
-                    elif len(pattern_files) > 1:
-                        raise AssertionError(f"Multiple files match the required pattern '{filepattern}': {pattern_files}. This is not supported yet.")
-                    else:
+                    elif len(pattern_files) == 0:
                         CLIInterface.send_message(f"No files match the required pattern '{filepattern}'. Please upload a correct file.")
+                    else:
+                        CLIInterface.send_message(f"The number of uploaded files matching '{filepattern}' should be >= {min_allowed} and <= {max_allowed}. Please make a correct upload.")
                 old_files = current_files
                 time.sleep(wait)
 
@@ -236,13 +250,13 @@ class CLIInterface(Interface):
         # Note: daemon=True means they'll be killed when main thread exits
 
         if result['user_interrupted']:
-            ret = ""
-        elif result['new_file'] is not None:
-            ret = result['new_file']
+            ret = ["", ]
+        elif result['new_files'] is not None:
+            ret = result['new_files']
         else:
             # This shouldn't happen under normal circumstances due to the assertion
             # that only one file can be processed, but we handle it gracefully
-            raise RuntimeError("Multiple files appeared simultaneously or unexpected error occurred")
+            raise RuntimeError("Unexpected error occurred")
 
         if obligatory and not ret:
             raise PipelineInterrupt('The user interrupted the pipeline execution')
