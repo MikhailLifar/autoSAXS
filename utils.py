@@ -21,6 +21,35 @@ sys.path.append(os.path.expanduser('~/SupervisedML/repos'))
 from supervised_ml.whittaker_smooth import whittaker_smooth
 
 
+import time
+from contextlib import contextmanager
+
+
+@contextmanager
+def timer(name="Timer"):
+    """
+    Context manager to precisely measure the execution time of a code block.
+
+    Usage:
+        with timer("block name") as t:
+            # code
+        print(t["elapsed"])
+
+    Returns:
+        dict: Holds the elapsed time in seconds under key ``"elapsed"`` after
+        the block finishes.
+    """
+    start = time.perf_counter()
+    metrics = {}
+    try:
+        yield metrics
+    finally:
+        end = time.perf_counter()
+        elapsed = end - start
+        metrics["elapsed"] = elapsed
+        print(f"[{name}] Elapsed time: {elapsed:.6f} seconds")
+
+
 ##### READING/WRITING FUNCTIONS ######
 
 
@@ -28,7 +57,7 @@ def read_from_tiff(tiff_path) -> np.ndarray:
     return image.read_image_data(tiff_path)
 
 
-def write_saxs(filename, wavenumber, intensity, metadata):
+def write_saxs(filename, wavenumber, intensity, sigma, metadata):
     """
     Write SAXS data and metadata to a file using YAML for metadata and CSV for data.
     
@@ -41,13 +70,15 @@ def write_saxs(filename, wavenumber, intensity, metadata):
     # Create a DataFrame for the data
     df = pd.DataFrame({
         'q': wavenumber,
-        'intensity': intensity
+        'intensity': intensity,
     })
+    if sigma is not None:
+        df['sigma'] = sigma
 
     # Delegate actual writing to generic helper
     write_data(filename, df, metadata)
 
-def read_saxs(filename) -> Tuple[np.ndarray, np.ndarray, dict]:
+def read_saxs(filename):
     """
     Read SAXS data and metadata from a file with YAML metadata and CSV data.
     
@@ -66,7 +97,11 @@ def read_saxs(filename) -> Tuple[np.ndarray, np.ndarray, dict]:
     wavenumber = df['q'].to_numpy()
     intensity = df['intensity'].to_numpy()
     
-    return wavenumber, intensity, metadata
+    sigma = None
+    if 'sigma' in df:
+        sigma = df['sigma'].to_numpy()
+    
+    return wavenumber, intensity, sigma, metadata
 
 
 def write_data(filename, data: pd.DataFrame, metadata):

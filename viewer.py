@@ -134,9 +134,13 @@ class PLTViewer(Viewer):
         else:
             fig, axs = fig_axs
         
-        q_cal, i_cal = curve_calibrated
+        q_cal, i_cal, sigma_cal = curve_calibrated
+        # sigma_cal *= 10  # debug
 
+        color = '#1f77b4'
         cal_plot = axs[0].plot(q_cal, i_cal, label="Calibrated Curve")
+        axs[0].fill_between(q_cal, i_cal - sigma_cal, i_cal + sigma_cal, color=color, alpha=0.5)
+        axs[0].grid(True, alpha=0.3)
 
         # Plot theoretical peak positions
         for q_val in theoretical_peaks:
@@ -202,10 +206,37 @@ class PLTViewer(Viewer):
             plt.close(fig)
     
     @staticmethod
-    def view_curves(*args, show_duration: Optional[float] = None, **kwargs):
+    def view_curves(
+        *args, show_duration: Optional[float] = None, 
+        sigmas=None, grid=True,
+        plotFilePath=None, savefigArgs=None,
+        **kwargs):
         kw = dict(xlabel='$q (nm^-1)$', ylabel='I (a.u.)')
         kw.update(kwargs)
+
         fig, ax = plotLines(*args, **kw)
+        if sigmas is not None:
+            assert len(sigmas) <= int(len(args) // 3) and all(isinstance(s, np.ndarray) for s in sigmas)
+            for i, s in enumerate(sigmas):
+                if s is None:
+                    continue
+                x, y, fmt = args[3*i:3*(i+1)]
+                color = None
+                if fmt is None:
+                    fmt = {}
+                if isinstance(fmt, str):
+                    fmt = {'label': fmt}
+                for k in ('c', 'color'):
+                    if k in fmt:
+                        color = fmt[k]
+                        break
+                ax.fill_between(x, y - s, y + s, color=color, alpha=0.5*fmt.get('alpha', 1.0))
+        if grid:
+            ax.grid(True, alpha=0.3)
+        if plotFilePath is not None:
+            if savefigArgs is None:
+                savefigArgs = {}
+            fig.savefig(plotFilePath, **savefigArgs)
         if show_duration is not None:
             PLTViewer.show(show_duration)
         else:
@@ -375,6 +406,7 @@ class PLTViewer(Viewer):
             if title == 'Scattering':
                 ax = fig.add_subplot(subplot_spec)
                 ax.plot(q, I, 'o', label='Experimental', markersize=4, alpha=0.7)
+                ax.fill_between(q, I - sigma, I + sigma, alpha=0.5)
                 ax.plot(q, I_fit, '-', label='Fit', linewidth=2)
                 ax.set_xlabel(r'$q$ (Å$^{-1}$)')
                 ax.set_ylabel(r'$I(q)$ (a.u.)')

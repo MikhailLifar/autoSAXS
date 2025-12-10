@@ -341,7 +341,7 @@ class Controller:
         if to_sub_path:
             os.makedirs(dest_dir, exist_ok=True)
 
-            q, sample, _ = read_saxs(to_sub_path)
+            q, sample, sigma_sample, _ = read_saxs(to_sub_path)
             root, basename = os.path.split(to_sub_path)
             basename, _ = os.path.splitext(basename)
             basename = basename.replace('int_', '', 1)
@@ -354,7 +354,7 @@ class Controller:
                 self.interface.send_message(f'Debug mode: Skipping subtraction for {to_sub_path} (results already exist)')
                 
             else:
-                _, I_sub, I_buff_scaled = subtract_buffer(
+                _, I_sub, I_buff_scaled, sigma_sub, sigma_buff_scaled = subtract_buffer(
                     buffer_path, to_sub_path, sub_path, 
                     match_tail_ops={
                         'q_range_rel': None, 
@@ -363,12 +363,14 @@ class Controller:
                 self.viewer.view_curves(
                     q, sample, 'sample',
                     q, I_buff_scaled, 'buffer scaled',
+                    sigmas=(sigma_sample, sigma_buff_scaled),
                     legend=True,
                     plotFilePath=diff_plot_path,
                     save=False
                 )
                 self.viewer.view_curves(
                     q, I_sub, 'sample',
+                    sigmas=(sigma_sub, ),
                     legend=True,
                     plotFilePath=sub_plot_path,
                     save=False
@@ -486,7 +488,7 @@ echo "Full results saved to: $RESULTS_FILE"
 
             else:
                 # plots
-                q, I, _ = read_saxs(to_plot_path)
+                q, I, _, _ = read_saxs(to_plot_path)
 
                 # self.viewer.view_curves(
                 #     q, I, 'I vs q',
@@ -563,7 +565,7 @@ echo "Full results saved to: $RESULTS_FILE"
                 self.interface.send_message(f'Debug mode: Skipping BODIES fit for {saxs_1d_path} (results already exist)')
 
             else:
-                q, I, _ = read_saxs(saxs_1d_path)
+                q, I, sigma, _ = read_saxs(saxs_1d_path)
                 
                 first_nm, last_nm = context['bodies', 'q_range_nm']
                 first_chnl, last_chnl = context['bodies', 'q_range_channels']
@@ -604,11 +606,11 @@ echo "Full results saved to: $RESULTS_FILE"
                     structure = (shape, params_dict)
                     
                     data = np.loadtxt(fir_path, skiprows=1, dtype=np.float64)
-                    q_fit, I_fit, sigma_exp = data[:, 0], data[:, 3], data[:, 2]
+                    q_fit, I_fit, sigma_bodies = data[:, 0], data[:, 3], data[:, 2]
                     idx_intersection = (q <= q_fit[-1])
                     q_intersetcion, I_intersection = q[idx_intersection], I[idx_intersection]
+                    sigma_interp = np.interp(q_intersetcion, q_fit, sigma_bodies)
                     I_fit_interp = np.interp(q_intersetcion, q_fit, I_fit)
-                    sigma_interp = np.interp(q_intersetcion, q_fit, sigma_exp)
 
                     chi2 = calc_chi2(I_intersection, I_fit_interp, sigma_interp)
                     to_plot.extend([q_intersetcion, I_fit_interp, f'{shape}; chi2: {chi2:.5f}'])
@@ -623,6 +625,7 @@ echo "Full results saved to: $RESULTS_FILE"
                     #     plotFilePath=os.path.join(bodies_subdir, f'{shape}_view.png'))
                 
                 self.viewer.view_curves(*to_plot,
+                                        sigmas=(sigma, ),
                                         title=f'Fits comparison for {basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
                                         plotFilePath=os.path.join(bodies_subdir, f'{basename}_fits.png'))
         
@@ -638,7 +641,7 @@ echo "Full results saved to: $RESULTS_FILE"
             os.makedirs(dammif_subdir, exist_ok=True)
             dammif_call = os.path.join(ATSAS_BIN_PREFIX, "dammif")
             dammif_prefix = os.path.join(dammif_subdir, 'dammif')
-            dammif_reps_num = 2 if fast_forward else 5
+            dammif_reps_num = 2  # 5
 
             dammif_fits_png = os.path.join(dammif_subdir, f'{basename}_fits.png')
             
@@ -650,7 +653,7 @@ echo "Full results saved to: $RESULTS_FILE"
             else:
                 os.system(f'for i in `seq 1 {dammif_reps_num}`; do {dammif_call} --prefix={dammif_prefix}-$i --mode=fast {gnom_path}; done')
 
-                q, I, _ = read_saxs(saxs_1d_path)
+                q, I, sigma, _ = read_saxs(saxs_1d_path)
                 to_plot = [q, I, {'label': 'exp', 'lw': 4}]
                 
                 for i in range(dammif_reps_num):
@@ -658,7 +661,7 @@ echo "Full results saved to: $RESULTS_FILE"
                     cif_path = f'{dammif_prefix}-{i+1}-1.cif'
 
                     data = np.loadtxt(fir_path, skiprows=1, dtype=np.float64)
-                    q_fit, I_fit, sigma_exp = data[:, 0], data[:, 3], data[:, 2]
+                    q_fit, I_fit, sigma_dammif = data[:, 0], data[:, 3], data[:, 2]
                     q_fit = q_fit * 10.0  # from A^-1 to nm ^-1
 
                     # self.viewer.view_curves(q_fit, I_fit, 'fitted curve', 
@@ -666,8 +669,8 @@ echo "Full results saved to: $RESULTS_FILE"
 
                     idx_intersection = (q <= q_fit[-1])
                     q_intersetcion, I_intersection = q[idx_intersection], I[idx_intersection]
+                    sigma_interp = np.interp(q_intersetcion, q_fit, sigma_dammif)
                     I_fit_interp = np.interp(q_intersetcion, q_fit, I_fit)
-                    sigma_interp = np.interp(q_intersetcion, q_fit, sigma_exp)
 
                     # self.viewer.view_curves(q_intersetcion, I_fit_interp, 'fitted curve', 
                     #                         plotFilePath=os.path.join(dammif_subdir, f'{basename}_{i}_shit_here_1.png'))
@@ -684,6 +687,7 @@ echo "Full results saved to: $RESULTS_FILE"
                         plotFilePath=os.path.join(dammif_subdir, f'dammif-{i}_view.png'))
                 
                 self.viewer.view_curves(*to_plot,
+                                        sigmas=(sigma, ), 
                                         title=f'Fits comparison for {basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
                                         plotFilePath=os.path.join(dammif_subdir, f'{basename}_fits.png'))
         
@@ -921,8 +925,9 @@ echo "Full results saved to: $RESULTS_FILE"
                         root, filename = os.path.split(profile_path)
                         basename, _ = os.path.splitext(filename)
                         profile_pic_path = os.path.join(root, f'{basename}.png')                
-                        q, I, _ = read_saxs(profile_path)
+                        q, I, sigma, _ = read_saxs(profile_path)
                         self.viewer.view_curves(q, I, basename,
+                                                sigmas=(sigma,),
                                                 xlabel='q, (nm-1)', ylabel='I, (a.u.)',
                                                 title=f'{basename} SAXS profile',
                                                 show_duration=None, save=False,
@@ -934,7 +939,7 @@ echo "Full results saved to: $RESULTS_FILE"
             profiles_data = []
             for basename, (idx, profile_path), plot_path in zip(
                 basename_list, enumerate(profile_paths), profile_pic_paths):
-                q, I, metadata = read_saxs(profile_path)
+                q, I, _, metadata = read_saxs(profile_path)
                 profiles_data.append(
                     {
                         'basename': basename,

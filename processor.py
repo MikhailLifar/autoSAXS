@@ -57,8 +57,8 @@ class IntegratorExtended:
         self.mask = np.load(mask_path)
     
     def integrate1d(self, saxs_2d, npt):
-        q, I = self.ai.integrate1d(saxs_2d, npt=npt, mask=self.mask)
-        return q, I
+        q, I, sigma = self.ai.integrate1d(saxs_2d, npt=npt, mask=self.mask, error_model='poisson')
+        return q, I, sigma
 
 
 def fit_circle(points: np.ndarray):
@@ -330,22 +330,22 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
         mask=mask
     )
 
-    q_cal, I_cal = integrator.integrate1d(calib_data, npt=npt)
+    q_cal, I_cal, sigma = integrator.integrate1d(calib_data, npt=npt)
 
     # Get theoretical/"ideal" calibrant ring positions
     tth_theor = np.array(calibrant.get_2th())
     q_theor = 4 * np.pi * np.sin(tth_theor / 2) / wavelength * 1e-9
 
-    return {'integrator': integrator, 'refined': refined, 'curve_calibrated': (q_cal, I_cal), 'theoretical_peaks': q_theor}
+    return {'integrator': integrator, 'refined': refined, 'curve_calibrated': (q_cal, I_cal, sigma), 'theoretical_peaks': q_theor}
 
 
 def integrate_2d_to_1d(integrator, saxs_2d, npt=1000, destpath=None, metadata=None):
-    q, I = integrator.integrate1d(saxs_2d, npt=npt)
+    q, I, sigma = integrator.integrate1d(saxs_2d, npt=npt)
     if destpath is not None:
         if metadata is None:
             metadata = dict()
-        write_saxs(destpath, q, I, metadata)
-    return q, I
+        write_saxs(destpath, q, I, sigma, metadata)
+    return q, I, sigma
 
 
 def subtract_buffer(
@@ -353,11 +353,11 @@ def subtract_buffer(
     image_path=None, 
     method='match_tail', match_tail_ops=None, 
     ):
-    q_buff, I_buff, _ = read_saxs(buffer_path)
+    q_buff, I_buff, sigma_buff, _ = read_saxs(buffer_path)
 
     scaling_factor = 1.
 
-    q, I, _ = read_saxs(src_path)
+    q, I, sigma, _ = read_saxs(src_path)
     if method == 'match_tail':
         algo_ops = {'q_range_abs': None, 
                     'q_range_rel': (0.8, None), 
@@ -402,11 +402,14 @@ def subtract_buffer(
     I_buffer_scaled = I_buff * scaling_factor
     I_sub = I - I_buffer_scaled
 
-    write_saxs(destpath, q, I_sub, metadata={
+    sigma_buffer_scaled = sigma_buff * scaling_factor 
+    sigma_sub = sigma_buffer_scaled + sigma
+
+    write_saxs(destpath, q, I_sub, sigma_sub, metadata={
                 'type': 'sub',
                 'sample_path': src_path,
                 'buffer_path': buffer_path
             } 
         )
     
-    return q, I_sub, I_buffer_scaled
+    return q, I_sub, I_buffer_scaled, sigma_sub, sigma_buffer_scaled

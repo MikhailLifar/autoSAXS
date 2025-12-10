@@ -1,12 +1,10 @@
 import yaml
-from processor import *
-from interface import *
-from viewer import *
 import os
 import sys
 import logging
 import warnings
 import json
+import itertools as it
 
 import numpy as np
 import pandas as pd
@@ -21,8 +19,13 @@ from aiAssistantFramework import lib as ai_lib
 from aiAssistantFramework.lib import llm, telegram
 import controller as ai_controller
 
+from utils import timer
 from processor import *
+from interface import *
 from viewer import *
+
+
+setPlotDefaults()
 
 
 def visual_model_test():
@@ -73,19 +76,35 @@ def view_3d_projections_test():
 
 
 def automask_test():
-    data = read_from_tiff('debug/data/raw/0001_AgBh700_96.9_calib.tif')
-    center_y_px, center_x_px = 0.06070 / 1.e-4, 0.04949 / 1.e-4
+    calib_data = read_from_tiff('debug/data/raw/0001_AgBh700_96.9_calib.tif')
+    sample_data = read_from_tiff('0002_ihs27_95.9_sample.tif')
+    integrator = IntegratorExtended.from_disk(os.path.join('data', 'debug', 'integrator_params'))
+    
+    center_y_px, center_x_px = 318, 598
     r_beam_px = 35
 
-    mask = calc_beam_abnormal_mask(
-        data, center_y_px, center_x_px, r_beam_px=r_beam_px
-    )
+    windows = [7, 9, 15, 21]
+    tols = [1.5, 2.0, 3.0]
+    times = [[] for _ in windows]
+    for window, tol in it.product(windows, tols):
+        with timer("mask calculation") as t:
+            mask = calc_beam_abnormal_mask(
+                calib_data, center_y_px, center_x_px, r_beam_px=r_beam_px, window_size=window, iqr_tol=tol,
+            )
 
-    fig, ax = plt.subplots()
-    im = ax.imshow(mask, cmap='gray')
-    ax.set_title("Beam + Abnormal Pixels Mask")
-    # plt.show()
-    fig.savefig('debug/mask_debug.png', dpi=400)
+        times[windows.index(window)].append(t['elapsed'])
+        basic_imshow(
+            mask, cmap='gray', 
+            xlabel='X',ylabel='Y', title=f"Beam + Abnormal Pixels Mask\nwindow: {window}; tol: {tol}", 
+            plotFilePath=os.path.join('debug', 'test_automask', f'{window}_{tol}.png'),
+            save=False)
+    
+    times = [np.mean(row) for row in times]
+    plotLines(
+        windows, times, 'exec time vs window size',
+        title='Mask calculation time vs window size', 
+        plotFilePath=os.path.join('debug', 'test_automask', f'exec_time_vs_window_size.png'),
+        save=False)
 
 
 if __name__ == '__main__':
