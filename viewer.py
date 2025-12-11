@@ -42,6 +42,10 @@ class Viewer:
         pass
 
     @staticmethod
+    def view_mask(*args, **kwargs):
+        pass
+
+    @staticmethod
     def view_curves(*args, **kwargs):
         pass
 
@@ -197,6 +201,49 @@ class PLTViewer(Viewer):
             theoretical_peaks,
             fig_axs=(fig, axs[[1, ], [1, ]]),
         )
+
+        if plotFilePath is not None:
+            fig.savefig(plotFilePath)
+        PLTViewer.show(show_duration)
+        if fig_axs is None and show_duration is None:
+            # No external figure management and no timed show – close to avoid leaks
+            plt.close(fig)
+    
+    @staticmethod
+    def view_mask(
+        img_data, mask, *, 
+        tiff_path, fig_axs=None, show_duration: Optional[float] = None, plotFilePath=None):
+
+        if fig_axs is None:
+            fig, axs = plt.subplots(2, 2, figsize=(32, 24))
+        else:
+            fig, axs = fig_axs
+        
+        img_data = img_data.astype('float')
+        img_data = img_data - min(np.min(img_data), 0)
+        
+        axs[0, 0].imshow(np.log1p(img_data), cmap='viridis', origin='lower')
+        axs[0, 0].set_title(f"2D SAXS Data: {os.path.basename(tiff_path)}")
+        axs[0, 0].set_xlabel("Pixel X")
+        axs[0, 0].set_ylabel("Pixel Y")
+
+        axs[0, 1].imshow(mask, cmap='grey', origin='lower')
+        axs[0, 1].set_title(f"Mask")
+        axs[0, 1].set_xlabel("Pixel X")
+        axs[0, 1].set_ylabel("Pixel Y")
+
+        img_data_masked = np.copy(img_data)
+        img_data_masked[mask] = 0.0
+        axs[1, 0].imshow(np.log1p(img_data_masked), cmap='viridis', origin='lower')
+        axs[1, 0].set_title(f"Masked 2D SAXS Data, masked as zeros")
+        axs[1, 0].set_xlabel("Pixel X")
+        axs[1, 0].set_ylabel("Pixel Y")
+
+        img_data_masked[mask] = np.nan
+        axs[1, 1].imshow(np.log1p(img_data_masked), cmap='viridis', origin='lower')
+        axs[1, 1].set_title(f"Masked 2D SAXS Data, masked as missing")
+        axs[1, 1].set_xlabel("Pixel X")
+        axs[1, 1].set_ylabel("Pixel Y")
 
         if plotFilePath is not None:
             fig.savefig(plotFilePath)

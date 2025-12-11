@@ -237,7 +237,7 @@ class Controller:
             self.viewer.view_refined_curve(refine_res['curve_calibrated'], refine_res['theoretical_peaks'])
         return refine_res
 
-    def autocalib(self, calibrant_path, context: Context, fast_forward=False):
+    def autocalib(self, calibrant_path, context: Context, mask_config, fast_forward=False):
         directory = context.directory
         
         # Check if calibration results exist in debug mode
@@ -289,6 +289,7 @@ class Controller:
                 'center_y_px': center_step_ret['center_y_px'],
                 'center_x_px': center_step_ret['center_x_px'],
                 'calibrant_name': calibrant_name,
+                'mask_config': mask_config,
             })
             self.interface.send_message('    Geometry refinement...')
             refine_step_ret = self.geometry_refinement_step(
@@ -305,6 +306,12 @@ class Controller:
                 **rings_step_ret,
                 **refine_step_ret,
             )
+            self.viewer.view_mask(
+                calib_data, refine_step_ret['integrator'].mask,
+                tiff_path=calibrant_path,
+                plotFilePath=os.path.join(directory, 'calibration_mask.png')
+            )
+            
             refined = refine_step_ret['refined']
             refined.update({'wavelength': context['detector_geometry', 'wavelength']})
             self.interface.send_message(
@@ -802,8 +809,22 @@ echo "Full results saved to: $RESULTS_FILE"
                 filepattern='raw/*_calib.tif',
                 skip_if_exists=True, allow_same_time=(1, 1)
             )
+            mask_config = {'auto': True}
+            mask_op = self.interface.ask_question(
+                "How do you want to set the mask for calibration?", 
+                options={'a': 'automask', 'b': 'set your mask', 'c': 'combine your mask with automatic mask'})
+            if mask_op in 'bc':
+                mask_path, = self.interface.wait_for_file(
+                    directory, 
+                    query='Upload mask* file with mask '
+                          '(supported extensions are .msk, .npy, .txt)',
+                    filepattern='mask*',
+                    skip_if_exists=True, allow_same_time=(1, 1)
+                )
+                mask_config['mask_path'] = mask_path
+                mask_config['auto'] = mask_op == 'c'
             res_calib = self.autocalib(
-                calibrant_path, context=context, fast_forward=fast_forward)
+                calibrant_path, context=context, mask_config=mask_config, fast_forward=fast_forward)
             ai = res_calib['integrator']
         
         if 'integration' in steps and 'calibration' not in steps:
@@ -903,7 +924,7 @@ echo "Full results saved to: $RESULTS_FILE"
                         buffer_base = os.path.basename(buffer_path).replace('_buffer.dat', '')
                         if buffer_base in sample_base:
                             aligned_pairs.append((sample_path, buffer_path))
-                    assert len(aligned_pairs) == len(sample_paths_1d)
+                assert len(aligned_pairs) == len(sample_paths_1d)
 
                 for s_p, b_p in aligned_pairs:
                     profile_path, profile_pic_path = self.subtract(
@@ -975,6 +996,7 @@ echo "Full results saved to: $RESULTS_FILE"
                 'Upload more data? Type "no" to exit program, type Enter or "yes" to continue',
             )
             run_load_cycle = not upload_more.lower().startswith('n')
+            iteration_number += 1
     
     def pipeline_batch(self, fast_forward=False):
         # TODO currently the pipeline is oriented on proteins. Since the pipeline for other samples is sort of similar, I think, there will be only one pipeline in the end

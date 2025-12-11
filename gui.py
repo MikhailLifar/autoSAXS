@@ -6,6 +6,7 @@ import yaml
 import subprocess
 import contextlib
 import itertools
+import tempfile
 from pathlib import Path
 
 import customtkinter as ctk
@@ -222,7 +223,7 @@ def _run_gui_interactive():
     return pipeline_choice, selected_steps
 
 
-def choose_profiles(profiles):
+def _run_choose_profiles_gui(profiles):
     """
     Show all provided SAXS profiles and let the user choose which to keep.
 
@@ -231,15 +232,12 @@ def choose_profiles(profiles):
             - basename: str
             - q: array-like
             - I: array-like
-            - metadata (optional)
-            - path (optional)
-            - plot_path (optional)
 
     Returns:
-        dict: {basename: profile_dict} for selected profiles.
+        list[str]: selected basenames.
     """
     if not profiles:
-        return {}
+        return []
 
     ctk.set_appearance_mode("System")
     ctk.set_default_color_theme("blue")
@@ -302,15 +300,15 @@ def choose_profiles(profiles):
         cb.grid(row=i // 4, column=i % 4, padx=12, pady=4, sticky="w")
         checkbox_vars[profile["basename"]] = (var, profile)
 
-    selected = {}
+    selected = []
 
     def on_confirm():
         nonlocal selected
-        selected = {
-            name: profile
-            for name, (var, profile) in checkbox_vars.items()
+        selected = [
+            name
+            for name, (var, _profile) in checkbox_vars.items()
             if var.get()
-        }
+        ]
         window.destroy()
 
     confirm_button = ctk.CTkButton(
@@ -328,6 +326,53 @@ def choose_profiles(profiles):
     window.mainloop()
 
     return selected
+
+
+def choose_profiles(profiles):
+    """
+    Public API to choose profiles without letting the GUI pollute CLI stdio.
+
+    Spawns a short-lived helper process (this same file) that runs the actual
+    CustomTkinter GUI and returns the selected profiles. Only structured JSON
+    is exchanged with the helper process; any stray GUI stdout/stderr stays
+    confined to the helper.
+    """
+    if not profiles:
+        return {}
+
+    helper_path = os.path.abspath(__file__)
+    tmp_path = None
+    try:
+        serializable_profiles = [
+            {
+                "basename": p["basename"],
+                "q": list(p["q"]),
+                "I": list(p["I"]),
+            }
+            for p in profiles
+        ]
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tmp:
+            json.dump(serializable_profiles, tmp)
+            tmp_path = tmp.name
+
+        proc = subprocess.run(
+            [sys.executable, helper_path, "--choose-profiles", tmp_path],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        data = json.loads(proc.stdout.strip() or "{}")
+        selected_basenames = data.get("selected_basenames", [])
+    finally:
+        if tmp_path:
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(tmp_path)
+
+    return {
+        p["basename"]: p
+        for p in profiles
+        if p["basename"] in selected_basenames
+    }
 
 
 def get_pipeline_spec_gui():
@@ -351,12 +396,18 @@ def get_pipeline_spec_gui():
 
 
 if __name__ == "__main__":
-    # Helper mode used by get_pipeline_spec_gui
+    # Helper modes used by get_pipeline_spec_gui / choose_profiles
     if len(sys.argv) > 1 and sys.argv[1] == "--run-gui":
         choice, steps = _run_gui_interactive()
         print(json.dumps({"pipeline_choice": choice, "steps": steps}))
+    elif len(sys.argv) > 2 and sys.argv[1] == "--choose-profiles":
+        profiles_path = Path(sys.argv[2])
+        with profiles_path.open("r") as f:
+            profiles = json.load(f)
+        selected = _run_choose_profiles_gui(profiles)
+        print(json.dumps({"selected_basenames": selected}))
     else:
-        # Manual testing: run the GUI directly.
+        # Manual testing: run the pipeline GUI directly.
         choice, steps = _run_gui_interactive()
         print(f"Pipeline: {choice}")
         print(f"Steps: {steps}")

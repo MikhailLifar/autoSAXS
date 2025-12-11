@@ -1,6 +1,7 @@
 from typing import Optional, Any, Tuple, List
 import os
 import json
+import glob
 
 import numpy as np
 import scipy.ndimage as ndi
@@ -11,6 +12,8 @@ import pyFAI.calibrant
 from pyFAI.detectors import Pilatus1M
 from pyFAI.geometryRefinement import GeometryRefinement
 from pyFAI.calibrant import CALIBRANT_FACTORY
+
+import fabio
 
 import matplotlib as mpl
 import matplotlib.colors as mcolors
@@ -38,6 +41,21 @@ class IntegratorExtended:
         if self.mask is not None:
             np.save(os.path.join(directory, 'mask.npy'), self.mask)
     
+    @staticmethod
+    def read_mask(mask_path):
+        _, ext = os.path.splitext(mask_path)
+        if ext == '.npy':
+            mask = np.load(mask_path).astype('bool')
+        elif ext == '.txt':
+            mask = np.loadtxt(mask_path).astype('bool')
+        elif ext == '.msk':
+            # assume fit2d .msk file
+            mask = fabio.open(mask_path).data.astype('bool')
+            mask = np.flip(mask, axis=0)  # noticed that the mask is read upside-down
+        else:
+            raise RuntimeError(f"Unsupported file extension for mask: {ext}")
+        return mask
+    
     @classmethod
     def from_disk(cls, directory):
         with open(os.path.join(directory, 'detector_params.json'), 'r') as fread:
@@ -45,16 +63,26 @@ class IntegratorExtended:
         with open(os.path.join(directory, 'ai_params.json'), 'r') as fread:
             ai_params = json.load(fread)
         
-        mask_path = os.path.join(directory, 'mask.npy')
-        if os.path.exists(mask_path):
-            mask = np.load(mask_path)
-        else:
-            mask = None
+        obj = cls(ai_params=ai_params, detector_params=detector_params, mask=None)
         
-        return cls(mask=mask, detector_params=detector_params, ai_params=ai_params)
+        mask_pattern = os.path.join(directory, 'mask.*')
+        mask_path = glob.glob(mask_pattern)
+        if len(mask_path) == 0:
+            return obj
+        if len(mask_path) == 1:            
+            mask_path, = mask_path
+            obj.set_mask(mask_path)
+        else:
+            raise RuntimeError(f'Too many files match mask pattern "{mask_pattern}"')
+        
+        return obj
     
-    def set_mask(self, mask_path: str):
-        self.mask = np.load(mask_path)
+    def set_mask(self, mask_path: str, combine_with_prev=False):
+        mask = IngegratorExtended.read_mask(mask_path)
+        if combine_with_prev and self.mask is not None:
+            self.mask = self.mask | mask
+        else:
+            self.mask = mask
     
     def integrate1d(self, saxs_2d, npt):
         q, I, sigma = self.ai.integrate1d(saxs_2d, npt=npt, mask=self.mask, error_model='poisson')
@@ -264,7 +292,7 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
            calibrant_name,
            r_beam_px,
            rot1=0, rot2=0, rot3=0, detector_name='Pilatus1M', 
-           fix: Tuple[str]=('wavelength', 'rot3'), npt: int = 1000, automask = True):
+           fix: Tuple[str]=('wavelength', 'rot3'), npt: int = 1000, mask_config=None):
     """
     Refine the detector geometry to calibrant rings, returning:
         - refined_params: [dist, poni1, poni2, rot1, rot2, rot3]
@@ -311,18 +339,32 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
 
     # Use refined geometry to integrate (q, I) - "calibrated" curve
     mask = None
-    if automask is not None:
-        if automask is True:
-            automask = {}
-        mask = calc_beam_abnormal_mask(calib_data, center_y_px, center_x_px, r_beam_px, **automask)
+    if mask_config is not None:
+        automask = None
+        if mask_config.get('auto', 'False') or (not mask_config.get('mask_path', '') and 'auto' not in mask_config):
+            automask_ops = {k: v for k, v in mask_config.items() if k not in ('auto', 'mask_path')}
+            automask = calc_beam_abnormal_mask(
+                calib_data, center_y_px, center_x_px, r_beam_px, 
+                **automask_ops)
+        
+        if mask_config.get('mask_path', ''):
+            mask = IntegratorExtended.read_mask(mask_config['mask_path'])
+        
+        if mask is not None and automask is not None:
+            mask = mask | automask
+        elif mask is None and automask is not None:
+            mask = automask
+        
+        if mask is None:
+            raise RuntimeError(f"Cannot parse mask_config:\n{mask_config}")
 
         # debug
-        print(f'Center: ({center_y_px}, {center_x_px})')
-        fig, ax = plt.subplots()
-        im = ax.imshow(mask, cmap='gray')
-        ax.set_title("Beam + Abnormal Pixels Mask")
-        # plt.show()
-        fig.savefig('debug/mask_debug.png', dpi=400)
+        # print(f'Center: ({center_y_px}, {center_x_px})')
+        # fig, ax = plt.subplots()
+        # im = ax.imshow(mask, cmap='gray')
+        # ax.set_title("Beam + Abnormal Pixels Mask")
+        # # plt.show()
+        # fig.savefig('debug/mask_debug.png', dpi=400)
     
     integrator = IntegratorExtended(
         ai_params={'wavelength': wavelength, **refined},
@@ -336,7 +378,9 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
     tth_theor = np.array(calibrant.get_2th())
     q_theor = 4 * np.pi * np.sin(tth_theor / 2) / wavelength * 1e-9
 
-    return {'integrator': integrator, 'refined': refined, 'curve_calibrated': (q_cal, I_cal, sigma), 'theoretical_peaks': q_theor}
+    return {
+        'integrator': integrator, 'refined': refined, 
+        'curve_calibrated': (q_cal, I_cal, sigma), 'theoretical_peaks': q_theor}
 
 
 def integrate_2d_to_1d(integrator, saxs_2d, npt=1000, destpath=None, metadata=None):
