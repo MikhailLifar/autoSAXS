@@ -1,0 +1,110 @@
+sphere:
+  initial_parameters:
+    R: 50.0
+    SCALE: 1.0
+    BKG: 0.01
+  pdist_commands:
+    - param: R
+    - type: LOGN
+    - param: SIG_R
+      value: 0.2
+  fit_parameters:
+    - R
+    - SCALE
+    - BKG
+    - SIG_R
+cylinder:
+  initial_parameters:
+    R: 20.0
+    L: 200.0
+    SCALE: 1.0
+    BKG: 0.01
+  pdist_commands:
+    - param: L
+    - type: LOGN
+    - param: SIG_L
+      value: 0.2
+  fit_parameters:
+    - R
+    - L
+    - SCALE
+    - BKG
+    - SIG_L
+core_shell_sphere:
+  initial_parameters:
+    R_CORE: 40.0
+    T_SH: 10.0
+    SCALE: 1.0
+    BKG: 0.01
+    SLD_CORE: 4.0e-6
+    SLD_SHELL: 2.0e-6
+    SLD_SOLV: 9.45e-7
+  pdist_commands:
+    - param: R_CORE
+    - type: LOGN
+    - param: SIG_R_CORE
+      value: 0.1
+  fit_parameters:
+    - R_CORE
+    - T_SH
+    - SCALE
+    - BKG
+    - SIG_R_CORE
+ellipsoid:
+  initial_parameters:
+    R_POLAR: 40.0
+    R_EQ: 20.0
+    SCALE: 1.0
+    BKG: 0.01
+  pdist_commands:
+    - param: R_POLAR
+    - type: LOGN
+    - param: SIG_R_POLAR
+      value: 0.2
+  fit_parameters:
+    - R_POLAR
+    - R_EQ
+    - SCALE
+    - BKG
+    - SIG_R_POLAR
+gauss_coil:
+  initial_parameters:
+    RG: 50.0
+    SCALE: 1.0
+    BKG: 0.01
+  pdist_commands: []
+  fit_parameters:
+    - RG
+    - SCALE
+    - BKG
+mass_fractal:
+  initial_parameters:
+    RG_CLUSTER: 100.0
+    D: 2.0
+    CORR_LENGTH: 10.0
+    SCALE: 1.0
+    BKG: 0.01
+  pdist_commands: []
+  fit_parameters:
+    - RG_CLUSTER
+    - D
+    - CORR_LENGTH
+    - SCALE
+    - BKG
+lamellar_ps:
+  initial_parameters:
+    D_SPACING: 100.0
+    SIGMA_D: 10.0
+    THICKNESS: 20.0
+    SLD_HEAD: 1.0e-6
+    SLD_TAIL: -0.4e-6
+    SLD_SOLV: 9.45e-7
+    SCALE: 1.0
+    BKG: 0.01
+  pdist_commands: []
+  fit_parameters:
+    - D_SPACING
+    - SIGMA_D
+    - THICKNESS
+    - SCALE
+    - BKG

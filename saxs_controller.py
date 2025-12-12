@@ -24,8 +24,8 @@ sys.path.append(os.path.expanduser('~/LLM/LLMAssistant/aiAssistantFramework'))
 # from aiAssistantFramework.lib import llm, telegram
 import controller as ai_controller
 from gui import get_pipeline_spec_gui, choose_profiles
+from polydispfit import polydispfit
 
-ATSAS_BIN_PREFIX = os.path.expanduser('~/ATSAS-3.2.1-1/bin')
 # CONFIG_FILE = "calib_config.conf"
 # CALIBRATED_GEOMETRY_PATH = 'calibrated_geometry.conf'
 ROOT_DIR = os.path.expanduser('~/KurchatovCoop')
@@ -700,6 +700,158 @@ echo "Full results saved to: $RESULTS_FILE"
         
         return dammif_subdir
     
+    def polydispfit(self, context: Context, saxs_1d_path, dest_dir, fast_forward=False):
+        polydisp_subdir = ''
+        
+        if saxs_1d_path:
+            self.interface.send_message('Polydisperse sphere fit...')
+            root, basename = os.path.split(saxs_1d_path)
+            basename, _ = os.path.splitext(basename)
+            
+            polydisp_subdir = os.path.join(dest_dir, f'polydispfit_{basename}')
+            os.makedirs(polydisp_subdir, exist_ok=True)
+            
+            fit_comparison_png = os.path.join(polydisp_subdir, f'{basename}_fit_comparison.png')
+            radius_dist_png = os.path.join(polydisp_subdir, f'{basename}_radius_distribution.png')
+            fit_data_dat = os.path.join(polydisp_subdir, f'{basename}_fit.dat')
+            
+            # Check if results exist in fast_forward mode
+            if fast_forward and all(os.path.exists(p) for p in (fit_comparison_png, radius_dist_png, fit_data_dat)):
+                self.interface.send_message(f'Debug mode: Skipping polydisperse fit for {saxs_1d_path} (results already exist)')
+            
+            else:
+                q, I, sigma, metadata_orig = read_saxs(saxs_1d_path)
+                
+                # # Get q_range from context (similar to bodies_fit)
+                # try:
+                #     first_nm, last_nm = context['polydispfit', 'q_range_nm']
+                # except (KeyError, TypeError):
+                #     # Default to full range if not specified
+                #     first_nm = q.min()
+                #     last_nm = q.max()
+                first_nm = 0.1
+                last_nm = 5.0
+                q_range = (first_nm, last_nm)
+                
+                dist_config = {
+                    "name": "gaussian",
+                    "params": {"mean": 3.0, "std": 0.5},
+                    "bounds": {"mean": (0.5, 10.0), "std": (0.05, 3.0)},
+                }
+                
+                model_name = 'sphere'
+                
+                # Perform the fit
+                fit_res = polydispfit(saxs_1d_path, model_name, dist_config, q_range)
+                
+                q_fit = fit_res["q"]
+                I_fit = fit_res["intensity"]
+                sigma_fit = fit_res["sigma"]
+                model_I = fit_res["model"]
+                scale = fit_res["scale"]
+                background = fit_res["background"]
+                chi2 = fit_res["chi2"]
+                dist_info = fit_res["distribution"]
+                opt_info = fit_res["optimizer_info"]
+                
+                # Plot 1: Fit comparison
+                self.viewer.view_curves(
+                    q_fit, I_fit, {'label': 'experimental', 'lw': 2},
+                    q_fit, model_I, {'label': f'polydisperse fit (chi2: {chi2:.5f})', 'lw': 2},
+                    sigmas=(sigma_fit, None),
+                    title=f'Polydisperse sphere fit for {basename}',
+                    xlabel='q (nm-1)',
+                    ylabel='I (a.u.)',
+                    legend=True,
+                    plotFilePath=fit_comparison_png,
+                    save=False
+                )
+                
+                # Plot 2: Radius distribution
+                dist_name = dist_info["name"].lower()
+                dist_params = dist_info["params"]
+                
+                # Choose plotting range based on fit
+                mean = dist_params.get("mean") or dist_params.get("r_mean") or dist_params.get("mu")
+                std = dist_params.get("std") or dist_params.get("sigma") or 0.2
+                R_min = max(0.01, mean - 4 * std)
+                R_max = mean + 4 * std
+                R = np.linspace(R_min, R_max, 300)
+                
+                # Calculate PDF based on distribution type
+                from scipy.special import gamma as gammafn
+                if dist_name in ("gaussian", "normal"):
+                    pdf = np.exp(-0.5 * ((R - dist_params["mean"]) / dist_params["std"]) ** 2) / (dist_params["std"] * np.sqrt(2 * np.pi))
+                elif dist_name in ("lognormal", "log-normal"):
+                    safe_R = np.maximum(R, np.finfo(float).tiny)
+                    pdf = np.exp(-(np.log(safe_R) - dist_params["mu"]) ** 2 / (2 * dist_params["sigma"] ** 2)) / (
+                        safe_R * dist_params["sigma"] * np.sqrt(2 * np.pi)
+                    )
+                elif dist_name in ("schulz", "schultz", "gamma"):
+                    z = dist_params["z"]
+                    r_mean = dist_params.get("mean", dist_params.get("r_mean"))
+                    safe_R = np.maximum(R, np.finfo(float).tiny)
+                    prefactor = ((z + 1) ** (z + 1)) / (r_mean * gammafn(z + 1))
+                    pdf = prefactor * (safe_R / r_mean) ** z * np.exp(-(z + 1) * safe_R / r_mean)
+                else:
+                    pdf = np.full_like(R, np.nan)
+                    self.interface.send_message(f'Warning: Unknown distribution type {dist_name} for visualization.')
+                
+                # Plot radius distribution
+                self.viewer.view_curves(
+                    R, pdf, {'label': f'{dist_name.capitalize()} distribution', 'lw': 2},
+                    title=f'Fitted radius distribution for {basename}',
+                    xlabel='Radius (nm)',
+                    ylabel='Probability density',
+                    legend=True,
+                    plotFilePath=radius_dist_png,
+                    save=False
+                )
+                
+                # Save fitted curve and model curve with metadata
+                fit_data_df = pd.DataFrame({
+                    'q': q_fit,
+                    'I_experimental': I_fit,
+                    'I_model': model_I,
+                    'sigma': sigma_fit if sigma_fit is not None else np.full_like(q_fit, np.nan),
+                })
+                
+                fit_metadata = {
+                    'type': 'polydisperse_fit',
+                    'parent': saxs_1d_path,
+                    'model_name': model_name,
+                    'q_range': q_range,
+                    'scale': float(scale),
+                    'background': float(background),
+                    'distribution': dist_info,
+                    'optimizer_info': opt_info,
+                    'fit_quality': {
+                        'chi2': float(chi2),
+                        'success': opt_info.get('success', False),
+                        'message': opt_info.get('message', ''),
+                        'nfev': opt_info.get('nfev', 0),
+                    },
+                    'fitted_parameters': dist_params,
+                }
+                
+                # Merge with original metadata if available
+                if metadata_orig:
+                    fit_metadata['original_metadata'] = metadata_orig
+                
+                write_data(fit_data_dat, fit_data_df, fit_metadata)
+                
+                self.interface.send_message(
+                    f'\n-- Polydisperse fit results --\n' +
+                    f'Model: {model_name}\n' +
+                    f'Distribution: {dist_name}\n' +
+                    f'Scale: {scale:.4g}\n' +
+                    f'Background: {background:.4g}\n' +
+                    f'Chi2: {chi2:.4g}\n' +
+                    f'Distribution parameters: {dist_params}\n'
+                )
+        
+        return polydisp_subdir
+    
     def ai_analysis(self, atsas_analysis_path, plot_paths, dest_dir,
                     text_model, vision_model,
                     fast_forward=False):
@@ -984,6 +1136,8 @@ echo "Full results saved to: $RESULTS_FILE"
                 if 'plots' in steps:
                     plot_paths = self.plot(context, profile_path, dest_dir=os.path.join(directory, 'plots'), fast_forward=fast_forward)
                     plot_paths = [profile_pic_path, ] + plot_paths
+                if 'polydispfit' in steps:
+                    self.polydispfit(context, profile_path, dest_dir=os.path.join(directory, 'polydispfit'), fast_forward=fast_forward)
                 if 'bodies' in steps:
                     self.bodies_fit(context, profile_path, dest_dir=os.path.join(directory, 'bodies'), fast_forward=fast_forward)
                 if 'dammif' in steps:
@@ -1064,6 +1218,12 @@ echo "Full results saved to: $RESULTS_FILE"
                 context, sub_path, dest_dir=os.path.join(directory, 'plots'), fast_forward=fast_forward)
             plot_paths = [sub_pic_path, ] + plot_paths
             context.append_path('plot', plot_paths)
+        
+        if context['fit_polydispfit']:
+            for p in context['paths', 'sub']:
+                self.polydispfit(
+                    context, p, os.path.join(directory, 'polydispfit'), fast_forward=fast_forward
+                )
         
         if context['fit_bodies']:
             for p in context['paths', 'sub']:

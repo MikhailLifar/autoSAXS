@@ -1,7 +1,8 @@
 from typing import Optional, Any, Tuple, List
-import os
-import json
+import os, re
+import json, yaml
 import glob
+import subprocess
 
 import numpy as np
 import scipy.ndimage as ndi
@@ -14,6 +15,14 @@ from pyFAI.geometryRefinement import GeometryRefinement
 from pyFAI.calibrant import CALIBRANT_FACTORY
 
 import fabio
+
+# from sasmodels.core import load_model
+# from sasmodels.fit import Fit
+import sasmodels.core
+import sasmodels.bumps_model
+import bumps.names as bn
+from bumps.fitproblem import FitProblem
+from bumps.fitters import fit
 
 import matplotlib as mpl
 import matplotlib.colors as mcolors
@@ -78,7 +87,7 @@ class IntegratorExtended:
         return obj
     
     def set_mask(self, mask_path: str, combine_with_prev=False):
-        mask = IngegratorExtended.read_mask(mask_path)
+        mask = IntegratorExtended.read_mask(mask_path)
         if combine_with_prev and self.mask is not None:
             self.mask = self.mask | mask
         else:
@@ -457,3 +466,205 @@ def subtract_buffer(
         )
     
     return q, I_sub, I_buffer_scaled, sigma_sub, sigma_buffer_scaled
+
+
+# DOES NOT WORK
+# import numpy as np
+# import yaml
+# import bumps.names as bn  # pyright: ignore[reportUnusedImport]
+# import sasmodels.core
+# from sasmodels.data import Data1D
+# from sasmodels.bumps_model import Model as SasModel, Experiment
+# from bumps.fitproblem import FitProblem
+# from bumps.fitters import fit
+
+
+# def run_bumps_fit(model_name, data_file, q_min, q_max):
+#     """
+#     Fit 1D SAXS data using sasmodels + bumps with a YAML-defined parameter set.
+
+#     The YAML file describes:
+#       - initial_parameters: starting values (YAML names are mapped to sasmodels names)
+#       - pdist_commands: optional polydispersity setup
+#       - fit_parameters: which parameters to vary
+#     """
+#     yaml_path = os.path.join(GLOBALS_DIR, 'primus_models.yml')
+
+#     # Load and crop data to requested q-range
+#     q_data, I_data, I_error, meta = read_saxs(data_file)
+#     mask = (q_data >= q_min) & (q_data <= q_max)
+#     q_data = q_data[mask]
+#     I_data = I_data[mask]
+#     I_error = I_error[mask]
+
+#     # Load model config
+#     with open(yaml_path, 'r') as f:
+#         models = yaml.safe_load(f)
+#     model_config = models[model_name]
+
+#     # Map YAML parameter names (legacy / uppercase) to sasmodels attribute names
+#     name_map = {
+#         'R': 'radius',
+#         'SIG_R': 'radius_pd',
+#         'L': 'length',
+#         'SIG_L': 'length_pd',
+#         'SCALE': 'scale',
+#         'BKG': 'background',
+#         'R_CORE': 'radius',
+#         'T_SH': 'thickness',
+#         'SIG_R_CORE': 'radius_pd',
+#         'SLD_CORE': 'sld_core',
+#         'SLD_SHELL': 'sld_shell',
+#         'SLD_SOLV': 'sld_solvent',
+#         'R_POLAR': 'radius_polar',
+#         'R_EQ': 'radius_equatorial',
+#         'SIG_R_POLAR': 'radius_polar_pd',
+#         'RG': 'rg',
+#         'RG_CLUSTER': 'radius',
+#         'D': 'fractal_dim',
+#         'CORR_LENGTH': 'correlation_length',
+#         'D_SPACING': 'd_spacing',
+#         'SIGMA_D': 'sigma_d',
+#         'THICKNESS': 'thickness',
+#         'SLD_HEAD': 'sld_head',
+#         'SLD_TAIL': 'sld_tail',
+#     }
+
+#     def to_model_name(yaml_name: str) -> str:
+#         return name_map.get(yaml_name, yaml_name.lower())
+
+#     # Build sasmodels model + bumps wrapper
+#     model_info = sasmodels.core.load_model_info(model_name)
+#     sm_model = SasModel(model_info)
+
+#     # Set initial parameters
+#     for yaml_name, value in model_config['initial_parameters'].items():
+#         m_name = to_model_name(yaml_name)
+#         if hasattr(sm_model, m_name):
+#             getattr(sm_model, m_name).value = value
+
+#     # Configure polydispersity (simple lognormal width on chosen parameter)
+#     pdist_commands = model_config.get('pdist_commands', [])
+#     if pdist_commands:
+#         param_to_pdist = None
+#         pdist_type = 'lognormal'
+#         pdist_sigma = 0.1
+#         for cmd in pdist_commands:
+#             if 'param' in cmd and 'value' not in cmd:
+#                 param_to_pdist = cmd['param']
+#             elif 'type' in cmd:
+#                 pdist_type = cmd['type'].lower()
+#             elif 'param' in cmd and 'value' in cmd:
+#                 pdist_sigma = cmd['value']
+#         if param_to_pdist:
+#             base = to_model_name(param_to_pdist)
+#             width_name = f'{base}_pd'
+#             type_name = f'{base}_pd_type'
+#             if hasattr(sm_model, width_name):
+#                 getattr(sm_model, width_name).value = pdist_sigma
+#             if hasattr(sm_model, type_name):
+#                 getattr(sm_model, type_name).value = pdist_type
+
+#     # Prepare data for bumps/sasmodels
+#     data = Data1D(q_data, I_data, I_error)
+#     data.qmin, data.qmax = q_min, q_max
+#     experiment = Experiment(data=data, model=sm_model)
+#     problem = FitProblem(experiment)
+
+#     # Decide which parameters to fit
+#     params_to_fit = model_config['fit_parameters']
+#     fit_names_mapped = [to_model_name(name) for name in params_to_fit]
+#     for par in problem._parameters:
+#         # _parameters is a list of bumps Parameter objects
+#         if par.name in fit_names_mapped:
+#             par.range(-np.inf, np.inf)  # allow to vary broadly
+#         else:
+#             par.fixed = True
+
+#     # Run LM fit (fast, deterministic)
+#     fit_result = fit(problem, method='lm')
+
+#     # Collect results mapped back to YAML names
+#     final_results = {}
+#     for yaml_name in params_to_fit:
+#         m_name = to_model_name(yaml_name)
+#         par = fit_result.par[m_name]
+#         final_results[yaml_name] = (par.value, par.stderr)
+
+#     return final_results
+
+
+# --- Example Usage ---
+# Assuming 'my_data.dat' and 'primus_models.yml' are in the same directory
+# results = run_sasview_fit('sphere', 'my_data.dat', 0.01, 0.4)
+# print(results)
+
+
+# DOES NOT WORK
+# def run_primus_fit(data_file, model_name, q_min, q_max):
+#     template_path = os.path.join(TEMPLATES_DIR, 'primus.txt') 
+#     yaml_path = os.path.join(GLOBALS_DIR, 'primus_models.yml')
+    
+#     with open(yaml_path, 'r') as f:
+#         models = yaml.safe_load(f)
+    
+#     model_config = models.get(model_name, {})
+#     if not model_config:
+#         raise RuntimeError(f'Unknown model: {model_name}')
+
+#     init_params_str = "\n".join([f"PAR {k}={v}" for k, v in model_config['initial_parameters'].items()])
+    
+#     pdist_str_list = []
+#     for cmd in model_config['pdist_commands']:
+#         if 'param' in cmd and 'value' in cmd:
+#             pdist_str_list.append(f"PAR {cmd['param']}={cmd['value']}")
+#         elif 'param' in cmd:
+#             pdist_str_list.append(f"PDIST {cmd['param']}")
+#         elif 'type' in cmd:
+#             pdist_str_list.append(f"PDIST {cmd['type']}")
+#     pdist_str = "\n".join(pdist_str_list)
+
+#     fit_params_str = "\n".join([f"FIT {p}" for p in model_config['fit_parameters']])
+
+#     with open(template_path, 'r') as f:
+#         script_template = f.read()
+
+#     primus_script = script_template.format(
+#         data_file=data_file,
+#         model=model_name,
+#         q_min=q_min,
+#         q_max=q_max,
+#         initial_parameters=init_params_str,
+#         pdist_commands=pdist_str,
+#         fit_parameters=fit_params_str
+#     )
+
+#     result = subprocess.run(
+#         os.path.join(ATSAS_BIN_PREFIX, 'primus'),
+#         input=primus_script,
+#         text=True,
+#         capture_output=True,
+#         check=True,
+#         shell=True
+#     )
+#     output = result.stdout
+
+#     results = {}
+#     param_section = False
+#     param_pattern = re.compile(r'^\s*(\w+)\s*=\s*([\d.+-eE]+)\s*\+/-\s*([\d.+-eE]+)')
+
+#     for line in output.splitlines():
+#         if "FINAL PARAMETERS" in line:
+#             param_section = True
+#             continue
+#         if param_section:
+#             match = param_pattern.match(line)
+#             if match:
+#                 param_name = match.group(1)
+#                 value = float(match.group(2))
+#                 uncertainty = float(match.group(3))
+#                 results[param_name] = (value, uncertainty)
+#             else:
+#                 break
+                
+#     return results, output

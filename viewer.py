@@ -263,7 +263,7 @@ class PLTViewer(Viewer):
 
         fig, ax = plotLines(*args, **kw)
         if sigmas is not None:
-            assert len(sigmas) <= int(len(args) // 3) and all(isinstance(s, np.ndarray) for s in sigmas)
+            assert len(sigmas) <= int(len(args) // 3) and all(isinstance(s, np.ndarray) or s is None for s in sigmas)
             for i, s in enumerate(sigmas):
                 if s is None:
                     continue

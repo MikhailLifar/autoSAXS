@@ -20,6 +20,7 @@ from aiAssistantFramework.lib import llm, telegram
 import controller as ai_controller
 
 from utils import timer
+from polydispfit import polydispfit
 from processor import *
 from interface import *
 from viewer import *
@@ -107,7 +108,107 @@ def automask_test():
         save=False)
 
 
+# def sasmodels_fit_test():
+#     data_path = 'debug/data/subtracted/sub_ihs27_sample.dat'
+#     model = 'sphere'
+
+#     # fitted, raw_output = run_primus_fit(data_path, model, q_min=0.01, q_max=0.4)
+#     fitted = run_bumps_fit(model, data_path, q_min=0.01, q_max=0.4)
+
+#     # print(f'Raw output:', raw_output)
+#     print(f'Fit results:', fitted)
+
+
+def polydispfit_test():
+    """
+    Fit a 1D SAXS dataset with a polydisperse sphere model and visualize results,
+    including the resulting distribution of sizes.
+    Uses the polydispfit function defined in polydispfit.py.
+    """
+    data_path = 'debug/data/subtracted/sub_ihs27_sample.dat'
+    model_name = 'sphere'
+    q_range = (0.01, 5.0)
+
+    # Gaussian radius distribution as a reasonable starting point
+    distribution = {
+        "name": "gaussian",
+        "params": {"mean": 3.0, "std": 0.5},
+        "bounds": {"mean": (0.5, 10.0), "std": (0.05, 3.0)},
+    }
+
+    fit_res = polydispfit(data_path, model_name, distribution, q_range)
+
+    q = fit_res["q"]
+    I = fit_res["intensity"]
+    sigma = fit_res["sigma"]
+    model_I = fit_res["model"]
+
+    # Plot the fitted SAXS profile
+    plt.figure()
+    if sigma is not None:
+        plt.errorbar(q, I, yerr=sigma, fmt='o', ms=3, lw=1, label='Data')
+    else:
+        plt.plot(q, I, 'o', ms=3, label='Data')
+    plt.plot(q, model_I, '-', lw=2, label='Polydisperse fit')
+    plt.xlabel('q (1/Å)')
+    plt.ylabel('Intensity (a.u.)')
+    plt.title('Polydisperse sphere fit')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    # --- Visualize the resulting radius distribution ---
+    dist_info = fit_res["distribution"]
+    dist_name = dist_info["name"].lower()
+    dist_params = dist_info["params"]
+
+    # Choose plotting range based on fit
+    mean = dist_params.get("mean") or dist_params.get("r_mean") or dist_params.get("mu")
+    std = dist_params.get("std") or dist_params.get("sigma") or 0.2
+    R_min = max(0.01, mean - 4 * std)
+    R_max = mean + 4 * std
+    R = np.linspace(R_min, R_max, 300)
+
+    # Define resulting 1D PDF using same logic as in polydispfit.py
+    if dist_name in ("gaussian", "normal"):
+        pdf = np.exp(-0.5 * ((R - dist_params["mean"]) / dist_params["std"]) ** 2) / (dist_params["std"] * np.sqrt(2 * np.pi))
+    elif dist_name in ("lognormal", "log-normal"):
+        safe_R = np.maximum(R, np.finfo(float).tiny)
+        pdf = np.exp(-(np.log(safe_R) - dist_params["mu"]) ** 2 / (2 * dist_params["sigma"] ** 2)) / (
+            safe_R * dist_params["sigma"] * np.sqrt(2 * np.pi)
+        )
+    elif dist_name in ("schulz", "schultz", "gamma"):
+        z = dist_params["z"]
+        r_mean = dist_params.get("mean", dist_params.get("r_mean"))
+        safe_R = np.maximum(R, np.finfo(float).tiny)
+        from scipy.special import gamma as gammafn
+        prefactor = ((z + 1) ** (z + 1)) / (r_mean * gammafn(z + 1))
+        pdf = prefactor * (safe_R / r_mean) ** z * np.exp(-(z + 1) * safe_R / r_mean)
+    else:
+        pdf = np.full_like(R, np.nan)
+        print("Unknown distribution type for visualization.")
+
+    # Plot the fitted distribution
+    plt.figure()
+    plt.plot(R, pdf, label=f'{dist_name.capitalize()} fit')
+    plt.xlabel('Radius')
+    plt.ylabel('Probability density')
+    plt.title('Fitted radius distribution')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    print("Fit summary:")
+    print(f"  scale:       {fit_res['scale']:.4g}")
+    print(f"  background:  {fit_res['background']:.4g}")
+    print(f"  chi2:        {fit_res['chi2']:.4g}")
+    print(f"  distribution params: {fit_res['distribution']}")
+
+
 if __name__ == '__main__':
     # visual_model_test()
     # view_3d_projections_test()
-    automask_test()
+    # automask_test()
+    polydispfit_test()

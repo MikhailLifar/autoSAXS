@@ -25,6 +25,13 @@ import time
 from contextlib import contextmanager
 
 
+GLOBALS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'global') 
+TEMPLATES_DIR = os.path.join(GLOBALS_DIR, 'templates')
+with open(os.path.join(GLOBALS_DIR, 'env.yml'), 'r') as fread:
+    ENV = yaml.safe_load(fread)
+ATSAS_BIN_PREFIX = ENV["ATSAS_BIN_PREFIX"]
+
+
 @contextmanager
 def timer(name="Timer"):
     """
