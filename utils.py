@@ -187,7 +187,7 @@ def get_pipeline_description(pipeline_name: str) -> str:
     Raises:
     FileNotFoundError: If the pipeline description file doesn't exist
     """
-    pipeline_file = os.path.join('repos', 'pipelines', f'{pipeline_name}.txt')
+    pipeline_file = os.path.join(REPO_DIR, 'pipelines', f'{pipeline_name}.txt')
 
     if not os.path.exists(pipeline_file):
         raise FileNotFoundError(f"Pipeline description file not found: {pipeline_file}")
