@@ -18,11 +18,11 @@ import fabio
 
 # from sasmodels.core import load_model
 # from sasmodels.fit import Fit
-import sasmodels.core
-import sasmodels.bumps_model
-import bumps.names as bn
-from bumps.fitproblem import FitProblem
-from bumps.fitters import fit
+# import sasmodels.core
+# import sasmodels.bumps_model
+# import bumps.names as bn
+# from bumps.fitproblem import FitProblem
+# from bumps.fitters import fit
 
 import matplotlib as mpl
 import matplotlib.colors as mcolors

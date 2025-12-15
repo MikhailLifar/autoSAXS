@@ -16,16 +16,17 @@ from pyFAI.io import image
 import base64
 from scipy.ndimage import gaussian_filter
 
-sys.path.append(os.path.expanduser('~/SupervisedML/repos'))
-
-from supervised_ml.whittaker_smooth import whittaker_smooth
-
-
 import time
 from contextlib import contextmanager
 
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 
-GLOBALS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'global') 
+SUPERVISED_ML_DIR = os.path.join(ROOT_DIR, 'supervised_ml')
+sys.path.append(SUPERVISED_ML_DIR)
+from supervised_ml.whittaker_smooth import whittaker_smooth
+
+GLOBALS_DIR = os.path.join(REPO_DIR, 'global') 
 TEMPLATES_DIR = os.path.join(GLOBALS_DIR, 'templates')
 with open(os.path.join(GLOBALS_DIR, 'env.yml'), 'r') as fread:
     ENV = yaml.safe_load(fread)

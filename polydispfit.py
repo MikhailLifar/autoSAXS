@@ -17,76 +17,6 @@ from scipy import optimize
 from utils import *
 
 
-def calculate_polydisperse_profile(model_name, q_fitted, distribution_func, *distribution_args):
-    """
-    Evaluate the polydisperse scattering profile for a given model and distribution.
-
-    Steps:
-    1) Load the precomputed lookup table (q grid, parameter grids, form factor grid, volume grid).
-    2) Restrict both the experimental q range and the table to their overlap.
-    3) Interpolate the form factor on the combined (q, parameters) grid.
-    4) Compute numerator = ∫ D(param) V(param)^2 P(q,param) dparam.
-       Compute denominator = ∫ D(param) V(param)^2 dparam.
-       Return numerator/denominator for each q.
-    """
-    file_path = os.path.join(GLOBALS_DIR, 'tabular', f'{model_name}.npz')
-    with np.load(file_path, allow_pickle=True) as data:
-        P_precalc = data['form_factor_data']
-        q_precalc = data['q_values']
-        param_grids = [data[f'param_{i+1}_values'] for i in range(len(data.files) - 3)] # Adjusted index
-        volume_grid = data['volume_grid'] # <-- CORRECTLY LOADED
-
-    q_fitted_min, q_fitted_max = q_fitted.min(), q_fitted.max()
-    q_precalc_min, q_precalc_max = q_precalc.min(), q_precalc.max()
-
-    q_min_new = max(q_fitted_min, q_precalc_min)
-    q_max_new = min(q_fitted_max, q_precalc_max)
-
-    assert q_min_new < q_max_new, "No overlap between fitted and precalculated q ranges!"
-
-    q_mask_fitted = (q_fitted >= q_min_new) & (q_fitted <= q_max_new)
-    q_mask_precalc = (q_precalc >= q_min_new) & (q_precalc <= q_max_new)
-
-    q_fitted_shrunk = q_fitted[q_mask_fitted]
-    q_precalc_shrunk = q_precalc[q_mask_precalc]
-    P_shrunk = P_precalc[q_mask_precalc]
-
-    # Use the shrunk q-range for everything downstream
-    q_fitted = q_fitted_shrunk
-
-    # Interpolator over q + parameter grids
-    interpolator = RegularGridInterpolator(
-        (q_precalc_shrunk, *param_grids),
-        P_shrunk,
-        method='linear',
-        bounds_error=False,
-        fill_value=0.0,
-    )
-
-    # Build full mesh for interpolation: shape (len(q), *param_grid_shapes)
-    mesh = np.meshgrid(q_fitted, *param_grids, indexing='ij')
-    points = np.stack([m.ravel() for m in mesh], axis=-1)
-    P_q_interp_grid = interpolator(points).reshape(mesh[0].shape)
-
-    # Distribution evaluated on parameter grids
-    D_grid = distribution_func(*param_grids, *distribution_args)
-    V_grid_sq = volume_grid**2
-
-    # Denominator: ∫ D * V^2 dparams
-    integrand_denominator = D_grid * V_grid_sq
-    denominator = integrand_denominator
-    for i in range(len(param_grids)):
-        denominator = np.trapz(denominator, param_grids[i], axis=0)
-
-    # Numerator: ∫ D * V^2 * P(q, params) dparams
-    integrand_numerator = D_grid * V_grid_sq * P_q_interp_grid
-    numerator = integrand_numerator
-    for i in range(len(param_grids)):
-        numerator = np.trapz(numerator, param_grids[i], axis=1)
-
-    return numerator / denominator
-
-
 def polydispfit(data_path, model_name, distribution: Dict, q_fit_range: Tuple[float, float]):
     """
     Fit 1D SAXS data by optimizing polydisperse distribution parameters.
@@ -239,6 +169,76 @@ def polydispfit(data_path, model_name, distribution: Dict, q_fit_range: Tuple[fl
         "metadata": metadata,
         "optimizer_info": {"success": opt.success, "message": opt.message, "nfev": opt.nfev},
     }
+
+
+def calculate_polydisperse_profile(model_name, q_fitted, distribution_func, *distribution_args):
+    """
+    Evaluate the polydisperse scattering profile for a given model and distribution.
+
+    Steps:
+    1) Load the precomputed lookup table (q grid, parameter grids, form factor grid, volume grid).
+    2) Restrict both the experimental q range and the table to their overlap.
+    3) Interpolate the form factor on the combined (q, parameters) grid.
+    4) Compute numerator = ∫ D(param) V(param)^2 P(q,param) dparam.
+       Compute denominator = ∫ D(param) V(param)^2 dparam.
+       Return numerator/denominator for each q.
+    """
+    file_path = os.path.join(GLOBALS_DIR, 'tabular', f'{model_name}.npz')
+    with np.load(file_path, allow_pickle=True) as data:
+        P_precalc = data['form_factor_data']
+        q_precalc = data['q_values']
+        param_grids = [data[f'param_{i+1}_values'] for i in range(len(data.files) - 3)] # Adjusted index
+        volume_grid = data['volume_grid'] # <-- CORRECTLY LOADED
+
+    q_fitted_min, q_fitted_max = q_fitted.min(), q_fitted.max()
+    q_precalc_min, q_precalc_max = q_precalc.min(), q_precalc.max()
+
+    q_min_new = max(q_fitted_min, q_precalc_min)
+    q_max_new = min(q_fitted_max, q_precalc_max)
+
+    assert q_min_new < q_max_new, "No overlap between fitted and precalculated q ranges!"
+
+    q_mask_fitted = (q_fitted >= q_min_new) & (q_fitted <= q_max_new)
+    q_mask_precalc = (q_precalc >= q_min_new) & (q_precalc <= q_max_new)
+
+    q_fitted_shrunk = q_fitted[q_mask_fitted]
+    q_precalc_shrunk = q_precalc[q_mask_precalc]
+    P_shrunk = P_precalc[q_mask_precalc]
+
+    # Use the shrunk q-range for everything downstream
+    q_fitted = q_fitted_shrunk
+
+    # Interpolator over q + parameter grids
+    interpolator = RegularGridInterpolator(
+        (q_precalc_shrunk, *param_grids),
+        P_shrunk,
+        method='linear',
+        bounds_error=False,
+        fill_value=0.0,
+    )
+
+    # Build full mesh for interpolation: shape (len(q), *param_grid_shapes)
+    mesh = np.meshgrid(q_fitted, *param_grids, indexing='ij')
+    points = np.stack([m.ravel() for m in mesh], axis=-1)
+    P_q_interp_grid = interpolator(points).reshape(mesh[0].shape)
+
+    # Distribution evaluated on parameter grids
+    D_grid = distribution_func(*param_grids, *distribution_args)
+    V_grid_sq = volume_grid**2
+
+    # Denominator: ∫ D * V^2 dparams
+    integrand_denominator = D_grid * V_grid_sq
+    denominator = integrand_denominator
+    for i in range(len(param_grids)):
+        denominator = np.trapz(denominator, param_grids[i], axis=0)
+
+    # Numerator: ∫ D * V^2 * P(q, params) dparams
+    integrand_numerator = D_grid * V_grid_sq * P_q_interp_grid
+    numerator = integrand_numerator
+    for i in range(len(param_grids)):
+        numerator = np.trapz(numerator, param_grids[i], axis=1)
+
+    return numerator / denominator
 
 
 def precalculate_form_factor(form_factor, volume_func, q_space, *parameter_spaces, save_path):

@@ -14,7 +14,8 @@ from collections import defaultdict
 import ase
 from ase.geometry import get_distances
 
-sys.path.append(os.path.expanduser('~/SupervisedML/repos'))
+from utils import SUPERVISED_ML_DIR
+sys.path.append(SUPERVISED_ML_DIR)
 from supervised_ml.plot_util import *
 
 from utils import (

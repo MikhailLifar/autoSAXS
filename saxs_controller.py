@@ -17,19 +17,19 @@ import seaborn as sns
 
 from ase.io import read
 
-sys.path.append(os.path.expanduser('~/LLM/LLMAssistant'))
-sys.path.append(os.path.expanduser('~/LLM/LLMAssistant/aiAssistantFramework'))
+# sys.path.append(os.path.expanduser('~/LLM/LLMAssistant'))
+# sys.path.append(os.path.expanduser('~/LLM/LLMAssistant/aiAssistantFramework'))
 
 # from aiAssistantFramework import lib as ai_lib
 # from aiAssistantFramework.lib import llm, telegram
-import controller as ai_controller
+# import controller as ai_controller
 from gui import get_pipeline_spec_gui, choose_profiles
 from polydispfit import polydispfit
 
 # CONFIG_FILE = "calib_config.conf"
 # CALIBRATED_GEOMETRY_PATH = 'calibrated_geometry.conf'
-ROOT_DIR = os.path.expanduser('~/KurchatovCoop')
-PROMPTS_DIR = os.path.join(ROOT_DIR, 'repos', 'prompts')
+
+PROMPTS_DIR = os.path.join(REPO_DIR, 'prompts')
 LATEST_STEPS_PATH = os.path.join(ROOT_DIR, 'temp', 'latest_steps.yml')
 DEBUG = True
 
@@ -582,7 +582,7 @@ echo "Full results saved to: $RESULTS_FILE"
                     last_chnl = np.argmin(np.abs(q - last_nm)) + 1
                 assert first_chnl is not None and last_chnl is not None
 
-                print(f'DEBUG - how BODIES is called: {bodies_call} --prefix={bodies_prefix} --first={first_chnl} --last={last_chnl} {saxs_1d_path}')
+                # print(f'DEBUG - how BODIES is called: {bodies_call} --prefix={bodies_prefix} --first={first_chnl} --last={last_chnl} {saxs_1d_path}')
                 # os.system(f"{bodies_call} --prefix={bodies_prefix} {saxs_1d_path} --first={first_chnl} --last={last_chnl}")
                 os.system(f"{bodies_call} --prefix={bodies_prefix} {saxs_1d_path}")
 
