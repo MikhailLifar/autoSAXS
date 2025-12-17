@@ -301,7 +301,7 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
            calibrant_name,
            r_beam_px,
            rot1=0, rot2=0, rot3=0, detector_name='Pilatus1M', 
-           fix: Tuple[str]=('wavelength', 'rot3'), npt: int = 1000, mask_config=None):
+           fix: Tuple[str]=('wavelength', 'rot3'), npt: int = 1000, mask_path=None, mask_config=None):
     """
     Refine the detector geometry to calibrant rings, returning:
         - refined_params: [dist, poni1, poni2, rot1, rot2, rot3]
@@ -349,20 +349,23 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
     # Use refined geometry to integrate (q, I) - "calibrated" curve
     mask = None
     if mask_config is not None:
+        mode = mask_config['mode']
+        
         automask = None
-        if mask_config.get('auto', 'False') or (not mask_config.get('mask_path', '') and 'auto' not in mask_config):
-            automask_ops = {k: v for k, v in mask_config.items() if k not in ('auto', 'mask_path')}
+        if mode in ['auto', 'combined']:
+            automask_ops = {k: v for k, v in mask_config.items() if k != 'mode'}
             automask = calc_beam_abnormal_mask(
                 calib_data, center_y_px, center_x_px, r_beam_px, 
                 **automask_ops)
         
-        if mask_config.get('mask_path', ''):
-            mask = IntegratorExtended.read_mask(mask_config['mask_path'])
+        if mode in ['from_file', 'combined']:
+            assert mask_path is not None
+            mask = IntegratorExtended.read_mask(mask_path)
         
-        if mask is not None and automask is not None:
-            mask = mask | automask
-        elif mask is None and automask is not None:
+        if mode == 'auto':
             mask = automask
+        elif mode == 'combined':
+            mask = mask | automask
         
         if mask is None:
             raise RuntimeError(f"Cannot parse mask_config:\n{mask_config}")

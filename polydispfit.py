@@ -171,7 +171,10 @@ def polydispfit(data_path, model_name, distribution: Dict, q_fit_range: Tuple[fl
     }
 
 
-def calculate_polydisperse_profile(model_name, q_fitted, distribution_func, *distribution_args):
+def calculate_polydisperse_profile(
+    model_name, q_fitted, distribution_func, *distribution_args,
+    use_precalculated=True,
+    ):
     """
     Evaluate the polydisperse scattering profile for a given model and distribution.
 
@@ -183,12 +186,28 @@ def calculate_polydisperse_profile(model_name, q_fitted, distribution_func, *dis
        Compute denominator = ∫ D(param) V(param)^2 dparam.
        Return numerator/denominator for each q.
     """
+    assert model_name == 'sphere', 'Currently only sphere model is supported'
     file_path = os.path.join(GLOBALS_DIR, 'tabular', f'{model_name}.npz')
-    with np.load(file_path, allow_pickle=True) as data:
-        P_precalc = data['form_factor_data']
-        q_precalc = data['q_values']
-        param_grids = [data[f'param_{i+1}_values'] for i in range(len(data.files) - 3)] # Adjusted index
-        volume_grid = data['volume_grid'] # <-- CORRECTLY LOADED
+    if use_precalculated and os.path.exists(file_path):
+        with np.load(file_path, allow_pickle=True) as data:
+            P_precalc = data['form_factor_data']
+            q_precalc = data['q_values']
+            param_grids = [data[f'param_{i+1}_values'] for i in range(len(data.files) - 3)] # Adjusted index
+            volume_grid = data['volume_grid'] # <-- CORRECTLY LOADED
+    else:
+        q_space = (0.01, 10.0, 1000)
+        if model_name == 'sphere':
+            form_factor = sphere_form_factor_vectorized
+            volume_func = sphere_volume
+            parameter_spaces = [(0.01, 10.0, 1000), ]
+        # elif model_name == 'ellipsoid':
+        #     form_factor = sphere_form_factor_vectorized
+        #     volume_func = sphere_volume
+        #     parameter_spaces = []
+        else:
+            raise ValueError(f'Unsupported model name: "{model_name}"')
+        P_precalc, volume_grid, q_precalc, param_grids = calculate_form_factor(
+            form_factor, volume_func, q_space, *parameter_spaces, save_path=file_path)
 
     q_fitted_min, q_fitted_max = q_fitted.min(), q_fitted.max()
     q_precalc_min, q_precalc_max = q_precalc.min(), q_precalc.max()
@@ -241,7 +260,7 @@ def calculate_polydisperse_profile(model_name, q_fitted, distribution_func, *dis
     return numerator / denominator
 
 
-def precalculate_form_factor(form_factor, volume_func, q_space, *parameter_spaces, save_path):
+def calculate_form_factor(form_factor, volume_func, q_space, *parameter_spaces, save_path=None):
     """
     Calculates and saves a multi-dimensional form factor lookup table with metadata.
     This version includes pre-calculating and saving the volume grid.
@@ -261,20 +280,20 @@ def precalculate_form_factor(form_factor, volume_func, q_space, *parameter_space
     volume_grid = volume_func(*param_grids)
     print("Volume grid calculation complete.")
 
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    
-    save_dict = {
-        'form_factor_data': P_q_params, 
-        'q_values': q,
-        'volume_grid': volume_grid  # <-- ADD THIS
-    }
-    for i, param_array in enumerate(param_arrays):
-        save_dict[f'param_{i+1}_values'] = param_array
-        
-    np.savez_compressed(save_path, **save_dict)
-    print(f"Lookup table and metadata saved to {save_path}")
+    if save_path is not None:
+        assert save_path.endswith('.npz')
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        save_dict = {
+            'form_factor_data': P_q_params, 
+            'q_values': q,
+            'volume_grid': volume_grid  # <-- ADD THIS
+        }
+        for i, param_array in enumerate(param_arrays):
+            save_dict[f'param_{i+1}_values'] = param_array
+        np.savez_compressed(save_path, **save_dict)
+        print(f"Lookup table and metadata saved to {save_path}")
 
-    return P_q_params
+    return P_q_params, volume_grid, q, param_arrays
 
 
 def sphere_form_factor_vectorized(q, R_grid):
@@ -345,7 +364,7 @@ if __name__ == '__main__':
     save_path_sphere = os.path.join(GLOBALS_DIR, 'tabular', 'sphere.npz')
 
     # --- Run the pre-calculation ---
-    sphere_table = precalculate_form_factor(
+    sphere_table = calculate_form_factor(
         sphere_form_factor_vectorized, sphere_volume,
         q_space, radius_space, # Note: this is a single tuple
         save_path=save_path_sphere

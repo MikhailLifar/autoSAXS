@@ -481,6 +481,34 @@ def calc_chi2(I0, I1, sigma_exp):
     return 1 / (I0.shape[0] - 1) * np.sum( ((I0 - I1) / sigma_exp) ** 2 )
 
 
+##### STRING UTILS ######
+
+
+def map_sample_files_to_buffer_files(sample_paths, buffer_paths):
+    """
+    Align sample and buffer 1D paths by base name, matching sample name containing buffer name
+    name convention - buffer path ends with "_buffer*.ext*", sample path with "_sample*.ext*"
+    """
+    aligned_pairs = []
+    not_all_paired = False
+    overlapped = False
+    for s_p in sample_paths:
+        _, s_ext = os.path.splitext(os.path.basename(s_p))
+        s_base = os.path.basename(s_p).replace(f'_sample{s_ext}', '')
+        for b_p in buffer_paths:
+            _, b_ext = os.path.splitext(os.path.basename(b_p))
+            b_base = os.path.basename(b_p).replace(f'_buffer{b_ext}', '')
+            if b_base in s_base:
+                if aligned_pairs:
+                    prev_s_p, _ = aligned_pairs[-1]
+                    if prev_s_p == s_p:
+                        overlapped = True
+                aligned_pairs.append((s_p, b_p))
+        if not aligned_pairs or aligned_pairs[-1][0] != s_p:
+            not_all_paired = True
+    return {'aligned_pairs': aligned_pairs, 'overlapped': overlapped, 'not_all_paired': not_all_paired}
+
+
 ##### DENSITY AND ISOSURFACE CALCULATION UTILS ######
 
 

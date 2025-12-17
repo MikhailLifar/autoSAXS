@@ -237,8 +237,9 @@ class Controller:
             self.viewer.view_refined_curve(refine_res['curve_calibrated'], refine_res['theoretical_peaks'])
         return refine_res
 
-    def autocalib(self, calibrant_path, context: Context, mask_config, fast_forward=False):
+    def autocalib(self, calibrant_path, mask_path, context: Context, fast_forward=False):
         directory = context.directory
+        assert directory is not None
         
         # Check if calibration results exist in debug mode
         calibration_results_file = os.path.join(directory, 'calibration.png')
@@ -248,7 +249,7 @@ class Controller:
         if fast_forward and refined_config_exists and all(
             os.path.exists(p) for p in (calibration_results_file, integrator_subd)
         ):
-            self.interface.send_message('Fast-forward mode: Skipping calibration (results already exist)')
+            self.interface.send_message('Fast-forward: Skipping calibration (results already exist)')
             refined = context['refined']
             integrator = IntegratorExtended.from_disk(integrator_subd)
             return {'integrator': integrator, 'refined': refined}
@@ -289,7 +290,8 @@ class Controller:
                 'center_y_px': center_step_ret['center_y_px'],
                 'center_x_px': center_step_ret['center_x_px'],
                 'calibrant_name': calibrant_name,
-                'mask_config': mask_config,
+                'mask_path': mask_path,
+                'mask_config': context['mask_config'],
             })
             self.interface.send_message('    Geometry refinement...')
             refine_step_ret = self.geometry_refinement_step(
@@ -335,7 +337,7 @@ class Controller:
             
             # Check if integration results exist in debug mode
             if fast_forward and os.path.exists(int_path):
-                self.interface.send_message(f'Debug mode: Skipping integration for {to_int_path} (results already exist)')
+                self.interface.send_message(f'Fast-forward: Skipping integration for {to_int_path} (results already exist)')
             else:
                 integrate_2d_to_1d(ai, read_from_tiff(to_int_path), destpath=int_path,
                                     metadata=metadata)
@@ -358,7 +360,7 @@ class Controller:
             
             # Check if subtraction results exist in debug mode
             if fast_forward and all(os.path.exists(p) for p in (sub_path, diff_plot_path, sub_plot_path)):
-                self.interface.send_message(f'Debug mode: Skipping subtraction for {to_sub_path} (results already exist)')
+                self.interface.send_message(f'Fast-forward: Skipping subtraction for {to_sub_path} (results already exist)')
                 
             else:
                 _, I_sub, I_buff_scaled, sigma_sub, sigma_buff_scaled = subtract_buffer(
@@ -400,7 +402,7 @@ class Controller:
             
             # Check if analysis results exist in debug mode
             if fast_forward and all(os.path.exists(pp) for pp in (results_file, gnom_file)):
-                self.interface.send_message(f'Debug mode: Skipping analysis for {to_analyze_path} (results already exist)')
+                self.interface.send_message(f'Fast-forward: Skipping analysis for {to_analyze_path} (results already exist)')
             
             else:            
                 os.system(f'''INPUT_FILE={to_analyze_path}
@@ -466,10 +468,6 @@ echo "Molecular weight estimates:"
 # echo "  From Porod volume: $MW_POROD g/mol"
 echo "  From Rg (globular): $MW_RG kDa"
 echo ""
-echo "Plots"
-echo "  - Guinier plot"
-echo "  - Kratky plot"
-echo ""
 echo "Full results saved to: $RESULTS_FILE"
 ''')
         
@@ -491,7 +489,7 @@ echo "Full results saved to: $RESULTS_FILE"
             if fast_forward and all(os.path.exists(p) for p in (
                 # sub_plot_path, 
                 guinier_plot_path, kratky_plot_path, loglog_plot_path)):
-                self.interface.send_message(f'Debug mode: Skipping plots for {to_plot_path} (results already exist)')
+                self.interface.send_message(f'Fast-forward: Skipping plots for {to_plot_path} (results already exist)')
 
             else:
                 # plots
@@ -569,7 +567,7 @@ echo "Full results saved to: $RESULTS_FILE"
             )
             
             if fast_forward and exists_bodies and os.path.exists(bodies_fits_png):
-                self.interface.send_message(f'Debug mode: Skipping BODIES fit for {saxs_1d_path} (results already exist)')
+                self.interface.send_message(f'Fast-forward: Skipping BODIES fit for {saxs_1d_path} (results already exist)')
 
             else:
                 q, I, sigma, _ = read_saxs(saxs_1d_path)
@@ -587,6 +585,15 @@ echo "Full results saved to: $RESULTS_FILE"
                 os.system(f"{bodies_call} --prefix={bodies_prefix} {saxs_1d_path}")
 
                 to_plot = [q, I, {'label': 'exp', 'lw': 4}]
+
+                fit_failed = all(
+                    not os.path.exists(os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir'))
+                    for shape in BODIES_SHAPES
+                )
+                if fit_failed:
+                    self.interface.send_message(f'BODIES fit for {saxs_1d_path} failed (resulting files were not found, probably integration or data cleaning error)')
+                    return bodies_subdir
+
                 for shape in BODIES_SHAPES:
                     fir_path = os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')
                     # cif_path = os.path.join(bodies_subdir, f'bodies_fit-{shape}-damstart.cif')
@@ -655,7 +662,7 @@ echo "Full results saved to: $RESULTS_FILE"
             exists_dammif = all(os.path.exists(os.path.join(dammif_subdir, f'dammif-{i}.fir')) for i in range(dammif_reps_num))
             
             if fast_forward and exists_dammif and os.path.exists(dammif_fits_png):
-                self.interface.send_message(f'Debug mode: Skipping DAMMIF fit for {gnom_path} (results already exist)')
+                self.interface.send_message(f'Fast-forward: Skipping DAMMIF fit for {gnom_path} (results already exist)')
             
             else:
                 os.system(f'for i in `seq 1 {dammif_reps_num}`; do {dammif_call} --prefix={dammif_prefix}-$i --mode=fast {gnom_path}; done')
@@ -717,7 +724,7 @@ echo "Full results saved to: $RESULTS_FILE"
             
             # Check if results exist in fast_forward mode
             if fast_forward and all(os.path.exists(p) for p in (fit_comparison_png, radius_dist_png, fit_data_dat)):
-                self.interface.send_message(f'Debug mode: Skipping polydisperse fit for {saxs_1d_path} (results already exist)')
+                self.interface.send_message(f'Fast-forward: Skipping polydisperse fit for {saxs_1d_path} (results already exist)')
             
             else:
                 q, I, sigma, metadata_orig = read_saxs(saxs_1d_path)
@@ -870,7 +877,7 @@ echo "Full results saved to: $RESULTS_FILE"
             if fast_forward and os.path.exists(context_path):
                 with open(context_path, 'r') as fread:
                     sample_context = fread.read()
-                self.interface.send_message(f'Debug mode: Skipping visual analysis for {basename} (results already exist)')
+                self.interface.send_message(f'Fast-forward: Skipping visual analysis for {basename} (results already exist)')
             
             else:
                 sample_context = []
@@ -912,7 +919,7 @@ echo "Full results saved to: $RESULTS_FILE"
             if fast_forward and os.path.exists(llm_answer_path):
                 with open(llm_answer_path, 'r') as fread:
                     answer = fread.read()
-                self.interface.send_message(f'Debug mode: Skipping LLM analysis for {basename} (results already exist)')
+                self.interface.send_message(f'Fast-forward: Skipping LLM analysis for {basename} (results already exist)')
 
             else:
                 context = sample_context
@@ -930,30 +937,47 @@ echo "Full results saved to: $RESULTS_FILE"
         
         return answer, llm_answer_path
 
-    def pipeline_interactive(self, fast_forward=False):
+    def pipeline_interactive(self, all_from_config=False, config_path: Optional[str] = None, fast_forward=False):
+        """
+        Parameters
+        ----------
+        all_from_config: bool
+            set to True when trating as part of Tango Control System
+        """
         # TODO currently the pipeline is oriented on proteins. Since the pipeline for other samples is sort of similar, I think, there will be only one pipeline in the end
 
         model = 'GLM-4.6'
         # model = 'DeepSeek-V3.1'
         vision_model = 'GLM-4.5V'
 
-        pipeline_choice, steps = get_pipeline_spec_gui()
-        save_latest_steps(pipeline_choice, steps)
+        context = Context()
 
-        descr, descr_path = get_pipeline_description(pipeline_choice)
-        # print(descr)
-        directory = self.interface.ask_for_file('Write a path to a directory for your data')
+        if all_from_config:
+            assert config_path is not None
+            context.set_config(config_path)
+            
+            steps = context['steps']
+            directory = context['directory']
+            context.set_directory(directory)
 
-        config_path, = self.interface.wait_for_file(
-            directory, 
-            query='Upload config file config.conf to your directory',
-            filepattern='config.conf',
-            obligatory=True,
-            skip_if_exists=True, allow_same_time=(1, 1)
-        )
+        else:
+            pipeline_choice, steps = get_pipeline_spec_gui()
+            save_latest_steps(pipeline_choice, steps)
 
-        context = Context(directory, descr_path, interface=self.interface)
-        
+            # descr, descr_path = get_pipeline_description(pipeline_choice)
+            # print(descr)
+            directory = self.interface.ask_for_file('Write a path to a directory for your data')
+            context.set_directory(directory)
+
+            config_path, = self.interface.wait_for_file(
+                directory, 
+                query='Upload config file config.conf to your directory',
+                filepattern='config.conf',
+                obligatory=True,
+                skip_if_exists=True, allow_same_time=(1, 1)
+            )
+            context.set_config(config_path)
+
         if 'calibration' in steps:
             calibrant_path, = self.interface.wait_for_file(
                 directory, 
@@ -961,22 +985,26 @@ echo "Full results saved to: $RESULTS_FILE"
                 filepattern='raw/*_calib.tif',
                 skip_if_exists=True, allow_same_time=(1, 1)
             )
-            mask_config = {'auto': True}
-            mask_op = self.interface.ask_question(
-                "How do you want to set the mask for calibration?", 
-                options={'a': 'automask', 'b': 'set your mask', 'c': 'combine your mask with automatic mask'})
-            if mask_op in 'bc':
+            context.append_path('calib_2d', calibrant_path)
+            if not all_from_config:
+                mask_op = self.interface.ask_question(
+                    "How do you want to set the mask for calibration?", 
+                    options={'a': 'automask', 'f': 'from file', 'c': 'combine your mask with automatic mask'})
+                mapping = {'a': 'auto', 'f': 'from_file', 'c': 'combined'}
+                context.update_config('mask_config', values={'mode': mapping[mask_op]})
+            mask_path = None
+            if context['mask_config', 'mode'] in ['from_file', 'combined']:
                 mask_path, = self.interface.wait_for_file(
                     directory, 
                     query='Upload mask* file with mask '
-                          '(supported extensions are .msk, .npy, .txt)',
+                        '(supported extensions are .msk, .npy, .txt)',
                     filepattern='mask*',
+                    obligatory=True,
                     skip_if_exists=True, allow_same_time=(1, 1)
                 )
-                mask_config['mask_path'] = mask_path
-                mask_config['auto'] = mask_op == 'c'
+                context.append_path('calib_mask', mask_path)
             res_calib = self.autocalib(
-                calibrant_path, context=context, mask_config=mask_config, fast_forward=fast_forward)
+                calibrant_path, mask_path, context=context, fast_forward=fast_forward)
             ai = res_calib['integrator']
         
         if 'integration' in steps and 'calibration' not in steps:
@@ -1005,23 +1033,43 @@ echo "Full results saved to: $RESULTS_FILE"
                     self.interface.send_message(f'Wrong "{ai_subdir}" directory structure. Reupload')
             ai = IntegratorExtended.from_disk(os.path.join(directory, ai_subdir))
 
-        run_load_cycle = True
+        run_process_cycle = True
         iteration_number = 0
-        while run_load_cycle:
-            buffer_path_1d = sample_path_1d = None
+        while run_process_cycle:
+            buffer_paths_1d = sample_paths_1d = None
             basename_list = []
             if 'integration' in steps:
-                buffer_paths = self.interface.wait_for_file(
-                    directory,
-                    query='Upload buffer 2d data to "raw" subdirectory raw/*_buffer.tif',
-                    filepattern='raw/*_buffer.tif',
-                    skip_if_exists=iteration_number==0)
+                fallback_delay = 10.0
+                buffer_paths = []
+                run_load_cycle = True
+                while run_load_cycle:
+                    if 'subtraction' in steps:
+                        buffer_paths = self.interface.wait_for_file(
+                            directory,
+                            query='Upload buffer 2d data to "raw" subdirectory raw/*_buffer.tif',
+                            filepattern='raw/*_buffer.tif',
+                            skip_if_exists=True, except_prev_paths=False,
+                            )     
+                    sample_paths = self.interface.wait_for_file(
+                        directory, 
+                        query='Upload sample 2d data to "raw" subdirectory raw/*_sample.tif',
+                        filepattern='raw/*_sample.tif',
+                        skip_if_exists=True, except_prev_paths=context['paths', 'sample_2d'])
+                    
+                    run_load_cycle = False
+                    if 'subtraction' in steps:
+                        alignment_res = map_sample_files_to_buffer_files(sample_paths, buffer_paths)
+                        run_load_cycle = alignment_res['overlapped'] or alignment_res['not_all_paired']
+                        if alignment_res['overlapped']:
+                            self.interface.send_message("For some sample files more than one buffer files were found. Are you following name conventions?")
+                        if alignment_res['not_all_paired']:
+                            self.interface.send_message("Not for all sample files buffer files were found")
+                        if run_load_cycle:
+                            self.interface.send_message(f"Make sure that you follow the name convention and that for each sample image there is exactly one buffer image. This error can also disappear buy itself for the next iteration")
+                            time.sleep(fallback_delay)
+                        else:
+                            buffer_paths = [b_p for _, b_p in alignment_res['aligned_pairs']]
                 
-                sample_paths = self.interface.wait_for_file(
-                    directory, 
-                    query='Upload sample 2d data to "raw" subdirectory raw/*_sample.tif',
-                    filepattern='raw/*_sample.tif',
-                    skip_if_exists=iteration_number==0)
                 if sample_paths:
                     basename_list = [
                         os.path.splitext(os.path.split(sample_path)[1])[0]
@@ -1044,18 +1092,40 @@ echo "Full results saved to: $RESULTS_FILE"
                     ]
                 # print('DEBUG: integration finished')
 
+                # add only processed paths to context
+                # though, in pipeline_batch all paths are saved to paths variable, not just inprocessed...
+                context.extend_paths('buffer_2d', buffer_paths)
+                context.extend_paths('sample_2d', sample_paths)
+
             if 'subtraction' in steps and 'integration' not in steps:
-                buffer_paths_1d = self.interface.wait_for_file(
-                    directory,
-                    query='Upload buffer 1d data to "averaged" subdirectory averaged/*_buffer.dat', 
-                    filepattern='averaged/*_buffer.dat',
-                    skip_if_exists=iteration_number==0
-                    )            
-                sample_paths_1d = self.interface.wait_for_file(
-                    directory,
-                    query='Upload sample 1d data to "averaged" subdirectory averaged/*_sample.dat', 
-                    filepattern='averaged/*_sample.dat',
-                    skip_if_exists=iteration_number==0)
+                fallback_delay = 10.0
+                buffer_paths = []
+                run_load_cycle = True
+                while run_load_cycle:
+                    buffer_paths_1d = self.interface.wait_for_file(
+                        directory,
+                        query='Upload buffer 1d data to "averaged" subdirectory averaged/*_buffer.dat', 
+                        filepattern='averaged/*_buffer.dat',
+                        skip_if_exists=True, except_prev_paths=False
+                        )            
+                    sample_paths_1d = self.interface.wait_for_file(
+                        directory,
+                        query='Upload sample 1d data to "averaged" subdirectory averaged/*_sample.dat', 
+                        filepattern='averaged/*_sample.dat',
+                        skip_if_exists=True, except_prev_paths=context['paths', 'sample_1d'])
+                    
+                    alignment_res = map_sample_files_to_buffer_files(sample_paths_1d, buffer_paths_1d)
+                    run_load_cycle = alignment_res['overlapped'] or alignment_res['not_all_paired']
+                    if alignment_res['overlapped']:
+                        self.interface.send_message("For some sample files more than one buffer files were found. Are you following name conventions?")
+                    if alignment_res['not_all_paired']:
+                        self.interface.send_message("Not for all sample files buffer files were found")
+                    if run_load_cycle:
+                        self.interface.send_message(f"Make sure that you follow the name convention and that for each sample image there is exactly one buffer image. This error can also disappear by itself for the next iteration")
+                        time.sleep(fallback_delay)
+                    else:
+                        buffer_paths_1d = [b_p for _, b_p in alignment_res['aligned_pairs']]
+
                 if sample_paths_1d:
                     basename_list = [
                         os.path.splitext(os.path.split(sample_path)[1])[0]
@@ -1067,16 +1137,9 @@ echo "Full results saved to: $RESULTS_FILE"
             if 'subtraction' in steps:
                 # print('DEBUG: subtraction started')
 
-                # Align sample and buffer 1D paths by base name, matching sample name containing buffer name
-                # name convention - buffer path ends with "_buffer.data", sample path wiht "_sample.dat"
-                aligned_pairs = []
-                for sample_path in sample_paths_1d:
-                    sample_base = os.path.basename(sample_path).replace('_sample.dat', '')
-                    for buffer_path in buffer_paths_1d:
-                        buffer_base = os.path.basename(buffer_path).replace('_buffer.dat', '')
-                        if buffer_base in sample_base:
-                            aligned_pairs.append((sample_path, buffer_path))
-                assert len(aligned_pairs) == len(sample_paths_1d)
+                alignment_res = map_sample_files_to_buffer_files(sample_paths_1d, buffer_paths_1d)
+                aligned_pairs = alignment_res['aligned_pairs']
+                assert not (alignment_res['overlapped'] or alignment_res['not_all_paired'])
 
                 for s_p, b_p in aligned_pairs:
                     profile_path, profile_pic_path = self.subtract(
@@ -1084,6 +1147,9 @@ echo "Full results saved to: $RESULTS_FILE"
                         dest_dir=os.path.join(directory, 'subtracted'), fast_forward=fast_forward)
                     profile_paths.append(profile_path)
                     profile_pic_paths.append(profile_pic_path)
+                
+                context.extend_paths('buffer_1d', buffer_paths_1d)
+                context.extend_paths('sample_1d', sample_paths_1d)
                 # print('DEBUG: subtraction finished')
             else:
                 # print('DEBUG: subtraction ommited')
@@ -1091,7 +1157,7 @@ echo "Full results saved to: $RESULTS_FILE"
                     directory, 
                     query='Upload sample data to "subtracted" subdirectory subtracted/*.dat', 
                     filepattern='subtracted/*.dat',
-                    skip_if_exists=iteration_number==0
+                    skip_if_exists=True, except_prev_paths=context['paths', 'profile'],
                     )
                 if profile_paths:
                     for profile_path in profile_paths:
@@ -1109,22 +1175,24 @@ echo "Full results saved to: $RESULTS_FILE"
                         profile_pic_paths.append(profile_pic_path)
                 # print('DEBUG: profile loading and plotting finished')
 
-            profiles_data = []
-            for basename, (idx, profile_path), plot_path in zip(
-                basename_list, enumerate(profile_paths), profile_pic_paths):
-                q, I, _, metadata = read_saxs(profile_path)
-                profiles_data.append(
-                    {
-                        'basename': basename,
-                        'path': profile_path,
-                        'q': q,
-                        'I': I,
-                        'metadata': metadata,
-                        'plot_path': plot_path,
-                    }
-                )
-
-            selected_profiles = choose_profiles(profiles_data)
+            if all_from_config:
+                selected_profiles = context['paths', 'selected_profiles']
+            else:
+                profiles_data = []
+                for basename, (idx, profile_path), plot_path in zip(
+                    basename_list, enumerate(profile_paths), profile_pic_paths):
+                    q, I, _, metadata = read_saxs(profile_path)
+                    profiles_data.append(
+                        {
+                            'basename': basename,
+                            'path': profile_path,
+                            'q': q,
+                            'I': I,
+                            'metadata': metadata,
+                            'plot_path': plot_path,
+                        }
+                    )
+                selected_profiles = choose_profiles(profiles_data)
 
             for basename, profile in selected_profiles.items():
                 profile_path = profile['path']
@@ -1133,24 +1201,38 @@ echo "Full results saved to: $RESULTS_FILE"
                 if 'simple_analysis' in steps:
                     atsas_res_path, gnom_path = self.get_descriptors(
                         context, profile_path, dest_dir=os.path.join(directory, 'descriptors'), fast_forward=fast_forward)
+                    context.append_path('atsas_res', atsas_res_path)
+                    context.append_path('P(r)', gnom_path)
                 if 'plots' in steps:
                     plot_paths = self.plot(context, profile_path, dest_dir=os.path.join(directory, 'plots'), fast_forward=fast_forward)
                     plot_paths = [profile_pic_path, ] + plot_paths
+                    context.append_path('plot', plot_paths)
                 if 'polydispfit' in steps:
-                    self.polydispfit(context, profile_path, dest_dir=os.path.join(directory, 'polydispfit'), fast_forward=fast_forward)
+                    ploydsip_dir = self.polydispfit(
+                        context, profile_path, dest_dir=os.path.join(directory, 'polydispfit'), fast_forward=fast_forward)
+                    context.append_path('polydisp', ploydsip_dir)
                 if 'bodies' in steps:
-                    self.bodies_fit(context, profile_path, dest_dir=os.path.join(directory, 'bodies'), fast_forward=fast_forward)
+                    bodies_dir = self.bodies_fit(
+                        context, profile_path, dest_dir=os.path.join(directory, 'bodies'), fast_forward=fast_forward)
+                    context.append_path('bodies', bodies_dir)
                 if 'dammif' in steps:
                     assert 'simple_analysis' in steps
-                    self.dammif_fit(
+                    dammif_dir = self.dammif_fit(
                         context, profile_path, gnom_path, dest_dir=os.path.join(directory, 'dammif'), fast_forward=fast_forward)
+                    context.append_path('dammif', dammif_dir)
                 # self.ai_analysis(atsas_res_path, plot_paths, directory, text_model=model, vision_model=vision_model)
             
+            context.extend_paths('profile', profile_paths)
+            
+            # if all_from_config:
+            #     old_files = 
             upload_more = self.interface.ask_question(
                 'Upload more data? Type "no" to exit program, type Enter or "yes" to continue',
             )
-            run_load_cycle = not upload_more.lower().startswith('n')
+            run_process_cycle = not upload_more.lower().startswith('n')
             iteration_number += 1
+        
+        return context
     
     def pipeline_batch(self, fast_forward=False):
         # TODO currently the pipeline is oriented on proteins. Since the pipeline for other samples is sort of similar, I think, there will be only one pipeline in the end

@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 import time
 from typing import Any, Optional
 import os
@@ -36,7 +36,8 @@ class Interface:
     @staticmethod
     def wait_for_file(
         directory, obligatory=False, query=None, 
-        wait=2.0, wait_to_end_loading=2.0, filepattern='*', skip_if_exists=False,
+        wait=2.0, wait_to_end_loading=2.0, 
+        filepattern='*', skip_if_exists=False, except_prev_paths=False,
         allow_same_time=(1, float('inf'))):
         raise NotImplementedError
 
@@ -135,7 +136,8 @@ class CLIInterface(Interface):
     @staticmethod
     def wait_for_file(
         directory, query=None, obligatory=False, 
-        wait=2.0, wait_to_end_loading=2.0, filepattern='*', skip_if_exists=False,
+        wait=2.0, wait_to_end_loading=2.0, 
+        filepattern='*', skip_if_exists=True, except_prev_paths=False,
         allow_same_time=(1, float('inf'))):
         assert query is not None
 
@@ -148,7 +150,11 @@ class CLIInterface(Interface):
         min_allowed, max_allowed = allow_same_time
         
         if skip_if_exists:
-            pattern_files = list(_get_pattern_files())
+            pattern_files = _get_pattern_files()
+            assert except_prev_paths is not True
+            if isinstance(except_prev_paths, Iterable):
+                pattern_files = pattern_files - set(except_prev_paths)
+            pattern_files = list(pattern_files)
             if min_allowed <= len(pattern_files) <= max_allowed:
                 CLIInterface.send_message(f"Skipped file uploading for pattern '{filepattern}', since found existing files")
                 return pattern_files
@@ -250,18 +256,23 @@ class CLIInterface(Interface):
         # Note: daemon=True means they'll be killed when main thread exits
 
         if result['user_interrupted']:
-            ret = ["", ]
+            new_files = []
         elif result['new_files'] is not None:
-            ret = result['new_files']
+            new_files = result['new_files']
         else:
             # This shouldn't happen under normal circumstances due to the assertion
             # that only one file can be processed, but we handle it gracefully
             raise RuntimeError("Unexpected error occurred")
 
-        if obligatory and not ret:
+        if obligatory and not new_files:
             raise PipelineInterrupt('The user interrupted the pipeline execution')
-
-        return ret
+        
+        if except_prev_paths is True:
+            return new_files
+        elif except_prev_paths is False:
+            return list(_get_pattern_files())
+        elif isinstance(except_prev_paths, Iterable):
+            return list(_get_pattern_files() - set(except_prev_paths))
 
 
     @staticmethod
