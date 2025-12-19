@@ -320,6 +320,7 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
     poni2 = pixel_size[1] * center_x_px
 
     # GeometryRefinement
+    print(f'DEBUG: Creating GeometryRefinement object...')
     gr = GeometryRefinement(
         rings,
         calibrant=calibrant,
@@ -332,9 +333,13 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
         detector=detector,
         wavelength=wavelength,
     )
+    print(f'DEBUG: GeometryRefinement object created. Starting refine3()...')
+    print(f'DEBUG: refine3() fix parameters: {fix}')
 
     # Refine geometry, fixing selected parameters (e.g., wavelength, rot3)
+    # This is the computationally intensive step
     gr.refine3(fix=fix)
+    print(f'DEBUG: refine3() completed successfully')
     refined = {
         'dist': gr._dist,
         'poni1': gr._poni1,
@@ -347,19 +352,25 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
         refined[k] = float(v)
 
     # Use refined geometry to integrate (q, I) - "calibrated" curve
+    print(f'DEBUG: Starting mask calculation...')
     mask = None
     if mask_config is not None:
         mode = mask_config['mode']
+        print(f'DEBUG: Mask config mode: {mode}')
         
         automask = None
         if mode in ['auto', 'combined']:
+            print(f'DEBUG: Calculating automatic mask...')
             automask_ops = {k: v for k, v in mask_config.items() if k != 'mode'}
             automask = calc_beam_abnormal_mask(
                 calib_data, center_y_px, center_x_px, r_beam_px, 
                 **automask_ops)
+            print(f'DEBUG: Automatic mask calculated')
         
+        mask = None
         if mode in ['from_file', 'combined']:
             assert mask_path is not None
+            print(f'DEBUG: Reading mask from file: {mask_path}')
             mask = IntegratorExtended.read_mask(mask_path)
         
         if mode == 'auto':
@@ -369,6 +380,8 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
         
         if mask is None:
             raise RuntimeError(f"Cannot parse mask_config:\n{mask_config}")
+        
+        print(f'DEBUG: Mask calculation complete')
 
         # debug
         # print(f'Center: ({center_y_px}, {center_x_px})')
@@ -378,13 +391,17 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
         # # plt.show()
         # fig.savefig('debug/mask_debug.png', dpi=400)
     
+    print(f'DEBUG: Creating IntegratorExtended object...')
     integrator = IntegratorExtended(
         ai_params={'wavelength': wavelength, **refined},
         detector_params={'detector_name': detector_name, 'pixel_size': pixel_size},
         mask=mask
     )
+    print(f'DEBUG: IntegratorExtended object created')
 
+    print(f'DEBUG: Starting 1D integration (npt={npt})...')
     q_cal, I_cal, sigma = integrator.integrate1d(calib_data, npt=npt)
+    print(f'DEBUG: 1D integration complete. q array length: {len(q_cal)}')
 
     # Get theoretical/"ideal" calibrant ring positions
     tth_theor = np.array(calibrant.get_2th())
@@ -393,6 +410,87 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
     return {
         'integrator': integrator, 'refined': refined, 
         'curve_calibrated': (q_cal, I_cal, sigma), 'theoretical_peaks': q_theor}
+
+
+def autocalib(calibration_image_path: str, config: dict, mask_path: Optional[str] = None) -> dict:
+    """
+    Performs calibration using the provided image and configuration.
+    
+    This function implements the calibration process based on Controller.autocalib,
+    performing center refinement, ring search, and geometry refinement.
+    
+    Args:
+        calibration_image_path: Full path to the calibration .tif image
+        context: Context object with calibration parameters
+        mask_path: Optional path to mask file (.msk, .npy, or .txt)
+    
+    Returns:
+        Dictionary containing refined calibration parameters:
+        - dist: Sample-to-detector distance (m)
+        - poni1: Point of normal incidence 1 (m)
+        - poni2: Point of normal incidence 2 (m)
+        - rot1: Detector rotation 1 (radians)
+        - rot2: Detector rotation 2 (radians)
+        - rot3: Detector rotation 3 (radians)
+        - wavelength: X-ray wavelength (m)
+    """
+    print(f'DEBUG: Autocalib is called. Parameters are: {", ".join(config.keys())}')
+    # Load calibration image
+    calib_data = read_from_tiff(calibration_image_path)
+    
+    # Step 1: Center refinement
+    center_ref_params = {
+        k: config['center_refinement'][k] 
+        for k in ['q_start', 'q_stop', 'min_segment_len']
+    }
+    center_step_ret = find_center(calib_data, **center_ref_params)
+    print(f'DEBUG: Center refinement is done. Parameters are: {", ".join(center_step_ret.keys())}')
+    
+    # Step 2: Calculate interring distance
+    d_geom = config['detector_geometry']
+    interring_dist_px = get_interring_dist_px(
+        d_geom['dist'], d_geom['wavelength'], d_geom['pixel_size'][0],
+        calibrant_name=config['calibrant_name']
+    )
+    
+    # Step 3: Ring search
+    ring_search_params = {
+        k: config['ring_search'][k] 
+        for k in ['q_stop', 'ring_I_threshold', 'r_max_px', 'r_step_px']
+    }
+    ring_search_params.update({
+        'r_beam_px': config['r_beam_px'],
+        'center_y_px': center_step_ret['center_y_px'],
+        'center_x_px': center_step_ret['center_x_px'],
+        'interring_dist_px': interring_dist_px
+    })
+    rings_step_ret = find_rings(calib_data, **ring_search_params)
+    print(f'DEBUG: Ring search is done. Parameters are: {", ".join(rings_step_ret.keys())}')
+    print(f'DEBUG: Number of rings found: {len(rings_step_ret.get("radii_px", []))}')
+
+    # Step 4: Geometry refinement
+    print(f'DEBUG: Starting geometry refinement...')
+    geometry_params = {
+        k: config['detector_geometry'][k] 
+        for k in ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3']
+    }
+    geometry_params.update({
+        'r_beam_px': config['r_beam_px'],
+        'center_y_px': center_step_ret['center_y_px'],
+        'center_x_px': center_step_ret['center_x_px'],
+        'calibrant_name': config['calibrant_name'],
+        'mask_path': mask_path,
+        'mask_config': config['mask_config'] if 'mask_config' in config else {'mode': 'auto'}
+    })
+    print(f'DEBUG: Geometry params prepared. Calling refine()...')
+    refine_step_ret = refine(calib_data, rings_step_ret['rings'], **geometry_params)
+    print(f'DEBUG: Geometry refinement is done. Parameters are: {", ".join(refine_step_ret.keys())}')
+    
+    # Extract refined parameters and add wavelength
+    refined = refine_step_ret['refined'].copy()
+    refined['wavelength'] = config['detector_geometry']['wavelength']
+    
+    return refined
 
 
 def integrate_2d_to_1d(integrator, saxs_2d, npt=1000, destpath=None, metadata=None):
