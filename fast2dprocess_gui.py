@@ -5,13 +5,16 @@
 import os
 import atexit
 
-# Threading environment variable names
+# Threading environment variable names - comprehensive list
 _THREADING_ENV_VARS = [
     'OMP_NUM_THREADS',
     'MKL_NUM_THREADS',
     'NUMEXPR_NUM_THREADS',
     'OPENBLAS_NUM_THREADS',
-    'VECLIB_MAXIMUM_THREADS'
+    'VECLIB_MAXIMUM_THREADS',
+    'BLIS_NUM_THREADS',
+    'TBB_NUM_THREADS',
+    'NUMBA_NUM_THREADS',
 ]
 
 # Save original values
@@ -20,11 +23,9 @@ for var in _THREADING_ENV_VARS:
     _ORIGINAL_THREADING_ENV[var] = os.environ.get(var)
 
 # Set to 1 thread to prevent deadlocks in worker threads
-os.environ['OMP_NUM_THREADS'] = '1'
-os.environ['MKL_NUM_THREADS'] = '1'
-os.environ['NUMEXPR_NUM_THREADS'] = '1'
-os.environ['OPENBLAS_NUM_THREADS'] = '1'
-os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
+# This must be done BEFORE any NumPy/SciPy/pyFAI imports
+for var in _THREADING_ENV_VARS:
+    os.environ[var] = '1'
 
 def _restore_threading_env():
     """Restore original threading environment variables."""
@@ -51,9 +52,14 @@ import shutil
 import traceback
 import threading
 import hashlib
+import subprocess
+import json
+import time
+import sys
+import sys
 
 # Import processing functions
-from processor import autocalib, integrate_2d_to_1d, subtract_buffer, IntegratorExtended, calc_beam_abnormal_mask
+from processor import integrate_2d_to_1d, subtract_buffer, IntegratorExtended, calc_beam_abnormal_mask
 from utils import read_from_tiff, read_saxs, write_saxs, ROOT_DIR
 
 # Import pyFAI for image reading
@@ -113,6 +119,7 @@ class SAXSProcessorGUI:
         self.calibrant_path = None
         self.buffer_path = None
         self.sample_path = None
+        self.mask_path = None
         self.calibrated_params = {}
         self.integrator = None
         self.buffer_1d_path = None
@@ -121,6 +128,10 @@ class SAXSProcessorGUI:
         self.calibration_thread = None
         self.calibration_running = False
         self.calibration_stage = None
+        self.calibration_process = None
+        self.status_monitor_running = False
+        self.calibration_process = None
+        self.status_monitor_running = False
         
         # Track calibration inputs for fast-forward mode
         self.last_calibration_hash = None
@@ -205,24 +216,13 @@ class SAXSProcessorGUI:
                 print(f"Error loading config: {e}")
     
     def try_load_integrator(self):
-        """Try to recreate integrator from saved calibration parameters."""
-        if not self.calibrated_params or not self.calibrant_path:
-            return
-        
-        try:
-            calib_data = read_from_tiff(self.calibrant_path)
-            pixel_size = self.config_dictionary.get('pixel_size', [1.72e-4, 1.72e-4])[0]
-            if pixel_size and pixel_size > 1e-10:
-                center_y_px = self.calibrated_params.get('poni1', 0) / pixel_size
-                center_x_px = self.calibrated_params.get('poni2', 0) / pixel_size
-                self.integrator = self.create_integrator_from_refined(
-                    self.calibrated_params,
-                    calib_data,
-                    center_y_px,
-                    center_x_px
-                )
-        except Exception as e:
-            print(f"Could not load integrator: {e}")
+        """Try to load integrator from disk if it exists."""
+        integrator_subd = os.path.join(TEMP_DIR, 'integrator_params')
+        if os.path.exists(integrator_subd):
+            try:
+                self.integrator = IntegratorExtended.from_disk(integrator_subd)
+            except Exception as e:
+                print(f"Could not load integrator from disk: {e}")
     
     def save_config(self):
         """Save current configuration to YAML file."""
@@ -262,11 +262,14 @@ class SAXSProcessorGUI:
         # Calibrant upload
         self.calibrant_frame = self.create_drag_drop_area(file_frame, "Calibrant Image", 0)
         
+        # Mask file upload (optional)
+        self.mask_frame = self.create_drag_drop_area(file_frame, "Mask File (Optional)", 1)
+        
         # Buffer upload
-        self.buffer_frame = self.create_drag_drop_area(file_frame, "Buffer Image", 1)
+        self.buffer_frame = self.create_drag_drop_area(file_frame, "Buffer Image", 2)
         
         # Sample upload
-        self.sample_frame = self.create_drag_drop_area(file_frame, "Sample Image", 2)
+        self.sample_frame = self.create_drag_drop_area(file_frame, "Sample Image", 3)
         
         # Calibration parameters section
         params_frame = ctk.CTkFrame(left_panel)
@@ -472,12 +475,17 @@ class SAXSProcessorGUI:
             "Calibrant Image": ("calibrant_path", "Calibrant", True),
             "Buffer Image": ("buffer_path", "Buffer", False),
             "Sample Image": ("sample_path", "Sample", False),
+            "Mask File (Optional)": ("mask_path", "Mask", False),
         }
         
         if title in file_type_map:
             attr_name, display_name, always_display = file_type_map[title]
             setattr(self, attr_name, file_path)
-            if always_display or self.is_calibration_available():
+            
+            # Mask file doesn't need to be displayed as an image
+            if title == "Mask File (Optional)":
+                self._update_status(f"Mask file loaded: {os.path.basename(str(file_path))}")
+            elif always_display or self.is_calibration_available():
                 self.display_2d_image(file_path, display_name)
                 
                 # Auto-process buffer or sample if calibration is available
@@ -600,6 +608,17 @@ class SAXSProcessorGUI:
         if not isinstance(pixel_size, list):
             pixel_size = [pixel_size, pixel_size]
         
+        # Set mask_config based on whether mask file is provided
+        if self.mask_path:
+            # If mask file is provided, use "combined" mode with calc_abnormal_mask=False
+            mask_config = self.advanced_params['mask_config'].copy()
+            mask_config['mode'] = 'combined'
+            mask_config['calc_abnormal_mask'] = False
+        else:
+            # If no mask file, use "auto" mode
+            mask_config = self.advanced_params['mask_config'].copy()
+            mask_config['mode'] = 'auto'
+        
         config = {
             'detector_geometry': {
                 'dist': required['detector_distance'],
@@ -613,7 +632,7 @@ class SAXSProcessorGUI:
             'ring_search': self.advanced_params['ring_search'],
             'r_beam_px': self.config_dictionary.get('r_beam_px', 35),
             'calibrant_name': self.config_dictionary.get('calibrant_name', 'AgBh'),
-            'mask_config': self.advanced_params['mask_config'],
+            'mask_config': mask_config,
         }
         
         return config
@@ -654,31 +673,35 @@ class SAXSProcessorGUI:
             with open(self.calibration_cache_path, 'r') as f:
                 cache = yaml.safe_load(f)
             if cache and cache.get('hash') == current_hash and cache.get('calibrated_params'):
-                self._update_status("Using cached calibration (inputs unchanged)")
-                self.calibrated_params = cache['calibrated_params']
-                calib_data = read_from_tiff(self.calibrant_path)
-                pixel_size = self.config_dictionary['pixel_size'][0]
-                if pixel_size and pixel_size > 1e-10:
-                    center_y_px = self.calibrated_params['poni1'] / pixel_size
-                    center_x_px = self.calibrated_params['poni2'] / pixel_size
-                    self.integrator = self.create_integrator_from_refined(
-                        self.calibrated_params, calib_data, center_y_px, center_x_px
-                    )
-                self.update_gui_after_calibration()
-                self.save_config()
-                
-                # Auto-process any existing buffer or sample images
-                if self.buffer_path:
-                    threading.Thread(target=self._process_image_worker, args=(self.buffer_path, "buffer", "Buffer"), daemon=True).start()
-                if self.sample_path:
-                    threading.Thread(target=self._process_image_worker, args=(self.sample_path, "sample", "Sample"), daemon=True).start()
-                
-                return True
+                # Try to load integrator from disk
+                integrator_subd = os.path.join(TEMP_DIR, 'integrator_params')
+                if os.path.exists(integrator_subd):
+                    try:
+                        self._update_status("Using cached calibration (inputs unchanged)")
+                        self.calibrated_params = cache['calibrated_params']
+                        self.integrator = IntegratorExtended.from_disk(integrator_subd)
+                        self.update_gui_after_calibration()
+                        self.save_config()
+                        
+                        # Auto-process any existing buffer or sample images
+                        if self.buffer_path:
+                            threading.Thread(target=self._process_image_worker, args=(self.buffer_path, "buffer", "Buffer"), daemon=True).start()
+                        if self.sample_path:
+                            threading.Thread(target=self._process_image_worker, args=(self.sample_path, "sample", "Sample"), daemon=True).start()
+                        
+                        return True
+                    except Exception as e:
+                        print(f"Error loading integrator from disk: {e}")
+                        # Fall through to re-run calibration
+                else:
+                    # Integrator not on disk, need to re-run calibration
+                    return False
         except Exception as e:
             print(f"Error loading cached calibration: {e}")
         return False
     
     def process_calibrant(self):
+        """Start calibration using separate subprocess service."""
         if not self.calibrant_path: 
             self._update_status("No calibrant image loaded")
             return
@@ -696,60 +719,155 @@ class SAXSProcessorGUI:
         
         self.calibration_running = True
         self._update_status(f"Calibrating: {os.path.basename(str(self.calibrant_path))}...", "progress")
-        self.status_update_counter = 0
-        self.start_status_updates()
         
+        # Start calibration in separate process
         def calibration_worker():
+            """Worker thread that launches calibration subprocess and monitors it."""
             try:
-                try:
-                    import threadpoolctl
-                    with threadpoolctl.threadpool_limits(limits=1):
-                        if not self.calibrant_path:
-                            raise ValueError("Calibrant path is None")
-                        self._run_calibration(config, current_hash)
-                except ImportError:
-                    if not self.calibrant_path:
-                        raise ValueError("Calibrant path is None")
-                    self._run_calibration(config, current_hash)
+                self._run_calibration_service(config, current_hash)
             except Exception as e:
                 error_msg = f"Unexpected error: {str(e)}"
                 traceback.print_exc()
-                self.root.after(0, self.stop_status_updates)
-                self.root.after(0, self.calibration_error, error_msg)
+                self.root.after_idle(self.stop_status_monitoring)
+                self.root.after_idle(lambda: self.calibration_error(error_msg))
         
         self.calibration_thread = threading.Thread(target=calibration_worker, daemon=False)
         self.calibration_thread.start()
-    
-    def start_status_updates(self):
-        """Start periodic status updates during calibration."""
-        if not hasattr(self, 'status_update_counter'):
-            self.status_update_counter = 0
         
-        def update_status_periodic():
-            if self.calibration_running:
-                self.status_update_counter += 1
-                # Add dots to show activity
-                dots = "." * ((self.status_update_counter // 2) % 4)
-                current_status = self.status_var.get()
-                if "Calibrating:" in current_status:
-                    # Keep the base message and add animated dots
-                    if "..." in current_status:
-                        base_status = current_status.replace("...", "")
+        # Start status monitoring
+        self.start_status_monitoring()
+    
+    def _run_calibration_service(self, config, current_hash):
+        """Run calibration using separate subprocess service."""
+        # Prepare configuration file for service
+        service_config_file = os.path.join(TEMP_DIR, 'calibration_config.json')
+        status_file = os.path.join(TEMP_DIR, 'calibration_status.json')
+        output_dir = os.path.join(TEMP_DIR, 'calibration_output')
+        
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Prepare config data
+        config_data = {
+            'calibrant_path': str(self.calibrant_path),
+            'mask_path': str(self.mask_path) if self.mask_path else None,
+            'config': config,
+            'current_hash': current_hash
+        }
+        
+        # Write config file
+        try:
+            with open(service_config_file, 'w') as f:
+                json.dump(config_data, f, indent=2)
+        except Exception as e:
+            raise RuntimeError(f"Failed to write calibration config: {e}")
+        
+        # Get path to calibration service script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        service_script = os.path.join(script_dir, 'calibration_service.py')
+        
+        if not os.path.exists(service_script):
+            raise RuntimeError(f"Calibration service script not found: {service_script}")
+        
+        # Launch calibration service as subprocess
+        try:
+            self.calibration_process = subprocess.Popen(
+                [sys.executable, service_script, service_config_file, output_dir, '--status-file', status_file],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Wait for process to complete
+            stdout, stderr = self.calibration_process.communicate()
+            
+            if self.calibration_process.returncode != 0:
+                error_msg = f"Calibration service failed: {stderr if stderr else 'Unknown error'}"
+                self.root.after_idle(self.stop_status_monitoring)
+                self.root.after_idle(lambda: self.calibration_error(error_msg))
+                return
+            
+            # Load results
+            result_file = os.path.join(output_dir, 'calibration_result.json')
+            if not os.path.exists(result_file):
+                error_msg = "Calibration completed but result file not found"
+                self.root.after_idle(self.stop_status_monitoring)
+                self.root.after_idle(lambda: self.calibration_error(error_msg))
+                return
+            
+            with open(result_file, 'r') as f:
+                result_data = json.load(f)
+            
+            if result_data.get('status') != 'success':
+                error_msg = result_data.get('error', 'Calibration failed')
+                self.root.after_idle(self.stop_status_monitoring)
+                self.root.after_idle(lambda: self.calibration_error(error_msg))
+                return
+            
+            # Load integrator from disk
+            integrator_subd = os.path.join(output_dir, 'integrator_params')
+            if not os.path.exists(integrator_subd):
+                error_msg = "Integrator parameters not found"
+                self.root.after_idle(self.stop_status_monitoring)
+                self.root.after_idle(lambda: self.calibration_error(error_msg))
+                return
+            
+            integrator = IntegratorExtended.from_disk(integrator_subd)
+            calibrated_params = result_data.get('calibrated_params', {})
+            
+            # Copy integrator to main temp directory
+            main_integrator_subd = os.path.join(TEMP_DIR, 'integrator_params')
+            if os.path.exists(main_integrator_subd):
+                shutil.rmtree(main_integrator_subd)
+            shutil.copytree(integrator_subd, main_integrator_subd)
+            
+            # Complete calibration
+            self.root.after_idle(self.stop_status_monitoring)
+            self.root.after_idle(lambda: self.calibration_complete(calibrated_params, integrator, current_hash))
+            
+        except Exception as e:
+            error_msg = f"Error running calibration service: {str(e)}"
+            traceback.print_exc()
+            self.root.after_idle(self.stop_status_monitoring)
+            self.root.after_idle(lambda: self.calibration_error(error_msg))
+    
+    def start_status_monitoring(self):
+        """Start monitoring calibration service status file."""
+        self.status_monitor_running = True
+        status_file = os.path.join(TEMP_DIR, 'calibration_status.json')
+        
+        def check_status():
+            if not self.status_monitor_running:
+                return
+            
+            try:
+                if os.path.exists(status_file):
+                    with open(status_file, 'r') as f:
+                        status_data = json.load(f)
+                    
+                    message = status_data.get('message', 'Calibrating...')
+                    status_type = status_data.get('type', 'progress')
+                    
+                    if status_type == 'success':
+                        self._update_status(message, "success")
+                        self.status_monitor_running = False
+                    elif status_type == 'error':
+                        self._update_status(f"ERROR: {message}", "error")
+                        self.status_monitor_running = False
                     else:
-                        base_status = current_status
-                    self.status_var.set(f"{base_status}{dots}")
-                # Schedule next update
-                self.root.after(500, update_status_periodic)
-            else:
-                # Stop updates when calibration is done
-                self.status_update_counter = 0
+                        self._update_status(f"Calibrating: {message}...", "progress")
+            except Exception as e:
+                # Ignore errors reading status file (service might not have written it yet)
+                pass
+            
+            if self.status_monitor_running:
+                # Check again in 500ms
+                self.root.after(500, check_status)
         
-        update_status_periodic()
+        check_status()
     
-    def stop_status_updates(self):
-        """Stop periodic status updates."""
-        if hasattr(self, 'status_update_counter'):
-            self.status_update_counter = 0
+    def stop_status_monitoring(self):
+        """Stop monitoring calibration service status."""
+        self.status_monitor_running = False
     
     def calibration_complete(self, calibrated_params, integrator, calibration_hash):
         """Called when calibration completes (in main thread)."""
@@ -789,64 +907,11 @@ class SAXSProcessorGUI:
             self.calibration_error(error_msg)
             traceback.print_exc()
     
-    def _run_calibration(self, config, current_hash):
-        """Run the actual calibration work (called from worker thread with thread limits)."""
-        def update_status(msg):
-            self.calibration_stage = msg
-            self.root.after(0, lambda: self._update_status(f"Calibrating: {msg}...", "progress"))
-        
-        update_status("Loading image")
-        
-        try:
-            update_status("Finding center (this may take a while)")
-            import time
-            time.sleep(0.1)
-            calibrated_params = autocalib(str(self.calibrant_path), config, mask_path=None)
-        except Exception as e:
-            error_msg = f"Autocalib failed: {str(e)}"
-            traceback.print_exc()
-            self.root.after(0, self.stop_status_updates)
-            self.root.after(0, self.calibration_error, error_msg)
-            return
-        
-        update_status("Creating integrator")
-        
-        try:
-            calib_data = read_from_tiff(self.calibrant_path)
-        except Exception as e:
-            error_msg = f"Failed to load calibration image: {str(e)}"
-            self.root.after(0, self.stop_status_updates)
-            self.root.after(0, self.calibration_error, error_msg)
-            return
-        
-        pixel_size = self.config_dictionary.get('pixel_size', [None])[0]
-        if not pixel_size or pixel_size < 1e-10:
-            error_msg = f"Invalid pixel size: {pixel_size}"
-            self.root.after(0, self.stop_status_updates)
-            self.root.after(0, self.calibration_error, error_msg)
-            return
-        
-        center_y_px = calibrated_params.get('poni1', 0) / pixel_size
-        center_x_px = calibrated_params.get('poni2', 0) / pixel_size
-        
-        try:
-            integrator = self.create_integrator_from_refined(
-                calibrated_params, calib_data, center_y_px, center_x_px
-            )
-        except Exception as e:
-            error_msg = f"Failed to create integrator: {str(e)}"
-            traceback.print_exc()
-            self.root.after(0, self.stop_status_updates)
-            self.root.after(0, self.calibration_error, error_msg)
-            return
-        
-        self.root.after(0, self.stop_status_updates)
-        self.root.after(0, self.calibration_complete, calibrated_params, integrator, current_hash)
-    
     def calibration_error(self, error_msg):
         """Called when calibration fails (in main thread)."""
         self._update_status(f"ERROR: {error_msg}", "error")
         self.calibration_running = False
+        self.status_monitor_running = False
         traceback.print_exc()
         self.root.after(5000, self.reset_status_bar_color)
     
@@ -882,19 +947,19 @@ class SAXSProcessorGUI:
     def _process_image_worker(self, image_path, image_type, title):
         """Worker function for processing images in a thread."""
         if not image_path:
-            self.root.after(0, lambda: self._update_status(f"No {image_type} image loaded"))
+            self.root.after_idle(lambda: self._update_status(f"No {image_type} image loaded"))
             return
         
         if not self.is_calibration_available():
-            self.root.after(0, lambda: self._update_status("Please calibrate first"))
+            self.root.after_idle(lambda: self._update_status("Please calibrate first"))
             return
         
-        self.root.after(0, lambda: self._update_status(f"Processing {image_type}: {os.path.basename(str(image_path))}", "progress"))
+        self.root.after_idle(lambda: self._update_status(f"Processing {image_type}: {os.path.basename(str(image_path))}", "progress"))
         
         try:
-            # Update GUI on main thread
-            self.root.after(0, lambda: self.display_2d_image(image_path, title))
-            self.root.after(0, lambda: self._save_plot(self.fig_2d, f"{image_type}_2d.png"))
+            # Update GUI on main thread - use after_idle to avoid deadlocks
+            self.root.after_idle(lambda: self.display_2d_image(image_path, title))
+            self.root.after_idle(lambda: self._save_plot(self.fig_2d, f"{image_type}_2d.png"))
             
             data = read_from_tiff(image_path)
             output_path = os.path.join(TEMP_DIR, f"{image_type}_1d.dat")
@@ -911,12 +976,12 @@ class SAXSProcessorGUI:
             
             setattr(self, f"{image_type}_1d_path", output_path)
             
-            # Update GUI on main thread
-            self.root.after(0, lambda: self.display_1d_curves())
-            self.root.after(0, lambda: self._save_plot(self.fig_1d, f"{image_type}_1d.png"))
-            self.root.after(0, lambda: self._update_status(f"{title} processed: {os.path.basename(str(image_path))}", "success"))
+            # Update GUI on main thread - use after_idle to avoid deadlocks
+            self.root.after_idle(lambda: self.display_1d_curves())
+            self.root.after_idle(lambda: self._save_plot(self.fig_1d, f"{image_type}_1d.png"))
+            self.root.after_idle(lambda: self._update_status(f"{title} processed: {os.path.basename(str(image_path))}", "success"))
         except Exception as e:
-            self.root.after(0, lambda: self._update_status(f"Error processing {image_type}: {str(e)}", "error"))
+            self.root.after_idle(lambda: self._update_status(f"Error processing {image_type}: {str(e)}", "error"))
             traceback.print_exc()
     
     def _process_image(self, image_path, image_type, title):

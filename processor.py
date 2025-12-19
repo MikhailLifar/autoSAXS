@@ -235,6 +235,7 @@ def calc_beam_abnormal_mask(
     center_y_px,
     center_x_px,
     r_beam_px,
+    calc_abnormal_mask: bool = True,
     window_size: int = 7,
     iqr_tol: float = 1.5,
 ):
@@ -267,26 +268,29 @@ def calc_beam_abnormal_mask(
     # plt.hist(data[data<1.0].flatten())
     # plt.show()
     
-    # Log transform to stabilize the exponential intensity decay.
-    data = data - min(np.min(data), 0.0)  # to avoid numerical mistakes in log
-    log_data = np.log1p(data)
+    if calc_abnormal_mask:
+        # Log transform to stabilize the exponential intensity decay.
+        data = data - min(np.min(data), 0.0)  # to avoid numerical mistakes in log
+        log_data = np.log1p(data)
 
-    # Local quartiles with reflection padding for correct edge handling.
-    q1 = ndi.percentile_filter(
-        log_data, percentile=25, size=window_size, mode="reflect"
-    )
-    q3 = ndi.percentile_filter(
-        log_data, percentile=75, size=window_size, mode="reflect"
-    )
-    iqr = q3 - q1
+        # Local quartiles with reflection padding for correct edge handling.
+        q1 = ndi.percentile_filter(
+            log_data, percentile=25, size=window_size, mode="reflect"
+        )
+        q3 = ndi.percentile_filter(
+            log_data, percentile=75, size=window_size, mode="reflect"
+        )
+        iqr = q3 - q1
 
-    # Fence thresholds; small epsilon avoids divide-by-zero in flat regions.
-    eps = 1e-12
-    lower = q1 - iqr_tol * iqr
-    upper = q3 + iqr_tol * iqr
-    abnormal_mask = (log_data < lower - eps) | (log_data > upper + eps)
-
-    return beam_mask | abnormal_mask
+        # Fence thresholds; small epsilon avoids divide-by-zero in flat regions.
+        eps = 1e-12
+        lower = q1 - iqr_tol * iqr
+        upper = q3 + iqr_tol * iqr
+        abnormal_mask = (log_data < lower - eps) | (log_data > upper + eps)
+        return beam_mask | abnormal_mask
+    
+    else:
+        return beam_mask
 
 
 def get_detector(detector_name='Pilatus1M', pixel_size=None):
@@ -319,6 +323,44 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
     poni1 = pixel_size[0] * center_y_px
     poni2 = pixel_size[1] * center_x_px
 
+    # CRITICAL: Read and prepare mask BEFORE entering threadpool limits context
+    # Mask operations (fabio, scipy) can trigger threading that conflicts with limits
+    print(f'DEBUG: Starting mask calculation (before refinement)...')
+    mask = None
+    if mask_config is not None:
+        mode = mask_config['mode']
+        print(f'DEBUG: Mask config mode: {mode}')
+        
+        automask = None
+        if mode in ['auto', 'combined']:
+            print(f'DEBUG: Calculating automatic mask...')
+            automask_ops = {k: v for k, v in mask_config.items() if k != 'mode'}
+            automask = calc_beam_abnormal_mask(
+                calib_data, center_y_px, center_x_px, r_beam_px, 
+                **automask_ops)
+            print(f'DEBUG: Automatic mask calculated')
+        
+        file_mask = None
+        if mode in ['from_file', 'combined']:
+            assert mask_path is not None
+            print(f'DEBUG: Reading mask from file: {mask_path}')
+            # Read mask BEFORE threadpool limits to avoid fabio/numpy threading conflicts
+            file_mask = IntegratorExtended.read_mask(mask_path)
+        
+        # Combine masks based on mode
+        if mode == 'auto':
+            mask = automask
+        elif mode == 'from_file':
+            mask = file_mask
+        elif mode == 'combined':
+            assert file_mask is not None and automask is not None, 'file_mask and automask must be not None'
+            mask = file_mask | automask
+        
+        if mask is None:
+            raise RuntimeError(f"Cannot parse mask_config:\n{mask_config}")
+    
+    print(f'DEBUG: Mask calculation complete')
+
     # GeometryRefinement
     print(f'DEBUG: Creating GeometryRefinement object...')
     gr = GeometryRefinement(
@@ -338,8 +380,22 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
 
     # Refine geometry, fixing selected parameters (e.g., wavelength, rot3)
     # This is the computationally intensive step
-    gr.refine3(fix=fix)
-    print(f'DEBUG: refine3() completed successfully')
+    # Ensure threading limits are applied during refinement to prevent deadlocks
+    try:
+        import threadpoolctl
+        # Set limits for all threadpool libraries
+        # Note: 'blas' controls MKL, OpenBLAS, and other BLAS implementations
+        # 'openmp' controls OpenMP threading
+        with threadpoolctl.threadpool_limits(limits=1, user_api='blas'):
+            with threadpoolctl.threadpool_limits(limits=1, user_api='openmp'):
+                # Also set global limit as fallback
+                with threadpoolctl.threadpool_limits(limits=1):
+                    gr.refine3(fix=fix)
+        print(f'DEBUG: refine3() completed successfully')
+    except ImportError:
+        # threadpoolctl not available, rely on environment variables
+        gr.refine3(fix=fix)
+        print(f'DEBUG: refine3() completed successfully')
     refined = {
         'dist': gr._dist,
         'poni1': gr._poni1,
@@ -352,45 +408,6 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
         refined[k] = float(v)
 
     # Use refined geometry to integrate (q, I) - "calibrated" curve
-    print(f'DEBUG: Starting mask calculation...')
-    mask = None
-    if mask_config is not None:
-        mode = mask_config['mode']
-        print(f'DEBUG: Mask config mode: {mode}')
-        
-        automask = None
-        if mode in ['auto', 'combined']:
-            print(f'DEBUG: Calculating automatic mask...')
-            automask_ops = {k: v for k, v in mask_config.items() if k != 'mode'}
-            automask = calc_beam_abnormal_mask(
-                calib_data, center_y_px, center_x_px, r_beam_px, 
-                **automask_ops)
-            print(f'DEBUG: Automatic mask calculated')
-        
-        mask = None
-        if mode in ['from_file', 'combined']:
-            assert mask_path is not None
-            print(f'DEBUG: Reading mask from file: {mask_path}')
-            mask = IntegratorExtended.read_mask(mask_path)
-        
-        if mode == 'auto':
-            mask = automask
-        elif mode == 'combined':
-            mask = mask | automask
-        
-        if mask is None:
-            raise RuntimeError(f"Cannot parse mask_config:\n{mask_config}")
-        
-        print(f'DEBUG: Mask calculation complete')
-
-        # debug
-        # print(f'Center: ({center_y_px}, {center_x_px})')
-        # fig, ax = plt.subplots()
-        # im = ax.imshow(mask, cmap='gray')
-        # ax.set_title("Beam + Abnormal Pixels Mask")
-        # # plt.show()
-        # fig.savefig('debug/mask_debug.png', dpi=400)
-    
     print(f'DEBUG: Creating IntegratorExtended object...')
     integrator = IntegratorExtended(
         ai_params={'wavelength': wavelength, **refined},
@@ -425,14 +442,16 @@ def autocalib(calibration_image_path: str, config: dict, mask_path: Optional[str
         mask_path: Optional path to mask file (.msk, .npy, or .txt)
     
     Returns:
-        Dictionary containing refined calibration parameters:
-        - dist: Sample-to-detector distance (m)
-        - poni1: Point of normal incidence 1 (m)
-        - poni2: Point of normal incidence 2 (m)
-        - rot1: Detector rotation 1 (radians)
-        - rot2: Detector rotation 2 (radians)
-        - rot3: Detector rotation 3 (radians)
-        - wavelength: X-ray wavelength (m)
+        Dictionary containing:
+        - 'refined': Dictionary with refined calibration parameters:
+            - dist: Sample-to-detector distance (m)
+            - poni1: Point of normal incidence 1 (m)
+            - poni2: Point of normal incidence 2 (m)
+            - rot1: Detector rotation 1 (radians)
+            - rot2: Detector rotation 2 (radians)
+            - rot3: Detector rotation 3 (radians)
+            - wavelength: X-ray wavelength (m)
+        - 'integrator': IntegratorExtended object with mask applied
     """
     print(f'DEBUG: Autocalib is called. Parameters are: {", ".join(config.keys())}')
     # Load calibration image
@@ -489,8 +508,7 @@ def autocalib(calibration_image_path: str, config: dict, mask_path: Optional[str
     # Extract refined parameters and add wavelength
     refined = refine_step_ret['refined'].copy()
     refined['wavelength'] = config['detector_geometry']['wavelength']
-    
-    return refined
+    return {'refined': refined, 'integrator': refine_step_ret['integrator']}
 
 
 def integrate_2d_to_1d(integrator, saxs_2d, npt=1000, destpath=None, metadata=None):
