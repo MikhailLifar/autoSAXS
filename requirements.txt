@@ -19,7 +19,6 @@ numpy==2.3.5
 packaging==25.0
 pandas==2.3.3
 pillow==12.0.0
-pip @ file:///home/task_176313218821961/conda-bld/pip_1763132220821/work
 pyfai==2025.12.0
 pyparsing==3.2.5
 python-dateutil==2.9.0.post0
