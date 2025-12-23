@@ -7,7 +7,9 @@ from typing import Optional, Callable
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import matplotlib.cm as cm
+import matplotlib.pyplot as plt
 from ..core.constants import TEMP_DIR
+from ..utils.filename_utils import generate_curve_plot_filename
 from utils import read_saxs
 
 
@@ -26,7 +28,8 @@ class CurvesTab1D:
         self.tab.grid_columnconfigure(1, weight=1)  # Plot area (flexible)
         self.tab.grid_rowconfigure(1, weight=1)  # Main content row
         
-        # Store curves: {filename: (file_path, curve_type, checkbox_var, checkbox_widget)}
+        # Store curves: {unique_id: (file_path, curve_type, checkbox_var, checkbox_widget, filename)}
+        # Use full path as unique identifier to allow multiple files with same basename
         self.curves = {}
         self.last_added_curve = None
         
@@ -35,11 +38,12 @@ class CurvesTab1D:
         checkbox_frame.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=(10, 5), pady=10)
         checkbox_frame.grid_columnconfigure(0, weight=1)
         
-        ctk.CTkLabel(
+        curves_label = ctk.CTkLabel(
             checkbox_frame,
             text="Curves",
             font=ctk.CTkFont(size=12, weight="bold")
-        ).grid(row=0, column=0, pady=(0, 10))
+        )
+        curves_label.grid(row=0, column=0, pady=(0, 10))
         
         self.checkbox_frame = checkbox_frame
         
@@ -54,11 +58,12 @@ class CurvesTab1D:
         plot_type_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
         plot_type_frame.grid_columnconfigure(0, weight=1)
         
-        ctk.CTkLabel(
+        plot_type_label = ctk.CTkLabel(
             plot_type_frame,
             text="Plot Type:",
             font=ctk.CTkFont(size=12, weight="bold")
-        ).grid(row=0, column=0, sticky="w", padx=10, pady=5)
+        )
+        plot_type_label.grid(row=0, column=0, sticky="w", padx=10, pady=5)
         
         # Create plot type segmented button
         plot_types = ["I vs q", "log I vs q", "log I vs log q", "Guinier: log I vs q^2", "Kratky: q^2 * I vs q"]
@@ -88,16 +93,20 @@ class CurvesTab1D:
         """Callback when plot type is changed."""
         self.plot_type = value
         self.update_display()
+        # Save the plot when user explicitly selects a specialized plot type
+        self.save_current_plot_type()
     
     def add_curve(self, file_path, curve_type="Unknown"):
         """Add a new curve to the list. Returns True if added, False if already exists."""
         if not file_path or not os.path.exists(file_path):
             return False
         
+        # Use full absolute path as unique identifier to allow multiple files with same basename
+        unique_id = os.path.abspath(str(file_path))
         filename = os.path.basename(str(file_path))
         
-        # Check if curve already exists
-        if filename in self.curves:
+        # Check if curve already exists (by unique path)
+        if unique_id in self.curves:
             return False
         
         # Create checkbox variable
@@ -116,15 +125,15 @@ class CurvesTab1D:
         row = len(self.curves) + 1
         checkbox.grid(row=row, column=0, sticky="w", padx=10, pady=2)
         
-        # Store curve data
-        self.curves[filename] = (file_path, curve_type, checkbox_var, checkbox)
+        # Store curve data: (file_path, curve_type, checkbox_var, checkbox_widget, filename)
+        self.curves[unique_id] = (file_path, curve_type, checkbox_var, checkbox, filename)
         
         # Set as last added and check it (default behavior: show only last curve)
-        self.last_added_curve = filename
+        self.last_added_curve = unique_id
         
         # Uncheck all previous curves and check the new one
-        for other_filename, (_, _, other_var, _) in self.curves.items():
-            if other_filename != filename:
+        for other_id, (_, _, other_var, _, _) in self.curves.items():
+            if other_id != unique_id:
                 other_var.set(False)
         checkbox_var.set(True)
         
@@ -146,7 +155,7 @@ class CurvesTab1D:
         color_idx = 0
         
         # Plot all checked curves
-        for filename, (file_path, curve_type, checkbox_var, _) in self.curves.items():
+        for unique_id, (file_path, curve_type, checkbox_var, _, filename) in self.curves.items():
             if checkbox_var.get():  # Only plot if checked
                 self._plot_1d_curve(file_path, filename, colors[color_idx % len(colors)], self.plot_type)
                 color_idx += 1
@@ -243,8 +252,161 @@ class CurvesTab1D:
     def save_plot(self, filename):
         """Save figure to temp directory."""
         try:
-            plot_path = os.path.join(TEMP_DIR, filename)
+            # If filename is already a full path, use it; otherwise join with TEMP_DIR
+            if os.path.isabs(filename):
+                plot_path = filename
+            else:
+                plot_path = os.path.join(TEMP_DIR, filename)
             self.fig.savefig(plot_path, dpi=150, bbox_inches='tight')
         except Exception as e:
             print(f"Error saving plot: {e}")
+    
+    def save_all_curve_plots(self, curve_path: str):
+        """
+        Save only the main 1D plot for a curve.
+        Specialized plots (Guinier, Kratky, loglog) are saved only when user selects those plot types.
+        
+        Args:
+            curve_path: Path to the curve data file
+        """
+        if not curve_path or not os.path.exists(curve_path):
+            return
+        
+        try:
+            # Save only main 1D curve plot
+            plot_filename = generate_curve_plot_filename(
+                curve_path,
+                "plot_1d",
+                ".png",
+                base_dir=TEMP_DIR
+            )
+            self.save_plot(plot_filename)
+            
+        except Exception as e:
+            print(f"Error saving curve plot for {curve_path}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def save_current_plot_type(self):
+        """
+        Save the currently selected plot type for all checked curves.
+        This is called when user changes plot type in the panel.
+        Only saves specialized plots (not "I vs q").
+        """
+        if not self.plot_type:
+            return
+        
+        # Map plot type names to save identifiers
+        # Only save specialized plot types, not the basic "I vs q"
+        plot_type_map = {
+            "log I vs q": "logI_vs_q",
+            "log I vs log q": "loglog",
+            "Guinier: log I vs q^2": "guinier",
+            "Kratky: q^2 * I vs q": "kratky",
+        }
+        
+        save_type = plot_type_map.get(self.plot_type)
+        if not save_type:
+            # For "I vs q", don't save automatically
+            return
+        
+        # Save plot for all checked curves
+        for unique_id, (file_path, curve_type, checkbox_var, _, filename) in self.curves.items():
+            if checkbox_var.get() and os.path.exists(file_path):
+                try:
+                    q, I, sigma, _ = read_saxs(file_path)
+                    q_nm = q * 1e-9  # Convert q from 1/m to 1/nm
+                    
+                    # Filter out zero/negative values for log plots
+                    valid_mask = (I > 0) & (q_nm > 0)
+                    q_plot = q_nm[valid_mask]
+                    I_plot = I[valid_mask]
+                    
+                    if len(q_plot) == 0:
+                        continue
+                    
+                    # Generate appropriate data based on plot type
+                    if save_type == "guinier":
+                        x_data = q_plot ** 2
+                        y_data = np.log10(I_plot)
+                        xlabel = "q² (nm⁻²)"
+                        ylabel = "log₁₀(I)"
+                    elif save_type == "kratky":
+                        x_data = q_plot
+                        y_data = (q_plot ** 2) * I_plot
+                        xlabel = "q (nm⁻¹)"
+                        ylabel = "q² × I (a.u.)"
+                    elif save_type == "loglog":
+                        x_data = np.log10(q_plot)
+                        y_data = np.log10(I_plot)
+                        xlabel = "log₁₀(q / nm⁻¹)"
+                        ylabel = "log₁₀(I)"
+                    elif save_type == "logI_vs_q":
+                        x_data = q_plot
+                        y_data = np.log10(I_plot)
+                        xlabel = "q (nm⁻¹)"
+                        ylabel = "log₁₀(I)"
+                    else:
+                        continue
+                    
+                    # Save the plot
+                    self._save_single_curve_plot(file_path, x_data, y_data, save_type, xlabel, ylabel)
+                    
+                except Exception as e:
+                    print(f"Error saving {save_type} plot for {filename}: {e}")
+    
+    def _save_single_curve_plot(self, curve_path: str, x_data, y_data, plot_type: str, 
+                                xlabel: str, ylabel: str):
+        """
+        Save a single curve plot.
+        
+        Args:
+            curve_path: Path to the curve data file
+            x_data: X-axis data
+            y_data: Y-axis data
+            plot_type: Type of plot (e.g., "guinier", "kratky", "loglog")
+            xlabel: X-axis label
+            ylabel: Y-axis label
+        """
+        try:
+            # Create a new figure for this plot
+            fig, ax = plt.subplots(figsize=(10, 6))
+            
+            # Plot the data
+            n_points = len(x_data)
+            if n_points > 1000:
+                marker_size = 8
+                alpha = 0.6
+            elif n_points > 500:
+                marker_size = 10
+                alpha = 0.7
+            else:
+                marker_size = 12
+                alpha = 0.8
+            
+            ax.scatter(
+                x_data, y_data,
+                s=marker_size,
+                alpha=alpha,
+                edgecolors='none',
+                marker='o',
+                color='#1f77b4'
+            )
+            
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(ylabel)
+            ax.set_title(f"{plot_type.capitalize()} Plot: {os.path.basename(curve_path)}")
+            ax.grid(True, alpha=0.3)
+            
+            # Generate filename
+            plot_path = generate_curve_plot_filename(curve_path, plot_type, '.png', TEMP_DIR)
+            
+            # Save plot
+            fig.savefig(plot_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            
+        except Exception as e:
+            print(f"Error saving {plot_type} plot: {e}")
+            import traceback
+            traceback.print_exc()
 

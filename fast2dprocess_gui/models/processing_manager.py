@@ -3,6 +3,7 @@ import os
 from typing import Optional
 from ..core.constants import TEMP_DIR
 from ..models.calibration_manager import CalibrationManager
+from ..utils.filename_utils import generate_filename
 from processor import integrate_2d_to_1d
 from utils import read_from_tiff
 
@@ -49,9 +50,13 @@ class ProcessingManager:
         # Read image data
         data = read_from_tiff(image_path)
         
-        # Create output filename
-        original_basename = os.path.splitext(os.path.basename(str(image_path)))[0]
-        output_path = os.path.join(self.temp_dir, f"int_{original_basename}.dat")
+        # Create output filename with descriptive naming
+        output_path = generate_filename(
+            image_path,
+            "int",
+            ".dat",
+            base_dir=self.temp_dir
+        )
         
         # Perform integration
         metadata = {'type': image_type, 'source_path': image_path}
@@ -75,9 +80,17 @@ class ProcessingManager:
         from processor import subtract_buffer
         
         if output_path is None:
+            # Generate descriptive filename from both buffer and sample names
             buffer_basename = os.path.splitext(os.path.basename(buffer_path))[0]
             sample_basename = os.path.splitext(os.path.basename(sample_path))[0]
-            output_path = os.path.join(self.temp_dir, f"subtracted_{buffer_basename}_{sample_basename}.dat")
+            # Use generate_filename with additional_info for the sample name
+            output_path = generate_filename(
+                buffer_path,
+                "subtracted",
+                ".dat",
+                additional_info=sample_basename,
+                base_dir=self.temp_dir
+            )
         
         subtract_buffer(buffer_path, sample_path, output_path, method='match_tail')
         return output_path

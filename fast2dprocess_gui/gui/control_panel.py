@@ -45,11 +45,12 @@ class ControlPanel:
         params_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=10)
         params_frame.grid_columnconfigure(0, weight=1)
         
-        ctk.CTkLabel(
+        params_title = ctk.CTkLabel(
             params_frame, 
             text="Calibration Parameters", 
             font=ctk.CTkFont(size=16, weight="bold")
-        ).grid(row=0, column=0, columnspan=2, pady=10)
+        )
+        params_title.grid(row=0, column=0, columnspan=2, pady=10)
         
         self.param_vars = {}
         self.param_sliders = {}
@@ -68,12 +69,12 @@ class ControlPanel:
         for display_name, (config_key, conversion, slider_range) in param_mapping.items():
             default_display = self._get_default_display_value(config_key, conversion, slider_range)
             
-            ctk.CTkLabel(params_frame, text=display_name).grid(row=row, column=0, sticky="w", padx=10, pady=5)
+            label = ctk.CTkLabel(params_frame, text=display_name)
+            label.grid(row=row, column=0, sticky="w", padx=10, pady=5)
             
             self.param_vars[config_key] = tk.DoubleVar(value=default_display)
-            ctk.CTkEntry(params_frame, width=120, textvariable=self.param_vars[config_key]).grid(
-                row=row, column=1, padx=10, pady=5
-            )
+            entry = ctk.CTkEntry(params_frame, width=120, textvariable=self.param_vars[config_key])
+            entry.grid(row=row, column=1, padx=10, pady=5)
             
             slider_min, slider_max = slider_range
             slider = ctk.CTkSlider(
@@ -95,6 +96,17 @@ class ControlPanel:
             font=ctk.CTkFont(size=14, weight="bold")
         )
         apply_button.grid(row=row, column=0, columnspan=2, pady=10)
+        
+        # Save button
+        row += 1
+        save_button = ctk.CTkButton(
+            params_frame,
+            text="Save",
+            command=self.callbacks.get('on_save'),
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color=("green", "darkgreen")
+        )
+        save_button.grid(row=row, column=0, columnspan=2, pady=10)
     
     def create_drag_drop_area(self, parent, title, row):
         """Create a drag and drop area for file upload."""
@@ -164,6 +176,29 @@ class ControlPanel:
                                 subchild.configure(text=f"File: {filename}")
                                 break
     
+    def _reset_drop_labels(self, frame, title):
+        """Reset labels in drop frame to default state."""
+        # Reset status label
+        if hasattr(frame, 'status_label'):
+            frame.status_label.configure(text="No file selected")
+        
+        # Reset drop_label (inside drop_area frame)
+        for child in frame.winfo_children():
+            if isinstance(child, ctk.CTkFrame):
+                # Check if this is the drop_area and has stored reference
+                if hasattr(child, 'drop_label'):
+                    drop_label = getattr(child, 'drop_label')
+                    drop_label.configure(text=f"Drag & Drop {title} Here")
+                else:
+                    # Fallback: search for the label
+                    for subchild in child.winfo_children():
+                        if isinstance(subchild, ctk.CTkLabel):
+                            current_text = subchild.cget("text")
+                            # Update if it's the drop label (contains "Drag & Drop" or starts with "File:")
+                            if "Drag & Drop" in current_text or current_text.startswith("File:"):
+                                subchild.configure(text=f"Drag & Drop {title} Here")
+                                break
+    
     def on_drop(self, event, frame, title):
         """Handle file drop event."""
         files = self.root.tk.splitlist(event.data)
@@ -171,11 +206,20 @@ class ControlPanel:
             return
         
         file_path = files[0]
-        self._update_drop_labels(frame, file_path)
         
-        # Call the callback to handle file drop
+        # Call the callback to handle file drop first (for validation)
+        # Only update labels if validation passes
         if self.callbacks.get('on_file_drop'):
-            self.callbacks['on_file_drop'](file_path, title)
+            success = self.callbacks['on_file_drop'](file_path, title)
+            # Only update labels if file was successfully processed
+            if success:
+                self._update_drop_labels(frame, file_path)
+            else:
+                # Reset labels to default state for failed validation
+                self._reset_drop_labels(frame, title)
+        else:
+            # If no callback, update labels anyway (shouldn't happen)
+            self._update_drop_labels(frame, file_path)
     
     def _get_default_display_value(self, config_key, conversion, slider_range):
         """Get default display value for a parameter, updating config if needed."""

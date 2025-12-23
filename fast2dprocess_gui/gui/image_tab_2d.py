@@ -7,6 +7,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from scipy.ndimage import zoom
 from ..core.constants import TEMP_DIR
+from ..utils.filename_utils import generate_filename
 from processor import IntegratorExtended
 from utils import read_from_tiff
 
@@ -36,11 +37,12 @@ class ImageTab2D:
         self.thumbnail_frame.grid_columnconfigure(0, weight=1)
         
         # Thumbnail title label
-        ctk.CTkLabel(
+        title_label = ctk.CTkLabel(
             self.thumbnail_frame,
             text="Images",
             font=ctk.CTkFont(size=12, weight="bold")
-        ).grid(row=0, column=0, pady=(0, 10))
+        )
+        title_label.grid(row=0, column=0, pady=(0, 10))
         
         # Main display area (right side)
         display_frame = ctk.CTkFrame(self.tab)
@@ -253,10 +255,52 @@ class ImageTab2D:
             traceback.print_exc()
     
     def save_plot(self, filename):
-        """Save figure to temp directory."""
+        """
+        Save figure to temp directory.
+        
+        Args:
+            filename: Filename (relative or absolute path)
+        """
         try:
-            plot_path = os.path.join(TEMP_DIR, filename)
+            # If filename is already a full path, use it; otherwise join with TEMP_DIR
+            if os.path.isabs(filename):
+                plot_path = filename
+            else:
+                plot_path = os.path.join(TEMP_DIR, filename)
             self.fig.savefig(plot_path, dpi=150, bbox_inches='tight')
         except Exception as e:
             print(f"Error saving plot: {e}")
+    
+    def save_calibrant_plot(self, image_path: str):
+        """
+        Save calibrant plot with descriptive filename.
+        
+        Args:
+            image_path: Path to the original image file
+        """
+        plot_filename = generate_filename(
+            image_path,
+            "calibrant",
+            ".png",
+            additional_info="2d",
+            base_dir=TEMP_DIR
+        )
+        self.save_plot(plot_filename)
+    
+    def save_image_plot(self, image_path: str, image_type: str):
+        """
+        Save image plot with descriptive filename.
+        
+        Args:
+            image_path: Path to the original image file
+            image_type: Type of image (e.g., "buffer", "sample")
+        """
+        plot_filename = generate_filename(
+            image_path,
+            image_type,
+            ".png",
+            additional_info="2d",
+            base_dir=TEMP_DIR
+        )
+        self.save_plot(plot_filename)
 

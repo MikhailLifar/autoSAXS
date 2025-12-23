@@ -14,7 +14,7 @@ from ..services import CalibrationService, ProcessingService
 from .control_panel import ControlPanel
 from .image_tab_2d import ImageTab2D
 from .curves_tab_1d import CurvesTab1D
-from .widgets import center_window
+from .widgets import center_window, enable_text_copying_recursive
 from utils import read_from_tiff
 
 
@@ -74,6 +74,9 @@ class SAXSProcessorGUI:
         
         # Center window
         center_window(self.root)
+        
+        # Enable text copying globally for all widgets (after all widgets are created)
+        enable_text_copying_recursive(self.root)
     
     def _subscribe_to_events(self):
         """Subscribe to events from managers/services."""
@@ -93,7 +96,14 @@ class SAXSProcessorGUI:
         if self.data_manager.calibrant_path and self.image_tab_2d:
             filename = os.path.basename(str(self.data_manager.calibrant_path))
             self.display_2d_image(self.data_manager.calibrant_path, f"Calibrant: {filename}")
-            self.image_tab_2d.save_plot("calibrant_2d.png")
+            # Copy image to temp with descriptive naming
+            self.data_manager.copy_image_to_temp(
+                self.data_manager.calibrant_path,
+                "calibrant",
+                TEMP_DIR
+            )
+            # Save plot - view component handles its own filename generation
+            self.image_tab_2d.save_calibrant_plot(self.data_manager.calibrant_path)
         
         # Auto-process any existing buffer or sample images
         if not from_cache:
@@ -140,6 +150,7 @@ class SAXSProcessorGUI:
         callbacks = {
             'on_file_drop': self.on_file_drop,
             'on_apply_calibration': self.apply_calibration,
+            'on_save': self.save_results,
         }
         self.control_panel = ControlPanel(main_frame, self.root, callbacks, self.config_dictionary)
         
@@ -183,8 +194,13 @@ class SAXSProcessorGUI:
         status_bar.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
         self.status_bar = status_bar
     
-    def on_file_drop(self, file_path: str, title: str):
-        """Handle file drop callback from ControlPanel."""
+    def on_file_drop(self, file_path: str, title: str) -> bool:
+        """
+        Handle file drop callback from ControlPanel.
+        
+        Returns:
+            True if file was successfully processed, False if validation failed
+        """
         file_type_map = {
             "Calibrant Image": (FileType.CALIBRANT, "Calibrant", True),
             "Buffer Image": (FileType.BUFFER, "Buffer", False),
@@ -194,6 +210,21 @@ class SAXSProcessorGUI:
         
         if title in file_type_map:
             file_type, image_type, always_display = file_type_map[title]
+            
+            # Validate mask file before storing
+            if title == "Mask File (Optional)":
+                if not self.data_manager.validate_mask_file(file_path):
+                    self._update_status(f"Invalid mask file: {os.path.basename(str(file_path))}. Only .npy, .txt, .msk files with values 0/1 or True/False are allowed.", "error")
+                    self.root.after(5000, self.reset_status_bar_color)
+                    return False  # Don't store invalid mask file
+            
+            # Validate image files (calibrant, buffer, sample) - must be .tif
+            elif title in ["Calibrant Image", "Buffer Image", "Sample Image"]:
+                if not self.data_manager.validate_image_file(file_path):
+                    self._update_status(f"Invalid {title.lower()}: {os.path.basename(str(file_path))}. Only .tif files are allowed.", "error")
+                    self.root.after(5000, self.reset_status_bar_color)
+                    return False  # Don't store invalid image file
+            
             # Store the file path
             self.data_manager.set_file(file_type, file_path)
             
@@ -225,6 +256,10 @@ class SAXSProcessorGUI:
                         ).start()
             else:
                 self._update_status("Please calibrate first")
+            
+            return True  # File successfully processed
+        
+        return False  # Unknown file type
     
     def _update_status(self, message: str, color: str = "default"):
         """Update status bar with message and optional color."""
@@ -236,15 +271,6 @@ class SAXSProcessorGUI:
         """Reset status bar to default color."""
         if hasattr(self, 'status_bar'):
             self.status_bar.configure(fg_color=STATUS_COLORS["default"])
-    
-    def _copy_file_to_temp(self, source_path: str, dest_name: str):
-        """Copy file to temp directory."""
-        if source_path:
-            try:
-                dest = os.path.join(TEMP_DIR, dest_name)
-                shutil.copy2(str(source_path), dest)
-            except Exception as e:
-                print(f"Error copying {dest_name}: {e}")
     
     def update_config_from_gui(self):
         """Update config_manager from GUI values."""
@@ -374,36 +400,65 @@ class SAXSProcessorGUI:
         )
         
         if output_path:
-            # Copy source image to temp
-            self._copy_file_to_temp(image_path, f"{image_type}.tif")
+            # Copy source image to temp with descriptive naming (delegated to DataManager)
+            self.data_manager.copy_image_to_temp(image_path, image_type, TEMP_DIR)
             
-            # Register curve in GUI
+            # Register curve in GUI and save plots (delegated to view component)
             if self.curves_tab_1d:
                 self.root.after_idle(lambda: self.curves_tab_1d.add_curve(output_path, image_type))
                 
+                # Save all plots for this curve (view component handles filename generation)
+                def save_all_curve_plots():
+                    if self.curves_tab_1d:
+                        self.curves_tab_1d.save_all_curve_plots(output_path)
+                
                 # Handle subtraction for sample
                 if image_type == "sample":
+                    # Store output_path in closure before scheduling
+                    sample_output_path = output_path
+                    
                     def create_subtracted_curves():
                         if not self.curves_tab_1d:
                             return
-                        # Find all buffer curves and create subtracted versions
-                        for buffer_filename, (buffer_path, buf_type, _, _) in list(self.curves_tab_1d.curves.items()):
+                        
+                        # Find the most recently added buffer curve
+                        # Skip any curves that match the current sample output_path to avoid confusion
+                        last_buffer_path = None
+                        sample_unique_id = os.path.abspath(str(sample_output_path))
+                        
+                        # Iterate in reverse order (most recent first) to find the most recent buffer
+                        for unique_id, (buffer_path, buf_type, _, _, filename) in reversed(list(self.curves_tab_1d.curves.items())):
+                            # Skip the current sample curve if it's already in the list
+                            if unique_id == sample_unique_id:
+                                continue
+                            # Find the most recent buffer curve
                             if buf_type == "buffer" and os.path.exists(buffer_path):
-                                subtracted_path = self.processing_service.create_subtracted_curve(
-                                    buffer_path, output_path
-                                )
-                                if subtracted_path and self.curves_tab_1d:
-                                    self.curves_tab_1d.add_curve(subtracted_path, "subtracted")
+                                last_buffer_path = buffer_path
+                                break
+                        
+                        # Perform subtraction if we found a buffer curve
+                        # Important: subtract_buffer expects (buffer_path, sample_path, output_path)
+                        # It calculates: sample - buffer
+                        if last_buffer_path:
+                            subtracted_path = self.processing_service.create_subtracted_curve(
+                                last_buffer_path,      # buffer curve (first argument) - will be subtracted FROM sample
+                                sample_output_path     # sample curve (second argument) - this is what we're subtracting FROM
+                            )
+                            if subtracted_path and self.curves_tab_1d:
+                                self.curves_tab_1d.add_curve(subtracted_path, "subtracted")
+                                # Save plots for subtracted curve (view component handles this)
+                                self.curves_tab_1d.save_all_curve_plots(subtracted_path)
                     
-                    # Schedule subtraction after a short delay
+                    # Schedule subtraction after a short delay to ensure sample curve is added to the list first
                     self.root.after(100, create_subtracted_curves)
+                
+                # Schedule plot saving
+                self.root.after(200, save_all_curve_plots)
             
-            # Update display
+            # Update display and save 2D image plot (delegated to view component)
             self.root.after_idle(lambda: self.display_1d_curves())
             if self.image_tab_2d:
-                self.root.after_idle(lambda: self.image_tab_2d.save_plot(f"{image_type}_2d.png"))
-            if self.curves_tab_1d:
-                self.root.after_idle(lambda: self.curves_tab_1d.save_plot(f"{image_type}_1d.png"))
+                self.root.after_idle(lambda: self.image_tab_2d.save_image_plot(image_path, image_type))
     
     def display_2d_image(self, image_path: str, title: str):
         """Display a 2D image in the 2D tab."""
@@ -423,4 +478,49 @@ class SAXSProcessorGUI:
         """Display 1D curves in the 1D tab."""
         if self.curves_tab_1d:
             self.curves_tab_1d.update_display()
+    
+    def save_results(self):
+        """Save all files from temporary directory to user-selected location."""
+        import tkinter.filedialog as filedialog
+        
+        # Let user select an existing directory (must be empty)
+        dest_dir = filedialog.askdirectory(
+            title="Select empty directory to save results (directory must exist and be empty)",
+            mustexist=True
+        )
+        
+        if not dest_dir:
+            return  # User cancelled
+        
+        # Check if directory is empty
+        if os.path.exists(dest_dir):
+            try:
+                # Check if directory is empty
+                if os.listdir(dest_dir):
+                    self._update_status(f"Error: Directory '{dest_dir}' is not empty. Please select an empty directory.", "error")
+                    self.root.after(5000, self.reset_status_bar_color)
+                    return
+            except OSError as e:
+                self._update_status(f"Error: Cannot access directory '{dest_dir}': {str(e)}", "error")
+                self.root.after(5000, self.reset_status_bar_color)
+                return
+        
+        # Delegate file operations to DataManager
+        try:
+            files_copied = self.data_manager.save_temp_files(TEMP_DIR, dest_dir)
+            if files_copied is not None:
+                if files_copied > 0:
+                    self._update_status(f"Successfully saved {files_copied} items to {dest_dir}", "success")
+                else:
+                    self._update_status("No temporary files found to save", "error")
+            else:
+                self._update_status("Error: Failed to save files", "error")
+            
+            self.root.after(5000, self.reset_status_bar_color)
+        except Exception as e:
+            error_msg = f"Error saving files: {str(e)}"
+            self._update_status(error_msg, "error")
+            self.root.after(5000, self.reset_status_bar_color)
+            import traceback
+            traceback.print_exc()
 
