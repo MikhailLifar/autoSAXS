@@ -15,6 +15,7 @@ import os
 import argparse
 import glob
 import numpy as np
+import pandas as pd
 
 # Add parent directory to path to import modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -147,6 +148,10 @@ def main():
     # Create dummy integrator
     integrator = create_dummy_integrator(mask=mask)
     
+    # Track if we're processing a directory (for DataFrame creation)
+    is_directory = os.path.isdir(args.tif_input)
+    results = []
+    
     # Process each .tif file
     for tif_file in tif_files:
         try:
@@ -157,9 +162,29 @@ def main():
             print(f"  min: {stats['min']}")
             print(f"  max: {stats['max']}")
             print()
+            
+            # Store results for DataFrame if processing a directory
+            if is_directory:
+                base_name = os.path.splitext(os.path.basename(tif_file))[0]
+                results.append({
+                    'filename': base_name,
+                    'sum': float(stats['sum']),
+                    'min': float(stats['min']),
+                    'max': float(stats['max'])
+                })
         except Exception as e:
             print(f"Error processing {tif_file}: {e}", file=sys.stderr)
             continue
+    
+    # Create DataFrame if processing a directory
+    if is_directory and results:
+        df = pd.DataFrame(results)
+        # Save DataFrame to CSV in the same directory
+        df_path = os.path.join(args.tif_input, 'integration_summary.csv')
+        df.to_csv(df_path, index=False)
+        print(f"\nSummary DataFrame saved to: {df_path}")
+        print(f"\nDataFrame contents:")
+        print(df.to_string(index=False))
 
 
 if __name__ == '__main__':
