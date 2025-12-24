@@ -189,6 +189,59 @@ def get_interring_dist_px(dist_guess, lmbd, px_size, calibrant_name='AgBh'):
     return interring_dist
 
 
+def get_r_beam_px(image: np.ndarray, center_y_px, center_x_px):
+    """
+    Estimate the radius of the dark beam-stop circle at the beam center.
+    
+    The function finds the minimum radius at which all pixels are "bright",
+    i.e., the minimum brightness of pixels at that radius is much higher than
+    in the dark center circle.
+    
+    Args:
+        image: 2D detector image
+        center_y_px: Beam center Y coordinate in pixels
+        center_x_px: Beam center X coordinate in pixels
+    
+    Returns:
+        Estimated beam-stop radius in pixels, or None if no clear edge is found
+    """
+    # Calculate radial distances from center for all pixels
+    y_coords, x_coords = np.ogrid[:image.shape[0], :image.shape[1]]
+    r = np.sqrt((y_coords - center_y_px)**2 + (x_coords - center_x_px)**2)
+    
+    # Get intensity at center (dark region)
+    center_radius = 5  # Small radius around center to estimate dark intensity
+    center_mask = r <= center_radius
+    center_intensity = np.median(image[center_mask]) if np.any(center_mask) else np.percentile(image, 5)
+    
+    # Define "bright" threshold as multiple of center intensity
+    brightness_threshold = np.percentile(image, 50.0)
+    
+    # Maximum radius to check: strictly limited to about 50 pixels
+    max_r_to_check = 50.0
+    
+    # Check radii from center outward
+    r_step = 1.0
+    r_values = np.arange(0, max_r_to_check + r_step, r_step)
+    
+    for r_check in r_values:
+        # Create ring mask (pixels at approximately this radius)
+        ring_width = 2.0  # Width of ring to check
+        ring_mask = (r >= r_check) & (r < r_check + ring_width)
+        
+        if np.any(ring_mask):
+            # Get minimum intensity in this ring
+            ring_intensities = image[ring_mask]
+            min_ring_intensity = np.min(ring_intensities)
+            
+            # If minimum intensity in ring is above threshold, we've found the edge
+            if min_ring_intensity > brightness_threshold:
+                return float(r_check)
+    
+    # If we didn't find a clear edge within the max radius, return None
+    return None
+
+
 def find_rings(
     calib_data, center_y_px, center_x_px, r_max_px,
     interring_dist_px, 

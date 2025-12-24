@@ -80,7 +80,9 @@ class Context:
         assert self.directory is not None
         if group_name not in self.paths:
             self.paths[group_name] = [[], (1, float("inf")), os.path.join(self.directory, "*")]
-        self.paths[group_name][0].append(path)
+        paths = self.paths[group_name][0]
+        if path not in paths:  # do not allow duplicate paths
+            paths.append(path)
     
     def extend_paths(self, group_name, paths):
         assert self.directory is not None

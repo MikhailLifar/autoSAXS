@@ -1234,37 +1234,65 @@ echo "Full results saved to: $RESULTS_FILE"
         
         return context
     
-    def pipeline_batch(self, fast_forward=False):
+    def pipeline_batch(
+        self, all_from_config=False, config_path: Optional[str] = None, fast_forward=False):
         # TODO currently the pipeline is oriented on proteins. Since the pipeline for other samples is sort of similar, I think, there will be only one pipeline in the end
 
         model = 'GLM-4.6'
         # model = 'DeepSeek-V3.1'
         vision_model = 'GLM-4.5V'
-        
-        descr, descr_path = get_pipeline_description('protein_v0')
-        # print(descr)
-        directory = self.interface.ask_for_file('Write a path to a directory for your data')
 
-        context = Context(directory, descr_path, interface=self.interface)
+        context = Context()
         
-        if context['paths', 'calib_2d']:
-            starting_point = 0
-        elif context['paths', 'buffer_1d'] and context.paths['sample_1d']:
-            starting_point = 1
-        elif context['paths', 'sub'] and context['paths', 'sub_picture']:
-            starting_point = 2
+        if all_from_config:
+            assert config_path is not None
+            context.set_config(config_path)
+            
+            steps = context['steps']
+            directory = context['directory']
+            context.set_directory(directory)
+
         else:
-            raise RuntimeError('Data for pipeline was not provided')
-        
-        ai = None
-        if starting_point < 1:
-            assert context['paths', 'buffer_2d'] and context.paths['sample_2d']
-            calibrant_path = context['paths', 'calib_2d', 0]
-            res_calib = self.autocalib(
-                calibrant_path, context=context, fast_forward=fast_forward)
-            ai = res_calib['integrator']
+            # pipeline_choice, steps = get_pipeline_spec_gui()
+            # save_latest_steps(pipeline_choice, steps)
 
-            # TODO for now integrated go directly to "averaged" subdir, should be fixed in the future
+            # descr, descr_path = get_pipeline_description(pipeline_choice)
+            # print(descr)
+            # directory = self.interface.ask_for_file('Write a path to a directory for your data')
+            # context.set_directory(directory)
+
+           
+            # config_path = glob.glob(os.path.join(directory, 'config.conf'))
+            # assert len(config_path) == 1
+            # config_path, = config_path
+            # context.set_config(config_path)
+
+            raise NotImplementedError
+
+        ai = None
+        if 'calibration' in steps:
+            assert 'calib_2d' in context.paths
+            calib_path = context['paths', 'calib_2d', -1]
+            if context['mask_config', 'mode'] in ['from_file', 'combined']:
+                mask_path = context['paths', 'calib_mask']
+                if mask_path:
+                    mask_path, = mask_path
+                else:
+                    mask_path = None
+            res_calib = self.autocalib(
+                calib_path, mask_path, context=context, fast_forward=fast_forward)
+            ai = res_calib['integrator']
+        
+        if 'integration' in steps and 'calibration' not in steps:
+            ai_subdir = 'integrator_params'
+            def exists_condition():
+                return all(os.path.exists(os.path.join(directory, ai_subdir, p)) 
+                for p in ['ai_params.json', 'detector_params.json', 'mask.npy']) 
+            
+            assert exists_condition(), 'IntegratorExtended object can not be created - the data does not exist'
+            ai = IntegratorExtended.from_disk(os.path.join(directory, ai_subdir))
+        
+        if 'integration' in steps:
             for p in context['paths', 'buffer_2d']:
                 int_p = self.integrate(
                     ai, context, p, metadata={'type': 'buffer'}, 
@@ -1278,42 +1306,52 @@ echo "Full results saved to: $RESULTS_FILE"
                     dest_dir=os.path.join(directory, 'averaged'), 
                     fast_forward=fast_forward)
                 context.append_path('sample_1d', int_p)
-            
-        if starting_point < 2:
-            for b_path, s_path in zip(context['paths', 'buffer_1d'], context['paths', 'sample_1d']):
+        
+        if 'subtraction' in steps:
+            profile_paths = []
+            profile_pic_paths = []
+
+            alignment_res = map_sample_files_to_buffer_files(
+                context['paths', 'sample_1d'], context['paths', 'buffer_1d'])
+            aligned_pairs = alignment_res['aligned_pairs']
+            assert not (alignment_res['overlapped'] or alignment_res['not_all_paired'])
+
+            for b_path, s_path in aligned_pairs:
                 sub_path, sub_pic_path = self.subtract(
                     context, s_path, b_path, 
                     dest_dir=os.path.join(directory, 'subtracted'), fast_forward=fast_forward
                 )
                 context.append_path('sub', sub_path)
                 context.append_path('sub_picture', sub_pic_path)
+
+        if 'sample_analysis' in steps:
+            for p in context['paths', 'sub']:
+                atsas_res_path, gnom_path = self.get_descriptors(
+                    context, p, 
+                    dest_dir=os.path.join(directory, 'descriptors'), fast_forward=fast_forward)
+                context.append_path('astas_analysis', atsas_res_path)
+                context.append_path('p(R)', gnom_path)
         
-        for p in context['paths', 'sub']:
-            atsas_res_path, gnom_path = self.get_descriptors(
-                context, p, 
-                dest_dir=os.path.join(directory, 'descriptors'), fast_forward=fast_forward)
-            context.append_path('astas_analysis', atsas_res_path)
-            context.append_path('p(R)', gnom_path)
+        if 'plots' in steps:
+            for sub_path, sub_pic_path in zip(context['paths', 'sub'], context['paths', 'sub_picture']):
+                plot_paths = self.plot(
+                    context, sub_path, dest_dir=os.path.join(directory, 'plots'), fast_forward=fast_forward)
+                plot_paths = [sub_pic_path, ] + plot_paths
+                context.append_path('plot', plot_paths)
         
-        for sub_path, sub_pic_path in zip(context['paths', 'sub'], context['paths', 'sub_picture']):
-            plot_paths = self.plot(
-                context, sub_path, dest_dir=os.path.join(directory, 'plots'), fast_forward=fast_forward)
-            plot_paths = [sub_pic_path, ] + plot_paths
-            context.append_path('plot', plot_paths)
-        
-        if context['fit_polydispfit']:
+        if 'polydispfit' in steps:
             for p in context['paths', 'sub']:
                 self.polydispfit(
                     context, p, os.path.join(directory, 'polydispfit'), fast_forward=fast_forward
                 )
         
-        if context['fit_bodies']:
+        if 'bodies' in steps:
             for p in context['paths', 'sub']:
                 self.bodies_fit(
                     context, p, os.path.join(directory, 'bodies'), fast_forward=fast_forward
                 )
         
-        if context['fit_dammif']:
+        if 'dammif' in steps:
             for sub_path, gnom_path in zip(context['paths', 'sub'], context['paths', 'p(R)']):
                 self.dammif_fit(
                     context, sub_path, gnom_path, os.path.join(directory, 'dammif'),
