@@ -58,6 +58,37 @@ def find_mask_file(directory):
     return None
 
 
+def longest_common_substring(strings):
+    """
+    Find the longest common substring among a list of strings.
+    
+    Args:
+        strings: List of strings
+    
+    Returns:
+        str: Longest common substring
+    """
+    if not strings:
+        return ""
+    if len(strings) == 1:
+        return strings[0]
+    
+    # Use the first string as reference
+    reference = strings[0]
+    longest = ""
+    
+    # Try all possible substrings of the reference string
+    for i in range(len(reference)):
+        for j in range(i + 1, len(reference) + 1):
+            substring = reference[i:j]
+            # Check if this substring appears in all other strings
+            if all(substring in s for s in strings[1:]):
+                if len(substring) > len(longest):
+                    longest = substring
+    
+    return longest
+
+
 def check_q_values_identical(integrated_data, rtol=1e-5):
     """
     Check if all integrated curves have identical q values.
@@ -118,6 +149,12 @@ def main():
     parser.add_argument(
         'directory',
         help='Directory containing .tif files'
+    )
+    parser.add_argument(
+        '--force', '-f',
+        action='store_true',
+        default=False,
+        help='Force recalculation and overwrite existing results (default: False, skip if results exist)'
     )
     
     args = parser.parse_args()
@@ -202,8 +239,9 @@ def main():
     # Step 5: Perform autocalibration
     print("\n5. Performing autocalibration...")
     controller = Controller(CLIInterface(), PLTViewer())
+    # Use fast_forward mode if force=False (skip if results exist)
     calib_result = controller.autocalib(
-        calibrant_path, mask_path, context=context, fast_forward=False
+        calibrant_path, mask_path, context=context, fast_forward=not args.force
     )
     integrator = calib_result['integrator']
     
@@ -234,29 +272,53 @@ def main():
     output_dir = os.path.join(directory, 'integrated')
     os.makedirs(output_dir, exist_ok=True)
     
+    # Per-file fast-forward check: integrate only files that don't have results yet
     for tif_file in tif_files_to_integrate:
-        try:
-            base_name = os.path.splitext(os.path.basename(tif_file))[0]
-            output_path = os.path.join(output_dir, f"{base_name}_integrated.dat")
-            
-            saxs_2d = read_from_tiff(tif_file)
-            metadata = {'source_file': os.path.basename(tif_file)}
-            q, I, sigma = integrate_2d_to_1d(
-                integrator, saxs_2d, npt=1000, destpath=output_path, metadata=metadata
-            )
-            
-            integrated_files.append(output_path)
-            integrated_data.append({
-                'file': base_name,
-                'path': output_path,
-                'q': q,
-                'I': I,
-                'sigma': sigma
-            })
-            print(f"   Integrated: {base_name}")
-        except Exception as e:
-            print(f"   Error integrating {os.path.basename(tif_file)}: {e}", file=sys.stderr)
-            continue
+        base_name = os.path.splitext(os.path.basename(tif_file))[0]
+        output_path = os.path.join(output_dir, f"{base_name}_integrated.dat")
+        
+        # Check if this file's integration result already exists (unless force=True)
+        should_skip = not args.force and os.path.exists(output_path)
+        
+        if should_skip:
+            # Load existing integrated data
+            try:
+                q, I, sigma, _ = read_saxs(output_path)  # Returns (wavenumber, intensity, sigma, metadata)
+                integrated_files.append(output_path)
+                integrated_data.append({
+                    'file': base_name,
+                    'path': output_path,
+                    'q': q,
+                    'I': I,
+                    'sigma': sigma
+                })
+                print(f"   Skipped (exists): {base_name}")
+                continue  # Skip to next file
+            except Exception as e:
+                print(f"   Error loading {base_name}, will re-integrate: {e}", file=sys.stderr)
+                should_skip = False
+        
+        if not should_skip:
+            # Integrate this file
+            try:
+                saxs_2d = read_from_tiff(tif_file)
+                metadata = {'source_file': os.path.basename(tif_file)}
+                q, I, sigma = integrate_2d_to_1d(
+                    integrator, saxs_2d, npt=1000, destpath=output_path, metadata=metadata
+                )
+                
+                integrated_files.append(output_path)
+                integrated_data.append({
+                    'file': base_name,
+                    'path': output_path,
+                    'q': q,
+                    'I': I,
+                    'sigma': sigma
+                })
+                print(f"   Integrated: {base_name}")
+            except Exception as e:
+                print(f"   Error integrating {os.path.basename(tif_file)}: {e}", file=sys.stderr)
+                continue
     
     if len(integrated_data) == 0:
         print("Error: No files were successfully integrated", file=sys.stderr)
@@ -264,12 +326,21 @@ def main():
     
     print(f"   Successfully integrated {len(integrated_data)} files")
     
-    # Step 8: Plot individual integrated curves
+    # Step 8: Plot individual integrated curves (per-file fast-forward check)
     print("\n8. Plotting individual integrated curves...")
     individual_plots_dir = os.path.join(directory, 'individual_curves')
     os.makedirs(individual_plots_dir, exist_ok=True)
     
     for i, data in enumerate(integrated_data):
+        plot_path = os.path.join(individual_plots_dir, f"{data['file']}_integrated.png")
+        
+        # Check if this plot already exists (unless force=True)
+        should_skip = not args.force and os.path.exists(plot_path)
+        
+        if should_skip:
+            print(f"   Skipped (exists): {data['file']}_integrated.png")
+            continue
+        
         fig, ax = plt.subplots()
         
         # Apply q_range filter if present
@@ -297,237 +368,332 @@ def main():
         ax.grid(True, alpha=0.3)
         ax.legend()
         plt.tight_layout()
-        plot_path = os.path.join(individual_plots_dir, f"{data['file']}_integrated.png")
         plt.savefig(plot_path, dpi=150)
         plt.close()
+        print(f"   Plotted: {data['file']}_integrated.png")
     
-    print(f"   Saved {len(integrated_data)} individual curve plots to {individual_plots_dir}")
+    print(f"   Individual curve plots saved to {individual_plots_dir}")
+    
+    # Step 8b: Export all integrated curves to CSV
+    print("\n8b. Exporting all integrated curves to CSV...")
+    
+    # Get base names of all integrated files (without extension)
+    base_names = [data['file'] for data in integrated_data]
+    
+    # Find longest common substring
+    common_substring = longest_common_substring(base_names)
+    
+    # Strip '_' from beginning and end
+    common_substring = common_substring.strip('_')
+    
+    # Generate CSV filename
+    if len(common_substring) >= 3:
+        csv_filename = f"{common_substring}_curves.csv"
+    else:
+        csv_filename = "curves.csv"
+    
+    # Save CSV to main directory (not integrated subdirectory)
+    csv_path = os.path.join(directory, csv_filename)
+    
+    # Check if CSV already exists
+    skip_csv = not args.force and os.path.exists(csv_path)
+    if skip_csv:
+        print(f"   CSV file already exists: {csv_filename}, skipping...")
+    else:
+        # Prepare data for CSV export
+        # Check if all curves have identical q values
+        q_values_identical = check_q_values_identical(integrated_data)
+        
+        if q_values_identical:
+            # Use the q values from the first curve
+            q_csv = integrated_data[0]['q']
+            # Create DataFrame with q column and I/sigma columns for each file
+            csv_data = {'q': q_csv}
+            for data in integrated_data:
+                csv_data[f"{data['file']}_I"] = data['I']
+                csv_data[f"{data['file']}_sigma"] = data['sigma']
+        else:
+            # Interpolate to common q grid for CSV
+            q_min = max(d['q'].min() for d in integrated_data)
+            q_max = min(d['q'].max() for d in integrated_data)
+            q_csv = np.linspace(q_min, q_max, 1000)
+            
+            csv_data = {'q': q_csv}
+            for data in integrated_data:
+                I_interp = np.interp(q_csv, data['q'], data['I'])
+                sigma_interp = np.interp(q_csv, data['q'], data['sigma'])
+                csv_data[f"{data['file']}_I"] = I_interp
+                csv_data[f"{data['file']}_sigma"] = sigma_interp
+        
+        # Create DataFrame and save to CSV
+        df_csv = pd.DataFrame(csv_data)
+        df_csv.to_csv(csv_path, index=False)
+        print(f"   Saved CSV file: {csv_filename}")
+        print(f"   CSV contains {len(df_csv)} rows and {len(df_csv.columns)} columns")
     
     # Step 9: Prepare data for PCA
     print("\n9. Preparing data for PCA analysis...")
     
-    # Check if interpolation is needed
-    q_values_identical = check_q_values_identical(integrated_data)
-    
-    if q_values_identical:
-        print("   All curves have identical q values, no interpolation needed")
-        # Use the q values from the first curve
-        q_common = integrated_data[0]['q']
-        # Stack all intensity arrays directly
-        I_matrix = np.array([data['I'] for data in integrated_data])
-    else:
-        print("   Curves have different q values, interpolating to common grid...")
-        q_common, I_matrix = interpolate_curves_to_common_grid(integrated_data, n_points=1000)
-    
-    print(f"   Data matrix shape: {I_matrix.shape} (n_curves x n_points)")
-    
-    # Apply q_range filter if present in config
-    if q_range_plot is not None:
-        print(f"   Applying q_range filter: [{q_min_plot}, {q_max_plot}] nm⁻¹")
-        # Filter q_common and I_matrix
-        mask = (q_common >= q_min_plot) & (q_common <= q_max_plot)
-        q_common = q_common[mask]
-        I_matrix = I_matrix[:, mask]
-        print(f"   After filtering: {len(q_common)} points remain")
-    
-    # Step 10: Perform PCA
-    print("\n10. Performing PCA analysis...")
-    # Center the data (subtract mean)
-    I_mean = np.mean(I_matrix, axis=0)
-    I_centered = I_matrix - I_mean
-    
-    # Perform PCA
-    pca = PCA()
-    pca.fit(I_centered)
-    
-    # Get PCA components and scores
-    components = pca.components_  # Principal components (eigenvectors)
-    scores = pca.transform(I_centered)  # Projections (PCA coefficients)
-    explained_variance = pca.explained_variance_ratio_
-    
-    print(f"   First component explains {explained_variance[0]*100:.2f}% of variance")
-    print(f"   Second component explains {explained_variance[1]*100:.2f}% of variance")
-    
-    # Step 11: Create plots
-    print("\n11. Creating plots...")
+    # Check if PCA results already exist
     plots_dir = os.path.join(directory, 'pca_plots')
-    os.makedirs(plots_dir, exist_ok=True)
+    pca_results_path = os.path.join(plots_dir, 'pca_results.npz')
+    skip_pca = not args.force
     
-    # Plot 1: First PCA component
-    plt.figure()
-    plt.plot(q_common, components[0], 'b-', linewidth=2, label='1st PCA component')
-    plt.xlabel('q (nm⁻¹)')
-    plt.ylabel('Component value')
-    plt.title('First PCA Component')
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'pca_component_1.png'), dpi=150)
-    plt.close()
-    print("   Saved: pca_component_1.png")
+    if skip_pca:
+        # Check if PCA results file exists and key plots exist
+        key_plots = [
+            'pca_component_1.png',
+            'pca_component_2.png',
+            'pca_explained_variance.png',
+            'pca_scatter_pc1_pc2.png'
+        ]
+        all_pca_exist = os.path.exists(pca_results_path)
+        if all_pca_exist:
+            for plot_file in key_plots:
+                if not os.path.exists(os.path.join(plots_dir, plot_file)):
+                    all_pca_exist = False
+                    break
+        
+        if all_pca_exist:
+            print("   PCA results already exist, loading from file...")
+            # Load PCA results
+            pca_data = np.load(pca_results_path, allow_pickle=True)
+            q_common = pca_data['q_common']
+            I_mean = pca_data['mean_curve']
+            components = pca_data['components']
+            scores = pca_data['scores']
+            explained_variance = pca_data['explained_variance']
+            print(f"   Loaded PCA results with {len(q_common)} q points and {len(scores)} curves")
+            skip_pca = True
+        else:
+            skip_pca = False
     
-    # Plot 1b: Second PCA component
-    plt.figure()
-    plt.plot(q_common, components[1], 'r-', linewidth=2, label='2nd PCA component')
-    plt.xlabel('q (nm⁻¹)')
-    plt.ylabel('Component value')
-    plt.title('Second PCA Component')
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'pca_component_2.png'), dpi=150)
-    plt.close()
-    print("   Saved: pca_component_2.png")
-    
-    # Plot 1c: Explained variance bar plot
-    n_components_to_show = min(10, len(explained_variance))
-    plt.figure()
-    component_indices = np.arange(1, n_components_to_show + 1)
-    plt.bar(component_indices, explained_variance[:n_components_to_show] * 100, 
-            color='steelblue', alpha=0.7, edgecolor='black', linewidth=0.5)
-    plt.xlabel('Principal Component')
-    plt.ylabel('Explained Variance (%)')
-    plt.title('Explained Variance by Principal Component')
-    plt.xticks(component_indices)
-    plt.grid(True, alpha=0.3, axis='y')
-    plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'pca_explained_variance.png'), dpi=150)
-    plt.close()
-    print("   Saved: pca_explained_variance.png")
-    
-    # Plot 2: Curves with lowest and highest 1st PCA coefficient
-    idx_lowest = np.argmin(scores[:, 0])
-    idx_highest = np.argmax(scores[:, 0])
-    
-    fig, ax = plt.subplots()
-    
-    # Apply q_range filter if present
-    data_lowest = integrated_data[idx_lowest]
-    data_highest = integrated_data[idx_highest]
-    
-    q_lowest = data_lowest['q']
-    I_lowest = data_lowest['I']
-    sigma_lowest = data_lowest['sigma']
-    q_highest = data_highest['q']
-    I_highest = data_highest['I']
-    sigma_highest = data_highest['sigma']
-    
-    if q_range_plot is not None:
-        mask_lowest = (q_lowest >= q_min_plot) & (q_lowest <= q_max_plot)
-        mask_highest = (q_highest >= q_min_plot) & (q_highest <= q_max_plot)
-        q_lowest = q_lowest[mask_lowest]
-        I_lowest = I_lowest[mask_lowest]
-        sigma_lowest = sigma_lowest[mask_lowest]
-        q_highest = q_highest[mask_highest]
-        I_highest = I_highest[mask_highest]
-        sigma_highest = sigma_highest[mask_highest]
-    
-    # Plot as scatter with error bars
-    ax.errorbar(
-        q_lowest, I_lowest, yerr=sigma_lowest,
-        fmt='o', markersize=3, alpha=0.6, color='blue',
-        capsize=1, capthick=0.5, elinewidth=0.5,
-        label=f'Lowest PC1 ({data_lowest["file"]}, PC1={scores[idx_lowest, 0]:.2f})'
-    )
-    ax.errorbar(
-        q_highest, I_highest, yerr=sigma_highest,
-        fmt='o', markersize=3, alpha=0.6, color='red',
-        capsize=1, capthick=0.5, elinewidth=0.5,
-        label=f'Highest PC1 ({data_highest["file"]}, PC1={scores[idx_highest, 0]:.2f})'
-    )
-    ax.set_xlabel('q (nm⁻¹)')
-    ax.set_ylabel('I (a.u.)')
-    ax.set_title('Curves with Extreme 1st PCA Coefficients')
-    # ax.set_xscale('log')
-    # ax.set_yscale('log')
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'pca_extreme_curves.png'), dpi=150)
-    plt.close()
-    print("   Saved: pca_extreme_curves.png")
-    
-    # Plot 3: Scatter plot in PC1-PC2 space
-    plt.figure()
-    scatter = plt.scatter(
-        scores[:, 0], scores[:, 1], 
-        c=range(len(scores)), cmap='viridis', 
-        s=50, alpha=0.6
-    )
-    plt.xlabel(f'PC1 ({explained_variance[0]*100:.1f}% variance)')
-    plt.ylabel(f'PC2 ({explained_variance[1]*100:.1f}% variance)')
-    plt.title('Scatter Plot: All Curves in PC1-PC2 Space')
-    plt.grid(True, alpha=0.3)
-    plt.colorbar(scatter, label='File index')
-    plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'pca_scatter_pc1_pc2.png'), dpi=150)
-    plt.close()
-    print("   Saved: pca_scatter_pc1_pc2.png")
-    
-    # Plot 4: All integrated curves colored by 1st PCA coefficient
-    fig, ax = plt.subplots()
-    
-    # Sort by PC1 coefficient for better visualization
-    sorted_indices = np.argsort(scores[:, 0])
-    pc1_sorted = scores[sorted_indices, 0]
-    
-    # Create colormap
-    cmap = plt.cm.get_cmap('RdYlBu_r')
-    norm = mcolors.Normalize(vmin=pc1_sorted.min(), vmax=pc1_sorted.max())
-    
-    for i, idx in enumerate(sorted_indices):
-        color = cmap(norm(pc1_sorted[i]))
-        data = integrated_data[idx]
+    if not skip_pca:
+        # Check if interpolation is needed
+        q_values_identical = check_q_values_identical(integrated_data)
+        
+        if q_values_identical:
+            print("   All curves have identical q values, no interpolation needed")
+            # Use the q values from the first curve
+            q_common = integrated_data[0]['q']
+            # Stack all intensity arrays directly
+            I_matrix = np.array([data['I'] for data in integrated_data])
+        else:
+            print("   Curves have different q values, interpolating to common grid...")
+            q_common, I_matrix = interpolate_curves_to_common_grid(integrated_data, n_points=1000)
+        
+        print(f"   Data matrix shape: {I_matrix.shape} (n_curves x n_points)")
+        
+        # Apply q_range filter if present in config
+        if q_range_plot is not None:
+            print(f"   Applying q_range filter: [{q_min_plot}, {q_max_plot}] nm⁻¹")
+            # Filter q_common and I_matrix
+            mask = (q_common >= q_min_plot) & (q_common <= q_max_plot)
+            q_common = q_common[mask]
+            I_matrix = I_matrix[:, mask]
+            print(f"   After filtering: {len(q_common)} points remain")
+        
+        # Step 10: Perform PCA
+        print("\n10. Performing PCA analysis...")
+        # Center the data (subtract mean)
+        I_mean = np.mean(I_matrix, axis=0)
+        I_centered = I_matrix - I_mean
+        
+        # Perform PCA
+        pca = PCA()
+        pca.fit(I_centered)
+        
+        # Get PCA components and scores
+        components = pca.components_  # Principal components (eigenvectors)
+        scores = pca.transform(I_centered)  # Projections (PCA coefficients)
+        explained_variance = pca.explained_variance_ratio_
+        
+        print(f"   First component explains {explained_variance[0]*100:.2f}% of variance")
+        print(f"   Second component explains {explained_variance[1]*100:.2f}% of variance")
+        
+        # Step 11: Create plots
+        print("\n11. Creating plots...")
+        os.makedirs(plots_dir, exist_ok=True)
+        
+        # Plot 1: First PCA component
+        plt.figure()
+        plt.plot(q_common, components[0], 'b-', linewidth=2, label='1st PCA component')
+        plt.xlabel('q (nm⁻¹)')
+        plt.ylabel('Component value')
+        plt.title('First PCA Component')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, 'pca_component_1.png'), dpi=150)
+        plt.close()
+        print("   Saved: pca_component_1.png")
+        
+        # Plot 1b: Second PCA component
+        plt.figure()
+        plt.plot(q_common, components[1], 'r-', linewidth=2, label='2nd PCA component')
+        plt.xlabel('q (nm⁻¹)')
+        plt.ylabel('Component value')
+        plt.title('Second PCA Component')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, 'pca_component_2.png'), dpi=150)
+        plt.close()
+        print("   Saved: pca_component_2.png")
+        
+        # Plot 1c: Explained variance bar plot
+        n_components_to_show = min(10, len(explained_variance))
+        plt.figure()
+        component_indices = np.arange(1, n_components_to_show + 1)
+        plt.bar(component_indices, explained_variance[:n_components_to_show] * 100, 
+                color='steelblue', alpha=0.7, edgecolor='black', linewidth=0.5)
+        plt.xlabel('Principal Component')
+        plt.ylabel('Explained Variance (%)')
+        plt.title('Explained Variance by Principal Component')
+        plt.xticks(component_indices)
+        plt.grid(True, alpha=0.3, axis='y')
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, 'pca_explained_variance.png'), dpi=150)
+        plt.close()
+        print("   Saved: pca_explained_variance.png")
+        
+        # Plot 2: Curves with lowest and highest 1st PCA coefficient
+        idx_lowest = np.argmin(scores[:, 0])
+        idx_highest = np.argmax(scores[:, 0])
+        
+        fig, ax = plt.subplots()
         
         # Apply q_range filter if present
-        q_plot = data['q']
-        I_plot = data['I']
-        sigma_plot = data['sigma']
+        data_lowest = integrated_data[idx_lowest]
+        data_highest = integrated_data[idx_highest]
+        
+        q_lowest = data_lowest['q']
+        I_lowest = data_lowest['I']
+        sigma_lowest = data_lowest['sigma']
+        q_highest = data_highest['q']
+        I_highest = data_highest['I']
+        sigma_highest = data_highest['sigma']
+        
         if q_range_plot is not None:
-            mask = (q_plot >= q_min_plot) & (q_plot <= q_max_plot)
-            q_plot = q_plot[mask]
-            I_plot = I_plot[mask]
-            sigma_plot = sigma_plot[mask]
+            mask_lowest = (q_lowest >= q_min_plot) & (q_lowest <= q_max_plot)
+            mask_highest = (q_highest >= q_min_plot) & (q_highest <= q_max_plot)
+            q_lowest = q_lowest[mask_lowest]
+            I_lowest = I_lowest[mask_lowest]
+            sigma_lowest = sigma_lowest[mask_lowest]
+            q_highest = q_highest[mask_highest]
+            I_highest = I_highest[mask_highest]
+            sigma_highest = sigma_highest[mask_highest]
         
         # Plot as scatter with error bars
         ax.errorbar(
-            q_plot, I_plot, yerr=sigma_plot,
-            fmt='o', markersize=1.5, alpha=0.4, color=color,
-            capsize=0.5, capthick=0.3, elinewidth=0.3
+            q_lowest, I_lowest, yerr=sigma_lowest,
+            fmt='o', markersize=3, alpha=0.6, color='blue',
+            capsize=1, capthick=0.5, elinewidth=0.5,
+            label=f'Lowest PC1 ({data_lowest["file"]}, PC1={scores[idx_lowest, 0]:.2f})'
         )
+        ax.errorbar(
+            q_highest, I_highest, yerr=sigma_highest,
+            fmt='o', markersize=3, alpha=0.6, color='red',
+            capsize=1, capthick=0.5, elinewidth=0.5,
+            label=f'Highest PC1 ({data_highest["file"]}, PC1={scores[idx_highest, 0]:.2f})'
+        )
+        ax.set_xlabel('q (nm⁻¹)')
+        ax.set_ylabel('I (a.u.)')
+        ax.set_title('Curves with Extreme 1st PCA Coefficients')
+        # ax.set_xscale('log')
+        # ax.set_yscale('log')
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, 'pca_extreme_curves.png'), dpi=150)
+        plt.close()
+        print("   Saved: pca_extreme_curves.png")
+        
+        # Plot 3: Scatter plot in PC1-PC2 space
+        plt.figure()
+        scatter = plt.scatter(
+            scores[:, 0], scores[:, 1], 
+            c=range(len(scores)), cmap='viridis', 
+            s=50, alpha=0.6
+        )
+        plt.xlabel(f'PC1 ({explained_variance[0]*100:.1f}% variance)')
+        plt.ylabel(f'PC2 ({explained_variance[1]*100:.1f}% variance)')
+        plt.title('Scatter Plot: All Curves in PC1-PC2 Space')
+        plt.grid(True, alpha=0.3)
+        plt.colorbar(scatter, label='File index')
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, 'pca_scatter_pc1_pc2.png'), dpi=150)
+        plt.close()
+        print("   Saved: pca_scatter_pc1_pc2.png")
+        
+        # Plot 4: All integrated curves colored by 1st PCA coefficient
+        fig, ax = plt.subplots()
+        
+        # Sort by PC1 coefficient for better visualization
+        sorted_indices = np.argsort(scores[:, 0])
+        pc1_sorted = scores[sorted_indices, 0]
+        
+        # Create colormap
+        cmap = plt.cm.get_cmap('RdYlBu_r')
+        norm = mcolors.Normalize(vmin=pc1_sorted.min(), vmax=pc1_sorted.max())
+        
+        for i, idx in enumerate(sorted_indices):
+            color = cmap(norm(pc1_sorted[i]))
+            data = integrated_data[idx]
+            
+            # Apply q_range filter if present
+            q_plot = data['q']
+            I_plot = data['I']
+            sigma_plot = data['sigma']
+            if q_range_plot is not None:
+                mask = (q_plot >= q_min_plot) & (q_plot <= q_max_plot)
+                q_plot = q_plot[mask]
+                I_plot = I_plot[mask]
+                sigma_plot = sigma_plot[mask]
+            
+            # Plot as scatter with error bars
+            ax.errorbar(
+                q_plot, I_plot, yerr=sigma_plot,
+                fmt='o', markersize=1.5, alpha=0.4, color=color,
+                capsize=0.5, capthick=0.3, elinewidth=0.3
+            )
+        
+        ax.set_xlabel('q (nm⁻¹)')
+        ax.set_ylabel('I (a.u.)')
+        ax.set_title('All Integrated Curves (Colored by 1st PCA Coefficient)')
+        # ax.set_xscale('log')
+        # ax.set_yscale('log')
+        ax.grid(True, alpha=0.3)
+        
+        # Add colorbar
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=ax)
+        cbar.set_label('1st PCA Coefficient', rotation=270, labelpad=20)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, 'pca_all_curves_colored.png'), dpi=150)
+        plt.close()
+        print("   Saved: pca_all_curves_colored.png")
+        
+        # Save PCA results to file
+        pca_results = {
+            'q_common': q_common,
+            'mean_curve': I_mean,
+            'components': components[:10],  # Save first 10 components
+            'scores': scores,
+            'explained_variance': explained_variance[:10],
+            'file_names': [d['file'] for d in integrated_data]
+        }
+        
+        np.savez(
+            os.path.join(plots_dir, 'pca_results.npz'),
+            **{k: (v if isinstance(v, np.ndarray) else np.array(v)) for k, v in pca_results.items()}
+        )
+    else:
+        print("   Skipped PCA analysis (results already exist)")
     
-    ax.set_xlabel('q (nm⁻¹)')
-    ax.set_ylabel('I (a.u.)')
-    ax.set_title('All Integrated Curves (Colored by 1st PCA Coefficient)')
-    # ax.set_xscale('log')
-    # ax.set_yscale('log')
-    ax.grid(True, alpha=0.3)
-    
-    # Add colorbar
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cbar = plt.colorbar(sm, ax=ax)
-    cbar.set_label('1st PCA Coefficient', rotation=270, labelpad=20)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'pca_all_curves_colored.png'), dpi=150)
-    plt.close()
-    print("   Saved: pca_all_curves_colored.png")
-    
-    # Save PCA results to file
-    pca_results = {
-        'q_common': q_common,
-        'mean_curve': I_mean,
-        'components': components[:10],  # Save first 10 components
-        'scores': scores,
-        'explained_variance': explained_variance[:10],
-        'file_names': [d['file'] for d in integrated_data]
-    }
-    
-    np.savez(
-        os.path.join(plots_dir, 'pca_results.npz'),
-        **{k: (v if isinstance(v, np.ndarray) else np.array(v)) for k, v in pca_results.items()}
-    )
+    # Print summary (using loaded or calculated data)
     
     print("\n" + "="*60)
     print("PCA Analysis Complete!")
