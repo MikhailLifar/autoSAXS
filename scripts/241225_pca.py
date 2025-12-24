@@ -159,6 +159,20 @@ def main():
     else:
         context.update_config('mask_config', values={'mode': 'auto'})
     
+    # Check for q_range in config for plotting and analysis
+    q_range_plot = None
+    q_min_plot = None
+    q_max_plot = None
+    try:
+        q_range_plot = context['q_range']
+        if q_range_plot is not None and isinstance(q_range_plot, (list, tuple)) and len(q_range_plot) == 2:
+            q_min_plot, q_max_plot = float(q_range_plot[0]), float(q_range_plot[1])
+            print(f"   Found q_range in config: [{q_min_plot}, {q_max_plot}] nm⁻¹")
+        else:
+            q_range_plot = None
+    except (KeyError, TypeError):
+        pass
+    
     # Step 4: Estimate r_beam_px from calibration image
     print("\n4. Estimating beam-stop radius...")
     calib_data = read_from_tiff(calibrant_path)
@@ -257,9 +271,20 @@ def main():
     
     for i, data in enumerate(integrated_data):
         fig, ax = plt.subplots()
+        
+        # Apply q_range filter if present
+        q_plot = data['q']
+        I_plot = data['I']
+        sigma_plot = data['sigma']
+        if q_range_plot is not None:
+            mask = (q_plot >= q_min_plot) & (q_plot <= q_max_plot)
+            q_plot = q_plot[mask]
+            I_plot = I_plot[mask]
+            sigma_plot = sigma_plot[mask]
+        
         # Plot as scatter with error bars
         ax.errorbar(
-            data['q'], data['I'], yerr=data['sigma'],
+            q_plot, I_plot, yerr=sigma_plot,
             fmt='o', markersize=2, alpha=0.6, 
             capsize=1, capthick=0.5, elinewidth=0.5,
             label=data['file']
@@ -295,6 +320,15 @@ def main():
         q_common, I_matrix = interpolate_curves_to_common_grid(integrated_data, n_points=1000)
     
     print(f"   Data matrix shape: {I_matrix.shape} (n_curves x n_points)")
+    
+    # Apply q_range filter if present in config
+    if q_range_plot is not None:
+        print(f"   Applying q_range filter: [{q_min_plot}, {q_max_plot}] nm⁻¹")
+        # Filter q_common and I_matrix
+        mask = (q_common >= q_min_plot) & (q_common <= q_max_plot)
+        q_common = q_common[mask]
+        I_matrix = I_matrix[:, mask]
+        print(f"   After filtering: {len(q_common)} points remain")
     
     # Step 10: Perform PCA
     print("\n10. Performing PCA analysis...")
@@ -332,27 +366,74 @@ def main():
     plt.close()
     print("   Saved: pca_component_1.png")
     
+    # Plot 1b: Second PCA component
+    plt.figure()
+    plt.plot(q_common, components[1], 'r-', linewidth=2, label='2nd PCA component')
+    plt.xlabel('q (nm⁻¹)')
+    plt.ylabel('Component value')
+    plt.title('Second PCA Component')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, 'pca_component_2.png'), dpi=150)
+    plt.close()
+    print("   Saved: pca_component_2.png")
+    
+    # Plot 1c: Explained variance bar plot
+    n_components_to_show = min(10, len(explained_variance))
+    plt.figure()
+    component_indices = np.arange(1, n_components_to_show + 1)
+    plt.bar(component_indices, explained_variance[:n_components_to_show] * 100, 
+            color='steelblue', alpha=0.7, edgecolor='black', linewidth=0.5)
+    plt.xlabel('Principal Component')
+    plt.ylabel('Explained Variance (%)')
+    plt.title('Explained Variance by Principal Component')
+    plt.xticks(component_indices)
+    plt.grid(True, alpha=0.3, axis='y')
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, 'pca_explained_variance.png'), dpi=150)
+    plt.close()
+    print("   Saved: pca_explained_variance.png")
+    
     # Plot 2: Curves with lowest and highest 1st PCA coefficient
     idx_lowest = np.argmin(scores[:, 0])
     idx_highest = np.argmax(scores[:, 0])
     
     fig, ax = plt.subplots()
+    
+    # Apply q_range filter if present
+    data_lowest = integrated_data[idx_lowest]
+    data_highest = integrated_data[idx_highest]
+    
+    q_lowest = data_lowest['q']
+    I_lowest = data_lowest['I']
+    sigma_lowest = data_lowest['sigma']
+    q_highest = data_highest['q']
+    I_highest = data_highest['I']
+    sigma_highest = data_highest['sigma']
+    
+    if q_range_plot is not None:
+        mask_lowest = (q_lowest >= q_min_plot) & (q_lowest <= q_max_plot)
+        mask_highest = (q_highest >= q_min_plot) & (q_highest <= q_max_plot)
+        q_lowest = q_lowest[mask_lowest]
+        I_lowest = I_lowest[mask_lowest]
+        sigma_lowest = sigma_lowest[mask_lowest]
+        q_highest = q_highest[mask_highest]
+        I_highest = I_highest[mask_highest]
+        sigma_highest = sigma_highest[mask_highest]
+    
     # Plot as scatter with error bars
     ax.errorbar(
-        integrated_data[idx_lowest]['q'], 
-        integrated_data[idx_lowest]['I'],
-        yerr=integrated_data[idx_lowest]['sigma'],
+        q_lowest, I_lowest, yerr=sigma_lowest,
         fmt='o', markersize=3, alpha=0.6, color='blue',
         capsize=1, capthick=0.5, elinewidth=0.5,
-        label=f'Lowest PC1 ({integrated_data[idx_lowest]["file"]}, PC1={scores[idx_lowest, 0]:.2f})'
+        label=f'Lowest PC1 ({data_lowest["file"]}, PC1={scores[idx_lowest, 0]:.2f})'
     )
     ax.errorbar(
-        integrated_data[idx_highest]['q'], 
-        integrated_data[idx_highest]['I'],
-        yerr=integrated_data[idx_highest]['sigma'],
+        q_highest, I_highest, yerr=sigma_highest,
         fmt='o', markersize=3, alpha=0.6, color='red',
         capsize=1, capthick=0.5, elinewidth=0.5,
-        label=f'Highest PC1 ({integrated_data[idx_highest]["file"]}, PC1={scores[idx_highest, 0]:.2f})'
+        label=f'Highest PC1 ({data_highest["file"]}, PC1={scores[idx_highest, 0]:.2f})'
     )
     ax.set_xlabel('q (nm⁻¹)')
     ax.set_ylabel('I (a.u.)')
@@ -396,11 +477,21 @@ def main():
     
     for i, idx in enumerate(sorted_indices):
         color = cmap(norm(pc1_sorted[i]))
+        data = integrated_data[idx]
+        
+        # Apply q_range filter if present
+        q_plot = data['q']
+        I_plot = data['I']
+        sigma_plot = data['sigma']
+        if q_range_plot is not None:
+            mask = (q_plot >= q_min_plot) & (q_plot <= q_max_plot)
+            q_plot = q_plot[mask]
+            I_plot = I_plot[mask]
+            sigma_plot = sigma_plot[mask]
+        
         # Plot as scatter with error bars
         ax.errorbar(
-            integrated_data[idx]['q'],
-            integrated_data[idx]['I'],
-            yerr=integrated_data[idx]['sigma'],
+            q_plot, I_plot, yerr=sigma_plot,
             fmt='o', markersize=1.5, alpha=0.4, color=color,
             capsize=0.5, capthick=0.3, elinewidth=0.3
         )
