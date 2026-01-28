@@ -490,8 +490,8 @@ def map_sample_files_to_buffer_files(sample_paths, buffer_paths):
     name convention - buffer path ends with "_buffer*.ext*", sample path with "_sample*.ext*"
     """
     aligned_pairs = []
-    not_all_paired = False
-    overlapped = False
+    not_paired = []
+    overlapped = []
     for s_p in sample_paths:
         _, s_ext = os.path.splitext(os.path.basename(s_p))
         s_base = os.path.basename(s_p).replace(f'_sample{s_ext}', '')
@@ -501,12 +501,12 @@ def map_sample_files_to_buffer_files(sample_paths, buffer_paths):
             if b_base in s_base:
                 if aligned_pairs:
                     prev_s_p, _ = aligned_pairs[-1]
-                    if prev_s_p == s_p:
-                        overlapped = True
+                    if prev_s_p == s_p and s_p not in overlapped:
+                        overlapped.append(s_p)
                 aligned_pairs.append((s_p, b_p))
         if not aligned_pairs or aligned_pairs[-1][0] != s_p:
-            not_all_paired = True
-    return {'aligned_pairs': aligned_pairs, 'overlapped': overlapped, 'not_all_paired': not_all_paired}
+            not_paired.append(s_p)
+    return {'aligned_pairs': aligned_pairs, 'overlapped': overlapped, 'not_paired': not_paired}
 
 
 ##### DENSITY AND ISOSURFACE CALCULATION UTILS ######

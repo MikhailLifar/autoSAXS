@@ -73,7 +73,7 @@ def _run_gui_interactive():
                 "polydispfit",
                 "bodies",
                 "dammif",
-                # "ai_analysis",
+                "ai_analysis",
             ],
             "default_steps": [
                 "calibration",
@@ -313,15 +313,49 @@ def _run_choose_profiles_gui(profiles):
         ]
         window.destroy()
 
+    def on_check_all():
+        for var, _profile in checkbox_vars.values():
+            var.set(True)
+
+    def on_uncheck_all():
+        for var, _profile in checkbox_vars.values():
+            var.set(False)
+
+    button_frame = ctk.CTkFrame(master=window)
+    button_frame.grid(row=3, column=0, padx=24, pady=(12, 24), sticky="ew")
+    button_frame.grid_columnconfigure(0, weight=1)
+    button_frame.grid_columnconfigure(1, weight=1)
+    button_frame.grid_columnconfigure(2, weight=1)
+
+    check_all_button = ctk.CTkButton(
+        master=button_frame,
+        text="Check all",
+        command=on_check_all,
+        width=140,
+        height=40,
+        font=ctk.CTkFont(size=16, weight="bold"),
+    )
+    check_all_button.grid(row=0, column=0, padx=8, pady=0)
+
+    uncheck_all_button = ctk.CTkButton(
+        master=button_frame,
+        text="Uncheck all",
+        command=on_uncheck_all,
+        width=140,
+        height=40,
+        font=ctk.CTkFont(size=16, weight="bold"),
+    )
+    uncheck_all_button.grid(row=0, column=1, padx=8, pady=0)
+
     confirm_button = ctk.CTkButton(
-        master=window,
+        master=button_frame,
         text="Confirm",
         command=on_confirm,
         width=140,
         height=40,
         font=ctk.CTkFont(size=16, weight="bold"),
     )
-    confirm_button.grid(row=3, column=0, padx=24, pady=(12, 24))
+    confirm_button.grid(row=0, column=2, padx=8, pady=0)
 
     window.protocol("WM_DELETE_WINDOW", on_confirm)
     _center_window(window)

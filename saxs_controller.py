@@ -17,11 +17,14 @@ import seaborn as sns
 
 from ase.io import read
 
-# sys.path.append(os.path.expanduser('~/LLM/LLMAssistant'))
+# AI_REPO_DIR = os.path.join(ROOT_DIR, 'aiAssistantFramework')
+# sys.path.append(AI_REPO_DIR)
 # sys.path.append(os.path.expanduser('~/LLM/LLMAssistant/aiAssistantFramework'))
 
+sys.path.append(ROOT_DIR)
 # from aiAssistantFramework import lib as ai_lib
-# from aiAssistantFramework.lib import llm, telegram
+from aiAssistantFramework.lib import llm 
+# from aiAssistantFramework.lib import telegram
 # import controller as ai_controller
 from gui import get_pipeline_spec_gui, choose_profiles
 from polydispfit import polydispfit
@@ -584,7 +587,7 @@ echo "Full results saved to: $RESULTS_FILE"
                 # os.system(f"{bodies_call} --prefix={bodies_prefix} {saxs_1d_path} --first={first_chnl} --last={last_chnl}")
                 os.system(f"{bodies_call} --prefix={bodies_prefix} {saxs_1d_path}")
 
-                to_plot = [q, I, {'label': 'exp', 'lw': 4}]
+                to_plot = []
 
                 fit_failed = all(
                     not os.path.exists(os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir'))
@@ -627,7 +630,11 @@ echo "Full results saved to: $RESULTS_FILE"
                     I_fit_interp = np.interp(q_intersetcion, q_fit, I_fit)
 
                     chi2 = calc_chi2(I_intersection, I_fit_interp, sigma_interp)
-                    to_plot.extend([q_intersetcion, I_fit_interp, f'{shape}; chi2: {chi2:.5f}'])
+                    params_str = ';'.join(
+                        f"{p_name}:{p_v:.2f}" for p_name, p_v in params_dict.items()
+                        if p_name != "scale"
+                        )
+                    to_plot.extend([q_intersetcion, I_fit_interp, f'{shape} ({params_str});$\\chi^2$: {chi2:.2f}'])
 
                     self.viewer.plot_3d_views_and_scattering(
                         structure, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
@@ -638,9 +645,12 @@ echo "Full results saved to: $RESULTS_FILE"
                     #     atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
                     #     plotFilePath=os.path.join(bodies_subdir, f'{shape}_view.png'))
                 
+                q_max = max(to_plot[i][-1] for i in range(0, len(to_plot), 3))
+                idx = q <= q_max 
+                to_plot = [q[idx], I[idx], {'label': 'exp', 'lw': 4}] + to_plot
                 self.viewer.view_curves(*to_plot,
-                                        sigmas=(sigma, ),
-                                        title=f'Fits comparison for {basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
+                                        sigmas=(sigma[idx], ),
+                                        title=f'Fits comparison for\n{basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
                                         plotFilePath=os.path.join(bodies_subdir, f'{basename}_fits.png'))
         
         return bodies_subdir
@@ -668,7 +678,7 @@ echo "Full results saved to: $RESULTS_FILE"
                 os.system(f'for i in `seq 1 {dammif_reps_num}`; do {dammif_call} --prefix={dammif_prefix}-$i --mode=fast {gnom_path}; done')
 
                 q, I, sigma, _ = read_saxs(saxs_1d_path)
-                to_plot = [q, I, {'label': 'exp', 'lw': 4}]
+                to_plot = []
                 
                 for i in range(dammif_reps_num):
                     fir_path = f'{dammif_prefix}-{i+1}.fir'
@@ -690,7 +700,7 @@ echo "Full results saved to: $RESULTS_FILE"
                     #                         plotFilePath=os.path.join(dammif_subdir, f'{basename}_{i}_shit_here_1.png'))
 
                     chi2 = calc_chi2(I_intersection, I_fit_interp, sigma_interp)
-                    to_plot.extend([q_intersetcion, I_fit_interp, f'dammif-{i}; chi2: {chi2:.5f}'])
+                    to_plot.extend([q_intersetcion, I_fit_interp, f'dammif-{i}; $\\chi^2$: {chi2:.2f}'])
 
                     atoms = read_bodies_cif(cif_path)
                     # self.viewer.plot_structure_and_scattering(
@@ -700,9 +710,13 @@ echo "Full results saved to: $RESULTS_FILE"
                         atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
                         plotFilePath=os.path.join(dammif_subdir, f'dammif-{i}_view.png'))
                 
+                q_max = max(to_plot[i][-1] for i in range(0, len(to_plot), 3))
+                idx = q <= q_max 
+                to_plot = [q[idx], I[idx], {'label': 'exp', 'lw': 4}] + to_plot
+                
                 self.viewer.view_curves(*to_plot,
-                                        sigmas=(sigma, ), 
-                                        title=f'Fits comparison for {basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
+                                        sigmas=(sigma[idx], ), 
+                                        title=f'Fits comparison for\n{basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
                                         plotFilePath=os.path.join(dammif_subdir, f'{basename}_fits.png'))
         
         return dammif_subdir
@@ -760,15 +774,17 @@ echo "Full results saved to: $RESULTS_FILE"
                 chi2 = fit_res["chi2"]
                 dist_info = fit_res["distribution"]
                 opt_info = fit_res["optimizer_info"]
+
+                q_fit, I_fit, model_I, sigma_fit = q_fit[2:], I_fit[2:], model_I[2:], sigma_fit[2:]
                 
                 # Plot 1: Fit comparison
                 self.viewer.view_curves(
                     q_fit, I_fit, {'label': 'experimental', 'lw': 2},
-                    q_fit, model_I, {'label': f'polydisperse fit (chi2: {chi2:.5f})', 'lw': 2},
+                    q_fit, model_I, {'label': f'polydisperse fit ($\\chi^2$: {chi2:.2f})', 'lw': 2},
                     sigmas=(sigma_fit, None),
-                    title=f'Polydisperse sphere fit for {basename}',
+                    title=f'Polydisperse sphere fit for\n{basename}',
                     xlabel='q (nm-1)',
-                    ylabel='I (a.u.)',
+                    ylabel='I',
                     legend=True,
                     plotFilePath=fit_comparison_png,
                     save=False
@@ -807,7 +823,7 @@ echo "Full results saved to: $RESULTS_FILE"
                 # Plot radius distribution
                 self.viewer.view_curves(
                     R, pdf, {'label': f'{dist_name.capitalize()} distribution', 'lw': 2},
-                    title=f'Fitted radius distribution for {basename}',
+                    title=f'Fitted radius distribution for\n{basename}',
                     xlabel='Radius (nm)',
                     ylabel='Probability density',
                     legend=True,
@@ -913,9 +929,6 @@ echo "Full results saved to: $RESULTS_FILE"
                 with open(context_path, 'w') as fwrite:
                     fwrite.write(sample_context)
 
-            # LLM
-            # I dont want to analyze each plot separately. If there are many plots, 
-            # I would rather combine the information coming from them.
             if fast_forward and os.path.exists(llm_answer_path):
                 with open(llm_answer_path, 'r') as fread:
                     answer = fread.read()
@@ -946,9 +959,11 @@ echo "Full results saved to: $RESULTS_FILE"
         """
         # TODO currently the pipeline is oriented on proteins. Since the pipeline for other samples is sort of similar, I think, there will be only one pipeline in the end
 
-        model = 'GLM-4.6'
+        # model = 'GLM-4.6'
         # model = 'DeepSeek-V3.1'
-        vision_model = 'GLM-4.5V'
+        model = 'Llama-4-Maverick-17B-128E-Instruct-FP8'
+        # vision_model = 'GLM-4.5V'
+        vision_model = 'Llama-4-Maverick-17B-128E-Instruct-FP8'
 
         context = Context()
 
@@ -1059,16 +1074,19 @@ echo "Full results saved to: $RESULTS_FILE"
                     run_load_cycle = False
                     if 'subtraction' in steps:
                         alignment_res = map_sample_files_to_buffer_files(sample_paths, buffer_paths)
-                        run_load_cycle = alignment_res['overlapped'] or alignment_res['not_all_paired']
+                        run_load_cycle = alignment_res['overlapped'] or alignment_res['not_paired']
                         if alignment_res['overlapped']:
-                            self.interface.send_message("For some sample files more than one buffer files were found. Are you following name conventions?")
-                        if alignment_res['not_all_paired']:
-                            self.interface.send_message("Not for all sample files buffer files were found")
+                            overlap_str = '\n'.join(alignment_res['overlapped'])
+                            self.interface.send_message(f"For some sample files more than one buffer files were found:\n{overlap_str}\n\nAre you following name conventions?")
+                        if alignment_res['not_paired']:
+                            not_paired_str = '\n'.join(alignment_res['not_paired'])
+                            self.interface.send_message(f"Not for all sample files buffer files were found:\n{not_paired_str}\n\nAre you following name conventions?")
                         if run_load_cycle:
                             self.interface.send_message(f"Make sure that you follow the name convention and that for each sample image there is exactly one buffer image. This error can also disappear buy itself for the next iteration")
                             time.sleep(fallback_delay)
                         else:
                             buffer_paths = [b_p for _, b_p in alignment_res['aligned_pairs']]
+                            buffer_paths = list(set(buffer_paths))
                 
                 if sample_paths:
                     basename_list = [
@@ -1115,16 +1133,19 @@ echo "Full results saved to: $RESULTS_FILE"
                         skip_if_exists=True, except_prev_paths=context['paths', 'sample_1d'])
                     
                     alignment_res = map_sample_files_to_buffer_files(sample_paths_1d, buffer_paths_1d)
-                    run_load_cycle = alignment_res['overlapped'] or alignment_res['not_all_paired']
+                    run_load_cycle = alignment_res['overlapped'] or alignment_res['not_paired']
                     if alignment_res['overlapped']:
-                        self.interface.send_message("For some sample files more than one buffer files were found. Are you following name conventions?")
-                    if alignment_res['not_all_paired']:
-                        self.interface.send_message("Not for all sample files buffer files were found")
+                        overlap_str = '\n'.join(alignment_res['overlapped'])
+                        self.interface.send_message(f"For some sample files more than one buffer files were found:\n{overlap_str}\n\nAre you following name conventions?")
+                    if alignment_res['not_paired']:
+                        not_paired_str = '\n'.join(alignment_res['not_paired'])
+                        self.interface.send_message(f"Not for all sample files buffer files were found:\n{not_paired_str}\n\nAre you following name conventions?")
                     if run_load_cycle:
                         self.interface.send_message(f"Make sure that you follow the name convention and that for each sample image there is exactly one buffer image. This error can also disappear by itself for the next iteration")
                         time.sleep(fallback_delay)
                     else:
                         buffer_paths_1d = [b_p for _, b_p in alignment_res['aligned_pairs']]
+                        buffer_paths_1d = list(set(buffer_paths_1d))
 
                 if sample_paths_1d:
                     basename_list = [
@@ -1139,7 +1160,11 @@ echo "Full results saved to: $RESULTS_FILE"
 
                 alignment_res = map_sample_files_to_buffer_files(sample_paths_1d, buffer_paths_1d)
                 aligned_pairs = alignment_res['aligned_pairs']
-                assert not (alignment_res['overlapped'] or alignment_res['not_all_paired'])
+                alignment_check = not (alignment_res['overlapped'] or alignment_res['not_paired'])
+                if not alignment_check:
+                    overlap_str = '\n'.join(alignment_res['overlapped'])
+                    not_paired_str = '\n'.join(alignment_res['not_paired'])
+                    raise RuntimeError(f"Buffer-sample alignment failed!\n\nOverlapped:\n{overlap_str}\n\nNot paired:\n{not_paired_str}")
 
                 for s_p, b_p in aligned_pairs:
                     profile_path, profile_pic_path = self.subtract(
@@ -1220,6 +1245,14 @@ echo "Full results saved to: $RESULTS_FILE"
                     dammif_dir = self.dammif_fit(
                         context, profile_path, gnom_path, dest_dir=os.path.join(directory, 'dammif'), fast_forward=fast_forward)
                     context.append_path('dammif', dammif_dir)
+                if 'ai_analysis' in steps:
+                    assert len(selected_profiles) == 1
+                    assert 'simple_analysis' in steps 
+                    assert 'plots' in steps
+                    self.ai_analysis(atsas_res_path, plot_paths, 
+                    dest_dir=os.path.join(directory, 'ai_analysis'),
+                    text_model=model, vision_model=vision_model, 
+                    fast_forward=fast_forward)
                 # self.ai_analysis(atsas_res_path, plot_paths, directory, text_model=model, vision_model=vision_model)
             
             context.extend_paths('profile', profile_paths)
@@ -1314,7 +1347,11 @@ echo "Full results saved to: $RESULTS_FILE"
             alignment_res = map_sample_files_to_buffer_files(
                 context['paths', 'sample_1d'], context['paths', 'buffer_1d'])
             aligned_pairs = alignment_res['aligned_pairs']
-            assert not (alignment_res['overlapped'] or alignment_res['not_all_paired'])
+            alignment_check = not(alignment_res['overlapped'] or alignment_res['not_paired'])
+            if not alignment_check:
+                overlap_str = '\n'.join(alignment_res['overlapped'])
+                not_paired_str = '\n'.join(alignment_res['not_paired'])
+                raise RuntimeError(f"Buffer-sample alignment failed!\n\nOverlapped:\n{overlap_str}\n\nNot paired:\n{not_paired_str}")
 
             for b_path, s_path in aligned_pairs:
                 sub_path, sub_pic_path = self.subtract(
