@@ -17,8 +17,8 @@ from typing import Any, Optional
 import numpy as np
 import yaml
 
-from event_bus import EventBus, EventType
-from utils import ROOT_DIR
+from .event_bus import EventBus, EventType
+from .utils import ROOT_DIR
 
 
 class PipelineInterrupt(Exception):

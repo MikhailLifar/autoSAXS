@@ -1,6 +1,6 @@
 # Technical specification: `Controller.pipeline_interactive`
 
-Specification of `Controller.pipeline_interactive` in `repos/saxs_controller.py`: single source of truth for implementation and refactoring.
+Specification of `Controller.pipeline_interactive` in the **autosaxs** package (`repos/autosaxs/`): single source of truth for implementation and refactoring. Pipeline invocation (wiring EventBus, Controller, and CLI/GUI) lives in **`repos/pipeline.py`**; run the pipeline via `python pipeline.py` (or `python -m pipeline`).
 
 ---
 
@@ -15,7 +15,7 @@ Specification of `Controller.pipeline_interactive` in `repos/saxs_controller.py`
 - **Technologies:** Python 3; YAML for config and metadata; CSV for tabular data in 1D curve files; JSON for integrator params and GUI protocol.
 - **External packages (as used in this pipeline):**
   - **ATSAS** — Software package for SAXS processing. It is responsible for descriptors calculation, fittng with geometric primitives (BODIES component of ATSAS), "ab initio" fitting with Dummy Atom Model (DAMMIF component of ATSAS)
-  - **customtkinter** — Used by `gui_interface.py` (former `gui.py`) for pipeline/step selection, profile selection, and short-lived dialogs per query.
+  - **customtkinter** — Used by `autosaxs.gui_interface` (and `autosaxs.gui`) for pipeline/step selection, profile selection, and short-lived dialogs per query.
   - **matplotlib** — Plotting (viewer, gui).
   - **numpy, pandas** — Arrays and tabular data.
   - **scipy** — e.g. `scipy.special.gamma`, interpolation; **scipy.ndimage** in processor.
@@ -26,28 +26,32 @@ Specification of `Controller.pipeline_interactive` in `repos/saxs_controller.py`
   - **aiAssistantFramework.lib.llm** — LLM requests for AI analysis.
   - **polydispfit** — Polydisperse sphere fitting (project-local module).
 - **Project-internal modules and usage:**
-  - **processor** (`repos/processor.py`): `IntegratorExtended`, `integrate_2d_to_1d`, `subtract_buffer`, `find_center`, `find_rings`, `refine`, `get_detector`, `get_interring_dist_px` (and `*` import so e.g. mask/geometry helpers used by calibration). Calibration and integration logic live here.
-  - **utils** (`repos/utils.py`): `read_from_tiff` (via processor’s use of `utils`); `read_saxs`, `write_saxs`, `write_data`, `read_data`, `load_config`, `save_config`, `get_pipeline_paths`, `map_sample_files_to_buffer_files`, `read_bodies_cif`, `calc_chi2`, `calculate_atoms_density_and_isosurface`, `calculate_shape_density_and_isosurface`; `ROOT_DIR`, `REPO_DIR`; `ENV` (from `global/env.yml`) for `ATSAS_BIN_PREFIX`; `whittaker_smooth` (from `supervised_ml`) used by subtraction.
-  - **event_bus** (`repos/event_bus.py`): `EventBus` and event type enum. See §3.1 for catalogue and payloads.
-  - **cli_interface** (`repos/cli_interface.py`): CLI for the pipeline. Defines `PipelineInterrupt`, `CLIInterface` (stdin/print, file monitoring), and `connect(bus)` to subscribe to EventBus; pipeline/step and profile selection in this module. Same event contract as GUI.
-  - **gui_interface** (`repos/gui_interface.py`): GUI for the pipeline; same event contract as CLI. Short-lived CustomTkinter dialogs per query; pipeline/step and profile selection as dialogs.
-  - **viewer** (`repos/viewer.py`): Visualization (`view_calibration`, `view_mask`, `view_curves`, `plot_3d_views_and_scattering`, etc.); pipeline uses `PLTViewer` in `__main__`.
-  - **context** (`repos/context.py`): `Context` — holds directory, config, and path groups; config and path accessors.
+  - **autosaxs** (`repos/autosaxs/`): Package containing the pipeline core. Modules: **processor**, **utils**, **event_bus**, **cli_interface**, **viewer**, **context**, **saxs_controller** (exports `Controller`), **gui_interface**, **gui**, **polydispfit**. Directories: **global/** (env.yml, primus_models.yml, templates/), **prompts/** (e.g. prompts/visual/ for AI/plot prompts). Other code (e.g. `pipeline.py`, `fast2dprocess_gui`, `calibration_service.py`, scripts) imports from `autosaxs` as needed.
+  - **processor** (`autosaxs/processor.py`): `IntegratorExtended`, `integrate_2d_to_1d`, `subtract_buffer`, `find_center`, `find_rings`, `refine`, `get_detector`, `get_interring_dist_px` (and `*` import so e.g. mask/geometry helpers used by calibration). Calibration and integration logic live here.
+  - **utils** (`autosaxs/utils.py`): `read_from_tiff` (via processor’s use of `utils`); `read_saxs`, `write_saxs`, `write_data`, `read_data`, `load_config`, `save_config`, `get_pipeline_paths`, `map_sample_files_to_buffer_files`, `read_bodies_cif`, `calc_chi2`, `calculate_atoms_density_and_isosurface`, `calculate_shape_density_and_isosurface`; `ROOT_DIR`, `REPO_DIR`; `ENV` (from `autosaxs/global/env.yml`) for `ATSAS_BIN_PREFIX`; `whittaker_smooth` (from `supervised_ml`) used by subtraction.
+  - **event_bus** (`autosaxs/event_bus.py`): `EventBus` and event type enum. See §3.1 for catalogue and payloads.
+  - **cli_interface** (`autosaxs/cli_interface.py`): CLI for the pipeline. Defines `PipelineInterrupt`, `CLIInterface` (stdin/print, file monitoring), and `connect(bus)` to subscribe to EventBus; pipeline/step and profile selection in this module. Same event contract as GUI.
+  - **gui_interface** (`autosaxs/gui_interface.py`): GUI for the pipeline; same event contract as CLI. Short-lived CustomTkinter dialogs per query; pipeline/step and profile selection as dialogs; uses `autosaxs.gui` for step/profile selection dialogs.
+  - **gui** (`autosaxs/gui.py`): GUI helpers for pipeline/step and profile selection (e.g. `_run_gui_interactive`, `_run_choose_profiles_gui`); used by `gui_interface`.
+  - **polydispfit** (`autosaxs/polydispfit.py`): Polydisperse sphere fitting; used by Controller for the polydispfit step.
+  - **viewer** (`autosaxs/viewer.py`): Visualization (`view_calibration`, `view_mask`, `view_curves`, `plot_3d_views_and_scattering`, etc.); entry point `pipeline.py` uses `PLTViewer` when wiring the pipeline.
+  - **context** (`autosaxs/context.py`): `Context` — holds directory, config, and path groups; config and path accessors.
+  - **pipeline** (`repos/pipeline.py`): Entry point for the interactive pipeline. Wires EventBus; connects one of `autosaxs.cli_interface` or `autosaxs.gui_interface` to it; creates `Controller` from `autosaxs.saxs_controller` and `PLTViewer` from `autosaxs.viewer`; runs `controller.pipeline_interactive(...)`. No pipeline logic—only wiring and invocation.
 
 ---
 
 ## 3. Architecture
 
 - **Type of application:** Interactive pipeline with CLI or GUI (one chosen); both communicate with Controller only via EventBus. File-based working directory; app waits for files matching patterns.
-- **Module layout:** **`event_bus.py`** (`EventBus` + event enum), **`cli_interface.py`** (CLI + `connect(bus)`), **`gui_interface.py`** (GUI). One EventBus instance; Controller and one of CLI/GUI connect to it.
+- **Module layout:** **autosaxs** package (`repos/autosaxs/`: `event_bus`, `cli_interface`, `processor`, `utils`, `viewer`, `context`, `saxs_controller`, `gui_interface`, `gui`, `polydispfit`; directories `global/`, `prompts/`); **`pipeline.py`** in `repos/` (entry point). One EventBus instance; Controller and one of CLI/GUI connect to it. Wiring is done in `pipeline.py`.
 - **Layers:**
-  - **EventBus** (`event_bus.py`): Single channel for Controller–Interface I/O; no direct calls. Event enum and payloads in `event_bus.py`; semantics in §3.1.
-  - **CLI** (`cli_interface.py`): Subscribes via `connect(bus)` to **FILE_REQUESTED**, **CHOICE_REQUESTED**, **DIRECTORY_REQUESTED**, **MESSAGE**, **PIPELINE_STEPS_REQUESTED**, **PROFILE_SELECTION_REQUESTED**; publishes **FILE_UPLOADED**, **FILE_UPLOAD_CANCELED**, **OPTION_CHOSEN**, **OPTION_CHOICE_CANCELED**, **DIRECTORY_SPECIFIED**, **PROGRAM_INTERRUPTED**, **PIPELINE_STEPS_SPECIFIED**, **PROFILE_SELECTION_SPECIFIED**. stdin/print + file monitoring; pipeline/step and profile selection in-module. Also defines `CLIInterface` and `PipelineInterrupt` for standalone use (e.g. `integrate.py`).
-  - **GUI** (`gui_interface.py`): Same events. Short-lived dialogs (directory, file, choice, message); pipeline/step and profile selection as dialogs.
-  - **Controller** (`saxs_controller.py`): Publishes to EventBus, subscribes to responses; calls processor, context, viewer, step logic. Holds EventBus (and viewer, etc.).
-  - **Processing** (`processor.py`), **Viewer** (`viewer.py`), **Context** (`context.py`), **Utils** (`utils.py`): Roles unchanged (calibration/integration, plotting, config/paths, I/O and helpers).
-- **How `pipeline_interactive` wires components:**
-  1. Create EventBus; Controller and one of `cli_interface` / `gui_interface` connect to it. Create `Context()`.
+  - **EventBus** (`autosaxs/event_bus.py`): Single channel for Controller–Interface I/O; no direct calls. Event enum and payloads in `event_bus.py`; semantics in §3.1.
+  - **CLI** (`autosaxs/cli_interface.py`): Subscribes via `connect(bus)` to **FILE_REQUESTED**, **CHOICE_REQUESTED**, **DIRECTORY_REQUESTED**, **MESSAGE**, **PIPELINE_STEPS_REQUESTED**, **PROFILE_SELECTION_REQUESTED**; publishes **FILE_UPLOADED**, **FILE_UPLOAD_CANCELED**, **OPTION_CHOSEN**, **OPTION_CHOICE_CANCELED**, **DIRECTORY_SPECIFIED**, **PROGRAM_INTERRUPTED**, **PIPELINE_STEPS_SPECIFIED**, **PROFILE_SELECTION_SPECIFIED**. stdin/print + file monitoring; pipeline/step and profile selection in-module. Also defines `CLIInterface` and `PipelineInterrupt` for standalone use.
+  - **GUI** (`autosaxs/gui_interface.py`): Same events. Short-lived dialogs (directory, file, choice, message); pipeline/step and profile selection as dialogs (uses `autosaxs.gui`).
+  - **Controller** (`autosaxs/saxs_controller.py`): Publishes to EventBus, subscribes to responses; calls processor, context, viewer, step logic. Holds EventBus (and viewer, etc.).
+  - **Processing** (`autosaxs/processor.py`), **Viewer** (`autosaxs/viewer.py`), **Context** (`autosaxs/context.py`), **Utils** (`autosaxs/utils.py`): Roles unchanged (calibration/integration, plotting, config/paths, I/O and helpers).
+- **How the pipeline is invoked and wires components:** Entry point `pipeline.py` (in repos):
+  1. Create EventBus; Controller and one of `autosaxs.cli_interface` / `autosaxs.gui_interface` connect to it. Create `Context()`.
   2. If not `all_from_config`: **DIRECTORY_REQUESTED** → **DIRECTORY_SPECIFIED** or **PROGRAM_INTERRUPTED**; then **FILE_REQUESTED** for `config.conf` → **FILE_UPLOADED** or cancel. Load config. Steps via EventBus (pipeline/step selection). Else: load config from path; read `steps`, `directory`.
   3. If `calibration` in steps: **FILE_REQUESTED** (calibrant) → response; if not `all_from_config`, **CHOICE_REQUESTED** (mask mode) → **OPTION_CHOSEN** / cancel; if mask from file/combined, **FILE_REQUESTED** (mask) → response. Run `autocalib(...)` or load integrator from disk when `integration` without calibration.
   4. Main loop: **FILE_REQUESTED** (buffer/sample 2D or 1D, or `subtracted/*.dat`) → **FILE_UPLOADED** or cancel; on alignment errors **MESSAGE** then retry. Profile selection via EventBus → `selected_profiles`. For each profile run optional steps (descriptors, plot, polydispfit, bodies, dammif, ai_analysis). **CHOICE_REQUESTED** (“Upload more data?”) → **OPTION_CHOSEN** “no” or cancel to exit.
@@ -55,7 +59,7 @@ Specification of `Controller.pipeline_interactive` in `repos/saxs_controller.py`
 
 ### 3.1 EventBus: events and data flow
 
-- **Channel:** Only path for Controller–Interface I/O. Enum and payload types in `event_bus.py`. One response per request (uploaded / canceled / interrupted). “Interface” below = connected implementation (`cli_interface` or `gui_interface`).
+- **Channel:** Only path for Controller–Interface I/O. Enum and payload types in `autosaxs/event_bus.py`. One response per request (uploaded / canceled / interrupted). “Interface” below = connected implementation (`autosaxs.cli_interface` or `autosaxs.gui_interface`).
 - **Events and payloads:**
   - **DIRECTORY_REQUESTED** — Controller. Payload: `query` (str). → **DIRECTORY_SPECIFIED** or **PROGRAM_INTERRUPTED**.
   - **DIRECTORY_SPECIFIED** — Interface. `path` (str).
@@ -188,7 +192,7 @@ No default values are defined in the controller for these; they must exist in co
 - **ai_analysis**  
   - Inputs: ATSAS results path, list of plot paths (sub, guinier, kratky, loglog).  
   - Preconditions: Exactly one selected profile; `simple_analysis` and `plots` in steps.  
-  - Outputs: In `ai_analysis/`: `<basename>_context.txt` (text + vision descriptions), `<basename>_llm_answer.txt`. Uses prompts under `PROMPTS_DIR` (`prompts/visual/saxs_1d.txt`, guinier_plot.txt, kratky_plot.txt, loglog_plot.txt) and asks user for a query, then calls LLM.  
+  - Outputs: In `ai_analysis/`: `<basename>_context.txt` (text + vision descriptions), `<basename>_llm_answer.txt`. Uses prompts under `PROMPTS_DIR` (`autosaxs/prompts/visual/saxs_1d.txt`, guinier_plot.txt, kratky_plot.txt, loglog_plot.txt) and asks user for a query, then calls LLM.  
   - Fast-forward: If `_context.txt` exists, vision part is skipped; if `_llm_answer.txt` exists, LLM call is skipped.
 
 ---
@@ -209,9 +213,9 @@ No default values are defined in the controller for these; they must exist in co
 
 ## 10. Invariants and edge cases
 
-- **EventBus wiring:** Controller gets EventBus + viewer (no Interface ref). One of `cli_interface` / `gui_interface` gets the same EventBus. All I/O via events.
+- **EventBus wiring:** Controller gets EventBus + viewer (no Interface ref). One of `autosaxs.cli_interface` / `autosaxs.gui_interface` gets the same EventBus. Wiring is done in `pipeline.py`. All I/O via events.
 - **Naming (buffer–sample):** Buffer ends with `_buffer<.ext>`, sample with `_sample<.ext>`. Pair when buffer base is **contained in** sample base. One sample ↔ multiple buffers = “overlapped”; unpaired = error. Loop requires no overlapped, no unpaired.
-- **LATEST_STEPS_PATH:** Controller writes `utils.ROOT_DIR/temp/latest_steps.yml`. If `gui_interface` uses a hardcoded path (e.g. `~/KurchatovCoop/temp/...`) for “latest configuration”, it may not see steps when `ROOT_DIR` differs; use `utils.ROOT_DIR`.
+- **LATEST_STEPS_PATH:** Controller writes `autosaxs.utils.ROOT_DIR/temp/latest_steps.yml`. If `autosaxs.gui_interface` uses a hardcoded path (e.g. `~/KurchatovCoop/temp/...`) for “latest configuration”, it may not see steps when `ROOT_DIR` differs; use `autosaxs.utils.ROOT_DIR`.
 - **all_from_config:** Requires `config_path`; config has `steps`, `directory`. No mask question; `context['paths','selected_profiles']` must be pre-filled.
 - **Empty selections:** All steps unchecked → fallback to `default_steps`. No profile selected → empty dict; per-profile loop runs zero times.
 - **Alignment order:** `buffer_paths_1d` from `aligned_pairs` then `list(set(...))`; buffer order not preserved; subtraction iterates `aligned_pairs`.

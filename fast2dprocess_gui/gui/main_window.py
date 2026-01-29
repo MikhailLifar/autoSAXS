@@ -15,7 +15,7 @@ from .control_panel import ControlPanel
 from .image_tab_2d import ImageTab2D
 from .curves_tab_1d import CurvesTab1D
 from .widgets import center_window, enable_text_copying_recursive
-from utils import read_from_tiff
+from autosaxs.utils import read_from_tiff
 
 
 class SAXSProcessorGUI:

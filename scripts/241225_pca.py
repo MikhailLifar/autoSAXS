@@ -23,16 +23,16 @@ from sklearn.decomposition import PCA
 # Add parent directory to path to import modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from processor import (
-    IntegratorExtended, find_center, find_rings, refine, 
+from autosaxs.processor import (
+    IntegratorExtended, find_center, find_rings, refine,
     get_interring_dist_px, integrate_2d_to_1d, get_r_beam_px
 )
-from utils import read_from_tiff, read_saxs, write_saxs
-from context import Context
-from event_bus import EventBus
-import cli_interface
-from saxs_controller import Controller
-from viewer import *
+from autosaxs.utils import read_from_tiff, read_saxs, write_saxs
+from autosaxs.context import Context
+from autosaxs.event_bus import EventBus
+from autosaxs import cli_interface
+from autosaxs.saxs_controller import Controller
+from autosaxs.viewer import *
 
 
 def find_calibration_file(directory):

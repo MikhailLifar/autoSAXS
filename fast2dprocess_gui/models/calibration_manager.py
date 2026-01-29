@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 from ..core.constants import TEMP_DIR
 from ..core.interfaces import ICalibrationManager
 from .config_manager import ConfigManager
-from processor import IntegratorExtended
+from autosaxs.processor import IntegratorExtended
 
 
 class CalibrationManager(ICalibrationManager):

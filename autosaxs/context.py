@@ -1,7 +1,7 @@
 import os
 from typing import Any, Optional
 
-from utils import get_pipeline_paths, load_config, save_config
+from .utils import get_pipeline_paths, load_config, save_config
 
 
 class Context:

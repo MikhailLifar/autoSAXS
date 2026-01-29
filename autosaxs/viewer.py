@@ -14,11 +14,11 @@ from collections import defaultdict
 import ase
 from ase.geometry import get_distances
 
-from utils import SUPERVISED_ML_DIR
+from .utils import SUPERVISED_ML_DIR
 sys.path.append(SUPERVISED_ML_DIR)
 from supervised_ml.plot_util import *
 
-from utils import (
+from .utils import (
     calc_chi2,
     calculate_atoms_density_and_isosurface,
     calculate_shape_density_and_isosurface

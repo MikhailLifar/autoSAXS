@@ -9,13 +9,11 @@ import os
 
 import customtkinter as ctk
 
-from event_bus import EventBus, EventType
-from cli_interface import PipelineInterrupt
-
-from utils import ROOT_DIR
-
+from .event_bus import EventBus, EventType
+from .cli_interface import PipelineInterrupt
+from .utils import ROOT_DIR
 # Pipeline/step and profile selection reuse gui internals (they use ROOT_DIR for latest_steps)
-from gui import _run_gui_interactive, _run_choose_profiles_gui
+from .gui import _run_gui_interactive, _run_choose_profiles_gui
 
 
 def _center_window(win):

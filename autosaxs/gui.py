@@ -16,7 +16,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 # from viewer import setPlotDefaults
 
-from utils import ROOT_DIR
+from .utils import ROOT_DIR
 
 
 def _center_window(win):

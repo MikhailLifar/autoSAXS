@@ -19,11 +19,11 @@ from aiAssistantFramework import lib as ai_lib
 from aiAssistantFramework.lib import llm, telegram
 import controller as ai_controller
 
-from utils import timer
-from polydispfit import polydispfit
-from processor import *
-from cli_interface import CLIInterface, PipelineInterrupt
-from viewer import *
+from autosaxs.utils import timer
+from autosaxs.polydispfit import polydispfit
+from autosaxs.processor import *
+from autosaxs.cli_interface import CLIInterface, PipelineInterrupt
+from autosaxs.viewer import *
 
 
 setPlotDefaults()

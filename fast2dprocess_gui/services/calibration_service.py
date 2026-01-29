@@ -9,7 +9,7 @@ from ..models.calibration_manager import CalibrationManager
 from ..models.data_manager import DataManager
 from ..core.constants import TEMP_DIR
 from ..core.event_bus import EventBus, EventType
-from processor import IntegratorExtended
+from autosaxs.processor import IntegratorExtended
 import shutil
 
 

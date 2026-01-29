@@ -29,7 +29,7 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from utils import *
+from .utils import *
 
 
 class IntegratorExtended:

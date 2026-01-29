@@ -58,8 +58,8 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
-from processor import autocalib, IntegratorExtended
-from utils import read_from_tiff, ROOT_DIR
+from autosaxs.processor import autocalib, IntegratorExtended
+from autosaxs.utils import read_from_tiff, ROOT_DIR
 
 # Status file for progress updates
 STATUS_FILE = None

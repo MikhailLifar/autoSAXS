@@ -19,14 +19,15 @@ from scipy.ndimage import gaussian_filter
 import time
 from contextlib import contextmanager
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+_autosaxs_dir = os.path.dirname(os.path.abspath(__file__))
+REPO_DIR = os.path.dirname(_autosaxs_dir)  # repos/
+ROOT_DIR = os.path.dirname(REPO_DIR)
 
 SUPERVISED_ML_DIR = os.path.join(ROOT_DIR, 'supervised_ml')
 sys.path.append(SUPERVISED_ML_DIR)
 from supervised_ml.whittaker_smooth import whittaker_smooth
 
-GLOBALS_DIR = os.path.join(REPO_DIR, 'global') 
+GLOBALS_DIR = os.path.join(_autosaxs_dir, 'global')
 TEMPLATES_DIR = os.path.join(GLOBALS_DIR, 'templates')
 with open(os.path.join(GLOBALS_DIR, 'env.yml'), 'r') as fread:
     ENV = yaml.safe_load(fread)

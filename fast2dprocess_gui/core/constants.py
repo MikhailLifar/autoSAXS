@@ -1,6 +1,6 @@
 """Constants used throughout the application."""
 import os
-from utils import ROOT_DIR
+from autosaxs.utils import ROOT_DIR
 
 # Determine temp directory
 TEMP_DIR = os.path.join(ROOT_DIR, "fast2dprocess_gui_temp")

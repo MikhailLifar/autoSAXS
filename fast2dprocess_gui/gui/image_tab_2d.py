@@ -8,8 +8,8 @@ from matplotlib.figure import Figure
 from scipy.ndimage import zoom
 from ..core.constants import TEMP_DIR
 from ..utils.filename_utils import generate_filename
-from processor import IntegratorExtended
-from utils import read_from_tiff
+from autosaxs.processor import IntegratorExtended
+from autosaxs.utils import read_from_tiff
 
 
 class ImageTab2D:

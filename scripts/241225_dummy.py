@@ -20,8 +20,8 @@ import pandas as pd
 # Add parent directory to path to import modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from processor import IntegratorExtended
-from utils import read_from_tiff, write_saxs
+from autosaxs.processor import IntegratorExtended
+from autosaxs.utils import read_from_tiff, write_saxs
 
 
 def create_dummy_integrator(mask=None):

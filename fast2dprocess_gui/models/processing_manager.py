@@ -4,8 +4,8 @@ from typing import Optional
 from ..core.constants import TEMP_DIR
 from ..models.calibration_manager import CalibrationManager
 from ..utils.filename_utils import generate_filename
-from processor import integrate_2d_to_1d
-from utils import read_from_tiff
+from autosaxs.processor import integrate_2d_to_1d
+from autosaxs.utils import read_from_tiff
 
 
 class ProcessingManager:
@@ -77,7 +77,7 @@ class ProcessingManager:
         Returns:
             Path to subtracted curve file
         """
-        from processor import subtract_buffer
+        from autosaxs.processor import subtract_buffer
         
         if output_path is None:
             # Generate descriptive filename from both buffer and sample names

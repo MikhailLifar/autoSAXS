@@ -7,13 +7,13 @@ import time
 import warnings
 import yaml
 
-from processor import *
-from cli_interface import PipelineInterrupt
-from viewer import *
-from context import Context
-from event_bus import EventBus, EventType
-from utils import ROOT_DIR
-import cli_interface
+from .processor import *
+from .cli_interface import PipelineInterrupt
+from .viewer import *
+from .context import Context
+from .event_bus import EventBus, EventType
+from .utils import ROOT_DIR
+from . import cli_interface
 
 import numpy as np
 import pandas as pd
@@ -32,12 +32,12 @@ sys.path.append(ROOT_DIR)
 from aiAssistantFramework.lib import llm 
 # from aiAssistantFramework.lib import telegram
 # import controller as ai_controller
-from polydispfit import polydispfit
+from .polydispfit import polydispfit
 
 # CONFIG_FILE = "calib_config.conf"
 # CALIBRATED_GEOMETRY_PATH = 'calibrated_geometry.conf'
 
-PROMPTS_DIR = os.path.join(REPO_DIR, 'prompts')
+PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prompts')
 LATEST_STEPS_PATH = os.path.join(ROOT_DIR, 'temp', 'latest_steps.yml')
 DEBUG = True
 
@@ -1691,11 +1691,4 @@ echo "Full results saved to: $RESULTS_FILE"
     #         self._send_message(f"\nAn unexpected error occurred and interrupted the work of the app: {e}. See calibration_app.log for details.")
 
 
-if __name__ == '__main__':
-    # Wire EventBus; Controller and one Interface connect to it (§3)
-    event_bus = EventBus()
-    cli_interface.connect(event_bus)
-    controller = Controller(event_bus, PLTViewer())
-    # directory path for pipeline0: debug/protein_v0, debug/protein_v0_interactive
-    controller.pipeline_interactive(fast_forward=True)
 

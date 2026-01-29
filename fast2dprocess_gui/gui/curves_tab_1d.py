@@ -10,7 +10,7 @@ import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 from ..core.constants import TEMP_DIR
 from ..utils.filename_utils import generate_curve_plot_filename
-from utils import read_saxs
+from autosaxs.utils import read_saxs
 
 
 class CurvesTab1D:

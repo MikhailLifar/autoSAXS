@@ -14,7 +14,7 @@ from scipy.interpolate import RegularGridInterpolator
 from scipy.special import gamma
 from scipy import optimize
 
-from utils import *
+from .utils import *
 
 
 def polydispfit(data_path, model_name, distribution: Dict, q_fit_range: Tuple[float, float]):
@@ -149,7 +149,7 @@ def polydispfit(data_path, model_name, distribution: Dict, q_fit_range: Tuple[fl
     scale, background = coeffs
     fitted_intensity = scale * final_profile + background
     residuals = intensity_fit - fitted_intensity
-    from utils import calc_chi2
+    from .utils import calc_chi2
     if sigma_fit is not None:
         chi2 = float(calc_chi2(intensity_fit, fitted_intensity, sigma_fit))
     else:
