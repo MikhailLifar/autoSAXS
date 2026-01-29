@@ -15,6 +15,7 @@ from pyFAI.io import image
 
 import base64
 from scipy.ndimage import gaussian_filter
+from scipy.spatial.distance import cdist
 
 import time
 from contextlib import contextmanager
@@ -480,6 +481,31 @@ def get_image_messages(image_path, text):
 
 def calc_chi2(I0, I1, sigma_exp):
     return 1 / (I0.shape[0] - 1) * np.sum( ((I0 - I1) / sigma_exp) ** 2 )
+
+
+# Volume per dummy atom (Å³) for DAM models; used in compute_dammif_descriptors.
+V_ATOM_DAM = 20.0
+
+
+def compute_dammif_descriptors(atoms: Atoms) -> Dict[str, float]:
+    """
+    Compute Rg, Dmax, V, and f_ratio from a DAM CIF (ASE Atoms).
+    Coords assumed in Å. Rg and Dmax returned in nm; V in Å³.
+    """
+    pos = np.asarray(atoms.get_positions(), dtype=np.float64)
+    n = len(pos)
+    if n == 0:
+        return {"Rg": np.nan, "Dmax": np.nan, "V": np.nan, "f_ratio": np.nan}
+    com = pos.mean(axis=0)
+    r_sq = np.sum((pos - com) ** 2, axis=1)
+    rg_ang = np.sqrt(np.mean(r_sq))
+    rg_nm = rg_ang / 10.0
+    dists = cdist(pos, pos, metric="euclidean")
+    dmax_ang = float(np.max(dists))
+    dmax_nm = dmax_ang / 10.0
+    v = n * V_ATOM_DAM
+    f_ratio = rg_nm / dmax_nm if dmax_nm > 0 else np.nan
+    return {"Rg": rg_nm, "Dmax": dmax_nm, "V": v, "f_ratio": f_ratio}
 
 
 ##### STRING UTILS ######

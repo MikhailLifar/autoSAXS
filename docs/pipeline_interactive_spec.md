@@ -6,7 +6,7 @@ Specification of `Controller.pipeline_interactive` in the **autosaxs** package (
 
 ## 1. Purpose and scope
 
-**Purpose:** Interactive SAXS pipeline: detector calibration; 2D→1D integration of buffer/sample images; optional buffer subtraction; descriptors (Rg, I(0), P(R) via ATSAS); Guinier/Kratky/log-log plots; optional shape fitting (BODIES, DAMMIF, polydisperse spheres); optional AI analysis. File-based I/O with directory and file upload prompts.
+**Purpose:** Interactive SAXS pipeline: detector calibration; 2D→1D integration of buffer/sample images; optional buffer subtraction; descriptors (Rg, I(0), P(R) via ATSAS); Guinier/Kratky/log-log plots; optional shape fitting (BODIES, DAMMIF, polydisperse spheres); optional AI analysis; per-profile PDF reports for all sample profiles. File-based I/O with directory and file upload prompts.
 
 ---
 
@@ -25,8 +25,9 @@ Specification of `Controller.pipeline_interactive` in the **autosaxs** package (
   - **yaml** — Config and metadata.
   - **aiAssistantFramework.lib.llm** — LLM requests for AI analysis.
   - **polydispfit** — Polydisperse sphere fitting (project-local module).
+  - **reportlab** — PDF generation for per-profile reports (text, tables, embedded figures).
 - **Project-internal modules and usage:**
-  - **autosaxs** (`repos/autosaxs/`): Package containing the pipeline core. Modules: **processor**, **utils**, **event_bus**, **cli_interface**, **viewer**, **context**, **saxs_controller** (exports `Controller`), **gui_interface**, **gui**, **polydispfit**. Directories: **global/** (env.yml, primus_models.yml, templates/), **prompts/** (e.g. prompts/visual/ for AI/plot prompts). Other code (e.g. `pipeline.py`, `fast2dprocess_gui`, `calibration_service.py`, scripts) imports from `autosaxs` as needed.
+  - **autosaxs** (`repos/autosaxs/`): Package containing the pipeline core. Modules: **processor**, **utils**, **event_bus**, **cli_interface**, **viewer**, **context**, **saxs_controller** (exports `Controller`), **gui_interface**, **gui**, **polydispfit**, **report**. Directories: **global/** (env.yml, primus_models.yml, templates/), **prompts/** (e.g. prompts/visual/ for AI/plot prompts). Other code (e.g. `pipeline.py`, `fast2dprocess_gui`, `calibration_service.py`, scripts) imports from `autosaxs` as needed.
   - **processor** (`autosaxs/processor.py`): `IntegratorExtended`, `integrate_2d_to_1d`, `subtract_buffer`, `find_center`, `find_rings`, `refine`, `get_detector`, `get_interring_dist_px` (and `*` import so e.g. mask/geometry helpers used by calibration). Calibration and integration logic live here.
   - **utils** (`autosaxs/utils.py`): `read_from_tiff` (via processor’s use of `utils`); `read_saxs`, `write_saxs`, `write_data`, `read_data`, `load_config`, `save_config`, `get_pipeline_paths`, `map_sample_files_to_buffer_files`, `read_bodies_cif`, `calc_chi2`, `calculate_atoms_density_and_isosurface`, `calculate_shape_density_and_isosurface`; `ROOT_DIR`, `REPO_DIR`; `ENV` (from `autosaxs/global/env.yml`) for `ATSAS_BIN_PREFIX`; `whittaker_smooth` (from `supervised_ml`) used by subtraction.
   - **event_bus** (`autosaxs/event_bus.py`): `EventBus` and event type enum. See §3.1 for catalogue and payloads.
@@ -36,6 +37,7 @@ Specification of `Controller.pipeline_interactive` in the **autosaxs** package (
   - **polydispfit** (`autosaxs/polydispfit.py`): Polydisperse sphere fitting; used by Controller for the polydispfit step.
   - **viewer** (`autosaxs/viewer.py`): Visualization (`view_calibration`, `view_mask`, `view_curves`, `plot_3d_views_and_scattering`, etc.); entry point `pipeline.py` uses `PLTViewer` when wiring the pipeline.
   - **context** (`autosaxs/context.py`): `Context` — holds directory, config, and path groups; config and path accessors.
+  - **report** (`autosaxs/report.py`): All per-profile PDF functionality. Builds a single PDF from a report-data dictionary (e.g. `build_report_pdf(report_data: dict, output_path: str)`). Only sections for which data is present are included. See §6 Report.
   - **pipeline** (`repos/pipeline.py`): Entry point for the interactive pipeline. Wires EventBus; connects one of `autosaxs.cli_interface` or `autosaxs.gui_interface` to it; creates `Controller` from `autosaxs.saxs_controller` and `PLTViewer` from `autosaxs.viewer`; runs `controller.pipeline_interactive(...)`. No pipeline logic—only wiring and invocation.
 
 ---
@@ -43,7 +45,7 @@ Specification of `Controller.pipeline_interactive` in the **autosaxs** package (
 ## 3. Architecture
 
 - **Type of application:** Interactive pipeline with CLI or GUI (one chosen); both communicate with Controller only via EventBus. File-based working directory; app waits for files matching patterns.
-- **Module layout:** **autosaxs** package (`repos/autosaxs/`: `event_bus`, `cli_interface`, `processor`, `utils`, `viewer`, `context`, `saxs_controller`, `gui_interface`, `gui`, `polydispfit`; directories `global/`, `prompts/`); **`pipeline.py`** in `repos/` (entry point). One EventBus instance; Controller and one of CLI/GUI connect to it. Wiring is done in `pipeline.py`.
+- **Module layout:** **autosaxs** package (`repos/autosaxs/`: `event_bus`, `cli_interface`, `processor`, `utils`, `viewer`, `context`, `saxs_controller`, `gui_interface`, `gui`, `polydispfit`, `report`; directories `global/`, `prompts/`); **`pipeline.py`** in `repos/` (entry point). One EventBus instance; Controller and one of CLI/GUI connect to it. Wiring is done in `pipeline.py`.
 - **Layers:**
   - **EventBus** (`autosaxs/event_bus.py`): Single channel for Controller–Interface I/O; no direct calls. Event enum and payloads in `event_bus.py`; semantics in §3.1.
   - **CLI** (`autosaxs/cli_interface.py`): Subscribes via `connect(bus)` to **FILE_REQUESTED**, **CHOICE_REQUESTED**, **DIRECTORY_REQUESTED**, **MESSAGE**, **PIPELINE_STEPS_REQUESTED**, **PROFILE_SELECTION_REQUESTED**; publishes **FILE_UPLOADED**, **FILE_UPLOAD_CANCELED**, **OPTION_CHOSEN**, **OPTION_CHOICE_CANCELED**, **DIRECTORY_SPECIFIED**, **PROGRAM_INTERRUPTED**, **PIPELINE_STEPS_SPECIFIED**, **PROFILE_SELECTION_SPECIFIED**. stdin/print + file monitoring; pipeline/step and profile selection in-module. Also defines `CLIInterface` and `PipelineInterrupt` for standalone use.
@@ -54,7 +56,7 @@ Specification of `Controller.pipeline_interactive` in the **autosaxs** package (
   1. Create EventBus; Controller and one of `autosaxs.cli_interface` / `autosaxs.gui_interface` connect to it. Create `Context()`.
   2. If not `all_from_config`: **DIRECTORY_REQUESTED** → **DIRECTORY_SPECIFIED** or **PROGRAM_INTERRUPTED**; then **FILE_REQUESTED** for `config.conf` → **FILE_UPLOADED** or cancel. Load config. Steps via EventBus (pipeline/step selection). Else: load config from path; read `steps`, `directory`.
   3. If `calibration` in steps: **FILE_REQUESTED** (calibrant) → response; if not `all_from_config`, **CHOICE_REQUESTED** (mask mode) → **OPTION_CHOSEN** / cancel; if mask from file/combined, **FILE_REQUESTED** (mask) → response. Run `autocalib(...)` or load integrator from disk when `integration` without calibration.
-  4. Main loop: **FILE_REQUESTED** (buffer/sample 2D or 1D, or `subtracted/*.dat`) → **FILE_UPLOADED** or cancel; on alignment errors **MESSAGE** then retry. Profile selection via EventBus → `selected_profiles`. For each profile run optional steps (descriptors, plot, polydispfit, bodies, dammif, ai_analysis). **CHOICE_REQUESTED** (“Upload more data?”) → **OPTION_CHOSEN** “no” or cancel to exit.
+  4. Main loop: **FILE_REQUESTED** (buffer/sample 2D or 1D, or `subtracted/*.dat`) → **FILE_UPLOADED** or cancel; on alignment errors **MESSAGE** then retry. Run integration/subtraction as per steps; then build and save reports for **all sample profiles** with report data from integration through subtraction (first pass; see §6 Report). Profile selection via EventBus → `selected_profiles`. For each **selected** profile: collect report data, run optional steps (descriptors, plot, polydispfit, bodies, dammif, ai_analysis); then build and save report again for that profile (second pass; full data; same output path).
   5. Return `context`. On **PROGRAM_INTERRUPTED**, exit (e.g. raise `PipelineInterrupt`).
 
 ### 3.1 EventBus: events and data flow
@@ -98,11 +100,12 @@ Specification of `Controller.pipeline_interactive` in the **autosaxs** package (
      - If `subtraction` in steps and `integration` not in steps: wait for buffer and sample 1D in `averaged/`; align; set `buffer_paths_1d` and `sample_paths_1d` (and basename list from sample names).
      - If `subtraction` in steps: align `sample_paths_1d` with `buffer_paths_1d`; for each aligned pair run `subtract` → outputs in `subtracted/`; extend context with buffer_1d and sample_1d paths.
      - If `subtraction` not in steps: wait for `subtracted/*.dat`; for each file load, plot, and build basename list and profile paths.
-  5. Profile selection: unless `all_from_config`, build `profiles_data` and request via EventBus; result is `selected_profiles` (dict basename → profile).
-  6. For each selected profile, in order: `simple_analysis` → descriptors and GNOM; `plots` → Guinier, Kratky, log-log; `polydispfit`; `bodies_fit`; `dammif_fit` (requires `simple_analysis`); `ai_analysis` (requires exactly one selected profile, `simple_analysis`, and `plots`). Each step may write to a subdir under the working directory and append paths to context.
-  7. Ask “Upload more data?”; if answer does not start with “n”, repeat from step 4 (new buffer/sample or profiles); otherwise exit and return context.
+  5. **First report pass:** For **all sample profiles** (not buffer): collect report data from integration through subtraction only; build and save one PDF per profile (e.g. `reports/<basename>_report.pdf`). See §6 Report.
+  6. Profile selection: unless `all_from_config`, build `profiles_data` and request via EventBus; result is `selected_profiles` (dict basename → profile).
+  7. For each **selected** profile, in order: build or update **report data** for that profile (from context and existing files). Run optional steps: `simple_analysis` → descriptors and GNOM; `plots` → Guinier, Kratky, log-log; `polydispfit`; `bodies_fit`; `dammif_fit` (requires `simple_analysis`); `ai_analysis` (requires exactly one selected profile, `simple_analysis`, and `plots`). Each step may write to a subdir and append paths to context. **Second report pass:** Build and save report again for that profile (full data; same output path as first pass, overwriting/updating the PDF). See §6 Report.
+  8. Ask “Upload more data?”; if answer does not start with “n”, repeat from step 4 (new buffer/sample or profiles); otherwise exit and return context.
 
-- **Processing:** When `integration` in steps, 2D files are integrated in one go after alignment. Subtraction runs in the same cycle after integration (or after loading 1D files); pairing via `map_sample_files_to_buffer_files` (see §10 naming).
+- **Processing:** When `integration` in steps, 2D files are integrated in one go after alignment. Subtraction runs in the same cycle after integration (or after loading 1D files); pairing via `map_sample_files_to_buffer_files` (see §11 naming).
 
 ---
 
@@ -111,12 +114,27 @@ Specification of `Controller.pipeline_interactive` in the **autosaxs** package (
 - **2D images:** Read with `pyFAI.io.image.read_image_data` (in `utils.read_from_tiff`). Patterns in the app: `raw/*_calib.tif`, `raw/*_buffer.tif`, `raw/*_sample.tif` — effectively TIFF (`.tif`).
 - **Mask:** Extensions: `.npy` (NumPy load, cast to bool), `.txt` (loadtxt, cast to bool), `.msk` (fabio, cast to bool, then flipped on first axis). Values must be 0/1 or boolean-like; no additional validation in code.
 - **1D SAXS curves (read_saxs/write_saxs):** Format is the generic “YAML metadata + CSV data” used by `read_data`/`write_data` in `utils.py`: file starts with a YAML block between `---` and `...`, then a line `# Data in CSV format\n`, then CSV. For SAXS, CSV has columns `q`, `intensity`, and optionally `sigma`. Metadata is a dict. Any file path passed to `read_saxs` must conform to this layout.
-- **Config file:** Working directory, `config.conf`; YAML. Keys in §6; schema implied by controller/processor use.
+- **Config file:** Working directory, `config.conf`; YAML. Keys in §7; schema implied by controller/processor use.
 - **Integrator persistence:** `integrator_params/` must contain `ai_params.json`, `detector_params.json`, and optionally `mask.npy` (one file matching `mask.*`). Used when step `integration` is selected without `calibration`.
+- **Report:** Data format, output path, and content are defined in §6 Report.
+- **Bodies/dammif fit exports:** Bodies step produces `bodies_fits.yml` (YAML dict of shape→{params, chi2}) and `bodies_fits.csv` (q, exp, fitted intensities over fit q-range). Dammif step produces `dammif_fits.yml` (YAML dict of replicate→{Rg, Dmax, V, f_ratio, chi2}) and `dammif_fits.csv` (same CSV layout). Layout and semantics in §9.
 
 ---
 
-## 6. Configuration parameters
+## 6. Report (per-profile PDF)
+
+Report generation is not a selectable step. Reports are produced for **all sample profiles**. For not-selected profiles the report contains only data from integration through subtraction; for selected profiles the report is built twice — first with that limited data, then again with full data after slow processing. Same output path for both passes; the second pass overwrites/updates the PDF.
+
+- **Scope:** One PDF per **sample** profile. Reports are saved to a dedicated `reports/` subdir in the working directory (e.g. `directory/reports/<basename>_report.pdf`), analogous to subtraction results in `subtracted/`. Format: PDF (reportlab or equivalent).
+- **First pass (after fast processing):** After the main cycle (integration and subtraction), for **every sample profile**: collect report data from integration through subtraction only (integrated curve if available, difference plot `diff_<basename>.png`, subtracted plot `sub_<basename>.png`). Build and save one PDF per profile. Content for this pass: only sections (1)–(3) below, as data exists. Not-selected profiles never receive more than this pass; their reports stay limited to integration→subtraction.
+- **Second pass (after slow processing):** For each **selected** profile, after running optional steps (simple_analysis, plots, polydispfit, bodies, dammif, ai_analysis): collect full report data (including descriptors, plot figures, fits). Build and save the PDF again for that profile at the **same output path**, overwriting/updating the first-pass PDF with full content. Content: all sections (1)–(7) for which data is present.
+- **Report data (per profile):** A dictionary passed to the report builder. Keys are optional; only present keys are rendered. Suggested keys (exact names are implementation-defined): path or data for **integrated curve** (figure: 1D integrated curve); **difference plot** (figure: `diff_<basename>.png`); **subtracted plot** (figure: `sub_<basename>.png`); **descriptors table** (Rg, I(0), Quality from `simple_analysis`); **plot figures** — I vs q, Guinier, Kratky, log I vs log q (one figure per plot kind, from `plots/`); **fits comparison figure** (experimental curve and all fits from polydispfit, BODIES, DAMMIF; x-limits from fit ranges); **fits table** (two columns: fit kind — e.g. polydispfit, bodies-sphere, … — and fitted parameters). First pass populates only integration→subtraction keys; second pass adds the rest from context and existing files.
+- **Content (each section optional in PDF):** (1) Figure: integrated curve (if integration result exists for this sample). (2) Figure: difference plot from subtract step. (3) Figure: subtracted plot. (4) Table: descriptors (Rg, I(0), Quality) from simple_analysis. (5) Individual figures for I vs q, Guinier, Kratky, log I vs log q (one figure per plot kind). (6) Fits: one figure with experimental curve and all fits; x-limits derived from fit ranges. (7) Fits: table — fit kind and fitted parameters.
+- **Implementation:** Controller collects report data into a dictionary; a function in `autosaxs.report` (e.g. `build_report_pdf(report_data: dict, output_path: str)`) builds the PDF from that dictionary. All PDF-related logic lives in `autosaxs/report.py`. No EventBus events for report.
+
+---
+
+## 7. Configuration parameters
 
 All of the following are read from the config (YAML) via `context[key1, key2, ...]` or used in `context.update_config`:
 
@@ -137,7 +155,7 @@ No default values are defined in the controller for these; they must exist in co
 
 ---
 
-## 7. Calibration
+## 8. Calibration
 
 - **Inputs:** Calibrant 2D path (pattern `raw/*_calib.tif`), optional mask path (if `mask_config.mode` is `from_file` or `combined`), and config (calibrant_name, center_refinement, detector_geometry, ring_search, r_beam_px, mask_config).
 - **Results:**
@@ -150,7 +168,7 @@ No default values are defined in the controller for these; they must exist in co
 
 ---
 
-## 8. Steps description
+## 9. Steps description
 
 - **integration**  
   - Inputs: integrator (from calibration or from `integrator_params/`), 2D paths.  
@@ -180,14 +198,18 @@ No default values are defined in the controller for these; they must exist in co
 
 - **bodies**  
   - Inputs: Profile path; config `bodies.q_range_nm` or `bodies.q_range_channels`.  
-  - Outputs: In `bodies/bodies_<basename>/`: `bodies_fit-<shape>.fir` for each shape in `BODIES_SHAPES`, `<shape>_view.png`, and `<basename>_fits.png`.  
-  - Fast-forward: If all `bodies_fit-<shape>.fir` exist and `<basename>_fits.png` exists, step is skipped. Note: BODIES is invoked without `--first`/`--last` in the current code (commented out).
+  - Outputs: In `bodies/bodies_<basename>/`: `bodies_fit-<shape>.fir` for each shape in `BODIES_SHAPES`, `<shape>_view.png`, `<basename>_fits.png`, a combined **`bodies_fits.yml`**, and a **`bodies_fits.csv`**.  
+  - **`bodies_fits.yml`:** Single YAML file. Dictionary mapping each shape name (e.g. `ellipsoid`, `dumbbell`, …) to a dict of fit parameters and quality: `{shape0: {p0: v0, p1: v1, ... chi2: v_chi2}, shape1: ...}`. Keys are shape identifiers; each value holds all fitted parameters (names and values) and `chi2`.  
+  - **`bodies_fits.csv`:** Single CSV. Columns: `q`, `exp`, then one column per fitted shape (e.g. `ellipsoid`, `dumbbell`, …). Rows: experimental q and intensity over the **fitted q-range only** (same q-limits as used for the fits / as on the fits figure), plus each shape’s fitted intensity on that q-grid. 
+  - Fast-forward: If all `bodies_fit-<shape>.fir` exist, `<basename>_fits.png` exists, and both `bodies_fits.yml` and `bodies_fits.csv` exist, step is skipped.
 
 - **dammif**  
   - Inputs: Profile path and GNOM `.out` path (from simple_analysis).  
   - Precondition: Step `simple_analysis` must be in steps.  
-  - Outputs: In `dammif/dammif_<basename>/`: `dammif-<i>.fir`, `dammif-<i>-1.cif`, and view/fits PNGs. Number of replicates is fixed in code: 2.  
-  - Fast-forward: If all `dammif-<i>.fir` exist and `<basename>_fits.png` exists, step is skipped.
+  - Outputs: In `dammif/dammif_<basename>/`: `dammif-<i>.fir`, `dammif-<i>-1.cif`, view/fits PNGs, a combined **`dammif_fits.yml`**, and a **`dammif_fits.csv`**. Number of replicates is fixed in code: 2.  
+  - **`dammif_fits.yml`:** Single YAML file. DAM provides no fit descriptors by default; each replicate is described by computed descriptors. Dictionary mapping each replicate (e.g. `dammif-1`, `dammif-2`) to a dict: `{dammif-<i>: {Rg: ..., Dmax: ..., V: ..., f_ratio: ..., chi2: ...}, ...}`. **Rg** = gyration radius; **Dmax** = maximum dimension; **V** = volume = N × V(atom) (N = number of dummy atoms, V(atom) = volume per atom); **f_ratio** = Rg / Dmax.  
+  - **`dammif_fits.csv`:** Single CSV. Same structure as bodies: columns `q`, `exp`, then one column per replicate (e.g. `dammif-1`, `dammif-2`). Rows: experimental q and intensity over the **fitted q-range only** (same q-limits as on the fits figure), plus each replicate’s fitted intensity on that q-grid.
+  - Fast-forward: If all `dammif-<i>.fir` exist, `<basename>_fits.png` exists, and both `dammif_fits.yml` and `dammif_fits.csv` exist, step is skipped.
 
 - **ai_analysis**  
   - Inputs: ATSAS results path, list of plot paths (sub, guinier, kratky, loglog).  
@@ -197,7 +219,7 @@ No default values are defined in the controller for these; they must exist in co
 
 ---
 
-## 9. Error handling and validation
+## 10. Error handling and validation
 
 - **Before processing:** Images: patterns e.g. `*_calib.tif`; no explicit extension check. Mask: read and cast to bool; bad extension → `RuntimeError` in `read_mask`. 1D: must parse with `read_saxs`; invalid → from `read_data`.
 - **Before calibration:** Directory set and exist. No calibrant → `autocalib` returns `integrator: None, refined: None`. Config must have calibrant_name, center_refinement, detector_geometry, ring_search, r_beam_px, mask_config.
@@ -211,7 +233,7 @@ No default values are defined in the controller for these; they must exist in co
 
 ---
 
-## 10. Invariants and edge cases
+## 11. Invariants and edge cases
 
 - **EventBus wiring:** Controller gets EventBus + viewer (no Interface ref). One of `autosaxs.cli_interface` / `autosaxs.gui_interface` gets the same EventBus. Wiring is done in `pipeline.py`. All I/O via events.
 - **Naming (buffer–sample):** Buffer ends with `_buffer<.ext>`, sample with `_sample<.ext>`. Pair when buffer base is **contained in** sample base. One sample ↔ multiple buffers = “overlapped”; unpaired = error. Loop requires no overlapped, no unpaired.

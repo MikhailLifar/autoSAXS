@@ -12,7 +12,14 @@ from .cli_interface import PipelineInterrupt
 from .viewer import *
 from .context import Context
 from .event_bus import EventBus, EventType
-from .utils import ROOT_DIR
+from .utils import (
+    ROOT_DIR,
+    ATSAS_BIN_PREFIX,
+    read_saxs,
+    calc_chi2,
+    read_bodies_cif,
+    compute_dammif_descriptors,
+)
 from . import cli_interface
 
 import numpy as np
@@ -33,6 +40,7 @@ from aiAssistantFramework.lib import llm
 # from aiAssistantFramework.lib import telegram
 # import controller as ai_controller
 from .polydispfit import polydispfit
+from .report import build_report_pdf
 
 # CONFIG_FILE = "calib_config.conf"
 # CALIBRATED_GEOMETRY_PATH = 'calibrated_geometry.conf'
@@ -103,6 +111,26 @@ def json_type_caster(s):
         return json.loads(s)
     except:
         raise ValueError('Incorrect JSON passed')
+
+
+def _parse_descriptors_from_results(results_path):
+    """Parse Rg, I(0), Quality from ATSAS results file. Returns dict or None."""
+    if not results_path or not os.path.isfile(results_path):
+        return None
+    import re
+    out = {}
+    with open(results_path, 'r') as f:
+        for line in f:
+            m = re.match(r'\s*Rg\s*=\s*(.+?)\s*nm', line)
+            if m:
+                out['Rg (nm)'] = m.group(1).strip()
+            m = re.match(r'\s*I\(0\)\s*=\s*(.+)', line)
+            if m:
+                out['I(0)'] = m.group(1).strip()
+            m = re.match(r'\s*Quality:\s*(.+)', line)
+            if m:
+                out['Quality'] = m.group(1).strip()
+    return out if out else None
 
 
 def save_latest_steps(pipeline_choice, steps):
@@ -631,13 +659,16 @@ echo "Full results saved to: $RESULTS_FILE"
             bodies_prefix = os.path.join(bodies_subdir, 'bodies_fit')
 
             bodies_fits_png = os.path.join(bodies_subdir, f'{basename}_fits.png')
-            
+            bodies_fits_yml = os.path.join(bodies_subdir, 'bodies_fits.yml')
+            bodies_fits_csv = os.path.join(bodies_subdir, 'bodies_fits.csv')
+
             exists_bodies = all(
                 os.path.exists(os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir'))
                 for shape in BODIES_SHAPES
             )
-            
-            if fast_forward and exists_bodies and os.path.exists(bodies_fits_png):
+            exists_bodies_exports = os.path.exists(bodies_fits_yml) and os.path.exists(bodies_fits_csv)
+
+            if fast_forward and exists_bodies and os.path.exists(bodies_fits_png) and exists_bodies_exports:
                 self._send_message(f'Fast-forward: Skipping BODIES fit for {saxs_1d_path} (results already exist)')
 
             else:
@@ -665,6 +696,7 @@ echo "Full results saved to: $RESULTS_FILE"
                     self._send_message(f'BODIES fit for {saxs_1d_path} failed (resulting files were not found, probably integration or data cleaning error)')
                     return bodies_subdir
 
+                fits_data = []
                 for shape in BODIES_SHAPES:
                     fir_path = os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')
                     # cif_path = os.path.join(bodies_subdir, f'bodies_fit-{shape}-damstart.cif')
@@ -698,6 +730,7 @@ echo "Full results saved to: $RESULTS_FILE"
                     I_fit_interp = np.interp(q_intersetcion, q_fit, I_fit)
 
                     chi2 = calc_chi2(I_intersection, I_fit_interp, sigma_interp)
+                    fits_data.append((shape, params_dict, chi2, q_intersetcion, I_fit_interp))
                     params_str = ';'.join(
                         f"{p_name}:{p_v:.2f}" for p_name, p_v in params_dict.items()
                         if p_name != "scale"
@@ -714,7 +747,20 @@ echo "Full results saved to: $RESULTS_FILE"
                     #     plotFilePath=os.path.join(bodies_subdir, f'{shape}_view.png'))
                 
                 q_max = max(to_plot[i][-1] for i in range(0, len(to_plot), 3))
-                idx = q <= q_max 
+                idx = q <= q_max
+                q_csv = q[idx]
+                I_exp_csv = I[idx]
+
+                fits_yml = {s: {**p, 'chi2': float(c)} for s, p, c, _q, _i in fits_data}
+                with open(bodies_fits_yml, 'w') as f:
+                    yaml.dump(fits_yml, f, default_flow_style=False)
+
+                csv_cols = ['q', 'exp'] + [s for s, *_ in fits_data]
+                csv_arrays = [q_csv, I_exp_csv] + [
+                    np.interp(q_csv, _q, _i) for _s, _p, _c, _q, _i in fits_data
+                ]
+                pd.DataFrame(dict(zip(csv_cols, csv_arrays))).to_csv(bodies_fits_csv, index=False)
+
                 to_plot = [q[idx], I[idx], {'label': 'exp', 'lw': 4}] + to_plot
                 self.viewer.view_curves(*to_plot,
                                         sigmas=(sigma[idx], ),
@@ -736,10 +782,13 @@ echo "Full results saved to: $RESULTS_FILE"
             dammif_reps_num = 2  # 5
 
             dammif_fits_png = os.path.join(dammif_subdir, f'{basename}_fits.png')
-            
+            dammif_fits_yml = os.path.join(dammif_subdir, 'dammif_fits.yml')
+            dammif_fits_csv = os.path.join(dammif_subdir, 'dammif_fits.csv')
+
             exists_dammif = all(os.path.exists(os.path.join(dammif_subdir, f'dammif-{i}.fir')) for i in range(dammif_reps_num))
-            
-            if fast_forward and exists_dammif and os.path.exists(dammif_fits_png):
+            exists_dammif_exports = os.path.exists(dammif_fits_yml) and os.path.exists(dammif_fits_csv)
+
+            if fast_forward and exists_dammif and os.path.exists(dammif_fits_png) and exists_dammif_exports:
                 self._send_message(f'Fast-forward: Skipping DAMMIF fit for {gnom_path} (results already exist)')
             
             else:
@@ -747,7 +796,8 @@ echo "Full results saved to: $RESULTS_FILE"
 
                 q, I, sigma, _ = read_saxs(saxs_1d_path)
                 to_plot = []
-                
+                fits_data = []
+
                 for i in range(dammif_reps_num):
                     fir_path = f'{dammif_prefix}-{i+1}.fir'
                     cif_path = f'{dammif_prefix}-{i+1}-1.cif'
@@ -768,20 +818,34 @@ echo "Full results saved to: $RESULTS_FILE"
                     #                         plotFilePath=os.path.join(dammif_subdir, f'{basename}_{i}_shit_here_1.png'))
 
                     chi2 = calc_chi2(I_intersection, I_fit_interp, sigma_interp)
+                    atoms = read_bodies_cif(cif_path)
+                    descr = compute_dammif_descriptors(atoms)
+                    fits_data.append((f'dammif-{i}', {**descr, 'chi2': float(chi2)}, q_intersetcion, I_fit_interp))
                     to_plot.extend([q_intersetcion, I_fit_interp, f'dammif-{i}; $\\chi^2$: {chi2:.2f}'])
 
-                    atoms = read_bodies_cif(cif_path)
                     # self.viewer.plot_structure_and_scattering(
                     #     atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
                     #     plotFilePath=os.path.join(dammif_subdir, f'dammif-{i}_view.png'))
                     self.viewer.plot_3d_views_and_scattering(
                         atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
                         plotFilePath=os.path.join(dammif_subdir, f'dammif-{i}_view.png'))
-                
+
                 q_max = max(to_plot[i][-1] for i in range(0, len(to_plot), 3))
-                idx = q <= q_max 
+                idx = q <= q_max
+                q_csv = q[idx]
+                I_exp_csv = I[idx]
+
+                fits_yml = {k: {kk: float(vv) for kk, vv in d.items()} for k, d, _q, _i in fits_data}
+                with open(dammif_fits_yml, 'w') as f:
+                    yaml.dump(fits_yml, f, default_flow_style=False)
+
+                csv_cols = ['q', 'exp'] + [k for k, *_ in fits_data]
+                csv_arrays = [q_csv, I_exp_csv] + [
+                    np.interp(q_csv, _q, _i) for _k, _d, _q, _i in fits_data
+                ]
+                pd.DataFrame(dict(zip(csv_cols, csv_arrays))).to_csv(dammif_fits_csv, index=False)
+
                 to_plot = [q[idx], I[idx], {'label': 'exp', 'lw': 4}] + to_plot
-                
                 self.viewer.view_curves(*to_plot,
                                         sigmas=(sigma[idx], ), 
                                         title=f'Fits comparison for\n{basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
@@ -1299,6 +1363,22 @@ echo "Full results saved to: $RESULTS_FILE"
                         profile_pic_paths.append(profile_pic_path)
                 # print('DEBUG: profile loading and plotting finished')
 
+            # First report pass: all sample profiles (integration through subtraction only)
+            if basename_list and profile_paths:
+                reports_dir = os.path.join(directory, 'reports')
+                for i in range(len(basename_list)):
+                    basename = basename_list[i]
+                    rd = {'basename': basename}
+                    if 'integration' in steps and sample_paths_1d is not None and i < len(sample_paths_1d):
+                        rd['integrated_curve_path'] = sample_paths_1d[i]
+                    if 'subtraction' in steps:
+                        rd['difference_plot_path'] = os.path.join(directory, 'subtracted', f'diff_{basename}.png')
+                        rd['subtracted_plot_path'] = os.path.join(directory, 'subtracted', f'sub_{basename}.png')
+                    else:
+                        rd['subtracted_plot_path'] = profile_pic_paths[i] if i < len(profile_pic_paths) else None
+                    out_path = os.path.join(reports_dir, f'{basename}_report.pdf')
+                    build_report_pdf(rd, out_path)
+
             if all_from_config:
                 selected_profiles = context['paths', 'selected_profiles']
             else:
@@ -1321,6 +1401,9 @@ echo "Full results saved to: $RESULTS_FILE"
             for basename, profile in selected_profiles.items():
                 profile_path = profile['path']
                 profile_pic_path = profile.get('plot_path')
+                atsas_res_path = gnom_path = None
+                plot_paths = [profile_pic_path] if profile_pic_path else []
+                polydisp_dir = bodies_dir = dammif_dir = ''
 
                 if 'simple_analysis' in steps:
                     atsas_res_path, gnom_path = self.get_descriptors(
@@ -1332,9 +1415,9 @@ echo "Full results saved to: $RESULTS_FILE"
                     plot_paths = [profile_pic_path, ] + plot_paths
                     context.append_path('plot', plot_paths)
                 if 'polydispfit' in steps:
-                    ploydsip_dir = self.polydispfit(
+                    polydisp_dir = self.polydispfit(
                         context, profile_path, dest_dir=os.path.join(directory, 'polydispfit'), fast_forward=fast_forward)
-                    context.append_path('polydisp', ploydsip_dir)
+                    context.append_path('polydisp', polydisp_dir)
                 if 'bodies' in steps:
                     bodies_dir = self.bodies_fit(
                         context, profile_path, dest_dir=os.path.join(directory, 'bodies'), fast_forward=fast_forward)
@@ -1353,7 +1436,52 @@ echo "Full results saved to: $RESULTS_FILE"
                     text_model=model, vision_model=vision_model, 
                     fast_forward=fast_forward)
                 # self.ai_analysis(atsas_res_path, plot_paths, directory, text_model=model, vision_model=vision_model)
-            
+
+                # Second report pass: full data for this selected profile (overwrites first-pass PDF)
+                rd = {'basename': basename}
+                idx = next((j for j, p in enumerate(profile_paths) if p == profile_path), None)
+                if idx is not None and sample_paths_1d is not None and idx < len(sample_paths_1d):
+                    rd['integrated_curve_path'] = sample_paths_1d[idx]
+                if 'subtraction' in steps:
+                    rd['difference_plot_path'] = os.path.join(directory, 'subtracted', f'diff_{basename}.png')
+                    rd['subtracted_plot_path'] = os.path.join(directory, 'subtracted', f'sub_{basename}.png')
+                else:
+                    rd['subtracted_plot_path'] = profile_pic_path
+                desc = _parse_descriptors_from_results(atsas_res_path)
+                if desc:
+                    rd['descriptors_table'] = desc
+                if len(plot_paths) >= 4:
+                    rd['plot_figures'] = {'sub': plot_paths[0], 'guinier': plot_paths[1], 'kratky': plot_paths[2], 'loglog': plot_paths[3]}
+                fits_figs = []
+                if polydisp_dir:
+                    fc = os.path.join(polydisp_dir, f'{basename}_fit_comparison.png')
+                    if os.path.isfile(fc):
+                        fits_figs.append(fc)
+                if bodies_dir:
+                    bf = os.path.join(bodies_dir, f'{basename}_fits.png')
+                    if os.path.isfile(bf):
+                        fits_figs.append(bf)
+                if dammif_dir:
+                    df = os.path.join(dammif_dir, f'{basename}_fits.png')
+                    if os.path.isfile(df):
+                        fits_figs.append(df)
+                if fits_figs:
+                    rd['fits_comparison_figure_path'] = fits_figs
+                bodies_yml = os.path.join(bodies_dir, 'bodies_fits.yml') if bodies_dir else None
+                bodies_csv = os.path.join(bodies_dir, 'bodies_fits.csv') if bodies_dir else None
+                dammif_yml = os.path.join(dammif_dir, 'dammif_fits.yml') if dammif_dir else None
+                dammif_csv = os.path.join(dammif_dir, 'dammif_fits.csv') if dammif_dir else None
+                if bodies_yml and os.path.isfile(bodies_yml):
+                    rd['bodies_fits_yml_path'] = bodies_yml
+                if bodies_csv and os.path.isfile(bodies_csv):
+                    rd['bodies_fits_csv_path'] = bodies_csv
+                if dammif_yml and os.path.isfile(dammif_yml):
+                    rd['dammif_fits_yml_path'] = dammif_yml
+                if dammif_csv and os.path.isfile(dammif_csv):
+                    rd['dammif_fits_csv_path'] = dammif_csv
+                out_path = os.path.join(directory, 'reports', f'{basename}_report.pdf')
+                build_report_pdf(rd, out_path)
+
             context.extend_paths('profile', profile_paths)
             
             # if all_from_config:
