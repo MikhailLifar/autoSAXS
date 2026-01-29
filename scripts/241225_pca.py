@@ -29,8 +29,9 @@ from processor import (
 )
 from utils import read_from_tiff, read_saxs, write_saxs
 from context import Context
+from event_bus import EventBus
+import cli_interface
 from saxs_controller import Controller
-from interface import CLIInterface
 from viewer import *
 
 
@@ -244,7 +245,9 @@ def main():
     
     # Step 5: Perform autocalibration
     print("\n5. Performing autocalibration...")
-    controller = Controller(CLIInterface(), PLTViewer())
+    event_bus = EventBus()
+    cli_interface.connect(event_bus)
+    controller = Controller(event_bus, PLTViewer())
     # Use fast_forward mode if force=False (skip if results exist)
     calib_result = controller.autocalib(
         calibrant_path, mask_path, context=context, fast_forward=not args.force

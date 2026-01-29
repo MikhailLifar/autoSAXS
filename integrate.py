@@ -4,7 +4,7 @@ import time
 import select
 
 from processor import *  # noqa: F401,F403  (brings in utils helpers like read_from_tiff, get_interring_dist_px, integrate_2d_to_1d)
-from interface import CLIInterface, PipelineInterrupt
+from cli_interface import CLIInterface, PipelineInterrupt
 from viewer import PLTViewer
 from context import Context
 

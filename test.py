@@ -22,7 +22,7 @@ import controller as ai_controller
 from utils import timer
 from polydispfit import polydispfit
 from processor import *
-from interface import *
+from cli_interface import CLIInterface, PipelineInterrupt
 from viewer import *
 
 

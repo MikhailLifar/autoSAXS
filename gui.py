@@ -16,6 +16,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 # from viewer import setPlotDefaults
 
+from utils import ROOT_DIR
+
 
 def _center_window(win):
     """
@@ -31,7 +33,7 @@ def _center_window(win):
     win.geometry(f"+{x}+{y}")
 
 
-LATEST_STEPS_PATH = Path(os.path.expanduser("~/KurchatovCoop")) / "temp" / "latest_steps.yml"
+LATEST_STEPS_PATH = Path(ROOT_DIR) / "temp" / "latest_steps.yml"
 
 
 def _load_latest_steps():

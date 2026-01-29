@@ -1,13 +1,19 @@
+import json
+import logging
+import os
+import queue
+import sys
+import time
+import warnings
 import yaml
+
 from processor import *
-from interface import *
+from cli_interface import PipelineInterrupt
 from viewer import *
 from context import Context
-import os
-import sys
-import logging
-import warnings
-import json
+from event_bus import EventBus, EventType
+from utils import ROOT_DIR
+import cli_interface
 
 import numpy as np
 import pandas as pd
@@ -26,7 +32,6 @@ sys.path.append(ROOT_DIR)
 from aiAssistantFramework.lib import llm 
 # from aiAssistantFramework.lib import telegram
 # import controller as ai_controller
-from gui import get_pipeline_spec_gui, choose_profiles
 from polydispfit import polydispfit
 
 # CONFIG_FILE = "calib_config.conf"
@@ -143,16 +148,16 @@ def save_latest_steps(pipeline_choice, steps):
 #         if debug and refined_config_exists and all(
 #             os.path.exists(p) for p in (calibration_results_file, integrator_subd)
 #         ):
-#             self.interface.send_message('Debug mode: Skipping calibration (results already exist)')
+#             self._send_message('Debug mode: Skipping calibration (results already exist)')
 #             refined = config['refined']
 #             integrator = IntegratorExtended.from_disk(integrator_subd)
 #             return {'integrator': integrator, 'refined': refined}
 #         else:
-#             self.interface.send_message('Autocalibration...')
+#             self._send_message('Autocalibration...')
 
 #             center_ref_params = {k: config['center_refinement'][k] 
 #                                 for k in ['q_start', 'q_stop', 'min_segment_len']}
-#             self.interface.send_message('    Center search...')
+#             self._send_message('    Center search...')
 #             center_step_ret = find_center(calib_data, **center_ref_params)
 #             # self.viewer.view_center(calib_data, calibrant_path, **center_search_res)
             
@@ -169,7 +174,7 @@ def save_latest_steps(pipeline_choice, steps):
 #                 'center_x_px': center_step_ret['center_x_px'],
 #                 'interring_dist_px': interring_dist_px
 #             })
-#             self.interface.send_message('    Rings identification...')
+#             self._send_message('    Rings identification...')
 #             rings_step_ret = find_rings(calib_data, **ring_search_params)
 #             # self.viewer.view_rings(calib_data, calibrant_path, rings=find_rings_res['rings'])
             
@@ -181,7 +186,7 @@ def save_latest_steps(pipeline_choice, steps):
 #                 'center_x_px': center_step_ret['center_x_px'],
 #                 'calibrant_name': calibrant_name,
 #             })
-#             self.interface.send_message('    Geometry refinement...')
+#             self._send_message('    Geometry refinement...')
 #             refine_step_ret = refine(calib_data, rings_step_ret['rings'], **geometry_params)
 #             # self.viewer.view_refined_curve(refine_step_ret['curve_calibrated'], refine_step_ret['theoretical_peaks'])
             
@@ -193,10 +198,10 @@ def save_latest_steps(pipeline_choice, steps):
 #                 **center_step_ret, **rings_step_ret, **refine_step_ret)
 #             refined = refine_step_ret['refined']
 #             refined.update({'wavelength': config['detector_geometry']['wavelength']})
-#             self.interface.send_message(
+#             self._send_message(
 #                 f'\n-- Calibrated geometry parameters --\n' + '\n'.join(f'{p}: {v}' for p, v in refined.items())  + '\n'
 #             )
-#             self.interface.send_message('Finished calibration')
+#             self._send_message('Finished calibration')
 #             update_config(config, config_path, 'refined', values=refined)
 #             return None, {k: refine_step_ret[k] for k in ('refined', 'integrator')}
 
@@ -212,13 +217,76 @@ def save_latest_steps(pipeline_choice, steps):
 
 class Controller:
     """
-    This class should combine an interface and a processor. In fact, it looks like the MVC model:
-    Model is SAXSProcessor and Viewer is Interface
+    Combines EventBus I/O, processor, and viewer. Holds EventBus and viewer only (no Interface).
+    All pipeline I/O goes via EventBus (spec §3).
     """
-    
-    def __init__(self, interface: Interface, viewer: Viewer):
-        self.interface = interface
+
+    def __init__(self, event_bus: EventBus, viewer: Viewer):
+        self._event_bus = event_bus
         self.viewer = viewer
+
+    def _send_message(self, text: str) -> None:
+        """Publish MESSAGE for the connected Interface to display."""
+        self._event_bus.publish(EventType.MESSAGE, {"text": text})
+
+    def _response_queue_get(self):
+        """Block until next response; on PROGRAM_INTERRUPTED raise PipelineInterrupt."""
+        evt, data = self._response_queue.get()
+        if evt == EventType.PROGRAM_INTERRUPTED:
+            reason = (data or {}).get("reason", "program interrupted")
+            raise PipelineInterrupt(reason)
+        return evt, data
+
+    def _request_directory(self, query: str) -> str:
+        self._event_bus.publish(EventType.DIRECTORY_REQUESTED, {"query": query})
+        evt, data = self._response_queue_get()
+        if evt == EventType.DIRECTORY_SPECIFIED:
+            return (data or {}).get("path", "")
+        raise PipelineInterrupt("directory selection canceled")
+
+    def _request_file(self, directory, query, filepattern="*", obligatory=False,
+                      skip_if_exists=True, except_prev_paths=False, allow_same_time=(1, float("inf"))):
+        self._event_bus.publish(EventType.FILE_REQUESTED, {
+            "directory": directory,
+            "query": query,
+            "filepattern": filepattern,
+            "obligatory": obligatory,
+            "skip_if_exists": skip_if_exists,
+            "except_prev_paths": except_prev_paths,
+            "allow_same_time": allow_same_time,
+        })
+        evt, data = self._response_queue_get()
+        if evt == EventType.FILE_UPLOADED:
+            return (data or {}).get("paths", [])
+        if evt == EventType.FILE_UPLOAD_CANCELED and not obligatory:
+            return []
+        raise PipelineInterrupt("file upload canceled or missing")
+
+    def _request_choice(self, query: str, options: dict, default_op: str = "no default") -> str:
+        self._event_bus.publish(EventType.CHOICE_REQUESTED, {
+            "query": query,
+            "options": options or {},
+            "default_op": default_op,
+        })
+        evt, data = self._response_queue_get()
+        if evt == EventType.OPTION_CHOSEN:
+            return (data or {}).get("choice", "")
+        raise PipelineInterrupt("choice canceled")
+
+    def _request_pipeline_steps(self):
+        self._event_bus.publish(EventType.PIPELINE_STEPS_REQUESTED, {})
+        evt, data = self._response_queue_get()
+        if evt == EventType.PIPELINE_STEPS_SPECIFIED:
+            d = data or {}
+            return d.get("pipeline_choice", "protein_v0"), d.get("steps", [])
+        raise PipelineInterrupt("pipeline selection canceled")
+
+    def _request_profile_selection(self, profiles_data: list) -> dict:
+        self._event_bus.publish(EventType.PROFILE_SELECTION_REQUESTED, {"profiles_data": profiles_data})
+        evt, data = self._response_queue_get()
+        if evt == EventType.PROFILE_SELECTION_SPECIFIED:
+            return (data or {}).get("selected_profiles", {})
+        return {}
     
     def center_refinement_step(self, calib_data, visualize=True, calib_tiff_path='', **center_ref_params):
         center_search_res = find_center(calib_data, **center_ref_params)
@@ -252,7 +320,7 @@ class Controller:
         if fast_forward and refined_config_exists and all(
             os.path.exists(p) for p in (calibration_results_file, integrator_subd)
         ):
-            self.interface.send_message('Fast-forward: Skipping calibration (results already exist)')
+            self._send_message('Fast-forward: Skipping calibration (results already exist)')
             refined = context['refined']
             integrator = IntegratorExtended.from_disk(integrator_subd)
             return {'integrator': integrator, 'refined': refined}
@@ -263,11 +331,11 @@ class Controller:
             calibrant_name = context['calibrant_name']
             calib_data = read_from_tiff(calibrant_path)
             
-            self.interface.send_message('Autocalibration...')
+            self._send_message('Autocalibration...')
 
             center_ref_params = {k: context['center_refinement', k] 
                                 for k in ['q_start', 'q_stop', 'min_segment_len']}
-            self.interface.send_message('    Center search...')
+            self._send_message('    Center search...')
             center_step_ret = self.center_refinement_step(calib_data, visualize=False, calib_tiff_path=calibrant_path, **center_ref_params)
             
             d_geom = context['detector_geometry']
@@ -283,7 +351,7 @@ class Controller:
                 'center_x_px': center_step_ret['center_x_px'],
                 'interring_dist_px': interring_dist_px
             })
-            self.interface.send_message('    Rings identification...')
+            self._send_message('    Rings identification...')
             rings_step_ret = self.rings_refinement_step(calib_data, visualize=False, calib_tiff_path=calibrant_path, **ring_search_params)
             
             geometry_params = {k: context['detector_geometry', k] 
@@ -296,7 +364,7 @@ class Controller:
                 'mask_path': mask_path,
                 'mask_config': context['mask_config'],
             })
-            self.interface.send_message('    Geometry refinement...')
+            self._send_message('    Geometry refinement...')
             refine_step_ret = self.geometry_refinement_step(
                 calib_data, rings_step_ret['rings'], visualize=False, **geometry_params)
             
@@ -319,10 +387,10 @@ class Controller:
             
             refined = refine_step_ret['refined']
             refined.update({'wavelength': context['detector_geometry', 'wavelength']})
-            self.interface.send_message(
+            self._send_message(
                 f'\n-- Calibrated geometry parameters --\n' + '\n'.join(f'{p}: {v}' for p, v in refined.items())  + '\n'
             )
-            self.interface.send_message('Finished calibration')
+            self._send_message('Finished calibration')
             context['refined'] = refined
             context.update_config('refined', values=refined)
             return {k: refine_step_ret[k] for k in ('refined', 'integrator')}
@@ -340,7 +408,7 @@ class Controller:
             
             # Check if integration results exist in debug mode
             if fast_forward and os.path.exists(int_path):
-                self.interface.send_message(f'Fast-forward: Skipping integration for {to_int_path} (results already exist)')
+                self._send_message(f'Fast-forward: Skipping integration for {to_int_path} (results already exist)')
             else:
                 integrate_2d_to_1d(ai, read_from_tiff(to_int_path), destpath=int_path,
                                     metadata=metadata)
@@ -363,7 +431,7 @@ class Controller:
             
             # Check if subtraction results exist in debug mode
             if fast_forward and all(os.path.exists(p) for p in (sub_path, diff_plot_path, sub_plot_path)):
-                self.interface.send_message(f'Fast-forward: Skipping subtraction for {to_sub_path} (results already exist)')
+                self._send_message(f'Fast-forward: Skipping subtraction for {to_sub_path} (results already exist)')
                 
             else:
                 _, I_sub, I_buff_scaled, sigma_sub, sigma_buff_scaled = subtract_buffer(
@@ -405,7 +473,7 @@ class Controller:
             
             # Check if analysis results exist in debug mode
             if fast_forward and all(os.path.exists(pp) for pp in (results_file, gnom_file)):
-                self.interface.send_message(f'Fast-forward: Skipping analysis for {to_analyze_path} (results already exist)')
+                self._send_message(f'Fast-forward: Skipping analysis for {to_analyze_path} (results already exist)')
             
             else:            
                 os.system(f'''INPUT_FILE={to_analyze_path}
@@ -492,7 +560,7 @@ echo "Full results saved to: $RESULTS_FILE"
             if fast_forward and all(os.path.exists(p) for p in (
                 # sub_plot_path, 
                 guinier_plot_path, kratky_plot_path, loglog_plot_path)):
-                self.interface.send_message(f'Fast-forward: Skipping plots for {to_plot_path} (results already exist)')
+                self._send_message(f'Fast-forward: Skipping plots for {to_plot_path} (results already exist)')
 
             else:
                 # plots
@@ -553,7 +621,7 @@ echo "Full results saved to: $RESULTS_FILE"
     
     def bodies_fit(self, context: Context, saxs_1d_path, dest_dir, fast_forward=False):
         if saxs_1d_path:
-            self.interface.send_message('BODIES fit...')
+            self._send_message('BODIES fit...')
             root, basename = os.path.split(saxs_1d_path)
             basename, _ = os.path.splitext(basename)
             
@@ -570,7 +638,7 @@ echo "Full results saved to: $RESULTS_FILE"
             )
             
             if fast_forward and exists_bodies and os.path.exists(bodies_fits_png):
-                self.interface.send_message(f'Fast-forward: Skipping BODIES fit for {saxs_1d_path} (results already exist)')
+                self._send_message(f'Fast-forward: Skipping BODIES fit for {saxs_1d_path} (results already exist)')
 
             else:
                 q, I, sigma, _ = read_saxs(saxs_1d_path)
@@ -594,7 +662,7 @@ echo "Full results saved to: $RESULTS_FILE"
                     for shape in BODIES_SHAPES
                 )
                 if fit_failed:
-                    self.interface.send_message(f'BODIES fit for {saxs_1d_path} failed (resulting files were not found, probably integration or data cleaning error)')
+                    self._send_message(f'BODIES fit for {saxs_1d_path} failed (resulting files were not found, probably integration or data cleaning error)')
                     return bodies_subdir
 
                 for shape in BODIES_SHAPES:
@@ -657,7 +725,7 @@ echo "Full results saved to: $RESULTS_FILE"
     
     def dammif_fit(self, context: Context, saxs_1d_path, gnom_path, dest_dir, fast_forward=False):
         if gnom_path:
-            self.interface.send_message('DAMMIF fit...')
+            self._send_message('DAMMIF fit...')
             root, basename = os.path.split(gnom_path)
             basename, _ = os.path.splitext(basename)
             
@@ -672,7 +740,7 @@ echo "Full results saved to: $RESULTS_FILE"
             exists_dammif = all(os.path.exists(os.path.join(dammif_subdir, f'dammif-{i}.fir')) for i in range(dammif_reps_num))
             
             if fast_forward and exists_dammif and os.path.exists(dammif_fits_png):
-                self.interface.send_message(f'Fast-forward: Skipping DAMMIF fit for {gnom_path} (results already exist)')
+                self._send_message(f'Fast-forward: Skipping DAMMIF fit for {gnom_path} (results already exist)')
             
             else:
                 os.system(f'for i in `seq 1 {dammif_reps_num}`; do {dammif_call} --prefix={dammif_prefix}-$i --mode=fast {gnom_path}; done')
@@ -725,7 +793,7 @@ echo "Full results saved to: $RESULTS_FILE"
         polydisp_subdir = ''
         
         if saxs_1d_path:
-            self.interface.send_message('Polydisperse sphere fit...')
+            self._send_message('Polydisperse sphere fit...')
             root, basename = os.path.split(saxs_1d_path)
             basename, _ = os.path.splitext(basename)
             
@@ -738,7 +806,7 @@ echo "Full results saved to: $RESULTS_FILE"
             
             # Check if results exist in fast_forward mode
             if fast_forward and all(os.path.exists(p) for p in (fit_comparison_png, radius_dist_png, fit_data_dat)):
-                self.interface.send_message(f'Fast-forward: Skipping polydisperse fit for {saxs_1d_path} (results already exist)')
+                self._send_message(f'Fast-forward: Skipping polydisperse fit for {saxs_1d_path} (results already exist)')
             
             else:
                 q, I, sigma, metadata_orig = read_saxs(saxs_1d_path)
@@ -818,7 +886,7 @@ echo "Full results saved to: $RESULTS_FILE"
                     pdf = prefactor * (safe_R / r_mean) ** z * np.exp(-(z + 1) * safe_R / r_mean)
                 else:
                     pdf = np.full_like(R, np.nan)
-                    self.interface.send_message(f'Warning: Unknown distribution type {dist_name} for visualization.')
+                    self._send_message(f'Warning: Unknown distribution type {dist_name} for visualization.')
                 
                 # Plot radius distribution
                 self.viewer.view_curves(
@@ -863,7 +931,7 @@ echo "Full results saved to: $RESULTS_FILE"
                 
                 write_data(fit_data_dat, fit_data_df, fit_metadata)
                 
-                self.interface.send_message(
+                self._send_message(
                     f'\n-- Polydisperse fit results --\n' +
                     f'Model: {model_name}\n' +
                     f'Distribution: {dist_name}\n' +
@@ -893,7 +961,7 @@ echo "Full results saved to: $RESULTS_FILE"
             if fast_forward and os.path.exists(context_path):
                 with open(context_path, 'r') as fread:
                     sample_context = fread.read()
-                self.interface.send_message(f'Fast-forward: Skipping visual analysis for {basename} (results already exist)')
+                self._send_message(f'Fast-forward: Skipping visual analysis for {basename} (results already exist)')
             
             else:
                 sample_context = []
@@ -932,12 +1000,12 @@ echo "Full results saved to: $RESULTS_FILE"
             if fast_forward and os.path.exists(llm_answer_path):
                 with open(llm_answer_path, 'r') as fread:
                     answer = fread.read()
-                self.interface.send_message(f'Fast-forward: Skipping LLM analysis for {basename} (results already exist)')
+                self._send_message(f'Fast-forward: Skipping LLM analysis for {basename} (results already exist)')
 
             else:
                 context = sample_context
-                self.interface.send_message('Now the results of your data processing are sent to LLM for the intelligent analysis.')
-                user_query = self.interface.ask_question('What is your query to LLM?')
+                self._send_message('Now the results of your data processing are sent to LLM for the intelligent analysis.')
+                user_query = self._request_choice('What is your query to LLM?', options={})
                 answer, _ = llm.send_request_to_llm(
                     model=text_model, 
                     messages=[
@@ -946,7 +1014,7 @@ echo "Full results saved to: $RESULTS_FILE"
                 )
                 with open(llm_answer_path, 'w') as fwrite:
                     fwrite.write(answer)
-                self.interface.send_message(f'LLM asnwer:\n{answer}')
+                self._send_message(f'LLM asnwer:\n{answer}')
         
         return answer, llm_answer_path
 
@@ -955,9 +1023,27 @@ echo "Full results saved to: $RESULTS_FILE"
         Parameters
         ----------
         all_from_config: bool
-            set to True when trating as part of Tango Control System
+            set to True when treating as part of Tango Control System
         """
-        # TODO currently the pipeline is oriented on proteins. Since the pipeline for other samples is sort of similar, I think, there will be only one pipeline in the end
+        # Wire response queue for request/response over EventBus (§3)
+        self._response_queue = queue.Queue()
+
+        def put_response(evt_type):
+            def _handler(data):
+                self._response_queue.put((evt_type, data))
+            return _handler
+
+        for evt in (
+            EventType.DIRECTORY_SPECIFIED,
+            EventType.FILE_UPLOADED,
+            EventType.FILE_UPLOAD_CANCELED,
+            EventType.OPTION_CHOSEN,
+            EventType.OPTION_CHOICE_CANCELED,
+            EventType.PROGRAM_INTERRUPTED,
+            EventType.PIPELINE_STEPS_SPECIFIED,
+            EventType.PROFILE_SELECTION_SPECIFIED,
+        ):
+            self._event_bus.subscribe(evt, put_response(evt))
 
         # model = 'GLM-4.6'
         # model = 'DeepSeek-V3.1'
@@ -970,82 +1056,89 @@ echo "Full results saved to: $RESULTS_FILE"
         if all_from_config:
             assert config_path is not None
             context.set_config(config_path)
-            
             steps = context['steps']
             directory = context['directory']
             context.set_directory(directory)
-
         else:
-            pipeline_choice, steps = get_pipeline_spec_gui()
+            pipeline_choice, steps = self._request_pipeline_steps()
             save_latest_steps(pipeline_choice, steps)
-
-            # descr, descr_path = get_pipeline_description(pipeline_choice)
-            # print(descr)
-            directory = self.interface.ask_for_file('Write a path to a directory for your data')
+            directory = self._request_directory('Write a path to a directory for your data')
             context.set_directory(directory)
-
-            config_path, = self.interface.wait_for_file(
-                directory, 
+            config_paths = self._request_file(
+                directory,
                 query='Upload config file config.conf to your directory',
                 filepattern='config.conf',
                 obligatory=True,
-                skip_if_exists=True, allow_same_time=(1, 1)
+                skip_if_exists=True,
+                allow_same_time=(1, 1),
             )
+            config_path, = config_paths
             context.set_config(config_path)
 
         if 'calibration' in steps:
-            calibrant_path, = self.interface.wait_for_file(
-                directory, 
+            calibrant_paths = self._request_file(
+                directory,
                 query='Upload raw/*_calib.tif file with calibration data',
                 filepattern='raw/*_calib.tif',
-                skip_if_exists=True, allow_same_time=(1, 1)
+                obligatory=True,
+                skip_if_exists=True,
+                allow_same_time=(1, 1),
             )
-            context.append_path('calib_2d', calibrant_path)
+            calibrant_path = calibrant_paths[0] if calibrant_paths else None
+            if calibrant_path:
+                context.append_path('calib_2d', calibrant_path)
             if not all_from_config:
-                mask_op = self.interface.ask_question(
-                    "How do you want to set the mask for calibration?", 
-                    options={'a': 'automask', 'f': 'from file', 'c': 'combine your mask with automatic mask'})
+                mask_op = self._request_choice(
+                    "How do you want to set the mask for calibration?",
+                    options={'a': 'automask', 'f': 'from file', 'c': 'combine your mask with automatic mask'},
+                )
                 mapping = {'a': 'auto', 'f': 'from_file', 'c': 'combined'}
                 context.update_config('mask_config', values={'mode': mapping[mask_op]})
             mask_path = None
             if context['mask_config', 'mode'] in ['from_file', 'combined']:
-                mask_path, = self.interface.wait_for_file(
-                    directory, 
-                    query='Upload mask* file with mask '
-                        '(supported extensions are .msk, .npy, .txt)',
+                mask_paths = self._request_file(
+                    directory,
+                    query='Upload mask* file with mask (supported extensions are .msk, .npy, .txt)',
                     filepattern='mask*',
                     obligatory=True,
-                    skip_if_exists=True, allow_same_time=(1, 1)
+                    skip_if_exists=True,
+                    allow_same_time=(1, 1),
                 )
-                context.append_path('calib_mask', mask_path)
+                mask_path = mask_paths[0] if mask_paths else None
+                if mask_path:
+                    context.append_path('calib_mask', mask_path)
             res_calib = self.autocalib(
                 calibrant_path, mask_path, context=context, fast_forward=fast_forward)
             ai = res_calib['integrator']
-        
+
         if 'integration' in steps and 'calibration' not in steps:
             ai_subdir = 'integrator_params'
+
             def exit_condition():
-                return all(os.path.exists(os.path.join(directory, ai_subdir, p)) 
-                for p in ['ai_params.json', 'detector_params.json', 'mask.npy']) 
-            
-            while not exit_condition(): 
-                self.interface.send_message(
-                    f'Integration requires calibrated geometry parameters and a mask.\n' 
+                return all(
+                    os.path.exists(os.path.join(directory, ai_subdir, p))
+                    for p in ['ai_params.json', 'detector_params.json', 'mask.npy']
+                )
+
+            while not exit_condition():
+                self._send_message(
+                    f'Integration requires calibrated geometry parameters and a mask.\n'
                     f'Provide them by uploading directory named "{ai_subdir}" which contains:\n'
                     f'ai_params.json\n'
                     f'detector_params.json\n'
                     f'mask.npy\n'
                 )
-                self.interface.wait_for_file(
-                    directory, 
+                self._request_file(
+                    directory,
                     query=f'Upload directory named "{ai_subdir}" to your working directory',
                     filepattern='integrator_params',
                     obligatory=True,
-                    skip_if_exists=True, allow_same_time=(1, 1)
+                    skip_if_exists=True,
+                    allow_same_time=(1, 1),
                 )
                 time.sleep(2.0)
                 if not exit_condition():
-                    self.interface.send_message(f'Wrong "{ai_subdir}" directory structure. Reupload')
+                    self._send_message(f'Wrong "{ai_subdir}" directory structure. Reupload')
             ai = IntegratorExtended.from_disk(os.path.join(directory, ai_subdir))
 
         run_process_cycle = True
@@ -1059,17 +1152,20 @@ echo "Full results saved to: $RESULTS_FILE"
                 run_load_cycle = True
                 while run_load_cycle:
                     if 'subtraction' in steps:
-                        buffer_paths = self.interface.wait_for_file(
+                        buffer_paths = self._request_file(
                             directory,
                             query='Upload buffer 2d data to "raw" subdirectory raw/*_buffer.tif',
                             filepattern='raw/*_buffer.tif',
-                            skip_if_exists=True, except_prev_paths=False,
-                            )     
-                    sample_paths = self.interface.wait_for_file(
-                        directory, 
+                            skip_if_exists=True,
+                            except_prev_paths=False,
+                        )
+                    sample_paths = self._request_file(
+                        directory,
                         query='Upload sample 2d data to "raw" subdirectory raw/*_sample.tif',
                         filepattern='raw/*_sample.tif',
-                        skip_if_exists=True, except_prev_paths=context['paths', 'sample_2d'])
+                        skip_if_exists=True,
+                        except_prev_paths=context['paths', 'sample_2d'],
+                    )
                     
                     run_load_cycle = False
                     if 'subtraction' in steps:
@@ -1077,12 +1173,12 @@ echo "Full results saved to: $RESULTS_FILE"
                         run_load_cycle = alignment_res['overlapped'] or alignment_res['not_paired']
                         if alignment_res['overlapped']:
                             overlap_str = '\n'.join(alignment_res['overlapped'])
-                            self.interface.send_message(f"For some sample files more than one buffer files were found:\n{overlap_str}\n\nAre you following name conventions?")
+                            self._send_message(f"For some sample files more than one buffer files were found:\n{overlap_str}\n\nAre you following name conventions?")
                         if alignment_res['not_paired']:
                             not_paired_str = '\n'.join(alignment_res['not_paired'])
-                            self.interface.send_message(f"Not for all sample files buffer files were found:\n{not_paired_str}\n\nAre you following name conventions?")
+                            self._send_message(f"Not for all sample files buffer files were found:\n{not_paired_str}\n\nAre you following name conventions?")
                         if run_load_cycle:
-                            self.interface.send_message(f"Make sure that you follow the name convention and that for each sample image there is exactly one buffer image. This error can also disappear buy itself for the next iteration")
+                            self._send_message(f"Make sure that you follow the name convention and that for each sample image there is exactly one buffer image. This error can also disappear buy itself for the next iteration")
                             time.sleep(fallback_delay)
                         else:
                             buffer_paths = [b_p for _, b_p in alignment_res['aligned_pairs']]
@@ -1120,28 +1216,31 @@ echo "Full results saved to: $RESULTS_FILE"
                 buffer_paths = []
                 run_load_cycle = True
                 while run_load_cycle:
-                    buffer_paths_1d = self.interface.wait_for_file(
+                    buffer_paths_1d = self._request_file(
                         directory,
-                        query='Upload buffer 1d data to "averaged" subdirectory averaged/*_buffer.dat', 
+                        query='Upload buffer 1d data to "averaged" subdirectory averaged/*_buffer.dat',
                         filepattern='averaged/*_buffer.dat',
-                        skip_if_exists=True, except_prev_paths=False
-                        )            
-                    sample_paths_1d = self.interface.wait_for_file(
+                        skip_if_exists=True,
+                        except_prev_paths=False,
+                    )
+                    sample_paths_1d = self._request_file(
                         directory,
-                        query='Upload sample 1d data to "averaged" subdirectory averaged/*_sample.dat', 
+                        query='Upload sample 1d data to "averaged" subdirectory averaged/*_sample.dat',
                         filepattern='averaged/*_sample.dat',
-                        skip_if_exists=True, except_prev_paths=context['paths', 'sample_1d'])
+                        skip_if_exists=True,
+                        except_prev_paths=context['paths', 'sample_1d'],
+                    )
                     
                     alignment_res = map_sample_files_to_buffer_files(sample_paths_1d, buffer_paths_1d)
                     run_load_cycle = alignment_res['overlapped'] or alignment_res['not_paired']
                     if alignment_res['overlapped']:
                         overlap_str = '\n'.join(alignment_res['overlapped'])
-                        self.interface.send_message(f"For some sample files more than one buffer files were found:\n{overlap_str}\n\nAre you following name conventions?")
+                        self._send_message(f"For some sample files more than one buffer files were found:\n{overlap_str}\n\nAre you following name conventions?")
                     if alignment_res['not_paired']:
                         not_paired_str = '\n'.join(alignment_res['not_paired'])
-                        self.interface.send_message(f"Not for all sample files buffer files were found:\n{not_paired_str}\n\nAre you following name conventions?")
+                        self._send_message(f"Not for all sample files buffer files were found:\n{not_paired_str}\n\nAre you following name conventions?")
                     if run_load_cycle:
-                        self.interface.send_message(f"Make sure that you follow the name convention and that for each sample image there is exactly one buffer image. This error can also disappear by itself for the next iteration")
+                        self._send_message(f"Make sure that you follow the name convention and that for each sample image there is exactly one buffer image. This error can also disappear by itself for the next iteration")
                         time.sleep(fallback_delay)
                     else:
                         buffer_paths_1d = [b_p for _, b_p in alignment_res['aligned_pairs']]
@@ -1177,13 +1276,13 @@ echo "Full results saved to: $RESULTS_FILE"
                 context.extend_paths('sample_1d', sample_paths_1d)
                 # print('DEBUG: subtraction finished')
             else:
-                # print('DEBUG: subtraction ommited')
-                profile_paths = self.interface.wait_for_file(
-                    directory, 
-                    query='Upload sample data to "subtracted" subdirectory subtracted/*.dat', 
+                profile_paths = self._request_file(
+                    directory,
+                    query='Upload sample data to "subtracted" subdirectory subtracted/*.dat',
                     filepattern='subtracted/*.dat',
-                    skip_if_exists=True, except_prev_paths=context['paths', 'profile'],
-                    )
+                    skip_if_exists=True,
+                    except_prev_paths=context['paths', 'profile'],
+                )
                 if profile_paths:
                     for profile_path in profile_paths:
                         root, filename = os.path.split(profile_path)
@@ -1217,7 +1316,7 @@ echo "Full results saved to: $RESULTS_FILE"
                             'plot_path': plot_path,
                         }
                     )
-                selected_profiles = choose_profiles(profiles_data)
+                selected_profiles = self._request_profile_selection(profiles_data)
 
             for basename, profile in selected_profiles.items():
                 profile_path = profile['path']
@@ -1259,10 +1358,11 @@ echo "Full results saved to: $RESULTS_FILE"
             
             # if all_from_config:
             #     old_files = 
-            upload_more = self.interface.ask_question(
+            upload_more = self._request_choice(
                 'Upload more data? Type "no" to exit program, type Enter or "yes" to continue',
+                options={},
             )
-            run_process_cycle = not upload_more.lower().startswith('n')
+            run_process_cycle = not (upload_more or '').lower().startswith('n')
             iteration_number += 1
         
         return context
@@ -1410,7 +1510,7 @@ echo "Full results saved to: $RESULTS_FILE"
     #         'Do you want to run a pipeline in "online" or "offline" mode? Type 1 for "online" mode and "2" for "offline" mode'
     #     )
     #     data_load_mode = 'online' if online_or_offline.startswith('1') else 'offline'
-    #     self.interface.send_message(f'Interaction mode is set to {data_load_mode}')
+    #     self._send_message(f'Interaction mode is set to {data_load_mode}')
 
     #     context = Context(directory, descr_path, interface=self.interface)
         
@@ -1508,18 +1608,18 @@ echo "Full results saved to: $RESULTS_FILE"
     #             self.fit_geometry(context, profile_path, gnom_path, directory, fast_forward=fast_forward)
     #             # self.ai_analysis(atsas_res_path, plot_paths, directory, text_model=model, vision_model=vision_model)
         
-        # # self.interface.send_message('Integration...')
+        # # self._send_message('Integration...')
         # paths['buffer_1d'], = self.integrate(ai, [paths['buffer_2d'], ], directory, [{'type': 'buffer'}, ], debug=debug)
         # paths['sample_1d'] = self.integrate(
         #     ai, paths['sample_2d'], directory, [{'type': 'sample'} for _ in range(len(paths['sample_2d']))], debug=debug)
         
-        # # self.interface.send_message('Subtraction...')
+        # # self._send_message('Subtraction...')
         # paths['sample_sub'] = self.subtract(paths['sample_1d'], paths['buffer_1d'], dest_dir=directory,
         #                                     config_sub=config['sub'])
         
         # # TODO scaling step
 
-        # # self.interface.send_message('Calculating the parameters...')
+        # # self._send_message('Calculating the parameters...')
         # paths['atsas_analysis'], paths['p(R)']  = self.get_descriptors(paths['sample_sub'], dest_dir=directory, debug=debug)
 
         # paths['plots'] = self.plot(paths['sample_sub'], dest_dir=directory, debug=debug)
@@ -1539,7 +1639,7 @@ echo "Full results saved to: $RESULTS_FILE"
     #                 options={'c': 'calibrate', 'u': 'use existent'}
     #             )
     #         else:
-    #             self.interface.send_message(
+    #             self._send_message(
     #                 'Calibrated geometry file does not exists. You need to calibrate the geometry of the detector first'
     #                 )
     #             if_calibrate = 'c'
@@ -1584,20 +1684,18 @@ echo "Full results saved to: $RESULTS_FILE"
     #         elif if_liquid == 'p':
     #             raise RuntimeError('There is no pipeline for powder sample analysis yet')
         
-    #         self.interface.send_message('The processing of SAXS data is finished. Good luck!')
+    #         self._send_message('The processing of SAXS data is finished. Good luck!')
             
     #     except Exception as e:
     #         logging.exception("An unhandled exception occurred and interrupted the work of the app.")
-    #         self.interface.send_message(f"\nAn unexpected error occurred and interrupted the work of the app: {e}. See calibration_app.log for details.")
+    #         self._send_message(f"\nAn unexpected error occurred and interrupted the work of the app: {e}. See calibration_app.log for details.")
 
 
 if __name__ == '__main__':
-    # calib image file path for debug: AgBh/100225_doubling/test/0003_AgBh1000old_or_107.3.tif
-    controller = Controller(CLIInterface(), PLTViewer())
-    # controller.pipeline()
+    # Wire EventBus; Controller and one Interface connect to it (§3)
+    event_bus = EventBus()
+    cli_interface.connect(event_bus)
+    controller = Controller(event_bus, PLTViewer())
     # directory path for pipeline0: debug/protein_v0, debug/protein_v0_interactive
-    # LLM query: It is known that the subject of the investigation is a protein dissolved in water. Which protein it could be based on available information?
-    # controller.protein_v0(fast_forward=True)
     controller.pipeline_interactive(fast_forward=True)
-    # controller.pipeline_batch(fast_forward=True)
 

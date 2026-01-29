@@ -12,7 +12,10 @@ THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if THIS_DIR not in sys.path:
     sys.path.insert(0, THIS_DIR)
 
-from saxs_controller import Controller, CLIInterface, PLTViewer  # noqa: E402
+from event_bus import EventBus
+import cli_interface
+from saxs_controller import Controller
+from viewer import PLTViewer
 
 
 class SAXSProcessing(Device):
@@ -120,12 +123,11 @@ class SAXSProcessing(Device):
         # Internal configuration storage (JSON-serializable dict)
         self._config = {}
 
-        # Wrap the existing CLI-based Controller for now.
-        # Later this can be replaced by a Tango-aware Interface/Viewer.
+        # Wire EventBus and CLI; Controller uses the same EventBus (spec §3).
         try:
-            interface = CLIInterface()
-            viewer = PLTViewer()
-            self._controller = Controller(interface, viewer)
+            event_bus = EventBus()
+            cli_interface.connect(event_bus)
+            self._controller = Controller(event_bus, PLTViewer())
             self.set_state(DevState.STANDBY)
             self.set_status("ControllerDevice initialized and ready.")
             self.info_stream("ControllerDevice initialized successfully.")

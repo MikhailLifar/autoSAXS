@@ -28,10 +28,9 @@ Specification of `Controller.pipeline_interactive` in `repos/saxs_controller.py`
 - **Project-internal modules and usage:**
   - **processor** (`repos/processor.py`): `IntegratorExtended`, `integrate_2d_to_1d`, `subtract_buffer`, `find_center`, `find_rings`, `refine`, `get_detector`, `get_interring_dist_px` (and `*` import so e.g. mask/geometry helpers used by calibration). Calibration and integration logic live here.
   - **utils** (`repos/utils.py`): `read_from_tiff` (via processor’s use of `utils`); `read_saxs`, `write_saxs`, `write_data`, `read_data`, `load_config`, `save_config`, `get_pipeline_paths`, `map_sample_files_to_buffer_files`, `read_bodies_cif`, `calc_chi2`, `calculate_atoms_density_and_isosurface`, `calculate_shape_density_and_isosurface`; `ROOT_DIR`, `REPO_DIR`; `ENV` (from `global/env.yml`) for `ATSAS_BIN_PREFIX`; `whittaker_smooth` (from `supervised_ml`) used by subtraction.
-  - **interface** (`repos/interface.py`): Defines the abstract `Interface` class (user I/O contract). Implementations live in `cli_interface.py` and `gui_interface.py`; only one is used at a time.
   - **event_bus** (`repos/event_bus.py`): `EventBus` and event type enum. See §3.1 for catalogue and payloads.
-  - **cli_interface** (`repos/cli_interface.py`): CLI implementation of `Interface`; same event contract as GUI. stdin/print and file monitoring; pipeline/step and profile selection in this module.
-  - **gui_interface** (`repos/gui_interface.py`): GUI implementation of `Interface`; same event contract as CLI. Short-lived CustomTkinter dialogs per query; pipeline/step and profile selection as dialogs.
+  - **cli_interface** (`repos/cli_interface.py`): CLI for the pipeline. Defines `PipelineInterrupt`, `CLIInterface` (stdin/print, file monitoring), and `connect(bus)` to subscribe to EventBus; pipeline/step and profile selection in this module. Same event contract as GUI.
+  - **gui_interface** (`repos/gui_interface.py`): GUI for the pipeline; same event contract as CLI. Short-lived CustomTkinter dialogs per query; pipeline/step and profile selection as dialogs.
   - **viewer** (`repos/viewer.py`): Visualization (`view_calibration`, `view_mask`, `view_curves`, `plot_3d_views_and_scattering`, etc.); pipeline uses `PLTViewer` in `__main__`.
   - **context** (`repos/context.py`): `Context` — holds directory, config, and path groups; config and path accessors.
 
@@ -40,13 +39,12 @@ Specification of `Controller.pipeline_interactive` in `repos/saxs_controller.py`
 ## 3. Architecture
 
 - **Type of application:** Interactive pipeline with CLI or GUI (one chosen); both communicate with Controller only via EventBus. File-based working directory; app waits for files matching patterns.
-- **Module layout:** **`interface.py`** (abstract `Interface`), **`event_bus.py`** (`EventBus` + event enum), **`cli_interface.py`**, **`gui_interface.py`**. One EventBus instance; Controller and one Interface implementation connect to it.
+- **Module layout:** **`event_bus.py`** (`EventBus` + event enum), **`cli_interface.py`** (CLI + `connect(bus)`), **`gui_interface.py`** (GUI). One EventBus instance; Controller and one of CLI/GUI connect to it.
 - **Layers:**
   - **EventBus** (`event_bus.py`): Single channel for Controller–Interface I/O; no direct calls. Event enum and payloads in `event_bus.py`; semantics in §3.1.
-  - **Interface** (abstract in `interface.py`; implementations in `cli_interface.py`, `gui_interface.py`): Same event contract; exactly one implementation used.
-    - **CLI** (`cli_interface.py`): Subscribes to **FILE_REQUESTED**, **CHOICE_REQUESTED**, **DIRECTORY_REQUESTED**, **MESSAGE**; publishes **FILE_UPLOADED**, **FILE_UPLOAD_CANCELED**, **OPTION_CHOSEN**, **OPTION_CHOICE_CANCELED**, **DIRECTORY_SPECIFIED**, **PROGRAM_INTERRUPTED**. stdin/print + file monitoring; pipeline/step and profile selection in-module.
-    - **GUI** (`gui_interface.py`): Same events. Short-lived dialogs (directory, file, choice, message); pipeline/step and profile selection as dialogs.
-  - **Controller** (`saxs_controller.py`): Publishes to EventBus, subscribes to responses; calls processor, context, viewer, step logic. Holds EventBus (and viewer, etc.), not Interface.
+  - **CLI** (`cli_interface.py`): Subscribes via `connect(bus)` to **FILE_REQUESTED**, **CHOICE_REQUESTED**, **DIRECTORY_REQUESTED**, **MESSAGE**, **PIPELINE_STEPS_REQUESTED**, **PROFILE_SELECTION_REQUESTED**; publishes **FILE_UPLOADED**, **FILE_UPLOAD_CANCELED**, **OPTION_CHOSEN**, **OPTION_CHOICE_CANCELED**, **DIRECTORY_SPECIFIED**, **PROGRAM_INTERRUPTED**, **PIPELINE_STEPS_SPECIFIED**, **PROFILE_SELECTION_SPECIFIED**. stdin/print + file monitoring; pipeline/step and profile selection in-module. Also defines `CLIInterface` and `PipelineInterrupt` for standalone use (e.g. `integrate.py`).
+  - **GUI** (`gui_interface.py`): Same events. Short-lived dialogs (directory, file, choice, message); pipeline/step and profile selection as dialogs.
+  - **Controller** (`saxs_controller.py`): Publishes to EventBus, subscribes to responses; calls processor, context, viewer, step logic. Holds EventBus (and viewer, etc.).
   - **Processing** (`processor.py`), **Viewer** (`viewer.py`), **Context** (`context.py`), **Utils** (`utils.py`): Roles unchanged (calibration/integration, plotting, config/paths, I/O and helpers).
 - **How `pipeline_interactive` wires components:**
   1. Create EventBus; Controller and one of `cli_interface` / `gui_interface` connect to it. Create `Context()`.
