@@ -419,26 +419,24 @@ class PLTViewer(Viewer):
                 f"got {type(structure)}"
             )
         
-        # Extract isosurface
-        verts, faces, _, _ = marching_cubes(density, level=isosurface_level)
-        
-        # Scale vertices back to original coordinate system
-        scale = (max_coords - min_coords) / (np.array(density.shape) - 1)
-        verts = verts * scale + min_coords
-        
-        # Normalize distances for coloring
+        # Extract isosurface (may fail if level is outside volume data range)
         norm = Normalize(vmin=0, vmax=r_max)
         cmap = cm.viridis
-        
-        # Calculate colors for each face based on average distance of its vertices from center
-        face_colors = []
-        for face in faces:
-            # Get vertices of this face
-            face_verts = verts[face]
-            # Calculate average distance of these vertices from center
-            avg_dist = np.mean(np.linalg.norm(face_verts - com, axis=1))
-            # Get color from colormap
-            face_colors.append(cmap(norm(avg_dist)))
+        verts = faces = face_colors = None
+        try:
+            verts, faces, _, _ = marching_cubes(density, level=isosurface_level)
+            # Scale vertices back to original coordinate system
+            scale = (max_coords - min_coords) / (np.array(density.shape) - 1)
+            verts = verts * scale + min_coords
+            # Calculate colors for each face based on average distance of its vertices from center
+            face_colors = []
+            for face in faces:
+                face_verts = verts[face]
+                avg_dist = np.mean(np.linalg.norm(face_verts - com, axis=1))
+                face_colors.append(cmap(norm(avg_dist)))
+        except ValueError:
+            # Surface level outside volume data range; leave 3D axes empty, keep scattering plot
+            pass
         
         # Create figure
         if fig_axs is not None:
@@ -465,22 +463,18 @@ class PLTViewer(Viewer):
                 continue
 
             ax = fig.add_subplot(subplot_spec, projection='3d')
-            
-            # Create mesh for this view with colors based on distance from center
-            mesh = Poly3DCollection(verts[faces], alpha=alpha_transparency, 
-                                    facecolors=face_colors, edgecolor='k', linewidth=0.2)
-            ax.add_collection3d(mesh)
-            
-            ax.view_init(elev=view_angle[0], azim=view_angle[1])
+            if verts is not None and faces is not None and face_colors is not None:
+                # Create mesh for this view with colors based on distance from center
+                mesh = Poly3DCollection(verts[faces], alpha=alpha_transparency,
+                                        facecolors=face_colors, edgecolor='k', linewidth=0.2)
+                ax.add_collection3d(mesh)
+                ax.view_init(elev=view_angle[0], azim=view_angle[1])
+                ax.set_xlim(min_coords[0], max_coords[0])
+                ax.set_ylim(min_coords[1], max_coords[1])
+                ax.set_zlim(min_coords[2], max_coords[2])
+            # else: marching_cubes failed (e.g. level outside volume range); leave axis empty
             ax.set_title(title)
             ax.set_box_aspect([1, 1, 1])  # equal aspect
-            
-            # Set limits
-            ax.set_xlim(min_coords[0], max_coords[0])
-            ax.set_ylim(min_coords[1], max_coords[1])
-            ax.set_zlim(min_coords[2], max_coords[2])
-            
-            # Hide axes ticks for cleaner look
             ax.set_xticks([])
             ax.set_yticks([])
             ax.set_zticks([])
