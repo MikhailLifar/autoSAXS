@@ -780,7 +780,7 @@ echo "Full results saved to: $RESULTS_FILE"
             dammif_fits_yml = os.path.join(dammif_subdir, 'dammif_fits.yml')
             dammif_fits_csv = os.path.join(dammif_subdir, 'dammif_fits.csv')
 
-            exists_dammif = all(os.path.exists(os.path.join(dammif_subdir, f'dammif-{i}.fir')) for i in range(dammif_reps_num))
+            exists_dammif = all(os.path.exists(os.path.join(dammif_subdir, f'dammif-{i+1}.fir')) for i in range(dammif_reps_num))
             exists_dammif_exports = os.path.exists(dammif_fits_yml) and os.path.exists(dammif_fits_csv)
 
             if fast_forward and exists_dammif and os.path.exists(dammif_fits_png) and exists_dammif_exports:

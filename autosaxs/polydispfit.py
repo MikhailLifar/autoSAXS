@@ -41,6 +41,7 @@ def polydispfit(data_path, model_name, distribution: Dict, q_fit_range: Tuple[fl
     intensity_fit = intensity[mask]
     sigma_fit = sigma[mask] if sigma is not None else None
 
+    ensure_tabular_model(model_name)
     model_path = os.path.join(GLOBALS_DIR, 'tabular', f'{model_name}.npz')
     with np.load(model_path, allow_pickle=True) as data:
         q_precalc = data["q_values"]
@@ -321,6 +322,27 @@ def sphere_form_factor_vectorized(q, R_grid):
 
 def sphere_volume(R_grid):
     return (4.0/3.0) * np.pi * R_grid**3
+
+
+def ensure_tabular_model(model_name: str) -> None:
+    """
+    Regenerate the tabular .npz lookup table for the given model if it is absent.
+    No user prompt; regeneration is automatic when the file is missing.
+    """
+    model_path = os.path.join(GLOBALS_DIR, 'tabular', f'{model_name}.npz')
+    if os.path.isfile(model_path):
+        return
+    if model_name == 'sphere':
+        q_space = (0.01, 10.0, 1000)
+        radius_space = (0.01, 10.0, 1000)
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
+        calculate_form_factor(
+            sphere_form_factor_vectorized, sphere_volume,
+            q_space, radius_space,
+            save_path=model_path
+        )
+        return
+    raise ValueError(f"Unknown model for tabular regeneration: {model_name}")
 
 
 def spheroid_form_factor_vectorized(q, a_grid, c_grid):

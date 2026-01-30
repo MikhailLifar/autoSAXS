@@ -37,7 +37,7 @@ Specification of `Controller.pipeline_interactive` in the **autosaxs** package (
   - **cli_interface** (`autosaxs/cli_interface.py`): CLI: stdin/print, file monitoring, `connect(bus)`. Defines `PipelineInterrupt`, `CLIInterface`. Same EventBus contract as GUI and API.
   - **gui_interface** (`autosaxs/gui_interface.py`): GUI: CustomTkinter dialogs per query; uses `autosaxs.gui` for step/profile selection.
   - **gui** (`autosaxs/gui.py`): GUI helpers for pipeline/step and profile selection (e.g. `_run_gui_interactive`, `_run_choose_profiles_gui`); used by `gui_interface`.
-  - **polydispfit** (`autosaxs/polydispfit.py`): Polydisperse sphere fitting; used by Controller for the polydispfit step.
+  - **polydispfit** (`autosaxs/polydispfit.py`): Polydisperse sphere fitting; used by Controller for the polydispfit step. Uses tabular lookup tables (e.g. `sphere.npz`) under `autosaxs/global/tabular/`; the pipeline regenerates missing .npz data before fitting.
   - **viewer** (`autosaxs/viewer.py`): Visualization (`view_calibration`, `view_mask`, `view_curves`, `plot_3d_views_and_scattering`, etc.); uses plot helpers from `autosaxs.foreign.supervised_ml.plot_util`. Entry point `pipeline.py` uses `PLTViewer` when wiring the pipeline.
   - **context** (`autosaxs/context.py`): `Context` — holds directory, config, and path groups; config and path accessors.
   - **report** (`autosaxs/report.py`): All per-profile PDF functionality. Builds a single PDF from a report-data dictionary (e.g. `build_report_pdf(report_data: dict, output_path: str)`). Only sections for which data is present are included. See §6 Report.
@@ -229,7 +229,8 @@ No default values are defined in the controller for these; they must exist in co
   - Fast-forward: If all three PNGs exist, plotting is skipped.
 
 - **polydispfit**  
-  - Inputs: Profile path. Fixed in code: q_range (0.1, 5.0) nm⁻¹, model `sphere`, gaussian distribution params/bounds.  
+  - Inputs: Profile path. Fixed in code: q_range (0.1, 5.0) nm⁻¹, model `sphere`, gaussian distribution params/bounds. Depends on tabular lookup table `autosaxs/global/tabular/<model_name>.npz` (e.g. `sphere.npz`).  
+  - **Regeneration of .npz:** If the required model .npz file is absent under `autosaxs/global/tabular/`, the step regenerates it (e.g. by running the precalculation that writes the lookup table) before performing the fit. No user prompt; regeneration is automatic when the file is missing.  
   - Outputs: In `polydispfit/polydispfit_<basename>/`: `*_fit_comparison.png`, `*_radius_distribution.png`, `*_fit.dat` (with metadata).  
   - Fast-forward: If those three exist, step is skipped.
 
@@ -246,7 +247,7 @@ No default values are defined in the controller for these; they must exist in co
   - Outputs: In `dammif/dammif_<basename>/`: `dammif-<i>.fir`, `dammif-<i>-1.cif`, view/fits PNGs, a combined **`dammif_fits.yml`**, and a **`dammif_fits.csv`**. Number of replicates is fixed in code: 2.  
   - **`dammif_fits.yml`:** Single YAML file. DAM provides no fit descriptors by default; each replicate is described by computed descriptors. Dictionary mapping each replicate (e.g. `dammif-0`, `dammif-1`) to a dict: `{dammif-<i>: {Rg: ..., Dmax: ..., V: ..., f_ratio: ..., chi2: ...}, ...}`. **Rg** = gyration radius; **Dmax** = maximum dimension; **V** = volume = N × V(atom) (N = number of dummy atoms, V(atom) = volume per atom); **f_ratio** = Rg / Dmax.  
   - **`dammif_fits.csv`:** Single CSV. Same structure as bodies: columns `q`, `exp`, then one column per replicate (e.g. `dammif-0`, `dammif-1`). Rows: experimental q and intensity over the **fitted q-range only** (same q-limits as on the fits figure), plus each replicate’s fitted intensity on that q-grid.
-  - Fast-forward: If all `dammif-<i>.fir` exist, `<basename>_fits.png` exists, and both `dammif_fits.yml` and `dammif_fits.csv` exist, step is skipped.
+  - Fast-forward: If all replicate `.fir` files exist (`dammif-1.fir`, `dammif-2.fir`, …), `<basename>_fits.png` exists, and both `dammif_fits.yml` and `dammif_fits.csv` exist, step is skipped.
 
 - **ai_analysis**  
   - Inputs: ATSAS results path, list of plot paths (sub, guinier, kratky, loglog).  
