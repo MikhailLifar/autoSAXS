@@ -16,12 +16,12 @@ This document is derived solely from the code in this repository. It describes b
 
 - **UI:** CustomTkinter (`customtkinter`), TkinterDnD2 (`tkinterdnd2`) for drag-and-drop.
 - **Plotting:** Matplotlib (FigureCanvasTkAgg, Figure, pyplot, colormaps).
-- **Numerics / science:** NumPy, SciPy (ndimage, zoom; `scipy.spatial.distance.cdist`; `whittaker_smooth` from `supervised_ml` used in `processor.subtract_buffer`), scikit-learn (`DBSCAN` in `processor.find_center`).
+- **Numerics / science:** NumPy, SciPy (ndimage, zoom; `scipy.spatial.distance.cdist`; `whittaker_smooth` from **autosaxs.foreign.supervised_ml** (vendored; no external supervised_ml) used in `processor.subtract_buffer`), scikit-learn (`DBSCAN` in `processor.find_center`).
 - **X-ray / calibration:** pyFAI (AzimuthalIntegrator, calibrant, geometry refinement, detectors), fabio (images/masks).
 - **Config / data:** YAML (`yaml.safe_load` / `yaml.dump`), JSON (calibration service config and status), pandas (in `utils` for SAXS read/write).
 - **Project-internal modules:**
-  - **processor** (`repos/processor.py`): `autocalib`, `IntegratorExtended`, `integrate_2d_to_1d`, `subtract_buffer`. Used for calibration, integration, and buffer subtraction.
-  - **utils** (`repos/utils.py`): `read_from_tiff`, `read_saxs`, `write_saxs`, `ROOT_DIR`, `whittaker_smooth` (via supervised_ml). Used for image/curve I/O and subtraction smoothing.
+  - **processor** (`autosaxs/processor.py`): `autocalib`, `IntegratorExtended`, `integrate_2d_to_1d`, `subtract_buffer`. Used for calibration, integration, and buffer subtraction.
+  - **utils** (`autosaxs/utils.py`): `read_from_tiff`, `read_saxs`, `write_saxs`, `whittaker_smooth`. Used for image/curve I/O and subtraction smoothing.
 
 ---
 
@@ -79,7 +79,7 @@ This document is derived solely from the code in this repository. It describes b
 - **Mask:** `.npy`, `.txt`, `.msk`. Validation: only two unique values, each interpretable as 0 or 1 (or boolean). Loaded in code as boolean (e.g. `np.load(...).astype('bool')`, `IntegratorExtended.read_mask`); `.msk` is flipped on first axis after load.
 - **1D curves:** Format read by `utils.read_saxs`: file has YAML metadata block between `---` and `...`, then CSV block after `# Data in CSV format`. CSV columns: `q`, `intensity`, and optionally `sigma`. Written by `utils.write_saxs` (and `processor.integrate_2d_to_1d` / `subtract_buffer` use it for output).
 - **Config file:** Path `TEMP_DIR/config.yml`. Structure: top-level keys `config_dictionary` (same content as `ConfigManager.basic_params`) and `advanced_params` only. `ConfigManager.save()` does not write `calibrated_params` to this file; calibrated parameters are stored in memory and in `calibration_cache.yml`.
-- **Temp directory:** Path `ROOT_DIR/fast2dprocess_gui_temp` where `ROOT_DIR` is from `utils.ROOT_DIR` (parent of the repository directory). Contents: `config.yml`, `calibration_cache.yml`, `integrator_params/` (detector_params.json, ai_params.json, optional mask.npy), `calibration_config.json`, `calibration_status.json`, `calibration_output/` (subprocess output; then integrator copied to main `integrator_params`), copied images (e.g. `calibrant_<name>.tif`, `buffer_<name>.tif`, `sample_<name>.tif`), integrated `.dat` files (e.g. `int_<basename>.dat`), subtracted `.dat` (e.g. `subtracted_<sample_basename>_<buffer_basename>.dat`), and plots (e.g. `calibrant_2d_<name>.png`, `plot_1d_<name>.png`, guinier/kratky/loglog when user selects those plot types).
+- **Temp directory:** Path `<ROOT>/fast2dprocess_gui_temp` where **`ROOT` is derived outside autosaxs** from the GUI application's own `__file__` (e.g. `os.path.dirname(__file__)` for the entry-point module, or its parent for the repository root). Contents: `config.yml`, `calibration_cache.yml`, `integrator_params/` (detector_params.json, ai_params.json, optional mask.npy), `calibration_config.json`, `calibration_status.json`, `calibration_output/` (subprocess output; then integrator copied to main `integrator_params`), copied images (e.g. `calibrant_<name>.tif`, `buffer_<name>.tif`, `sample_<name>.tif`), integrated `.dat` files (e.g. `int_<basename>.dat`), subtracted `.dat` (e.g. `subtracted_<sample_basename>_<buffer_basename>.dat`), and plots (e.g. `calibrant_2d_<name>.png`, `plot_1d_<name>.png`, guinier/kratky/loglog when user selects those plot types).
 
 ---
 

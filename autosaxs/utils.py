@@ -21,12 +21,9 @@ import time
 from contextlib import contextmanager
 
 _autosaxs_dir = os.path.dirname(os.path.abspath(__file__))
-REPO_DIR = os.path.dirname(_autosaxs_dir)  # repos/
-ROOT_DIR = os.path.dirname(REPO_DIR)
+LATEST_STEPS_PATH = os.path.join(_autosaxs_dir, "temp", "latest_steps.yml")
 
-SUPERVISED_ML_DIR = os.path.join(ROOT_DIR, 'supervised_ml')
-sys.path.append(SUPERVISED_ML_DIR)
-from supervised_ml.whittaker_smooth import whittaker_smooth
+from .foreign.supervised_ml.whittaker_smooth import whittaker_smooth
 
 GLOBALS_DIR = os.path.join(_autosaxs_dir, 'global')
 TEMPLATES_DIR = os.path.join(GLOBALS_DIR, 'templates')
@@ -189,7 +186,7 @@ def get_pipeline_description(pipeline_name: str) -> str:
     Raises:
     FileNotFoundError: If the pipeline description file doesn't exist
     """
-    pipeline_file = os.path.join(REPO_DIR, 'pipelines', f'{pipeline_name}.txt')
+    pipeline_file = os.path.join(_autosaxs_dir, 'pipelines', f'{pipeline_name}.txt')
 
     if not os.path.exists(pipeline_file):
         raise FileNotFoundError(f"Pipeline description file not found: {pipeline_file}")

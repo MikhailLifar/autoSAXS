@@ -1,9 +1,9 @@
 """Constants used throughout the application."""
 import os
-from autosaxs.utils import ROOT_DIR
 
-# Determine temp directory
-TEMP_DIR = os.path.join(ROOT_DIR, "fast2dprocess_gui_temp")
+# Root derived from this app (repos/ when run from repo), not from autosaxs
+_APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+TEMP_DIR = os.path.join(_APP_ROOT, "fast2dprocess_gui_temp")
 CONFIG_PATH = os.path.join(TEMP_DIR, "config.yml")
 
 # Unit conversion constants

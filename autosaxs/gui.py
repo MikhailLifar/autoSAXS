@@ -16,7 +16,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 # from viewer import setPlotDefaults
 
-from .utils import ROOT_DIR
+from .utils import LATEST_STEPS_PATH
 
 
 def _center_window(win):
@@ -33,16 +33,14 @@ def _center_window(win):
     win.geometry(f"+{x}+{y}")
 
 
-LATEST_STEPS_PATH = Path(ROOT_DIR) / "temp" / "latest_steps.yml"
-
-
 def _load_latest_steps():
     """
     Load previously saved steps configuration if it exists.
     Returns a dict with optional 'steps' and 'pipeline' keys or {}.
     """
-    if LATEST_STEPS_PATH.exists():
-        with LATEST_STEPS_PATH.open("r") as f:
+    path = Path(LATEST_STEPS_PATH)
+    if path.exists():
+        with path.open("r") as f:
             data = yaml.safe_load(f) or {}
             # Only keep list entries that look like steps
             steps = data.get("steps")

@@ -1,3 +1,9 @@
 .ipynb_checkpoints/
 __pycache__/
 *.npz
+# build artifacts
+*.egg-info/
+build/
+dist/
+*.egg
+autosaxs/temp/

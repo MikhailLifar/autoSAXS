@@ -1,7 +1,7 @@
 # GUI implementation of the pipeline EventBus contract.
 # Subscribes to request events; uses short-lived CustomTkinter dialogs.
 # Pipeline/step and profile selection as dialogs (spec §3).
-# Uses utils.ROOT_DIR for latest_steps (spec §10).
+# Pipeline/step and profile selection reuse gui internals (LATEST_STEPS_PATH from utils).
 
 import glob
 import fnmatch
@@ -11,8 +11,6 @@ import customtkinter as ctk
 
 from .event_bus import EventBus, EventType
 from .cli_interface import PipelineInterrupt
-from .utils import ROOT_DIR
-# Pipeline/step and profile selection reuse gui internals (they use ROOT_DIR for latest_steps)
 from .gui import _run_gui_interactive, _run_choose_profiles_gui
 
 

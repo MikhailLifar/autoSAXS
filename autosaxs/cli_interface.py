@@ -18,7 +18,7 @@ import numpy as np
 import yaml
 
 from .event_bus import EventBus, EventType
-from .utils import ROOT_DIR
+from .utils import LATEST_STEPS_PATH
 
 
 class PipelineInterrupt(Exception):
@@ -275,9 +275,6 @@ DEFAULT_PIPELINES = {
         ],
     },
 }
-
-LATEST_STEPS_PATH = os.path.join(ROOT_DIR, "temp", "latest_steps.yml")
-
 
 def _load_latest_steps():
     if os.path.exists(LATEST_STEPS_PATH):

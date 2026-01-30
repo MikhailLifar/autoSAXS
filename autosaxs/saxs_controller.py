@@ -13,7 +13,7 @@ from .viewer import *
 from .context import Context
 from .event_bus import EventBus, EventType
 from .utils import (
-    ROOT_DIR,
+    LATEST_STEPS_PATH,
     ATSAS_BIN_PREFIX,
     read_saxs,
     calc_chi2,
@@ -30,13 +30,9 @@ import seaborn as sns
 
 from ase.io import read
 
-# AI_REPO_DIR = os.path.join(ROOT_DIR, 'aiAssistantFramework')
-# sys.path.append(AI_REPO_DIR)
-# sys.path.append(os.path.expanduser('~/LLM/LLMAssistant/aiAssistantFramework'))
-
-sys.path.append(ROOT_DIR)
 # from aiAssistantFramework import lib as ai_lib
-from aiAssistantFramework.lib import llm 
+# from aiAssistantFramework.lib import llm 
+from .foreign.aiAssistantFramework.lib import llm
 # from aiAssistantFramework.lib import telegram
 # import controller as ai_controller
 from .polydispfit import polydispfit
@@ -46,7 +42,6 @@ from .report import build_report_pdf
 # CALIBRATED_GEOMETRY_PATH = 'calibrated_geometry.conf'
 
 PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prompts')
-LATEST_STEPS_PATH = os.path.join(ROOT_DIR, 'temp', 'latest_steps.yml')
 DEBUG = True
 
 BODIES_SHAPES = {
@@ -1082,13 +1077,7 @@ echo "Full results saved to: $RESULTS_FILE"
         
         return answer, llm_answer_path
 
-    def pipeline_interactive(self, all_from_config=False, config_path: Optional[str] = None, fast_forward=False):
-        """
-        Parameters
-        ----------
-        all_from_config: bool
-            set to True when treating as part of Tango Control System
-        """
+    def pipeline_interactive(self, fast_forward=False):
         # Wire response queue for request/response over EventBus (§3)
         self._response_queue = queue.Queue()
 
@@ -1117,27 +1106,20 @@ echo "Full results saved to: $RESULTS_FILE"
 
         context = Context()
 
-        if all_from_config:
-            assert config_path is not None
-            context.set_config(config_path)
-            steps = context['steps']
-            directory = context['directory']
-            context.set_directory(directory)
-        else:
-            pipeline_choice, steps = self._request_pipeline_steps()
-            save_latest_steps(pipeline_choice, steps)
-            directory = self._request_directory('Write a path to a directory for your data')
-            context.set_directory(directory)
-            config_paths = self._request_file(
-                directory,
-                query='Upload config file config.conf to your directory',
-                filepattern='config.conf',
-                obligatory=True,
-                skip_if_exists=True,
-                allow_same_time=(1, 1),
-            )
-            config_path, = config_paths
-            context.set_config(config_path)
+        pipeline_choice, steps = self._request_pipeline_steps()
+        save_latest_steps(pipeline_choice, steps)
+        directory = self._request_directory('Write a path to a directory for your data')
+        context.set_directory(directory)
+        config_paths = self._request_file(
+            directory,
+            query='Upload config file config.conf to your directory',
+            filepattern='config.conf',
+            obligatory=True,
+            skip_if_exists=True,
+            allow_same_time=(1, 1),
+        )
+        config_path, = config_paths
+        context.set_config(config_path)
 
         if 'calibration' in steps:
             calibrant_paths = self._request_file(
@@ -1151,13 +1133,12 @@ echo "Full results saved to: $RESULTS_FILE"
             calibrant_path = calibrant_paths[0] if calibrant_paths else None
             if calibrant_path:
                 context.append_path('calib_2d', calibrant_path)
-            if not all_from_config:
-                mask_op = self._request_choice(
-                    "How do you want to set the mask for calibration?",
-                    options={'a': 'automask', 'f': 'from file', 'c': 'combine your mask with automatic mask'},
-                )
-                mapping = {'a': 'auto', 'f': 'from_file', 'c': 'combined'}
-                context.update_config('mask_config', values={'mode': mapping[mask_op]})
+            mask_op = self._request_choice(
+                "How do you want to set the mask for calibration?",
+                options={'a': 'automask', 'f': 'from file', 'c': 'combine your mask with automatic mask'},
+            )
+            mapping = {'a': 'auto', 'f': 'from_file', 'c': 'combined'}
+            context.update_config('mask_config', values={'mode': mapping[mask_op]})
             mask_path = None
             if context['mask_config', 'mode'] in ['from_file', 'combined']:
                 mask_paths = self._request_file(
@@ -1363,7 +1344,16 @@ echo "Full results saved to: $RESULTS_FILE"
                         profile_pic_paths.append(profile_pic_path)
                 # print('DEBUG: profile loading and plotting finished')
 
-            # First report pass: all sample profiles (integration through subtraction only)
+            # simple_analysis for all sample profiles
+            descriptors_by_basename = {}
+            if 'simple_analysis' in steps and basename_list and profile_paths:
+                descriptors_dir = os.path.join(directory, 'descriptors')
+                for basename, profile_path in zip(basename_list, profile_paths):
+                    atsas_res_path, gnom_path = self.get_descriptors(
+                        context, profile_path, dest_dir=descriptors_dir, fast_forward=fast_forward)
+                    descriptors_by_basename[basename] = (atsas_res_path, gnom_path)
+
+            # First report pass: all sample profiles (integration→subtraction; descriptors if simple_analysis run; §4 step 6)
             if basename_list and profile_paths:
                 reports_dir = os.path.join(directory, 'reports')
                 for i in range(len(basename_list)):
@@ -1376,40 +1366,45 @@ echo "Full results saved to: $RESULTS_FILE"
                         rd['subtracted_plot_path'] = os.path.join(directory, 'subtracted', f'sub_{basename}.png')
                     else:
                         rd['subtracted_plot_path'] = profile_pic_paths[i] if i < len(profile_pic_paths) else None
+                    if basename in descriptors_by_basename:
+                        desc = _parse_descriptors_from_results(descriptors_by_basename[basename][0])
+                        if desc:
+                            rd['descriptors_table'] = desc
                     out_path = os.path.join(reports_dir, f'{basename}_report.pdf')
                     build_report_pdf(rd, out_path)
 
-            if all_from_config:
-                selected_profiles = context['paths', 'selected_profiles']
-            else:
-                profiles_data = []
-                for basename, (idx, profile_path), plot_path in zip(
-                    basename_list, enumerate(profile_paths), profile_pic_paths):
-                    q, I, _, metadata = read_saxs(profile_path)
-                    profiles_data.append(
-                        {
-                            'basename': basename,
-                            'path': profile_path,
-                            'q': q,
-                            'I': I,
-                            'metadata': metadata,
-                            'plot_path': plot_path,
-                        }
-                    )
+            profiles_data = []
+            for basename, (idx, profile_path), plot_path in zip(
+                basename_list, enumerate(profile_paths), profile_pic_paths):
+                q, I, _, metadata = read_saxs(profile_path)
+                profiles_data.append(
+                    {
+                        'basename': basename,
+                        'path': profile_path,
+                        'q': q,
+                        'I': I,
+                        'metadata': metadata,
+                        'plot_path': plot_path,
+                    }
+                )
+            # Profile selection only if at least one step after simple_analysis (§4 step 7, §11)
+            steps_after_simple_analysis = {'plots', 'polydispfit', 'bodies', 'dammif', 'ai_analysis'}
+            request_profile_selection = bool(set(steps) & steps_after_simple_analysis)
+            if request_profile_selection:
                 selected_profiles = self._request_profile_selection(profiles_data)
+            else:
+                selected_profiles = {}
 
             for basename, profile in selected_profiles.items():
                 profile_path = profile['path']
                 profile_pic_path = profile.get('plot_path')
-                atsas_res_path = gnom_path = None
+                atsas_res_path, gnom_path = descriptors_by_basename.get(basename, (None, None))
+                if atsas_res_path:
+                    context.append_path('atsas_res', atsas_res_path)
+                if gnom_path:
+                    context.append_path('P(r)', gnom_path)
                 plot_paths = [profile_pic_path] if profile_pic_path else []
                 polydisp_dir = bodies_dir = dammif_dir = ''
-
-                if 'simple_analysis' in steps:
-                    atsas_res_path, gnom_path = self.get_descriptors(
-                        context, profile_path, dest_dir=os.path.join(directory, 'descriptors'), fast_forward=fast_forward)
-                    context.append_path('atsas_res', atsas_res_path)
-                    context.append_path('P(r)', gnom_path)
                 if 'plots' in steps:
                     plot_paths = self.plot(context, profile_path, dest_dir=os.path.join(directory, 'plots'), fast_forward=fast_forward)
                     plot_paths = [profile_pic_path, ] + plot_paths
@@ -1423,14 +1418,14 @@ echo "Full results saved to: $RESULTS_FILE"
                         context, profile_path, dest_dir=os.path.join(directory, 'bodies'), fast_forward=fast_forward)
                     context.append_path('bodies', bodies_dir)
                 if 'dammif' in steps:
-                    assert 'simple_analysis' in steps
+                    assert profile_path is not None and gnom_path is not None
                     dammif_dir = self.dammif_fit(
                         context, profile_path, gnom_path, dest_dir=os.path.join(directory, 'dammif'), fast_forward=fast_forward)
                     context.append_path('dammif', dammif_dir)
                 if 'ai_analysis' in steps:
                     assert len(selected_profiles) == 1
-                    assert 'simple_analysis' in steps 
-                    assert 'plots' in steps
+                    assert profile_path is not None and gnom_path is not None
+                    assert len(plot_paths) > 1
                     self.ai_analysis(atsas_res_path, plot_paths, 
                     dest_dir=os.path.join(directory, 'ai_analysis'),
                     text_model=model, vision_model=vision_model, 
@@ -1483,9 +1478,7 @@ echo "Full results saved to: $RESULTS_FILE"
                 build_report_pdf(rd, out_path)
 
             context.extend_paths('profile', profile_paths)
-            
-            # if all_from_config:
-            #     old_files = 
+
             upload_more = self._request_choice(
                 'Upload more data? Type "no" to exit program, type Enter or "yes" to continue',
                 options={},
