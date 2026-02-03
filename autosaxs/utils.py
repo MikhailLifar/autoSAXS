@@ -111,6 +111,63 @@ def read_saxs(filename):
     return wavenumber, intensity, sigma, metadata
 
 
+def read_chi(filename: str) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Read q and intensity from a .chi file (two-column format with header).
+    Returns (q, intensity) arrays.
+    """
+    data_lines = []
+    header_passed = False
+    with open(filename, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = line.split()
+            if len(parts) == 2:
+                try:
+                    float(parts[0])
+                    float(parts[1])
+                    header_passed = True
+                except ValueError:
+                    pass
+            if header_passed and len(parts) == 2:
+                data_lines.append(line)
+    if not data_lines:
+        raise ValueError(f"No valid data found in .chi file: {filename}")
+    q, I = np.loadtxt(data_lines, unpack=True)
+    return q, I
+
+
+def integration_comparison_metric(
+    q1: np.ndarray, I1: np.ndarray,
+    q2: np.ndarray, I2: np.ndarray,
+    q_min: Optional[float] = None,
+    q_max: Union[float, str] = 6.0,
+    eps: float = 1.0e-0,
+) -> float:
+    """
+    Compute int_{q0}^{q_max} 2 * |I1(q) - I2(q)| / (|I1(q)|*|I2(q)| + eps) on a common q grid.
+    One curve is interpolated to the other's q; integration uses trapezoidal rule.
+    q_max: upper limit for integration (default 6.0). Use "auto" for old behavior: min of the two curves' max q.
+    """
+    if q_min is None:
+        q_min = max(np.min(q1), np.min(q2))
+    if q_max == "auto":
+        q_max_val = min(np.max(q1), np.max(q2))
+    else:
+        q_max_val = float(q_max)
+    q_common = np.sort(np.unique(np.concatenate([q1, q2])))
+    q_common = q_common[(q_common >= q_min) & (q_common <= q_max_val)]
+    if len(q_common) < 2:
+        return np.nan
+    I1_interp = np.interp(q_common, q1, I1)
+    I2_interp = np.interp(q_common, q2, I2)
+    denom = np.abs(I1_interp) * np.abs(I2_interp) + eps
+    integrand = 2.0 * np.abs(I1_interp - I2_interp) / denom
+    return float(np.trapz(integrand, q_common))
+
+
 def write_data(filename, data: pd.DataFrame, metadata):
     """
     Write generic tabular data and metadata to a file using YAML for metadata and CSV for data.

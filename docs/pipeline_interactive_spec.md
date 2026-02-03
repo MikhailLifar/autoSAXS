@@ -83,17 +83,17 @@ Specification of `Controller.pipeline_interactive` in the **autosaxs** package (
 
 **api** (`autosaxs/api.py`): script-driven interface; responds from function arguments and hardcoded values. Each function is specified by signature and by how it answers each pipeline request (directory, files, steps, choices, profile selection; MESSAGE handling for failures).
 
-#### 3.2.1 `fast_first_processing(directory)`
+#### 3.2.1 `fast_first_processing(directory, steps=None, mask_choice=None)`
 
-- **Signature:** `fast_first_processing(directory)` — `directory` is the working directory path (str).
-- **Steps:** `['calibration', 'integration', 'subtraction', 'simple_analysis']` (hardcoded).
+- **Signature:** `fast_first_processing(directory, steps=None, mask_choice=None)` — `directory` is the working directory path (str). `steps`: optional list of step names (e.g. `['calibration', 'integration']`); default `None` → `['calibration', 'integration', 'subtraction', 'simple_analysis']`. `mask_choice`: optional; when calibration asks for mask mode, use this choice: `'a'` (automask), `'f'` (from file), `'c'` (combine); default `None` → `'c'`.
+- **Steps:** Configurable via `steps`; default `['calibration', 'integration', 'subtraction', 'simple_analysis']`.
 - **Responses to pipeline requests:**
-  - **PIPELINE_STEPS_REQUESTED** → **PIPELINE_STEPS_SPECIFIED** with `steps` as above.
+  - **PIPELINE_STEPS_REQUESTED** → **PIPELINE_STEPS_SPECIFIED** with `steps` (the function argument or default).
   - **DIRECTORY_REQUESTED** → **DIRECTORY_SPECIFIED** with `path` = `directory` (the function argument).
   - **FILE_REQUESTED** for `config.conf` → resolve path under `directory`; if file exists, **FILE_UPLOADED** with that path; otherwise raise an error (file is required to exist).
   - **FILE_REQUESTED** for `raw/*_calib.tif` → expect file(s) to exist under `directory`; if requested (e.g. not found / skip_if_exists did not apply), raise an error; otherwise **FILE_UPLOADED** with the existing path(s).
-  - **CHOICE_REQUESTED** (mask mode) → **OPTION_CHOSEN** with `choice` = `"c"` (combined).
-  - **FILE_REQUESTED** for `mask*` → expect file to exist under `directory`; if requested and not found, raise an error; otherwise **FILE_UPLOADED** with the existing path(s).
+  - **CHOICE_REQUESTED** (mask mode) → **OPTION_CHOSEN** with `choice` = `mask_choice` (the function argument or default `"c"`).
+  - **FILE_REQUESTED** for `mask*` → only when mask mode is from_file or combined (i.e. `mask_choice` is `'f'` or `'c'`). Expect file to exist under `directory`; if requested and not found, raise an error; otherwise **FILE_UPLOADED** with the existing path(s).
   - **FILE_REQUESTED** for `raw/*_buffer.tif` → same as `raw/*_calib.tif`: expect to exist; if requested and not found, raise an error; otherwise **FILE_UPLOADED** with existing path(s).
   - **FILE_REQUESTED** for `raw/*_sample.tif` → same as above: expect to exist; if requested and not found, raise an error; otherwise **FILE_UPLOADED** with existing path(s).
   - **MESSAGE** with alignment-failure text (overlapped / not_paired buffer–sample) → raise an error (do not let the pipeline retry).

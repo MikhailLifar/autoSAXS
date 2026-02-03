@@ -32,12 +32,17 @@ def _wrap_handler(bus: EventBus, callback):
     return handler
 
 
-def fast_first_processing(directory: str):
-    """Run pipeline with steps calibration, integration, subtraction (§3.2.1).
+def fast_first_processing(directory: str, steps=None, mask_choice=None):
+    """Run pipeline with configurable steps (§3.2.1).
     directory: working directory; required files must exist there.
+    steps: list of step names (e.g. ["calibration", "integration"]). Default: calibration, integration, subtraction, simple_analysis.
+    mask_choice: when calibration asks for mask, use this choice: 'a' (automask), 'f' (from file), 'c' (combine). Default: 'c'.
     Raises if a required file is missing or on alignment failure.
     """
-    steps = ["calibration", "integration", "subtraction", "simple_analysis"]
+    if steps is None:
+        steps = ["calibration", "integration", "subtraction", "simple_analysis"]
+    if mask_choice is None:
+        mask_choice = "c"
     pipeline_choice = "protein_v0"
 
     def on_pipeline_steps_requested(_data):
@@ -60,7 +65,7 @@ def fast_first_processing(directory: str):
         d = data or {}
         query = (d.get("query") or "").lower()
         if "mask" in query:
-            return (EventType.OPTION_CHOSEN, {"choice": "c"})
+            return (EventType.OPTION_CHOSEN, {"choice": mask_choice})
         return (EventType.OPTION_CHOSEN, {"choice": "no"})
 
     def on_message(data):
