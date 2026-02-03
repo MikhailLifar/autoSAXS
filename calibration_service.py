@@ -10,7 +10,6 @@ Where config_json contains:
     - calibrant_path: Path to calibrant image
     - mask_path: Optional path to mask file
     - config: Calibration configuration dictionary
-    - current_hash: Hash for caching (optional)
 """
 
 # Set threading environment variables BEFORE importing NumPy/SciPy/pyFAI
@@ -108,7 +107,6 @@ def main():
     calibrant_path = config_data.get('calibrant_path')
     mask_path = config_data.get('mask_path')
     config = config_data.get('config')
-    current_hash = config_data.get('current_hash')
     
     if not calibrant_path or not config:
         write_status("Missing required parameters: calibrant_path or config", "error")
@@ -136,7 +134,6 @@ def main():
         result_file = os.path.join(OUTPUT_DIR, 'calibration_result.json')
         result_data = {
             'calibrated_params': calibrated_params,
-            'calibration_hash': current_hash,
             'status': 'success'
         }
         with open(result_file, 'w') as f:

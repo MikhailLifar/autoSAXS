@@ -7,6 +7,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from scipy.ndimage import zoom
 from ..core.constants import TEMP_DIR
+from ..core.style import FONTS, COLORS
 from ..utils.filename_utils import generate_filename
 from autosaxs.processor import IntegratorExtended
 from autosaxs.utils import read_from_tiff
@@ -40,7 +41,7 @@ class ImageTab2D:
         title_label = ctk.CTkLabel(
             self.thumbnail_frame,
             text="Images",
-            font=ctk.CTkFont(size=12, weight="bold")
+            font=ctk.CTkFont(**FONTS["panel_title"])
         )
         title_label.grid(row=0, column=0, pady=(0, 10))
         
@@ -109,7 +110,7 @@ class ImageTab2D:
         label = ctk.CTkLabel(
             thumb_container,
             text=display_text,
-            font=ctk.CTkFont(size=9),
+            font=ctk.CTkFont(**FONTS["thumbnail_label"]),
             wraplength=120,
             justify="center"
         )
@@ -145,9 +146,9 @@ class ImageTab2D:
             if isinstance(child, ctk.CTkFrame) and hasattr(child, 'unique_id'):
                 child_id = getattr(child, 'unique_id', None)
                 if child_id == unique_id:
-                    child.configure(fg_color=("gray75", "gray35"))
+                    child.configure(fg_color=COLORS["thumbnail_selected"])
                 else:
-                    child.configure(fg_color=("gray90", "gray20"))
+                    child.configure(fg_color=COLORS["thumbnail_unselected"])
     
     def add_image_thumbnail(self, image_path, image_type):
         """Add a thumbnail for an image. Uses file path as unique identifier."""

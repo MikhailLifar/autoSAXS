@@ -24,11 +24,3 @@ CONVERSIONS_TO_DISPLAY = {
     "detector_tilt": 1,  # radians
     "tilt_plane_rotation": 1,  # radians
 }
-
-STATUS_COLORS = {
-    "default": ("gray85", "gray25"),
-    "progress": ("lightblue", "darkblue"),
-    "success": ("green", "darkgreen"),
-    "error": ("red", "darkred"),
-}
-

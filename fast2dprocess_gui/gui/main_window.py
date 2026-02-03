@@ -5,8 +5,9 @@ import threading
 import traceback
 import customtkinter as ctk
 import tkinter as tk
-from typing import Optional
-from ..core.constants import TEMP_DIR, STATUS_COLORS, CONVERSIONS_TO_INTERNAL, CONVERSIONS_TO_DISPLAY
+from typing import Optional, Union, List
+from ..core.constants import TEMP_DIR, CONVERSIONS_TO_INTERNAL, CONVERSIONS_TO_DISPLAY
+from ..core.style import STATUS_COLORS, FONTS
 from ..core.event_bus import EventBus, EventType
 from ..models import ConfigManager, DataManager, CalibrationManager, ProcessingManager
 from ..models.data_manager import FileType
@@ -87,7 +88,6 @@ class SAXSProcessorGUI:
     def _on_calibration_complete(self, data: dict):
         """Handle calibration completion event."""
         calibrated_params = data.get('calibrated_params', {})
-        from_cache = data.get('from_cache', False)
         
         # Update GUI with calibrated parameters
         self.update_gui_after_calibration()
@@ -105,22 +105,21 @@ class SAXSProcessorGUI:
             # Save plot - view component handles its own filename generation
             self.image_tab_2d.save_calibrant_plot(self.data_manager.calibrant_path)
         
-        # Auto-process any existing buffer or sample images
-        if not from_cache:
-            if self.data_manager.buffer_path:
-                buffer_filename = os.path.basename(str(self.data_manager.buffer_path))
-                threading.Thread(
-                    target=self._process_image_worker,
-                    args=(self.data_manager.buffer_path, "buffer", f"Buffer: {buffer_filename}"),
-                    daemon=True
-                ).start()
-            if self.data_manager.sample_path:
-                sample_filename = os.path.basename(str(self.data_manager.sample_path))
-                threading.Thread(
-                    target=self._process_image_worker,
-                    args=(self.data_manager.sample_path, "sample", f"Sample: {sample_filename}"),
-                    daemon=True
-                ).start()
+        # Auto-process any existing buffer or sample list sequentially (buffer first, then each sample)
+        # in a single worker so the shared integrator is never used from more than one thread at a time.
+        if self.data_manager.buffer_path or self.data_manager.sample_paths:
+            def _sequential_auto_process():
+                if self.data_manager.buffer_path:
+                    buffer_filename = os.path.basename(str(self.data_manager.buffer_path))
+                    self._process_image_worker(
+                        self.data_manager.buffer_path, "buffer", f"Buffer: {buffer_filename}"
+                    )
+                for sample_path in self.data_manager.sample_paths:
+                    sample_filename = os.path.basename(str(sample_path))
+                    self._process_image_worker(
+                        sample_path, "sample", f"Sample: {sample_filename}"
+                    )
+            threading.Thread(target=_sequential_auto_process, daemon=True).start()
     
     def _on_calibration_error(self, data: dict):
         """Handle calibration error event."""
@@ -142,8 +141,9 @@ class SAXSProcessorGUI:
         # Main container
         main_frame = ctk.CTkFrame(self.root)
         main_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-        main_frame.grid_columnconfigure(0, weight=1)
-        main_frame.grid_columnconfigure(1, weight=3)
+        # Left column: narrow, does not grow with window (weight=0), min width for content
+        main_frame.grid_columnconfigure(0, weight=0, minsize=260)
+        main_frame.grid_columnconfigure(1, weight=1)
         main_frame.grid_rowconfigure(0, weight=1)
         
         # Create control panel (left side)
@@ -184,7 +184,7 @@ class SAXSProcessorGUI:
             parent, 
             textvariable=self.status_var, 
             height=40,
-            font=ctk.CTkFont(size=14, weight="bold"),
+            font=ctk.CTkFont(**FONTS["status_bar"]),
             fg_color=STATUS_COLORS["default"],
             corner_radius=5,
             anchor="w",
@@ -194,72 +194,99 @@ class SAXSProcessorGUI:
         status_bar.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
         self.status_bar = status_bar
     
-    def on_file_drop(self, file_path: str, title: str) -> bool:
+    def on_file_drop(self, file_path_or_paths: Union[str, List[str]], title: str) -> bool:
         """
-        Handle file drop callback from ControlPanel.
+        Handle file drop callback from ControlPanel. Sample Image(s) accepts a list of paths; others accept a single path.
         
         Returns:
-            True if file was successfully processed, False if validation failed
+            True if file(s) were successfully processed, False if validation failed
         """
         file_type_map = {
             "Calibrant Image": (FileType.CALIBRANT, "Calibrant", True),
             "Buffer Image": (FileType.BUFFER, "Buffer", False),
-            "Sample Image": (FileType.SAMPLE, "Sample", False),
+            "Sample Image(s)": (FileType.SAMPLE, "Sample", False),
             "Mask File (Optional)": (FileType.MASK, "Mask", False),
         }
         
-        if title in file_type_map:
-            file_type, image_type, always_display = file_type_map[title]
+        # Only sample zone may receive multiple files; others must receive a single path
+        if title != "Sample Image(s)" and isinstance(file_path_or_paths, list):
+            self._update_status(f"Only one file allowed for {title}.", "error")
+            self.root.after(5000, self.reset_status_bar_color)
+            return False
+        
+        if title not in file_type_map:
+            return False
+        
+        file_type, image_type, always_display = file_type_map[title]
+        
+        # --- Sample Image(s): multiple paths, validate each, replace sample list ---
+        if title == "Sample Image(s)":
+            paths = [file_path_or_paths] if isinstance(file_path_or_paths, str) else file_path_or_paths
+            valid_paths = [p for p in paths if self.data_manager.validate_image_file(p)]
+            if not valid_paths:
+                self._update_status("Invalid sample(s): only .tif files are allowed. No valid files in drop.", "error")
+                self.root.after(5000, self.reset_status_bar_color)
+                return False
+            self.data_manager.sample_paths = valid_paths
             
-            # Validate mask file before storing
-            if title == "Mask File (Optional)":
-                if not self.data_manager.validate_mask_file(file_path):
-                    self._update_status(f"Invalid mask file: {os.path.basename(str(file_path))}. Only .npy, .txt, .msk files with values 0/1 or True/False are allowed.", "error")
-                    self.root.after(5000, self.reset_status_bar_color)
-                    return False  # Don't store invalid mask file
+            for path in valid_paths:
+                if self.image_tab_2d:
+                    self.image_tab_2d.add_image_thumbnail(path, image_type)
             
-            # Validate image files (calibrant, buffer, sample) - must be .tif
-            elif title in ["Calibrant Image", "Buffer Image", "Sample Image"]:
-                if not self.data_manager.validate_image_file(file_path):
-                    self._update_status(f"Invalid {title.lower()}: {os.path.basename(str(file_path))}. Only .tif files are allowed.", "error")
-                    self.root.after(5000, self.reset_status_bar_color)
-                    return False  # Don't store invalid image file
-            
-            # Store the file path
-            self.data_manager.set_file(file_type, file_path)
-            
-            # Add thumbnail for all image types (including mask)
-            if self.image_tab_2d:
-                self.image_tab_2d.add_image_thumbnail(file_path, image_type)
-            
-            # Mask file doesn't need to be displayed as an image in main view initially
-            if title == "Mask File (Optional)":
-                self._update_status(f"Mask file loaded: {os.path.basename(str(file_path))}")
-            elif always_display or self.calibration_manager.is_calibrated:
-                filename = os.path.basename(str(file_path))
+            if always_display or self.calibration_manager.is_calibrated:
+                first_path = valid_paths[0]
+                filename = os.path.basename(str(first_path))
                 display_title = f"{image_type}: {filename}"
-                self.display_2d_image(file_path, display_title)
-                
-                # Auto-process buffer or sample if calibration is available
+                self.display_2d_image(first_path, display_title)
                 if self.calibration_manager.is_calibrated:
-                    if title == "Buffer Image":
-                        threading.Thread(
-                            target=self._process_image_worker,
-                            args=(file_path, "buffer", f"Buffer: {filename}"),
-                            daemon=True
-                        ).start()
-                    elif title == "Sample Image":
-                        threading.Thread(
-                            target=self._process_image_worker,
-                            args=(file_path, "sample", f"Sample: {filename}"),
-                            daemon=True
-                        ).start()
+                    def _process_all_samples():
+                        for sample_path in self.data_manager.sample_paths:
+                            sample_filename = os.path.basename(str(sample_path))
+                            self._process_image_worker(
+                                sample_path, "sample", f"Sample: {sample_filename}"
+                            )
+                    threading.Thread(target=_process_all_samples, daemon=True).start()
             else:
                 self._update_status("Please calibrate first")
-            
-            return True  # File successfully processed
+            return True
         
-        return False  # Unknown file type
+        # --- Single-file zones: Calibrant, Buffer, Mask ---
+        file_path = file_path_or_paths if isinstance(file_path_or_paths, str) else file_path_or_paths[0]
+        
+        if title == "Mask File (Optional)":
+            if not self.data_manager.validate_mask_file(file_path):
+                self._update_status(f"Invalid mask file: {os.path.basename(str(file_path))}. Only .npy, .txt, .msk files with values 0/1 or True/False are allowed.", "error")
+                self.root.after(5000, self.reset_status_bar_color)
+                return False
+        
+        if title in ["Calibrant Image", "Buffer Image"]:
+            if not self.data_manager.validate_image_file(file_path):
+                self._update_status(f"Invalid {title.lower()}: {os.path.basename(str(file_path))}. Only .tif files are allowed.", "error")
+                self.root.after(5000, self.reset_status_bar_color)
+                return False
+        
+        self.data_manager.set_file(file_type, file_path)
+        
+        if self.image_tab_2d:
+            self.image_tab_2d.add_image_thumbnail(file_path, image_type)
+        
+        if title == "Mask File (Optional)":
+            self._update_status(f"Mask file loaded: {os.path.basename(str(file_path))}")
+        elif always_display or self.calibration_manager.is_calibrated:
+            filename = os.path.basename(str(file_path))
+            display_title = f"{image_type}: {filename}"
+            self.display_2d_image(file_path, display_title)
+            if self.calibration_manager.is_calibrated:
+                if title == "Buffer Image":
+                    threading.Thread(
+                        target=self._process_image_worker,
+                        args=(file_path, "buffer", f"Buffer: {filename}"),
+                        daemon=True
+                    ).start()
+        else:
+            self._update_status("Please calibrate first")
+        
+        return True
     
     def _update_status(self, message: str, color: str = "default"):
         """Update status bar with message and optional color."""
@@ -405,55 +432,41 @@ class SAXSProcessorGUI:
             
             # Register curve in GUI and save plots (delegated to view component)
             if self.curves_tab_1d:
-                self.root.after_idle(lambda: self.curves_tab_1d.add_curve(output_path, image_type))
-                
-                # Save all plots for this curve (view component handles filename generation)
+                out_path = output_path
+                img_type = image_type
+
                 def save_all_curve_plots():
                     if self.curves_tab_1d:
-                        self.curves_tab_1d.save_all_curve_plots(output_path)
-                
-                # Handle subtraction for sample
-                if image_type == "sample":
-                    # Store output_path in closure before scheduling
-                    sample_output_path = output_path
-                    
-                    def create_subtracted_curves():
-                        if not self.curves_tab_1d:
-                            return
-                        
-                        # Find the most recently added buffer curve
-                        # Skip any curves that match the current sample output_path to avoid confusion
-                        last_buffer_path = None
-                        sample_unique_id = os.path.abspath(str(sample_output_path))
-                        
-                        # Iterate in reverse order (most recent first) to find the most recent buffer
-                        for unique_id, (buffer_path, buf_type, _, _, filename) in reversed(list(self.curves_tab_1d.curves.items())):
-                            # Skip the current sample curve if it's already in the list
-                            if unique_id == sample_unique_id:
-                                continue
-                            # Find the most recent buffer curve
-                            if buf_type == "buffer" and os.path.exists(buffer_path):
-                                last_buffer_path = buffer_path
-                                break
-                        
-                        # Perform subtraction if we found a buffer curve
-                        # Important: subtract_buffer expects (buffer_path, sample_path, output_path)
-                        # It calculates: sample - buffer
-                        if last_buffer_path:
-                            subtracted_path = self.processing_service.create_subtracted_curve(
-                                last_buffer_path,      # buffer curve (first argument) - will be subtracted FROM sample
-                                sample_output_path     # sample curve (second argument) - this is what we're subtracting FROM
-                            )
-                            if subtracted_path and self.curves_tab_1d:
-                                self.curves_tab_1d.add_curve(subtracted_path, "subtracted")
-                                # Save plots for subtracted curve (view component handles this)
-                                self.curves_tab_1d.save_all_curve_plots(subtracted_path)
-                    
-                    # Schedule subtraction after a short delay to ensure sample curve is added to the list first
-                    self.root.after(100, create_subtracted_curves)
-                
-                # Schedule plot saving
-                self.root.after(200, save_all_curve_plots)
+                        self.curves_tab_1d.save_all_curve_plots(out_path)
+
+                def create_subtracted_curves():
+                    if not self.curves_tab_1d:
+                        return
+                    sample_output_path = out_path
+                    last_buffer_path = None
+                    sample_unique_id = os.path.abspath(str(sample_output_path))
+                    for unique_id, (buffer_path, buf_type, _, _, filename) in reversed(list(self.curves_tab_1d.curves.items())):
+                        if unique_id == sample_unique_id:
+                            continue
+                        if buf_type == "buffer" and os.path.exists(buffer_path):
+                            last_buffer_path = buffer_path
+                            break
+                    if last_buffer_path:
+                        subtracted_path = self.processing_service.create_subtracted_curve(
+                            last_buffer_path, sample_output_path
+                        )
+                        if subtracted_path and self.curves_tab_1d:
+                            self.curves_tab_1d.add_curve(subtracted_path, "subtracted")
+                            self.curves_tab_1d.save_all_curve_plots(subtracted_path)
+
+                def add_curve_then_maybe_subtract():
+                    self.curves_tab_1d.add_curve(out_path, img_type)
+                    if img_type == "sample":
+                        # Schedule subtraction only after this sample's curve is in the list (avoids race with buffer)
+                        self.root.after(100, create_subtracted_curves)
+                    self.root.after(200, save_all_curve_plots)
+
+                self.root.after_idle(add_curve_then_maybe_subtract)
             
             # Update display and save 2D image plot (delegated to view component)
             self.root.after_idle(lambda: self.display_1d_curves())

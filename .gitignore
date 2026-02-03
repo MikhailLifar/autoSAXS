@@ -1,9 +1,11 @@
 .ipynb_checkpoints/
 __pycache__/
 *.npz
+*.log
 # build artifacts
 *.egg-info/
 build/
 dist/
 *.egg
 autosaxs/temp/
+fast2dprocess_gui_temp/

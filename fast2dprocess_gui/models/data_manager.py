@@ -1,5 +1,5 @@
 """Data file management for the application."""
-from typing import Optional
+from typing import Optional, List
 from enum import Enum
 import os
 import shutil
@@ -15,30 +15,33 @@ class FileType(Enum):
 
 
 class DataManager:
-    """Manages file paths and data loading."""
+    """Manages file paths and data loading. Sample holds a list of paths; others are single path."""
     
     def __init__(self):
         """Initialize the data manager."""
         self._files: dict[FileType, Optional[str]] = {
             FileType.CALIBRANT: None,
             FileType.BUFFER: None,
-            FileType.SAMPLE: None,
             FileType.MASK: None,
         }
+        self._sample_paths: List[str] = []
     
     def set_file(self, file_type: FileType, path: str):
         """
-        Set file path for a given type.
+        Set file path for a given type. For SAMPLE, use set_sample_paths instead.
         
         Args:
-            file_type: Type of file
+            file_type: Type of file (must not be SAMPLE)
             path: Path to the file
         """
-        self._files[file_type] = path
+        if file_type == FileType.SAMPLE:
+            self._sample_paths = [path] if path else []
+        else:
+            self._files[file_type] = path
     
     def get_file(self, file_type: FileType) -> Optional[str]:
         """
-        Get file path for a given type.
+        Get file path for a given type. For SAMPLE, returns first path or None.
         
         Args:
             file_type: Type of file
@@ -46,6 +49,8 @@ class DataManager:
         Returns:
             Path to the file, or None if not set
         """
+        if file_type == FileType.SAMPLE:
+            return self._sample_paths[0] if self._sample_paths else None
         return self._files.get(file_type)
     
     @property
@@ -69,14 +74,14 @@ class DataManager:
         self.set_file(FileType.BUFFER, path)
     
     @property
-    def sample_path(self) -> Optional[str]:
-        """Get sample file path."""
-        return self.get_file(FileType.SAMPLE)
+    def sample_paths(self) -> List[str]:
+        """Get list of sample file paths (zero or more)."""
+        return list(self._sample_paths)
     
-    @sample_path.setter
-    def sample_path(self, path: str):
-        """Set sample file path."""
-        self.set_file(FileType.SAMPLE, path)
+    @sample_paths.setter
+    def sample_paths(self, paths: List[str]):
+        """Set sample file paths (replaces previous list)."""
+        self._sample_paths = list(paths) if paths else []
     
     @property
     def mask_path(self) -> Optional[str]:

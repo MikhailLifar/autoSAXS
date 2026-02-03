@@ -1,7 +1,5 @@
 """Calibration management for the application."""
 import os
-import hashlib
-import yaml
 from typing import Optional, Dict, Any
 from ..core.constants import TEMP_DIR
 from ..core.interfaces import ICalibrationManager
@@ -24,8 +22,6 @@ class CalibrationManager(ICalibrationManager):
         self.temp_dir = temp_dir
         self.integrator: Optional[IntegratorExtended] = None
         self.calibrated_params: Dict[str, Any] = {}
-        self.last_calibration_hash: Optional[str] = None
-        self.calibration_cache_path = os.path.join(temp_dir, "calibration_cache.yml")
         
         # Try to load integrator from disk if it exists
         self._try_load_integrator()
@@ -112,97 +108,17 @@ class CalibrationManager(ICalibrationManager):
         
         return config
     
-    def compute_calibration_hash(self, calib_path: str, config: Dict[str, Any]) -> Optional[str]:
-        """
-        Compute hash of calibration inputs for caching.
-        
-        Args:
-            calib_path: Path to calibrant image
-            config: Configuration dictionary
-            
-        Returns:
-            Hash string or None if computation fails
-        """
-        try:
-            # Read file content hash
-            with open(calib_path, 'rb') as f:
-                file_hash = hashlib.md5(f.read()).hexdigest()
-            
-            # Create config hash
-            config_str = yaml.dump(config, default_flow_style=False)
-            config_hash = hashlib.md5(config_str.encode()).hexdigest()
-            
-            # Combine hashes
-            combined = f"{file_hash}_{config_hash}"
-            return hashlib.md5(combined.encode()).hexdigest()
-        except Exception as e:
-            print(f"Error computing calibration hash: {e}")
-            return None
-    
-    def load_cached_calibration(self, hash_value: str) -> bool:
-        """
-        Load cached calibration if hash matches.
-        
-        Args:
-            hash_value: Hash of calibration inputs
-            
-        Returns:
-            True if cached calibration was loaded, False otherwise
-        """
-        if not os.path.exists(self.calibration_cache_path):
-            return False
-        
-        try:
-            with open(self.calibration_cache_path, 'r') as f:
-                cache = yaml.safe_load(f)
-            if cache and cache.get('hash') == hash_value and cache.get('calibrated_params'):
-                # Try to load integrator from disk
-                integrator_subd = os.path.join(self.temp_dir, 'integrator_params')
-                if os.path.exists(integrator_subd):
-                    try:
-                        self.calibrated_params = cache['calibrated_params']
-                        self.integrator = IntegratorExtended.from_disk(integrator_subd)
-                        self.last_calibration_hash = hash_value
-                        return True
-                    except Exception as e:
-                        print(f"Error loading integrator from disk: {e}")
-                        return False
-        except Exception as e:
-            print(f"Error loading cached calibration: {e}")
-        return False
-    
-    def save_calibration_cache(self, hash_value: str, calibrated_params: Dict[str, Any]):
-        """
-        Save calibration cache to disk.
-        
-        Args:
-            hash_value: Hash of calibration inputs
-            calibrated_params: Calibrated parameters
-        """
-        try:
-            cache = {'hash': hash_value, 'calibrated_params': calibrated_params}
-            os.makedirs(os.path.dirname(self.calibration_cache_path), exist_ok=True)
-            with open(self.calibration_cache_path, 'w') as f:
-                yaml.dump(cache, f, default_flow_style=False)
-        except Exception as e:
-            print(f"Error saving calibration cache: {e}")
-    
     def set_calibration_result(self, integrator: IntegratorExtended, 
-                               calibrated_params: Dict[str, Any], 
-                               calibration_hash: Optional[str] = None):
+                               calibrated_params: Dict[str, Any]):
         """
         Set the calibration result.
         
         Args:
             integrator: Calibrated integrator
             calibrated_params: Calibrated parameters
-            calibration_hash: Optional hash of calibration inputs
         """
         self.integrator = integrator
         self.calibrated_params = calibrated_params
-        if calibration_hash:
-            self.last_calibration_hash = calibration_hash
-            self.save_calibration_cache(calibration_hash, calibrated_params)
         
         # Save integrator to disk
         integrator_subd = os.path.join(self.temp_dir, 'integrator_params')

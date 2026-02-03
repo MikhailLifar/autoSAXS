@@ -3,8 +3,9 @@ import os
 import customtkinter as ctk
 import tkinter as tk
 from tkinterdnd2 import DND_FILES
-from typing import Dict, Callable, Optional
+from typing import Dict, Callable, Optional, Union, List
 from ..core.constants import CONVERSIONS_TO_INTERNAL
+from ..core.style import FONTS, COLORS
 
 
 class ControlPanel:
@@ -24,33 +25,43 @@ class ControlPanel:
         self.config_dictionary = config_dictionary
         self.callbacks = callbacks
         
-        # Create panel frame
-        self.panel = ctk.CTkFrame(parent)
+        # Create panel frame: width responds to window (narrower, flexible)
+        self.parent = parent
+        self.panel = ctk.CTkFrame(parent, width=280)
         self.panel.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         self.panel.grid_columnconfigure(0, weight=1)
-        
-        # File upload section
+        self.panel.grid_rowconfigure(0, weight=1)   # file section expands with height
+        self.panel.grid_rowconfigure(1, weight=0)  # params section natural height
+        self._panel_min_width = 240
+        self._panel_max_width = 320
+        self._panel_width_ratio = 0.20  # fraction of window width
+        self._update_panel_width()
+        self.root.bind("<Configure>", lambda e: self._on_configure(e))
+
+        # File upload section (expands with window height)
         file_frame = ctk.CTkFrame(self.panel)
-        file_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+        file_frame.grid(row=0, column=0, sticky="nsew", padx=8, pady=6)
         file_frame.grid_columnconfigure(0, weight=1)
+        for r in range(4):
+            file_frame.grid_rowconfigure(r, weight=1, minsize=52)  # drop zones have min height
         
         # Create drag and drop areas
         self.calibrant_frame = self.create_drag_drop_area(file_frame, "Calibrant Image", 0)
         self.mask_frame = self.create_drag_drop_area(file_frame, "Mask File (Optional)", 1)
         self.buffer_frame = self.create_drag_drop_area(file_frame, "Buffer Image", 2)
-        self.sample_frame = self.create_drag_drop_area(file_frame, "Sample Image", 3)
+        self.sample_frame = self.create_drag_drop_area(file_frame, "Sample Image(s)", 3)
         
-        # Calibration parameters section
+        # Calibration parameters section (fixed height, at bottom)
         params_frame = ctk.CTkFrame(self.panel)
-        params_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=10)
+        params_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=6)
         params_frame.grid_columnconfigure(0, weight=1)
         
         params_title = ctk.CTkLabel(
             params_frame, 
             text="Calibration Parameters", 
-            font=ctk.CTkFont(size=16, weight="bold")
+            font=ctk.CTkFont(**FONTS["heading"])
         )
-        params_title.grid(row=0, column=0, columnspan=2, pady=10)
+        params_title.grid(row=0, column=0, columnspan=2, pady=6)
         
         self.param_vars = {}
         self.param_sliders = {}
@@ -70,11 +81,11 @@ class ControlPanel:
             default_display = self._get_default_display_value(config_key, conversion, slider_range)
             
             label = ctk.CTkLabel(params_frame, text=display_name)
-            label.grid(row=row, column=0, sticky="w", padx=10, pady=5)
+            label.grid(row=row, column=0, sticky="w", padx=8, pady=2)
             
             self.param_vars[config_key] = tk.DoubleVar(value=default_display)
-            entry = ctk.CTkEntry(params_frame, width=120, textvariable=self.param_vars[config_key])
-            entry.grid(row=row, column=1, padx=10, pady=5)
+            entry = ctk.CTkEntry(params_frame, width=90, textvariable=self.param_vars[config_key])
+            entry.grid(row=row, column=1, padx=8, pady=2)
             
             slider_min, slider_max = slider_range
             slider = ctk.CTkSlider(
@@ -84,7 +95,7 @@ class ControlPanel:
                 variable=self.param_vars[config_key],
                 command=lambda v, p=config_key: self.update_param_value(p, v)
             )
-            slider.grid(row=row+1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 10))
+            slider.grid(row=row+1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 6))
             self.param_sliders[config_key] = slider
             row += 2
         
@@ -93,9 +104,9 @@ class ControlPanel:
             params_frame,
             text="Apply Calibration",
             command=self.callbacks.get('on_apply_calibration'),
-            font=ctk.CTkFont(size=14, weight="bold")
+            font=ctk.CTkFont(**FONTS["heading"])
         )
-        apply_button.grid(row=row, column=0, columnspan=2, pady=10)
+        apply_button.grid(row=row, column=0, columnspan=2, pady=6)
         
         # Save button
         row += 1
@@ -103,123 +114,106 @@ class ControlPanel:
             params_frame,
             text="Save",
             command=self.callbacks.get('on_save'),
-            font=ctk.CTkFont(size=14, weight="bold"),
-            fg_color=("green", "darkgreen")
+            font=ctk.CTkFont(**FONTS["heading"]),
+            fg_color=COLORS["save_button"]
         )
-        save_button.grid(row=row, column=0, columnspan=2, pady=10)
+        save_button.grid(row=row, column=0, columnspan=2, pady=6)
     
+    def _on_configure(self, event):
+        """Update panel width when root window is resized (only on root)."""
+        if event.widget is self.root:
+            self._update_panel_width()
+
+    def _update_panel_width(self):
+        """Set panel width from window width (narrower, clamped to min/max)."""
+        try:
+            w = self.root.winfo_width()
+            if w <= 1:
+                return
+            width = int(w * self._panel_width_ratio)
+            width = max(self._panel_min_width, min(self._panel_max_width, width))
+            if self.panel.winfo_width() != width:
+                self.panel.configure(width=width)
+        except (tk.TclError, Exception):
+            pass
+
+    def _dnd_text_no_file(self, title: str) -> str:
+        """Text shown in DnD area when no file is uploaded."""
+        return f"{title} (Drag and Drop)"
+
+    def _dnd_text_with_file(self, title: str, file_path: Union[str, List[str]]) -> str:
+        """Text shown in DnD area when file(s) uploaded. For multiple samples: 'N files' or 'File: <first> + N more'."""
+        if isinstance(file_path, list):
+            if not file_path:
+                return self._dnd_text_no_file(title)
+            if len(file_path) == 1:
+                return f"{title}: {os.path.basename(str(file_path[0]))}"
+            first = os.path.basename(str(file_path[0]))
+            return f"{title}: {first} + {len(file_path) - 1} more"
+        filename = os.path.basename(str(file_path))
+        return f"{title}: {filename}"
+
     def create_drag_drop_area(self, parent, title, row):
-        """Create a drag and drop area for file upload."""
-        frame = ctk.CTkFrame(parent)
-        frame.grid(row=row, column=0, sticky="ew", padx=10, pady=10)
-        frame.grid_columnconfigure(0, weight=1)
-        
-        # Title label
-        label = ctk.CTkLabel(
-            frame, 
-            text=title, 
-            font=ctk.CTkFont(size=14, weight="bold")
-        )
-        label.grid(row=0, column=0, pady=(10, 0))
-        
-        # Drag and drop area
-        drop_area = ctk.CTkFrame(frame, height=100)
-        drop_area.grid(row=1, column=0, sticky="ew", padx=10, pady=10)
+        """Create a single drop zone with all text inside the field."""
+        drop_area = ctk.CTkFrame(parent)
+        drop_area.grid(row=row, column=0, sticky="nsew", padx=8, pady=4)
         drop_area.grid_columnconfigure(0, weight=1)
         drop_area.grid_rowconfigure(0, weight=1)
         
-        # Drop label
-        drop_label = ctk.CTkLabel(
-            drop_area, 
-            text=f"Drag & Drop {title} Here", 
-            fg_color="transparent"
+        # Single label inside the DnD field: "<Image type> (Drag and Drop)" or "<Image type>: <file name>"
+        label = ctk.CTkLabel(
+            drop_area,
+            text=self._dnd_text_no_file(title),
+            fg_color=COLORS["drop_zone"],
+            font=ctk.CTkFont(**FONTS["drop_zone"]),
+            wraplength=240,
         )
-        drop_label.grid(row=0, column=0, pady=20)
+        label.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
         
-        # Status label
-        status_label = ctk.CTkLabel(frame, text="No file selected")
-        status_label.grid(row=2, column=0, pady=(0, 10))
-        
-        # Store references for easy access when updating
-        setattr(drop_area, 'title', title)
-        setattr(drop_area, 'drop_label', drop_label)
-        setattr(frame, 'status_label', status_label)
-        
-        # Configure drag and drop
+        drop_area.title = title
+        drop_area.dnd_label = label
         drop_area.drop_target_register(DND_FILES)  # type: ignore
-        drop_area.dnd_bind("<<Drop>>", lambda e, f=frame, t=title: self.on_drop(e, f, t))  # type: ignore
+        drop_area.dnd_bind("<<Drop>>", lambda e, d=drop_area, t=title: self.on_drop(e, d, t))  # type: ignore
         
-        return frame
+        return drop_area
     
-    def _update_drop_labels(self, frame, file_path):
-        """Update labels in drop frame with file name."""
-        filename = os.path.basename(str(file_path))
-        
-        # Update status label using stored reference
-        if hasattr(frame, 'status_label'):
-            frame.status_label.configure(text=f"File: {filename}")
-        
-        # Find and update drop_label (inside drop_area frame)
-        for child in frame.winfo_children():
-            if isinstance(child, ctk.CTkFrame):
-                # Check if this is the drop_area and has stored reference
-                if hasattr(child, 'drop_label'):
-                    drop_label = getattr(child, 'drop_label')
-                    drop_label.configure(text=f"File: {filename}")
-                else:
-                    # Fallback: search for the label
-                    for subchild in child.winfo_children():
-                        if isinstance(subchild, ctk.CTkLabel):
-                            current_text = subchild.cget("text")
-                            # Update if it's the drop label (contains "Drag & Drop" or starts with "File:")
-                            if "Drag & Drop" in current_text or current_text.startswith("File:"):
-                                subchild.configure(text=f"File: {filename}")
-                                break
+    def _update_drop_labels(self, drop_area, file_path: Union[str, List[str]]):
+        """Update the single label inside the DnD area: '<Image type>: <file name>' or for multiple samples 'N files' / 'File: <first> + N more'."""
+        if hasattr(drop_area, 'dnd_label') and hasattr(drop_area, 'title'):
+            text = self._dnd_text_with_file(drop_area.title, file_path)
+            drop_area.dnd_label.configure(text=text)
     
-    def _reset_drop_labels(self, frame, title):
-        """Reset labels in drop frame to default state."""
-        # Reset status label
-        if hasattr(frame, 'status_label'):
-            frame.status_label.configure(text="No file selected")
-        
-        # Reset drop_label (inside drop_area frame)
-        for child in frame.winfo_children():
-            if isinstance(child, ctk.CTkFrame):
-                # Check if this is the drop_area and has stored reference
-                if hasattr(child, 'drop_label'):
-                    drop_label = getattr(child, 'drop_label')
-                    drop_label.configure(text=f"Drag & Drop {title} Here")
-                else:
-                    # Fallback: search for the label
-                    for subchild in child.winfo_children():
-                        if isinstance(subchild, ctk.CTkLabel):
-                            current_text = subchild.cget("text")
-                            # Update if it's the drop label (contains "Drag & Drop" or starts with "File:")
-                            if "Drag & Drop" in current_text or current_text.startswith("File:"):
-                                subchild.configure(text=f"Drag & Drop {title} Here")
-                                break
+    def _reset_drop_labels(self, drop_area, title):
+        """Reset the DnD area label to '<Image type> (Drag and Drop)'."""
+        if hasattr(drop_area, 'dnd_label'):
+            drop_area.dnd_label.configure(text=self._dnd_text_no_file(title))
     
-    def on_drop(self, event, frame, title):
-        """Handle file drop event."""
+    def on_drop(self, event, drop_area, title):
+        """Handle file drop event. Sample Image(s) accepts multiple files; other zones accept only one (error if multiple)."""
         files = self.root.tk.splitlist(event.data)
         if not files or not files[0]:
             return
         
-        file_path = files[0]
-        
-        # Call the callback to handle file drop first (for validation)
-        # Only update labels if validation passes
-        if self.callbacks.get('on_file_drop'):
-            success = self.callbacks['on_file_drop'](file_path, title)
-            # Only update labels if file was successfully processed
-            if success:
-                self._update_drop_labels(frame, file_path)
-            else:
-                # Reset labels to default state for failed validation
-                self._reset_drop_labels(frame, title)
+        # Only Sample Image(s) accepts multiple files; others must receive a single file
+        is_sample_zone = title == "Sample Image(s)"
+        if is_sample_zone:
+            file_path_or_paths = list(files)
         else:
-            # If no callback, update labels anyway (shouldn't happen)
-            self._update_drop_labels(frame, file_path)
+            if len(files) > 1:
+                # Spec: error if more than one file on non-sample zone
+                if self.callbacks.get('on_file_drop'):
+                    self.callbacks['on_file_drop'](files, title)  # pass list to trigger "only one file" error
+                return
+            file_path_or_paths = files[0]
+        
+        if self.callbacks.get('on_file_drop'):
+            success = self.callbacks['on_file_drop'](file_path_or_paths, title)
+            if success:
+                self._update_drop_labels(drop_area, file_path_or_paths)
+            else:
+                self._reset_drop_labels(drop_area, title)
+        else:
+            self._update_drop_labels(drop_area, file_path_or_paths)
     
     def _get_default_display_value(self, config_key, conversion, slider_range):
         """Get default display value for a parameter, updating config if needed."""

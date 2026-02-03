@@ -7,6 +7,7 @@ setup_threading_env()
 
 import customtkinter as ctk
 from tkinterdnd2 import TkinterDnD
+from fast2dprocess_gui.core.style import COLOR_THEME
 from fast2dprocess_gui.gui import SAXSProcessorGUI
 
 
@@ -15,9 +16,9 @@ def main():
     # Create root window with DND support
     root = TkinterDnD.Tk()
     
-    # Set theme
+    # Set theme from style module
     ctk.set_appearance_mode("System")
-    ctk.set_default_color_theme("blue")
+    ctk.set_default_color_theme(COLOR_THEME)
     
     # Create GUI
     app = SAXSProcessorGUI(root)

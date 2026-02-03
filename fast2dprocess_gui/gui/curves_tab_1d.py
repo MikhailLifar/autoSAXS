@@ -9,6 +9,7 @@ from matplotlib.figure import Figure
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 from ..core.constants import TEMP_DIR
+from ..core.style import FONTS, PLOT_COLORMAP, PLOT_DEFAULT_CURVE_COLOR, PLOT_LEGEND_FONTSIZE
 from ..utils.filename_utils import generate_curve_plot_filename
 from autosaxs.utils import read_saxs
 
@@ -41,7 +42,7 @@ class CurvesTab1D:
         curves_label = ctk.CTkLabel(
             checkbox_frame,
             text="Curves",
-            font=ctk.CTkFont(size=12, weight="bold")
+            font=ctk.CTkFont(**FONTS["panel_title"])
         )
         curves_label.grid(row=0, column=0, pady=(0, 10))
         
@@ -61,7 +62,7 @@ class CurvesTab1D:
         plot_type_label = ctk.CTkLabel(
             plot_type_frame,
             text="Plot Type:",
-            font=ctk.CTkFont(size=12, weight="bold")
+            font=ctk.CTkFont(**FONTS["panel_title"])
         )
         plot_type_label.grid(row=0, column=0, sticky="w", padx=10, pady=5)
         
@@ -118,7 +119,7 @@ class CurvesTab1D:
             text=filename,
             variable=checkbox_var,
             command=self.update_display,
-            font=ctk.CTkFont(size=10)
+            font=ctk.CTkFont(**FONTS["curve_checkbox"])
         )
         
         # Find next available row (skip title label at row 0)
@@ -151,7 +152,7 @@ class CurvesTab1D:
         
         # Color palette for curves
         n_curves = max(len(self.curves), 1)  # Avoid division by zero
-        colors = cm.get_cmap('tab10')(np.linspace(0, 1, n_curves))
+        colors = cm.get_cmap(PLOT_COLORMAP)(np.linspace(0, 1, n_curves))
         color_idx = 0
         
         # Plot all checked curves
@@ -185,7 +186,7 @@ class CurvesTab1D:
         self.ax.set_title(f"1D SAXS Curves - {self.plot_type}")
         self.ax.grid(True, alpha=0.3)
         if color_idx > 0:  # Only show legend if there are curves
-            self.ax.legend(loc='best', fontsize=9)
+            self.ax.legend(loc='best', fontsize=PLOT_LEGEND_FONTSIZE)
         self.canvas.draw()
     
     def _plot_1d_curve(self, file_path, label, color, plot_type):
@@ -390,7 +391,7 @@ class CurvesTab1D:
                 alpha=alpha,
                 edgecolors='none',
                 marker='o',
-                color='#1f77b4'
+                color=PLOT_DEFAULT_CURVE_COLOR
             )
             
             ax.set_xlabel(xlabel)

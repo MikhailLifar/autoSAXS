@@ -72,20 +72,15 @@ class CalibrationService:
                 self.event_bus.publish(EventType.CALIBRATION_ERROR, {"error": str(e)})
             return False
         
-        # Compute hash and check cache
-        current_hash = self.calibration_manager.compute_calibration_hash(calibrant_path, config)
-        if current_hash and current_hash == self.calibration_manager.last_calibration_hash:
-            if self.calibration_manager.load_cached_calibration(current_hash):
-                if status_callback:
-                    status_callback("Using cached calibration (inputs unchanged)", "success")
-                if self.event_bus:
-                    self.event_bus.publish(EventType.CALIBRATION_COMPLETE, {
-                        "calibrated_params": self.calibration_manager.calibrated_params,
-                        "from_cache": True
-                    })
-                return True
+        # Remove stale status file from previous run so GUI does not show old "Calibration complete"
+        status_file = os.path.join(self.temp_dir, 'calibration_status.json')
+        if os.path.exists(status_file):
+            try:
+                os.remove(status_file)
+            except OSError:
+                pass
         
-        # Start calibration
+        # Start calibration (no cache; every run uses subprocess)
         self.calibration_running = True
         status_msg = f"Calibrating: {os.path.basename(str(calibrant_path))}..."
         if status_callback:
@@ -97,7 +92,7 @@ class CalibrationService:
         def calibration_worker():
             """Worker thread that launches calibration subprocess and monitors it."""
             try:
-                self._run_calibration_service(config, current_hash, status_callback)
+                self._run_calibration_service(config, status_callback)
             except Exception as e:
                 error_msg = f"Unexpected error: {str(e)}"
                 import traceback
@@ -113,7 +108,7 @@ class CalibrationService:
         
         return True
     
-    def _run_calibration_service(self, config: dict, current_hash: Optional[str],
+    def _run_calibration_service(self, config: dict,
                                   status_callback: Optional[Callable[[str, str], None]]):
         """Run calibration using separate subprocess service."""
         # Prepare configuration file for service
@@ -123,12 +118,11 @@ class CalibrationService:
         
         os.makedirs(output_dir, exist_ok=True)
         
-        # Prepare config data
+        # Prepare config data (no current_hash; spec: calibrant_path, mask_path, config)
         config_data = {
             'calibrant_path': str(self.data_manager.calibrant_path),
             'mask_path': str(self.data_manager.mask_path) if self.data_manager.mask_path else None,
             'config': config,
-            'current_hash': current_hash
         }
         
         # Write config file
@@ -199,7 +193,7 @@ class CalibrationService:
             
             # Complete calibration
             self.stop_status_monitoring()
-            self._handle_calibration_complete(calibrated_params, integrator, current_hash, status_callback)
+            self._handle_calibration_complete(calibrated_params, integrator, status_callback)
             
         except Exception as e:
             error_msg = f"Error running calibration service: {str(e)}"
@@ -219,10 +213,9 @@ class CalibrationService:
         self.status_monitor_running = False
     
     def _handle_calibration_complete(self, calibrated_params: dict, integrator: IntegratorExtended,
-                                     calibration_hash: Optional[str],
                                      status_callback: Optional[Callable[[str, str], None]]):
         """Handle calibration completion."""
-        self.calibration_manager.set_calibration_result(integrator, calibrated_params, calibration_hash)
+        self.calibration_manager.set_calibration_result(integrator, calibrated_params)
         self.calibration_running = False
         
         success_text = f"✓ Calibration complete: {os.path.basename(str(self.data_manager.calibrant_path))}"
@@ -233,7 +226,6 @@ class CalibrationService:
             self.event_bus.publish(EventType.CALIBRATION_COMPLETE, {
                 "calibrated_params": calibrated_params,
                 "calibrant_path": self.data_manager.calibrant_path,
-                "from_cache": False
             })
     
     def _handle_calibration_error(self, error_msg: str, status_callback: Optional[Callable[[str, str], None]]):
