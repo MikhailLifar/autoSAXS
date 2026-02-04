@@ -206,6 +206,23 @@ def integration_comparison_metric(
     return float(np.trapz(integrand, q_common))
 
 
+def _make_yaml_safe(obj):
+    """Convert numpy/types to native Python so yaml.dump produces clean YAML."""
+    if isinstance(obj, dict):
+        return {k: _make_yaml_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_make_yaml_safe(x) for x in obj]
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
+
+
 def write_data(filename, data: pd.DataFrame, metadata):
     """
     Write generic tabular data and metadata to a file using YAML for metadata and CSV for data.
@@ -215,6 +232,7 @@ def write_data(filename, data: pd.DataFrame, metadata):
     data (pd.DataFrame): Tabular data to be written as CSV
     metadata (dict): Dictionary containing metadata
     """
+    metadata = _make_yaml_safe(metadata)
     with open(filename, 'w') as f:
         # Write metadata in YAML format
         f.write("# Data File\n")

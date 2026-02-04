@@ -1433,6 +1433,8 @@ echo "Full results saved to: $RESULTS_FILE"
                 # self.ai_analysis(atsas_res_path, plot_paths, directory, text_model=model, vision_model=vision_model)
 
                 # Second report pass: full data for this selected profile (overwrites first-pass PDF)
+                # Use basename from profile_path for fit outputs (polydisp/bodies/dammif derive it from profile_path)
+                basename_from_path = os.path.splitext(os.path.basename(profile_path))[0] if profile_path else basename
                 rd = {'basename': basename}
                 idx = next((j for j, p in enumerate(profile_paths) if p == profile_path), None)
                 if idx is not None and sample_paths_1d is not None and idx < len(sample_paths_1d):
@@ -1449,19 +1451,23 @@ echo "Full results saved to: $RESULTS_FILE"
                     rd['plot_figures'] = {'sub': plot_paths[0], 'guinier': plot_paths[1], 'kratky': plot_paths[2], 'loglog': plot_paths[3]}
                 fits_figs = []
                 if polydisp_dir:
-                    fc = os.path.join(polydisp_dir, f'{basename}_fit_comparison.png')
+                    fc = os.path.join(polydisp_dir, f'{basename_from_path}_fit_comparison.png')
                     if os.path.isfile(fc):
-                        fits_figs.append(fc)
+                        fits_figs.append((fc, 'polydispfit'))
                 if bodies_dir:
-                    bf = os.path.join(bodies_dir, f'{basename}_fits.png')
+                    bf = os.path.join(bodies_dir, f'{basename_from_path}_fits.png')
                     if os.path.isfile(bf):
-                        fits_figs.append(bf)
+                        fits_figs.append((bf, 'bodies'))
                 if dammif_dir:
-                    df = os.path.join(dammif_dir, f'{basename}_fits.png')
+                    df = os.path.join(dammif_dir, f'{basename_from_path}_fits.png')
                     if os.path.isfile(df):
-                        fits_figs.append(df)
+                        fits_figs.append((df, 'dammif'))
                 if fits_figs:
                     rd['fits_comparison_figure_path'] = fits_figs
+                if polydisp_dir:
+                    polydisp_fit_dat = os.path.join(polydisp_dir, f'{basename_from_path}_fit.dat')
+                    if os.path.isfile(polydisp_fit_dat):
+                        rd['polydisp_fit_dat_path'] = polydisp_fit_dat
                 bodies_yml = os.path.join(bodies_dir, 'bodies_fits.yml') if bodies_dir else None
                 bodies_csv = os.path.join(bodies_dir, 'bodies_fits.csv') if bodies_dir else None
                 dammif_yml = os.path.join(dammif_dir, 'dammif_fits.yml') if dammif_dir else None

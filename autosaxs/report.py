@@ -31,7 +31,7 @@ try:
 except Exception:
     _HAS_MPL = False
 
-from .utils import read_saxs
+from .utils import read_saxs, read_data
 
 
 REPORT_IMAGE_WIDTH = 14 * cm  # fit to A4 width with margins
@@ -91,12 +91,44 @@ def _fmt_num(v: Any) -> str:
     return str(v)
 
 
+def _polydisp_row_from_dat(dat_path: Optional[str]) -> Optional[Tuple[str, str]]:
+    """Build one fits table row (fit_kind, params_str) from polydisp fit .dat metadata. chi2, mean, deviation."""
+    if not dat_path or not os.path.isfile(dat_path):
+        return None
+    try:
+        _, _, metadata = read_data(dat_path)
+        fp = metadata.get('fitted_parameters')
+        if fp is None and 'distribution' in metadata:
+            dist = metadata['distribution']
+            fp = dist.get('params', {}) if isinstance(dist, dict) else {}
+        fp = fp or {}
+        fq = metadata.get('fit_quality') or {}
+        chi2 = fq.get('chi2')
+        mean = fp.get('mean') or fp.get('r_mean') or fp.get('mu')
+        std = fp.get('std') or fp.get('sigma')
+        parts = []
+        if chi2 is not None:
+            parts.append(f"chi2: {_fmt_num(chi2)}")
+        if mean is not None:
+            parts.append(f"mean: {_fmt_num(mean)}")
+        if std is not None:
+            parts.append(f"deviation: {_fmt_num(std)}")
+        if not parts:
+            return None
+        return ("polydispfit", ", ".join(parts))
+    except Exception:
+        return None
+
+
 def _load_fits_from_yml(
     bodies_yml_path: Optional[str] = None,
     dammif_yml_path: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
-    """Build fits table rows (fit_kind, params_str) from bodies and dammif yml files. Numbers in .3f."""
+    """Build fits table rows (fit_kind, params_str) from bodies and dammif yml. chi2 first; numbers in .3f."""
     rows: List[Tuple[str, str]] = []
+    def _params_str(params: dict) -> str:
+        ordered = ['chi2'] + [k for k in params if k != 'chi2']
+        return ", ".join(f"{k}: {_fmt_num(params[k])}" for k in ordered if k in params)
     if bodies_yml_path and os.path.isfile(bodies_yml_path):
         try:
             with open(bodies_yml_path, 'r') as f:
@@ -104,8 +136,7 @@ def _load_fits_from_yml(
             if isinstance(data, dict):
                 for shape_name, params in data.items():
                     if isinstance(params, dict):
-                        parts = [f"{k}: {_fmt_num(v)}" for k, v in params.items()]
-                        rows.append((f"bodies-{shape_name}", ", ".join(parts)))
+                        rows.append((f"bodies-{shape_name}", _params_str(params)))
         except Exception:
             pass
     if dammif_yml_path and os.path.isfile(dammif_yml_path):
@@ -115,8 +146,7 @@ def _load_fits_from_yml(
             if isinstance(data, dict):
                 for rep_name, params in data.items():
                     if isinstance(params, dict):
-                        parts = [f"{k}: {_fmt_num(v)}" for k, v in params.items()]
-                        rows.append((rep_name, ", ".join(parts)))
+                        rows.append((rep_name, _params_str(params)))
         except Exception:
             pass
     return rows
@@ -209,13 +239,14 @@ def build_report_pdf(report_data: Dict[str, Any], output_path: str) -> None:
         difference_plot_path: str — path to diff_<basename>.png
         subtracted_plot_path: str — path to sub_<basename>.png
         descriptors_table: list of (label, value) or dict — Rg, I(0), Quality
-        plot_figures: dict with keys sub, guinier, kratky, loglog (paths) — one figure per plot kind
-        fits_comparison_figure_path: str or list — path(s) to fits comparison PNG(s)
-        fits_table: list of (fit_kind_str, params_str) — two columns (used if yml paths not given)
+        plot_figures: dict with keys guinier, kratky, loglog (paths) — plot figures only (no I vs q)
+        fits_comparison_figure_path: str or list of (path, label) — path(s) and optional label per figure (e.g. polydispfit, bodies, dammif)
+        fits_table: list of (fit_kind_str, params_str) — two columns (used when no yml/polydisp paths)
+        polydisp_fit_dat_path: str — path to polydisp fit .dat (metadata); polydisp row is prepended to fits table
         bodies_fits_yml_path: str — path to bodies_fits.yml (BODIES step); used to build fits table
         dammif_fits_yml_path: str — path to dammif_fits.yml (DAMMIF step); used to build fits table
-        bodies_fits_csv_path: str — path to bodies_fits.csv; optional excerpt table in Fits section
-        dammif_fits_csv_path: str — path to dammif_fits.csv; optional excerpt table in Fits section
+        bodies_fits_csv_path: str — path to bodies_fits.csv (used for optional combined exp+fits figure only)
+        dammif_fits_csv_path: str — path to dammif_fits.csv (used for optional combined exp+fits figure only)
     """
     styles = getSampleStyleSheet()
     story: list = []
@@ -282,16 +313,12 @@ def build_report_pdf(report_data: Dict[str, Any], output_path: str) -> None:
                 Spacer(1, 0.5 * cm),
             ]))
 
-    # (5) Plot figures — I vs q, Guinier, Kratky, log I vs log q
+    # (5) Plot figures — Guinier, Kratky, log I vs log q
     plot_figures = report_data.get('plot_figures')
     if isinstance(plot_figures, dict):
-        labels = {
-            'sub': 'I vs q',
-            'guinier': 'Guinier',
-            'kratky': 'Kratky',
-            'loglog': 'log I vs log q',
-        }
-        for key, path in plot_figures.items():
+        labels = {'guinier': 'Guinier', 'kratky': 'Kratky', 'loglog': 'log I vs log q'}
+        for key in ('guinier', 'kratky', 'loglog'):
+            path = plot_figures.get(key)
             if path and os.path.isfile(path):
                 _add_image_if_exists(story, path, str(labels.get(key, key)), temp_paths, styles)
     elif isinstance(plot_figures, (list, tuple)):
@@ -311,26 +338,38 @@ def build_report_pdf(report_data: Dict[str, Any], output_path: str) -> None:
     # Also embed any pre-generated fits comparison PNGs from pipeline (polydispfit, bodies, dammif)
     fits_fig = report_data.get('fits_comparison_figure_path')
     if isinstance(fits_fig, (list, tuple)):
-        for j, path in enumerate(fits_fig):
-            _add_image_if_exists(story, path, f"Fits comparison ({j + 1})", temp_paths, styles)
+        for item in fits_fig:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                path, label = str(item[0]), item[1]
+                caption = f"Fits comparison, {label}" if label else "Fits comparison"
+            else:
+                path = item if isinstance(item, str) else str(item)
+                caption = "Fits comparison"
+            _add_image_if_exists(story, path, caption, temp_paths, styles)
     elif fits_fig:
-        _add_image_if_exists(story, fits_fig, "Fits comparison", temp_paths, styles)
+        _add_image_if_exists(story, str(fits_fig), "Fits comparison", temp_paths, styles)
 
-    # (7) Fits table — from bodies/dammif yml when provided, else report_data['fits_table']; keep together
+    # (7) Fits table — polydisp first when present, then bodies/dammif yml; chi2 first; cells wrap to avoid overflow
     fits_table = report_data.get('fits_table')
     yml_rows = _load_fits_from_yml(
         report_data.get('bodies_fits_yml_path'),
         report_data.get('dammif_fits_yml_path'),
     )
-    if yml_rows:
-        fits_table = yml_rows
-    if fits_table and isinstance(fits_table, (list, tuple)):
+    polydisp_row = _polydisp_row_from_dat(report_data.get('polydisp_fit_dat_path'))
+    if polydisp_row is not None:
+        all_fit_rows = [polydisp_row] + yml_rows
+    elif yml_rows:
+        all_fit_rows = yml_rows
+    else:
+        all_fit_rows = list(fits_table) if fits_table and isinstance(fits_table, (list, tuple)) else []
+    if all_fit_rows:
+        normal_style = styles['Normal']
         rows = [["Fit kind", "Fitted parameters"]]
-        for row in fits_table:
+        for row in all_fit_rows:
             if isinstance(row, (list, tuple)) and len(row) >= 2:
-                rows.append([str(row[0]), str(row[1])])
+                rows.append([Paragraph(str(row[0]), normal_style), Paragraph(str(row[1]), normal_style)])
             elif isinstance(row, (list, tuple)) and len(row) == 1:
-                rows.append([str(row[0]), ''])
+                rows.append([Paragraph(str(row[0]), normal_style), Paragraph('', normal_style)])
         if len(rows) > 1:
             t = Table(rows, colWidths=[5 * cm, 9 * cm])
             t.setStyle(TableStyle([
@@ -341,25 +380,11 @@ def build_report_pdf(report_data: Dict[str, Any], output_path: str) -> None:
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
                 ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
             ]))
             story.append(KeepTogether([
                 Paragraph("Fits", styles['Heading2']),
                 t,
-                Spacer(1, 0.5 * cm),
-            ]))
-
-    # Optional: fits curve data excerpt from bodies/dammif csv
-    for label, csv_path in [
-        ("Bodies fits curve (excerpt)", report_data.get('bodies_fits_csv_path')),
-        ("DAMMIF fits curve (excerpt)", report_data.get('dammif_fits_csv_path')),
-    ]:
-        if not csv_path:
-            continue
-        tbl = _table_from_csv_excerpt(csv_path)
-        if tbl is not None:
-            story.append(KeepTogether([
-                Paragraph(label, styles['Heading3']),
-                tbl,
                 Spacer(1, 0.5 * cm),
             ]))
 

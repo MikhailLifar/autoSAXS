@@ -249,32 +249,37 @@ class CLIInterface:
 
 # --- EventBus wiring and pipeline/profile selection ---
 
-# Pipeline definitions aligned with gui (same steps and default_steps)
+# All available steps (order preserved). Used for step selection like profile selection.
+ALL_STEPS = [
+    "calibration",
+    "integration",
+    "subtraction",
+    "simple_analysis",
+    "plots",
+    "polydispfit",
+    "bodies",
+    "dammif",
+    "ai_analysis",
+]
+DEFAULT_STEPS = [
+    "calibration",
+    "integration",
+    "subtraction",
+    "simple_analysis",
+    "plots",
+    "polydispfit",
+    "bodies",
+]
+
+# Pipeline definitions aligned with gui (for API/latest compatibility)
 DEFAULT_PIPELINES = {
     "protein_v0": {
         "label": "protein-v0",
-        "steps": [
-            "calibration",
-            "integration",
-            "subtraction",
-            "simple_analysis",
-            "plots",
-            "polydispfit",
-            "bodies",
-            "dammif",
-            "ai_analysis",
-        ],
-        "default_steps": [
-            "calibration",
-            "integration",
-            "subtraction",
-            "simple_analysis",
-            "plots",
-            "polydispfit",
-            "bodies",
-        ],
+        "steps": list(ALL_STEPS),
+        "default_steps": list(DEFAULT_STEPS),
     },
 }
+
 
 def _load_latest_steps():
     if os.path.exists(LATEST_STEPS_PATH):
@@ -284,6 +289,12 @@ def _load_latest_steps():
             if isinstance(steps, (list, tuple)):
                 return {"steps": list(steps), "pipeline": data.get("pipeline")}
     return {}
+
+
+def _step_list_to_indices(step_names: list) -> list:
+    """Return list of indices into ALL_STEPS for the given step names (order preserved)."""
+    step_to_idx = {s: i for i, s in enumerate(ALL_STEPS)}
+    return [step_to_idx[s] for s in step_names if s in step_to_idx]
 
 
 def connect(bus: EventBus) -> None:
@@ -348,35 +359,50 @@ def connect(bus: EventBus) -> None:
     def on_pipeline_steps_requested(_data):
         latest_cfg = _load_latest_steps()
         has_latest = bool(latest_cfg.get("steps"))
-        pipeline_keys = list(DEFAULT_PIPELINES.keys())
-        opts = {k: DEFAULT_PIPELINES[k]["label"] for k in pipeline_keys}
-        opts_str = " / ".join(f"{k}: {v}" for k, v in opts.items())
+        # Show steps with indices (same style as profile selection)
+        CLIInterface.send_message("Choose pipeline steps:")
+        for i, step in enumerate(ALL_STEPS):
+            CLIInterface.send_message(f"  {i}: {step}")
+        protein_v0_indices = ", ".join(str(i) for i in _step_list_to_indices(DEFAULT_STEPS))
+        prompt_lines = [
+            "Enter comma-separated indices to select, or one of the names of the following default sequences:",
+            f"  protein-v0: {protein_v0_indices}",
+        ]
         if has_latest:
-            CLIInterface.send_message(
-                f"Pipelines: {opts_str}; or 'latest' for last configuration."
-            )
-        else:
-            CLIInterface.send_message(f"Pipelines: {opts_str}")
+            latest_steps = latest_cfg.get("steps") or []
+            latest_idx_list = _step_list_to_indices(latest_steps)
+            if latest_idx_list:
+                latest_indices = ", ".join(str(i) for i in latest_idx_list)
+                prompt_lines.append(f"  latest: {latest_indices}")
+        CLIInterface.send_message("\n".join(prompt_lines))
         try:
-            raw = input("Pipeline choice: ").strip() or "protein_v0"
-            if raw == "latest" and has_latest:
-                pipeline_choice = latest_cfg.get("pipeline") or pipeline_keys[0]
-                steps = latest_cfg.get("steps") or DEFAULT_PIPELINES[pipeline_choice]["default_steps"]
+            line = input().strip()
+            raw_lower = line.lower()
+            if raw_lower == "latest" and has_latest:
+                pipeline_choice = latest_cfg.get("pipeline") or "protein_v0"
+                steps = latest_cfg.get("steps") or DEFAULT_STEPS
+                steps = list(steps)
+            elif raw_lower in ("protein-v0", "protein_v0") or not line:
+                pipeline_choice = "protein_v0"
+                steps = list(DEFAULT_STEPS)
             else:
-                pipeline_choice = raw if raw in pipeline_keys else "protein_v0"
-                pipeline_cfg = DEFAULT_PIPELINES[pipeline_choice]
-                steps_list = pipeline_cfg["steps"]
-                default_steps = pipeline_cfg["default_steps"]
-                CLIInterface.send_message(
-                    f"Steps: {', '.join(steps_list)}. Default: {', '.join(default_steps)}."
-                )
-                CLIInterface.send_message("Enter comma-separated step names to enable, or Enter for default:")
-                step_line = input().strip()
-                if not step_line:
-                    steps = list(default_steps)
-                else:
-                    chosen = [s.strip() for s in step_line.split(',') if s.strip()]
-                    steps = [s for s in steps_list if s in chosen] if chosen else list(default_steps)
+                pipeline_choice = "protein_v0"
+                indices = []
+                for s in line.split(","):
+                    s = s.strip()
+                    if s.isdigit():
+                        idx = int(s)
+                        if 0 <= idx < len(ALL_STEPS):
+                            indices.append(idx)
+                # Preserve order and avoid duplicates
+                seen = set()
+                steps = []
+                for i in indices:
+                    if i not in seen:
+                        seen.add(i)
+                        steps.append(ALL_STEPS[i])
+                if not steps:
+                    steps = list(DEFAULT_STEPS)
             bus.publish(
                 EventType.PIPELINE_STEPS_SPECIFIED,
                 {"pipeline_choice": pipeline_choice, "steps": steps},

@@ -168,8 +168,8 @@ Reports: one PDF per sample profile in `reports/<basename>_report.pdf`. Not a se
 
 - **First pass:** After main cycle (integration, subtraction) and, if in steps, after simple_analysis for all. For every sample profile: collect data (integration→subtraction; descriptors if simple_analysis was run). Build and save one PDF. Content: sections (1)–(3); (4) when simple_analysis was run. Not-selected profiles get no further passes.
 - **Second pass:** Only for selected profiles. After remaining steps (plots, polydispfit, bodies, dammif, ai_analysis): collect full report data; build and save PDF at same path (overwrites first pass). Content: sections (1)–(7) as data exists.
-- **Report data:** Dict per profile; only present keys rendered. Keys: integrated curve, difference plot (`diff_<basename>.png`), subtracted plot (`sub_<basename>.png`), descriptors table (Rg, I(0), Quality), plot figures (I vs q, Guinier, Kratky, log-log), fits comparison figure, fits table. First pass: integration→subtraction (+ descriptors if simple_analysis run). Second pass: add plots and fits.
-- **PDF sections (optional):** (1) Integrated curve. (2) Difference plot. (3) Subtracted plot. (4) Descriptors table. (5) Plot figures (I vs q, Guinier, Kratky, log-log). (6) Fits figure. (7) Fits table.
+- **Report data:** Dict per profile; only present keys rendered. Keys: integrated curve, difference plot (`diff_<basename>.png`), subtracted plot (`sub_<basename>.png`), descriptors table (Rg, I(0), Quality), plot figures (Guinier, Kratky, log-log; no I vs q — it duplicates the subtracted curve), fits comparison figure(s), fits table. First pass: integration→subtraction (+ descriptors if simple_analysis run). Second pass: add plots and fits.
+- **PDF sections (optional):** (1) Integrated curve. (2) Difference plot. (3) Subtracted plot. (4) Descriptors table. (5) Plot figures (Guinier, Kratky, log-log only). (6) Fits figure(s): each titled by fit type (e.g. "Fits comparison, polydispfit", "Fits comparison, bodies", "Fits comparison, dammif"). (7) Fits table.
 - **Implementation:** `autosaxs.report.build_report_pdf(report_data, output_path)`. No EventBus events.
 
 ---
