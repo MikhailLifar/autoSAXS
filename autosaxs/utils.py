@@ -139,6 +139,44 @@ def read_chi(filename: str) -> Tuple[np.ndarray, np.ndarray]:
     return q, I
 
 
+def read_reference_sub_dat(filename: str) -> Tuple[np.ndarray, np.ndarray, str]:
+    """
+    Read reference subtracted .dat file (format: header with Parent(s): sample.chi buffer.chi, then two-column q I).
+    Returns (q, intensity, sample_chi_basename) where sample_chi_basename is the stem of the sample .chi (e.g. 0002_ihs27_95.9).
+    """
+    sample_basename = ""
+    data_lines = []
+    header_passed = False
+    parent_re = re.compile(r"Parent\s*\(\s*s\s*\)\s*:\s*(.+)", re.IGNORECASE)  # "Parent(s): path1 path2"
+    with open(filename, "r") as f:
+        for line in f:
+            line_strip = line.strip()
+            m = parent_re.match(line_strip)
+            if m:
+                # Paths can be space-separated; first is sample .chi, second is buffer .chi
+                paths = m.group(1).strip().split()
+                if paths:
+                    sample_path = paths[0].replace("\\", "/")
+                    sample_basename = os.path.basename(sample_path)
+                    if sample_basename.lower().endswith(".chi"):
+                        sample_basename = sample_basename[:-4]
+            parts = line.split()
+            if len(parts) == 2:
+                try:
+                    float(parts[0])
+                    float(parts[1])
+                    header_passed = True
+                    data_lines.append(line)  # only append lines that are actually two numbers (skip e.g. "range-from: 1")
+                except ValueError:
+                    pass
+    if not data_lines:
+        raise ValueError(f"No valid data found in reference sub .dat file: {filename}")
+    if not sample_basename:
+        raise ValueError(f"No Parent(s) line with sample .chi path in: {filename}")
+    q, I = np.loadtxt(data_lines, unpack=True)
+    return q, I, sample_basename
+
+
 def integration_comparison_metric(
     q1: np.ndarray, I1: np.ndarray,
     q2: np.ndarray, I2: np.ndarray,
