@@ -627,8 +627,11 @@ def subtract_buffer(
     I_buffer_scaled = I_buff * scaling_factor
     I_sub = I - I_buffer_scaled
 
-    sigma_buffer_scaled = sigma_buff * scaling_factor 
-    sigma_sub = sigma_buffer_scaled + sigma
+    if sigma_buff is not None and sigma is not None:
+        sigma_buffer_scaled = sigma_buff * scaling_factor 
+        sigma_sub = sigma_buffer_scaled + sigma
+    else:
+        sigma_sub = None
 
     write_saxs(destpath, q, I_sub, sigma_sub, metadata={
                 'type': 'sub',

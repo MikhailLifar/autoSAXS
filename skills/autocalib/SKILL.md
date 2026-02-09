@@ -1,6 +1,6 @@
 ---
 name: autocalib
-description: Run SAXS autocalibration by invoking the autocalib.py script in this directory. The script accepts command-line arguments for calibrant image path (*.tif), config file path (*.conf), and mask file path (mask*). The working directory is always derived from the calibrant image path (its parent directory). Full calibration is always performed (no fast-forward).
+description: Runs automatic calibration for 2D SAXS measurements. Detector geometry calibration is required to establish the correct q-axis and account for geometric distortions. It is an absolute prerequisite for accurate data and must be repeated whenever the geometry changes (e.g., when changing the detector-sample distance). Calibration is performed by measuring a sample with a known scattering pattern, such as silver behenate (AgBh).
 license: MIT
 compatibility: opencode
 metadata:
