@@ -93,14 +93,14 @@ class DataManager:
         """Set mask file path."""
         self.set_file(FileType.MASK, path)
     
-    def copy_image_to_temp(self, source_path: str, image_type: str, temp_dir: str) -> Optional[str]:
+    def copy_image_to_temp(self, source_path: str, image_type: str, base_dir: str) -> Optional[str]:
         """
-        Copy image file to temp directory with descriptive naming.
+        Copy image file to working directory with descriptive naming.
         
         Args:
             source_path: Path to source image file
             image_type: Type of image (e.g., "buffer", "sample", "calibrant")
-            temp_dir: Temporary directory path
+            base_dir: Working directory path (all outputs go here)
             
         Returns:
             Path to copied file, or None if error occurred
@@ -115,11 +115,11 @@ class DataManager:
                 image_type,
                 os.path.splitext(str(source_path))[1]
             )
-            dest_path = os.path.join(temp_dir, dest_name)
+            dest_path = os.path.join(base_dir, dest_name)
             shutil.copy2(str(source_path), dest_path)
             return dest_path
         except Exception as e:
-            print(f"Error copying {source_path} to temp: {e}")
+            print(f"Error copying {source_path} to working directory: {e}")
             return None
     
     @staticmethod

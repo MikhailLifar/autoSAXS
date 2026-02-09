@@ -1,12 +1,10 @@
 """Main GUI window for SAXS Data Processor."""
 import os
-import shutil
 import threading
-import traceback
 import customtkinter as ctk
 import tkinter as tk
 from typing import Optional, Union, List
-from ..core.constants import TEMP_DIR, CONVERSIONS_TO_INTERNAL, CONVERSIONS_TO_DISPLAY
+from ..core.constants import CONVERSIONS_TO_INTERNAL, CONVERSIONS_TO_DISPLAY
 from ..core.style import STATUS_COLORS, FONTS
 from ..core.event_bus import EventBus, EventType
 from ..models import ConfigManager, DataManager, CalibrationManager, ProcessingManager
@@ -22,35 +20,34 @@ from autosaxs.utils import read_from_tiff
 class SAXSProcessorGUI:
     """Main application window - coordinates views and delegates to managers."""
     
-    def __init__(self, root):
+    def __init__(self, root, working_dir: str):
         """
         Initialize the main GUI window.
         
         Args:
             root: Tkinter root window
+            working_dir: User-selected empty directory; all outputs are written here.
         """
         self.root = root
+        self.working_dir = working_dir
         self.root.title("SAXS Data Processor")
         self.root.geometry("1400x900")
-        
-        # Ensure temp directory exists
-        os.makedirs(TEMP_DIR, exist_ok=True)
         
         # Initialize event bus
         self.event_bus = EventBus()
         
-        # Initialize managers
-        self.config_manager = ConfigManager()
+        config_path = os.path.join(working_dir, "config.yml")
+        self.config_manager = ConfigManager(config_path)
         self.data_manager = DataManager()
-        self.calibration_manager = CalibrationManager(self.config_manager, TEMP_DIR)
-        self.processing_manager = ProcessingManager(self.calibration_manager, TEMP_DIR)
+        self.calibration_manager = CalibrationManager(self.config_manager, working_dir)
+        self.processing_manager = ProcessingManager(self.calibration_manager, working_dir)
         
         # Initialize services
         self.calibration_service = CalibrationService(
             self.calibration_manager,
             self.data_manager,
+            working_dir,
             self.event_bus,
-            TEMP_DIR
         )
         self.processing_service = ProcessingService(
             self.processing_manager,
@@ -96,11 +93,11 @@ class SAXSProcessorGUI:
         if self.data_manager.calibrant_path and self.image_tab_2d:
             filename = os.path.basename(str(self.data_manager.calibrant_path))
             self.display_2d_image(self.data_manager.calibrant_path, f"Calibrant: {filename}")
-            # Copy image to temp with descriptive naming
+            # Copy image to working directory with descriptive naming
             self.data_manager.copy_image_to_temp(
                 self.data_manager.calibrant_path,
                 "calibrant",
-                TEMP_DIR
+                self.working_dir,
             )
             # Save plot - view component handles its own filename generation
             self.image_tab_2d.save_calibrant_plot(self.data_manager.calibrant_path)
@@ -150,7 +147,6 @@ class SAXSProcessorGUI:
         callbacks = {
             'on_file_drop': self.on_file_drop,
             'on_apply_calibration': self.apply_calibration,
-            'on_save': self.save_results,
         }
         self.control_panel = ControlPanel(main_frame, self.root, callbacks, self.config_dictionary)
         
@@ -171,11 +167,11 @@ class SAXSProcessorGUI:
         
         # 2D images tab
         tab_2d = self.notebook.add("2D Images")
-        self.image_tab_2d = ImageTab2D(tab_2d)
+        self.image_tab_2d = ImageTab2D(tab_2d, self.working_dir)
         
         # 1D curves tab
         tab_1d = self.notebook.add("1D Curves")
-        self.curves_tab_1d = CurvesTab1D(tab_1d)
+        self.curves_tab_1d = CurvesTab1D(tab_1d, self.working_dir)
         self.curves_tab_1d.update_callback = lambda: self.display_1d_curves()  # type: ignore
         
         # Status bar
@@ -349,7 +345,7 @@ class SAXSProcessorGUI:
     
     def _start_status_monitoring(self):
         """Start monitoring calibration service status file."""
-        status_file = os.path.join(TEMP_DIR, 'calibration_status.json')
+        status_file = os.path.join(self.working_dir, 'calibration_status.json')
         
         def check_status():
             if not self.calibration_service.status_monitor_running:
@@ -427,8 +423,8 @@ class SAXSProcessorGUI:
         )
         
         if output_path:
-            # Copy source image to temp with descriptive naming (delegated to DataManager)
-            self.data_manager.copy_image_to_temp(image_path, image_type, TEMP_DIR)
+            # Copy source image to working directory with descriptive naming (delegated to DataManager)
+            self.data_manager.copy_image_to_temp(image_path, image_type, self.working_dir)
             
             # Register curve in GUI and save plots (delegated to view component)
             if self.curves_tab_1d:
@@ -492,48 +488,4 @@ class SAXSProcessorGUI:
         if self.curves_tab_1d:
             self.curves_tab_1d.update_display()
     
-    def save_results(self):
-        """Save all files from temporary directory to user-selected location."""
-        import tkinter.filedialog as filedialog
-        
-        # Let user select an existing directory (must be empty)
-        dest_dir = filedialog.askdirectory(
-            title="Select empty directory to save results (directory must exist and be empty)",
-            mustexist=True
-        )
-        
-        if not dest_dir:
-            return  # User cancelled
-        
-        # Check if directory is empty
-        if os.path.exists(dest_dir):
-            try:
-                # Check if directory is empty
-                if os.listdir(dest_dir):
-                    self._update_status(f"Error: Directory '{dest_dir}' is not empty. Please select an empty directory.", "error")
-                    self.root.after(5000, self.reset_status_bar_color)
-                    return
-            except OSError as e:
-                self._update_status(f"Error: Cannot access directory '{dest_dir}': {str(e)}", "error")
-                self.root.after(5000, self.reset_status_bar_color)
-                return
-        
-        # Delegate file operations to DataManager
-        try:
-            files_copied = self.data_manager.save_temp_files(TEMP_DIR, dest_dir)
-            if files_copied is not None:
-                if files_copied > 0:
-                    self._update_status(f"Successfully saved {files_copied} items to {dest_dir}", "success")
-                else:
-                    self._update_status("No temporary files found to save", "error")
-            else:
-                self._update_status("Error: Failed to save files", "error")
-            
-            self.root.after(5000, self.reset_status_bar_color)
-        except Exception as e:
-            error_msg = f"Error saving files: {str(e)}"
-            self._update_status(error_msg, "error")
-            self.root.after(5000, self.reset_status_bar_color)
-            import traceback
-            traceback.print_exc()
 

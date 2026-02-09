@@ -2,19 +2,18 @@
 import os
 import yaml
 from typing import Dict, Any, Optional
-from ..core.constants import CONFIG_PATH
 from ..core.interfaces import IConfigManager
 
 
 class ConfigManager(IConfigManager):
     """Manages configuration loading and saving."""
     
-    def __init__(self, config_path: str = CONFIG_PATH):
+    def __init__(self, config_path: str):
         """
         Initialize the configuration manager.
         
         Args:
-            config_path: Path to the configuration file
+            config_path: Path to the configuration file (e.g. in working directory)
         """
         self.config_path = config_path
         self.basic_params = {

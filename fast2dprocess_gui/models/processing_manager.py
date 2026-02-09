@@ -1,7 +1,6 @@
 """Processing management for the application."""
 import os
 from typing import Optional
-from ..core.constants import TEMP_DIR
 from ..models.calibration_manager import CalibrationManager
 from ..utils.filename_utils import generate_filename
 from autosaxs.processor import integrate_2d_to_1d
@@ -11,16 +10,16 @@ from autosaxs.utils import read_from_tiff
 class ProcessingManager:
     """Manages image processing operations."""
     
-    def __init__(self, calibration_manager: CalibrationManager, temp_dir: str = TEMP_DIR):
+    def __init__(self, calibration_manager: CalibrationManager, working_dir: str):
         """
         Initialize the processing manager.
         
         Args:
             calibration_manager: Calibration manager instance
-            temp_dir: Temporary directory for processing output
+            working_dir: Working directory for processing output
         """
         self.calibration_manager = calibration_manager
-        self.temp_dir = temp_dir
+        self.temp_dir = working_dir
     
     def process_image(self, image_path: str, image_type: str) -> str:
         """

@@ -1,7 +1,6 @@
 """Calibration management for the application."""
 import os
 from typing import Optional, Dict, Any
-from ..core.constants import TEMP_DIR
 from ..core.interfaces import ICalibrationManager
 from .config_manager import ConfigManager
 from autosaxs.processor import IntegratorExtended
@@ -10,16 +9,16 @@ from autosaxs.processor import IntegratorExtended
 class CalibrationManager(ICalibrationManager):
     """Manages calibration state and operations."""
     
-    def __init__(self, config_manager: ConfigManager, temp_dir: str = TEMP_DIR):
+    def __init__(self, config_manager: ConfigManager, working_dir: str):
         """
         Initialize the calibration manager.
         
         Args:
             config_manager: Configuration manager instance
-            temp_dir: Temporary directory for calibration files
+            working_dir: Working directory for calibration files
         """
         self.config_manager = config_manager
-        self.temp_dir = temp_dir
+        self.temp_dir = working_dir
         self.integrator: Optional[IntegratorExtended] = None
         self.calibrated_params: Dict[str, Any] = {}
         

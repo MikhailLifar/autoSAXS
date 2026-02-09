@@ -6,7 +6,6 @@ import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from scipy.ndimage import zoom
-from ..core.constants import TEMP_DIR
 from ..core.style import FONTS, COLORS
 from ..utils.filename_utils import generate_filename
 from autosaxs.processor import IntegratorExtended
@@ -16,14 +15,16 @@ from autosaxs.utils import read_from_tiff
 class ImageTab2D:
     """Tab for displaying 2D SAXS images."""
     
-    def __init__(self, parent):
+    def __init__(self, parent, working_dir: str):
         """
         Initialize the 2D image tab.
         
         Args:
             parent: Parent tabview or frame
+            working_dir: Directory for saving plots
         """
         self.tab = parent
+        self.working_dir = working_dir
         self.tab.grid_columnconfigure(0, weight=0)  # Thumbnail panel (fixed width)
         self.tab.grid_columnconfigure(1, weight=1)  # Main display (flexible)
         self.tab.grid_rowconfigure(0, weight=1)
@@ -257,17 +258,17 @@ class ImageTab2D:
     
     def save_plot(self, filename):
         """
-        Save figure to temp directory.
+        Save figure to working directory.
         
         Args:
             filename: Filename (relative or absolute path)
         """
         try:
-            # If filename is already a full path, use it; otherwise join with TEMP_DIR
+            # If filename is already a full path, use it; otherwise join with working_dir
             if os.path.isabs(filename):
                 plot_path = filename
             else:
-                plot_path = os.path.join(TEMP_DIR, filename)
+                plot_path = os.path.join(self.working_dir, filename)
             self.fig.savefig(plot_path, dpi=150, bbox_inches='tight')
         except Exception as e:
             print(f"Error saving plot: {e}")
@@ -284,7 +285,7 @@ class ImageTab2D:
             "calibrant",
             ".png",
             additional_info="2d",
-            base_dir=TEMP_DIR
+            base_dir=self.working_dir,
         )
         self.save_plot(plot_filename)
     
@@ -301,7 +302,7 @@ class ImageTab2D:
             image_type,
             ".png",
             additional_info="2d",
-            base_dir=TEMP_DIR
+            base_dir=self.working_dir,
         )
         self.save_plot(plot_filename)
 

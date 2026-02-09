@@ -107,17 +107,6 @@ class ControlPanel:
             font=ctk.CTkFont(**FONTS["heading"])
         )
         apply_button.grid(row=row, column=0, columnspan=2, pady=6)
-        
-        # Save button
-        row += 1
-        save_button = ctk.CTkButton(
-            params_frame,
-            text="Save",
-            command=self.callbacks.get('on_save'),
-            font=ctk.CTkFont(**FONTS["heading"]),
-            fg_color=COLORS["save_button"]
-        )
-        save_button.grid(row=row, column=0, columnspan=2, pady=6)
     
     def _on_configure(self, event):
         """Update panel width when root window is resized (only on root)."""

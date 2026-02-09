@@ -25,9 +25,8 @@ FONTS = {
     "thumbnail_label": {"size": 9},
 }
 
-# Widget colors: Save button, thumbnail selection, drop zone.
+# Widget colors: thumbnail selection, drop zone.
 COLORS = {
-    "save_button": ("green", "darkgreen"),
     "thumbnail_selected": ("gray75", "gray35"),
     "thumbnail_unselected": ("gray90", "gray20"),
     "drop_zone": "transparent",

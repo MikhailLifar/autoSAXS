@@ -1,10 +1,5 @@
 """Constants used throughout the application."""
-import os
-
-# Root derived from this app (repos/ when run from repo), not from autosaxs
-_APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TEMP_DIR = os.path.join(_APP_ROOT, "fast2dprocess_gui_temp")
-CONFIG_PATH = os.path.join(TEMP_DIR, "config.yml")
+# Working directory is selected by the user at launch via dialog; not a constant.
 
 # Unit conversion constants
 CONVERSIONS_TO_INTERNAL = {

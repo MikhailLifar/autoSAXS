@@ -7,7 +7,6 @@ import threading
 from typing import Optional, Callable
 from ..models.calibration_manager import CalibrationManager
 from ..models.data_manager import DataManager
-from ..core.constants import TEMP_DIR
 from ..core.event_bus import EventBus, EventType
 from autosaxs.processor import IntegratorExtended
 import shutil
@@ -18,21 +17,21 @@ class CalibrationService:
     
     def __init__(self, calibration_manager: CalibrationManager,
                  data_manager: DataManager,
-                 event_bus: Optional[EventBus] = None,
-                 temp_dir: str = TEMP_DIR):
+                 working_dir: str,
+                 event_bus: Optional[EventBus] = None):
         """
         Initialize the calibration service.
         
         Args:
             calibration_manager: Calibration manager instance
             data_manager: Data manager instance
+            working_dir: Working directory for calibration files (required)
             event_bus: Optional event bus for publishing events
-            temp_dir: Temporary directory for calibration files
         """
         self.calibration_manager = calibration_manager
         self.data_manager = data_manager
         self.event_bus = event_bus
-        self.temp_dir = temp_dir
+        self.temp_dir = working_dir  # working directory (legacy name kept for internal paths)
         
         self.calibration_running = False
         self.calibration_process: Optional[subprocess.Popen] = None

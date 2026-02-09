@@ -6,9 +6,9 @@ This document is derived solely from the code in this repository. It describes b
 
 ## 1. Purpose and scope
 
-**One-sentence summary:** The application is a desktop GUI for SAXS (Small-Angle X-Ray Scattering) that performs 2D → 1D azimuthal integration with calibrant-based geometry calibration, optional mask and buffer subtraction, and saving of results.
+**One-sentence summary:** The application is a desktop GUI for SAXS (Small-Angle X-Ray Scattering) that performs 2D → 1D azimuthal integration with calibrant-based geometry calibration, optional mask and buffer subtraction, with all results automatically saved to a user-selected working directory.
 
-**Main user goal:** Load a calibrant image, apply calibration (with optional mask), then optionally load buffer and one or more sample images to produce integrated 1D curves and buffer-subtracted curves, and save all outputs (config, integrator, integrated/subtracted `.dat` files, and plots) to an empty directory. Only the sample field accepts multiple images; calibrant, mask, and buffer remain single-file.
+**Main user goal:** Choose an empty working directory at launch, then run calibration and process buffer/samples; all outputs are written automatically to that directory.
 
 ---
 
@@ -37,16 +37,21 @@ This document is derived solely from the code in this repository. It describes b
   - **Style:** The module `fast2dprocess_gui/core/style.py` is the single source of truth for all visual style: the CustomTkinter color theme (e.g. `COLOR_THEME`: "blue", "green", "dark-blue"), fonts, colors (including status bar colors), spacing, and any other theme-related variables. This module is the only place where such values are defined; all GUI code and any code that sets widget appearance or theme must import from it (e.g. `from fast2dprocess_gui.core.style import FONTS, COLORS, STATUS_COLORS, COLOR_THEME`) and must not hardcode theme, fonts, colors, or other style constants elsewhere. Status bar colors are defined here.
 
 - **Ownership:**
-  - **DataManager:** Single path per file type for calibrant, buffer, and mask; **sample** holds a **list of paths** (zero or more). Validation: image extension `.tif`/`.tiff`; mask extension `.npy`/`.txt`/`.msk` and 0/1 or boolean-like values. Copy images to temp; save all temp files to user-selected directory. Only the sample field accepts and stores multiple files.
+  - **DataManager:** Single path per file type for calibrant, buffer, and mask; **sample** holds a **list of paths** (zero or more). Validation: image extension `.tif`/`.tiff`; mask extension `.npy`/`.txt`/`.msk` and 0/1 or boolean-like values. Copy images to working directory; all outputs are written to the working directory (selected at launch, must be empty). Only the sample field accepts and stores multiple files.
   - **CalibrationManager:** Calibration state (integrator, `calibrated_params`). Build config for `autocalib`; save integrator and write `calibrated_params` into config (and to disk as needed).
-  - **ProcessingManager:** Calls `integrate_2d_to_1d` and `subtract_buffer`; requires `CalibrationManager.is_calibrated`; uses `CalibrationManager.get_integrator()` and `utils.read_from_tiff`; output paths via `filename_utils.generate_filename` into temp dir.
+  - **ProcessingManager:** Calls `integrate_2d_to_1d` and `subtract_buffer`; requires `CalibrationManager.is_calibrated`; uses `CalibrationManager.get_integrator()` and `utils.read_from_tiff`; output paths via `filename_utils.generate_filename` into working directory.
   - **ConfigManager:** `basic_params` (wavelength, detector_distance, pixel_size, beam_center_x/y, detector_tilt, tilt_plane_rotation, calibrant_name, r_beam_px, detector_name) and `advanced_params` (center_refinement, ring_search, mask_config). Load/save YAML at `CONFIG_PATH`; on disk: `config_dictionary` and `advanced_params`.
 
-- **Main window (`SAXSProcessorGUI`):** Creates `EventBus`; instantiates `ConfigManager`, `DataManager`, `CalibrationManager`, `ProcessingManager`, then `CalibrationService` and `ProcessingService` with shared managers and event bus. Keeps `config_dictionary` as a reference to `config_manager.basic_params` for the control panel. Builds left `ControlPanel` and right tabbed area (2D Images, 1D Curves) plus status bar; subscribes to `CALIBRATION_COMPLETE`, `CALIBRATION_ERROR`, `PROCESSING_COMPLETE`; wires file drop, Apply Calibration, and Save to callbacks that call services/managers and update GUI (including scheduling work on main thread where required).
+- **Main window (`SAXSProcessorGUI`):** At startup, shows a pop-up directory selection dialog; the user must select an empty working directory (mandatory; app does not proceed until a valid empty directory is chosen or user cancels and exits). Creates `EventBus`; instantiates `ConfigManager`, `DataManager`, `CalibrationManager`, `ProcessingManager`, then `CalibrationService` and `ProcessingService` with shared managers and event bus. Keeps `config_dictionary` as a reference to `config_manager.basic_params` for the control panel. Builds left `ControlPanel` and right tabbed area (2D Images, 1D Curves) plus status bar; subscribes to `CALIBRATION_COMPLETE`, `CALIBRATION_ERROR`, `PROCESSING_COMPLETE`; wires file drop and Apply Calibration to callbacks that call services/managers and update GUI (including scheduling work on main thread where required). All results are written automatically to the working directory; there is no Save button.
 
 ---
 
 ## 4. User workflow (step-by-step)
+
+0. **Working directory (mandatory at launch)**
+   - On startup, before the main window is shown (or immediately when the app starts), a pop-up file selection dialog asks the user to choose a directory. This directory is the **working directory**.
+   - **Requirement:** The selected directory must be **empty** (e.g. `os.listdir(path)` must be empty). If the user selects a non-empty directory, the app shows an error and re-prompts. The step is **mandatory**: the app does not proceed to the main workflow until a valid empty directory is selected or the user cancels (in which case the app exits).
+   - Once set, all outputs (config, integrator, copied images, integrated/subtracted `.dat` files, plots) are written automatically to this directory.
 
 1. **File inputs**
    - **Calibrant:** Required for calibration. Accepted after validation (see below). Only one path; last drop wins.
@@ -66,13 +71,13 @@ This document is derived solely from the code in this repository. It describes b
 4. **Auto-processing**
    - Triggered when: (a) calibration completes, and buffer_path is set or the sample list is non-empty; (b) user drops a buffer or one or more samples when already calibrated.
    - **Sequential processing:** When calibration completes with buffer and/or samples set, the application must process them **sequentially** in a single worker thread: buffer first (if set), then **each sample in the sample list in order**. When only buffer or only samples are set, that/those are processed in the same thread. The integrator (pyFAI) must not be used concurrently from multiple threads.
-   - For each such image: display 2D, run `ProcessingService.process_image`, copy image to temp with descriptive name, add 1D curve, save 1D main plot and 2D plot. For each **sample**: after a short delay, create subtracted curve using the most recently added buffer curve (if any) and save its plots.
+   - For each such image: display 2D, run `ProcessingService.process_image`, copy image to working directory with descriptive name, add 1D curve, save 1D main plot and 2D plot. For each **sample**: after a short delay, create subtracted curve using the most recently added buffer curve (if any) and save its plots.
 
 5. **Buffer subtraction**
    - Performed when a sample has just been processed (for **each** sample in the list): subtract the “current” buffer from that sample. The “current” buffer is the most recently added buffer curve (by iteration order in `CurvesTab1D.curves`, reverse order, first buffer found). Formula: sample − scaled buffer (see Processing pipeline). Output path is generated from buffer and sample basenames; subtracted curve is added to 1D tab and its plots saved. If no buffer has been processed yet, no subtraction is created for that sample.
 
-6. **Save**
-   - User chooses a directory (must exist and be empty). All contents of the temp directory (files and subdirs) are copied to the selected directory. On success/failure/empty temp, status is set and reset after 5 seconds.
+6. **Persistence**
+   - All results are written automatically to the working directory as they are produced (config, integrator params, calibration output, copied images, integrated and subtracted `.dat` files, plots).
 
 ---
 
@@ -81,8 +86,8 @@ This document is derived solely from the code in this repository. It describes b
 - **Images:** `.tif`, `.tiff` (read via `utils.read_from_tiff` → `pyFAI.io.image.read_image_data`).
 - **Mask:** `.npy`, `.txt`, `.msk`. Validation: only two unique values, each interpretable as 0 or 1 (or boolean). Loaded in code as boolean (e.g. `np.load(...).astype('bool')`, `IntegratorExtended.read_mask`); `.msk` is flipped on first axis after load.
 - **1D curves:** Format read by `utils.read_saxs`: file has YAML metadata block between `---` and `...`, then CSV block after `# Data in CSV format`. CSV columns: `q`, `intensity`, and optionally `sigma`. Written by `utils.write_saxs` (and `processor.integrate_2d_to_1d` / `subtract_buffer` use it for output).
-- **Config file:** Path `TEMP_DIR/config.yml`. Structure: top-level keys `config_dictionary` (same content as `ConfigManager.basic_params`) and `advanced_params` only. `ConfigManager.save()` may also persist `calibrated_params` when updated after calibration; calibrated parameters are stored in memory and, when saved, in config.
-- **Temp directory:** Path `<ROOT>/fast2dprocess_gui_temp` where **`ROOT` is derived outside autosaxs** from the GUI application's own `__file__` (e.g. `os.path.dirname(__file__)` for the entry-point module, or its parent for the repository root). Contents: `config.yml`, `integrator_params/` (detector_params.json, ai_params.json, optional mask.npy), `calibration_config.json`, `calibration_status.json`, `calibration_output/` (subprocess output; then integrator copied to main `integrator_params`), copied images (e.g. `calibrant_<name>.tif`, `buffer_<name>.tif`, `sample_<name>.tif`), integrated `.dat` files (e.g. `int_<basename>.dat`), subtracted `.dat` (e.g. `subtracted_<sample_basename>_<buffer_basename>.dat`), and plots (e.g. `calibrant_2d_<name>.png`, `plot_1d_<name>.png`, guinier/kratky/loglog when user selects those plot types).
+- **Config file:** Path `WORKING_DIR/config.yml` where `WORKING_DIR` is the directory selected by the user at launch. Structure: top-level keys `config_dictionary` (same content as `ConfigManager.basic_params`) and `advanced_params` only. `ConfigManager.save()` may also persist `calibrated_params` when updated after calibration; calibrated parameters are stored in memory and, when saved, in config.
+- **Working directory:** Path is chosen by the user at launch via a pop-up directory selection dialog; the directory **must be empty**. Contents (all written automatically as the user works): `config.yml`, `integrator_params/` (detector_params.json, ai_params.json, optional mask.npy), `calibration_config.json`, `calibration_status.json`, `calibration_output/` (subprocess output; then integrator copied to main `integrator_params`), copied images (e.g. `calibrant_<name>.tif`, `buffer_<name>.tif`, `sample_<name>.tif`), integrated `.dat` files (e.g. `int_<basename>.dat`), subtracted `.dat` (e.g. `subtracted_<sample_basename>_<buffer_basename>.dat`), and plots (e.g. `calibrant_2d_<name>.png`, `plot_1d_<name>.png`, guinier/kratky/loglog when user selects those plot types).
 
 ---
 
@@ -109,19 +114,19 @@ This document is derived solely from the code in this repository. It describes b
 
 - **Inputs:** Calibrant image path (required), optional mask path, and config built from `CalibrationManager.build_calibration_config` (includes detector_geometry, center_refinement, ring_search, r_beam_px, calibrant_name, mask_config).
 
-- **Subprocess:** Calibration runs in a separate process to avoid NumPy/pyFAI threading issues with the GUI. Invocation: `sys.executable calibration_service.py <config_json> <output_dir> --status-file <status_file>`. Config JSON: calibrant_path, mask_path, config (full calibration dict). Output dir: `TEMP_DIR/calibration_output`. Status file: `TEMP_DIR/calibration_status.json`. The GUI starts a worker thread that launches this subprocess, waits for it, then reads results from `calibration_output/calibration_result.json` and copies `integrator_params` into `TEMP_DIR/integrator_params`.
+- **Subprocess:** Calibration runs in a separate process to avoid NumPy/pyFAI threading issues with the GUI. Invocation: `sys.executable calibration_service.py <config_json> <output_dir> --status-file <status_file>`. Config JSON: calibrant_path, mask_path, config (full calibration dict). Output dir: `WORKING_DIR/calibration_output`. Status file: `WORKING_DIR/calibration_status.json`. The GUI starts a worker thread that launches this subprocess, waits for it, then reads results from `calibration_output/calibration_result.json` and copies `integrator_params` into `WORKING_DIR/integrator_params`.
 
-- **Status reporting:** Status file path: `TEMP_DIR/calibration_status.json`. JSON keys: `message`, `type` (e.g. "progress", "success", "error"), `timestamp`. The GUI polls this file on a 500 ms timer while `status_monitor_running` is True and updates the status bar text and color from `message` and `type`; on "success" or "error" monitoring stops.
+- **Status reporting:** Status file path: `WORKING_DIR/calibration_status.json`. JSON keys: `message`, `type` (e.g. "progress", "success", "error"), `timestamp`. The GUI polls this file on a 500 ms timer while `status_monitor_running` is True and updates the status bar text and color from `message` and `type`; on "success" or "error" monitoring stops.
 
-- **Outputs:** Integrator saved to `TEMP_DIR/integrator_params` (and in subprocess to `calibration_output/integrator_params`). `calibrated_params` stored in `CalibrationManager`; config may be updated with `calibrated_params` via `ConfigManager.save()` when calibration completes. GUI fields (beam center, detector distance, wavelength, tilts) updated from calibrated values via `update_gui_after_calibration` and conversions in `CONVERSIONS_TO_DISPLAY`.
+- **Outputs:** Integrator saved to `WORKING_DIR/integrator_params` (and in subprocess to `calibration_output/integrator_params`). `calibrated_params` stored in `CalibrationManager`; config may be updated with `calibrated_params` via `ConfigManager.save()` when calibration completes. GUI fields (beam center, detector distance, wavelength, tilts) updated from calibrated values via `update_gui_after_calibration` and conversions in `CONVERSIONS_TO_DISPLAY`.
 
 ---
 
 ## 8. Processing pipeline
 
-- **2D → 1D:** `ProcessingManager.process_image` calls `integrate_2d_to_1d(integrator, data, npt=1000, destpath=output_path, metadata=metadata)`. Data comes from `read_from_tiff(image_path)`. Output path: `generate_filename(image_path, "int", ".dat", base_dir=temp_dir)` → e.g. `int_<basename>.dat` in temp dir. Metadata: type (buffer/sample), source_path.
+- **2D → 1D:** `ProcessingManager.process_image` calls `integrate_2d_to_1d(integrator, data, npt=1000, destpath=output_path, metadata=metadata)`. Data comes from `read_from_tiff(image_path)`. Output path: `generate_filename(image_path, "int", ".dat", base_dir=working_dir)` → e.g. `int_<basename>.dat` in working directory. Metadata: type (buffer/sample), source_path.
 
-- **Output naming:** `filename_utils.generate_filename(original_path, operation, extension, additional_info=None, base_dir=None)`. Examples: integrated → `int_<basename>.dat`; subtracted → `generate_filename(buffer_path, "subtracted", ".dat", additional_info=sample_basename, base_dir=temp_dir)` → `subtracted_<sample_basename>_<buffer_basename>.dat`; calibrant 2D plot → `calibrant_2d_<basename>.png`; curve plot_1d → `plot_1d_<curve_basename>.png`; etc.
+- **Output naming:** `filename_utils.generate_filename(original_path, operation, extension, additional_info=None, base_dir=None)`. Examples: integrated → `int_<basename>.dat`; subtracted → `generate_filename(buffer_path, "subtracted", ".dat", additional_info=sample_basename, base_dir=working_dir)` → `subtracted_<sample_basename>_<buffer_basename>.dat`; calibrant 2D plot → `calibrant_2d_<basename>.png`; curve plot_1d → `plot_1d_<curve_basename>.png`; etc. All `base_dir` usage refers to the working directory.
 
 - **Buffer subtraction:** Implemented in `processor.subtract_buffer(buffer_path, src_path, destpath, method='match_tail', ...)`. Sample = `src_path`, buffer = `buffer_path`. Formula: I_sub = I_sample − scaling_factor × I_buffer. Scaling by `match_tail`: use high-q tail (default q_range_rel (0.8, None), approach_factor 0.98), smooth with whittaker_smooth, then scale so scaled buffer matches sample in that tail. Interpolation of buffer onto sample q-grid if q arrays differ. Triggered after a sample is processed: the most recently added buffer curve (by reverse iteration in `curves_tab_1d.curves`) is used; if none, no subtraction.
 
@@ -135,7 +140,7 @@ This document is derived solely from the code in this repository. It describes b
 
 - **Publishers and subscribers (as implemented):**
   - **CALIBRATION_STARTED:** Published by `CalibrationService.run_calibration` (calibrant_path in data). No subscriber in code.
-  - **CALIBRATION_COMPLETE:** Published by `CalibrationService` (calibrated_params, calibrant_path). Subscriber: `SAXSProcessorGUI._on_calibration_complete` (update GUI, show calibrant, copy to temp, save calibrant plot, auto-process buffer and all samples in sample list).
+  - **CALIBRATION_COMPLETE:** Published by `CalibrationService` (calibrated_params, calibrant_path). Subscriber: `SAXSProcessorGUI._on_calibration_complete` (update GUI, show calibrant, copy to working directory, save calibrant plot, auto-process buffer and all samples in sample list).
   - **CALIBRATION_ERROR:** Published by `CalibrationService`. Subscriber: `SAXSProcessorGUI._on_calibration_error` (status bar, reset color after 5 s).
   - **PROCESSING_STARTED:** Published by `ProcessingService.process_image`. No subscriber in code.
   - **PROCESSING_COMPLETE:** Published by `ProcessingService.process_image`. Subscriber: `SAXSProcessorGUI._on_processing_complete` (no-op).
@@ -146,11 +151,11 @@ This document is derived solely from the code in this repository. It describes b
 
 ## 10. GUI layout and behavior
 
-- **Left: Control Panel.** Drag-and-drop zones (in order): Calibrant Image, Mask File (Optional), Buffer Image, Sample Image(s). Calibrant, Mask, and Buffer each accept a **single file**; **Sample** accepts **one or more files** in a single drop (multiple paths replace the previous sample list). Display for Sample when multiple files: "File: <first> + N more". Each zone shows “Drag & Drop … Here” or “File: <filename>” and “No file selected” / “File: <filename>”. Below: “Calibration Parameters” with entries and sliders for wavelength, detector distance, pixel size, beam center X/Y, detector tilt, tilt plane rotation; “Apply Calibration” button; “Save” button (green). Callbacks: on_file_drop, on_apply_calibration, on_save.
+- **Left: Control Panel.** Drag-and-drop zones (in order): Calibrant Image, Mask File (Optional), Buffer Image, Sample Image(s). Calibrant, Mask, and Buffer each accept a **single file**; **Sample** accepts **one or more files** in a single drop (multiple paths replace the previous sample list). Display for Sample when multiple files: "File: <first> + N more". Each zone shows “Drag & Drop … Here” or “File: <filename>” and “No file selected” / “File: <filename>”. Below: “Calibration Parameters” with entries and sliders for wavelength, detector distance, pixel size, beam center X/Y, detector tilt, tilt plane rotation; “Apply Calibration” button. All results are written automatically to the working directory. Callbacks: on_file_drop, on_apply_calibration.
 
 - **Right: Tabs.** “2D Images”: left = scrollable thumbnails (Images); right = main 2D view. “1D Curves”: left = scrollable curve list (checkboxes); top-right = plot type selector; below = 1D plot canvas. Selection: 2D main image chosen by clicking a thumbnail (then that thumbnail highlighted). 1D: only checked curves are plotted.
 
-- **Status bar:** Single line below the tabbed area; text from `status_var`; background color from `STATUS_COLORS` in `fast2dprocess_gui/core/style.py`: default (gray), progress (lightblue/darkblue), success (green), error (red). Reset to default color after 5 seconds following an error (calibration error, save error, or invalid file).
+- **Status bar:** Single line below the tabbed area; text from `status_var`; background color from `STATUS_COLORS` in `fast2dprocess_gui/core/style.py`: default (gray), progress (lightblue/darkblue), success (green), error (red). Reset to default color after 5 seconds following an error (calibration error, working-directory validation error, or invalid file).
 
 - **Text copying:** Right-click (Button-3 / Button-2) on labels and entries opens a “Copy” context menu; recursive attach from root via `enable_text_copying_recursive(root)` after widgets are created. Copy uses widget text or entry selection/content.
 
@@ -163,8 +168,8 @@ This document is derived solely from the code in this repository. It describes b
 - **Contents of the style module:** The module exposes at least the following, matching the current app appearance:
   - **`COLOR_THEME`** — the CustomTkinter default color theme; current value `"blue"`. Applied at startup (e.g. `ctk.set_default_color_theme(COLOR_THEME)`) from the entry point; not set elsewhere.
   - **`STATUS_COLORS`** — dict keyed by status type (`"default"`, `"progress"`, `"success"`, `"error"`), values are (light, dark) tuples for CustomTkinter. Current values: default `("gray85", "gray25")`, progress `("lightblue", "darkblue")`, success `("green", "darkgreen")`, error `("red", "darkred")`.
-  - **`FONTS`** — font definitions used across the GUI. Concrete values: satus bar 14 pt bold; section/button titles (e.g. "Calibration Parameters", "Apply Calibration", "Save") 14 pt bold; panel titles ("Images", "Curves", "Plot Type:") 12 pt bold; drop-zone labels 12 pt; curve list checkboxes 10 pt; thumbnail labels (filename under thumb) 9 pt; plot legend 9 pt.
-  - **`COLORS`** (or equivalent) — widget colors. Concrete values: Save button `("green", "darkgreen")`; thumbnail selected `("gray75", "gray35")`, unselected `("gray90", "gray20")`; drop-zone label background `"transparent"`.
+  - **`FONTS`** — font definitions used across the GUI. Concrete values: status bar 14 pt bold; section/button titles (e.g. "Calibration Parameters", "Apply Calibration") 14 pt bold; panel titles ("Images", "Curves", "Plot Type:") 12 pt bold; drop-zone labels 12 pt; curve list checkboxes 10 pt; thumbnail labels (filename under thumb) 9 pt; plot legend 9 pt.
+  - **`COLORS`** (or equivalent) — widget colors. Concrete values: thumbnail selected `("gray75", "gray35")`, unselected `("gray90", "gray20")`; drop-zone label background `"transparent"`.
   - **Plot-related constants** — 1D curve colormap name `"tab10"`; default single-curve scatter color `"#1f77b4"`; legend font size 9.
   Every style value used anywhere in the app must be defined in this module.
 
@@ -178,7 +183,7 @@ This document is derived solely from the code in this repository. It describes b
 
 - **Plot types (exact list):** “I vs q”, “log I vs q”, “log I vs log q”, “Guinier: log I vs q^2”, “Kratky: q^2 * I vs q”. Axes/labels and data transform (e.g. log10(I), q², q²×I) are set per plot type. q displayed in nm⁻¹ (internal q in 1/m multiplied by 1e-9).
 
-- **When plots are saved:** On add of a curve, only the main 1D plot is saved (`plot_1d_<basename>.png`) via `save_all_curve_plots(curve_path)`. When the user changes plot type with the segmented button, `save_current_plot_type()` runs and saves specialized plots only for the currently selected type (not “I vs q”): log I vs q → “logI_vs_q”, log I vs log q → “loglog”, Guinier → “guinier”, Kratky → “kratky”, each as `<type>_<basename>.png` in TEMP_DIR.
+- **When plots are saved:** On add of a curve, only the main 1D plot is saved (`plot_1d_<basename>.png`) via `save_all_curve_plots(curve_path)`. When the user changes plot type with the segmented button, `save_current_plot_type()` runs and saves specialized plots only for the currently selected type (not “I vs q”): log I vs q → “logI_vs_q”, log I vs log q → “loglog”, Guinier → “guinier”, Kratky → “kratky”, each as `<type>_<basename>.png` in the working directory.
 
 - **Default selection:** When a new curve is added, it becomes the only checked curve (all others unchecked); `last_added_curve` is set to its unique_id. Duplicate path (same unique_id): add returns without adding; no duplicate entries.
 
@@ -192,7 +197,7 @@ This document is derived solely from the code in this repository. It describes b
 
 - **Image reading fallbacks:** For both thumbnail and main display: (1) `read_from_tiff(image_path)`; on exception (2) `fabio.open(image_path).data`; on exception (3) `IntegratorExtended.read_mask(image_path)` (mask converted to float for display). If all fail, error is printed and no display/thumbnail update.
 
-- **When 2D plots are saved:** Calibrant: after calibration complete, `image_tab_2d.save_calibrant_plot(calibrant_path)` → `calibrant_2d_<basename>.png`. Buffer/sample: after processing in worker, `image_tab_2d.save_image_plot(image_path, image_type)` → `<image_type>_2d_<basename>.png`.
+- **When 2D plots are saved:** Calibrant: after calibration complete, `image_tab_2d.save_calibrant_plot(calibrant_path)` → `calibrant_2d_<basename>.png` in the working directory. Buffer/sample: after processing in worker, `image_tab_2d.save_image_plot(image_path, image_type)` → `<image_type>_2d_<basename>.png` in the working directory.
 
 ---
 
@@ -216,13 +221,11 @@ This document is derived solely from the code in this repository. It describes b
 
 - **On processing failure:** ProcessingService catches exception, updates status callback with error, publishes PROCESSING_ERROR; returns None. Main window does not add curve or run subtraction if output_path is None.
 
-- **Save:** Destination must exist (`mustexist=True` in askdirectory) and be empty (`os.listdir(dest_dir)` must be empty). If not empty or OSError on listdir: status error, reset after 5 s. If `save_temp_files` returns None (exception): status "Failed to save files". If 0 items: status "No temporary files found to save".
+- **Working directory at launch:** The directory selection dialog must require an empty directory. If the user selects a non-empty directory: show an error (e.g. status or dialog message) and re-prompt until the user selects an empty directory or cancels. If the user cancels without selecting a valid directory, the application exits. The chosen path is stored as the working directory for the session; all writes go there.
 
 ---
 
 ## 16. Invariants and edge cases
-
-- **Save directory must be empty:** The app rejects non-empty directories and reports an error; only empty directories are accepted for save.
 
 - **Calibrant required before calibration:** Apply Calibration with no calibrant shows “No calibrant image loaded”. Calibration run in the service also checks calibrant and publishes CALIBRATION_ERROR if missing.
 

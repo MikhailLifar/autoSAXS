@@ -8,7 +8,6 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
-from ..core.constants import TEMP_DIR
 from ..core.style import FONTS, PLOT_COLORMAP, PLOT_DEFAULT_CURVE_COLOR, PLOT_LEGEND_FONTSIZE
 from ..utils.filename_utils import generate_curve_plot_filename
 from autosaxs.utils import read_saxs
@@ -17,14 +16,16 @@ from autosaxs.utils import read_saxs
 class CurvesTab1D:
     """Tab for displaying 1D SAXS curves with checkbox selection."""
     
-    def __init__(self, parent):
+    def __init__(self, parent, working_dir: str):
         """
         Initialize the 1D curves tab.
         
         Args:
             parent: Parent tabview or frame
+            working_dir: Directory for saving plots
         """
         self.tab = parent
+        self.working_dir = working_dir
         self.tab.grid_columnconfigure(0, weight=0)  # Checkbox panel (fixed width)
         self.tab.grid_columnconfigure(1, weight=1)  # Plot area (flexible)
         self.tab.grid_rowconfigure(1, weight=1)  # Main content row
@@ -251,13 +252,13 @@ class CurvesTab1D:
         self.update_display()
     
     def save_plot(self, filename):
-        """Save figure to temp directory."""
+        """Save figure to working directory."""
         try:
-            # If filename is already a full path, use it; otherwise join with TEMP_DIR
+            # If filename is already a full path, use it; otherwise join with working_dir
             if os.path.isabs(filename):
                 plot_path = filename
             else:
-                plot_path = os.path.join(TEMP_DIR, filename)
+                plot_path = os.path.join(self.working_dir, filename)
             self.fig.savefig(plot_path, dpi=150, bbox_inches='tight')
         except Exception as e:
             print(f"Error saving plot: {e}")
@@ -279,7 +280,7 @@ class CurvesTab1D:
                 curve_path,
                 "plot_1d",
                 ".png",
-                base_dir=TEMP_DIR
+                base_dir=self.working_dir,
             )
             self.save_plot(plot_filename)
             
@@ -400,7 +401,7 @@ class CurvesTab1D:
             ax.grid(True, alpha=0.3)
             
             # Generate filename
-            plot_path = generate_curve_plot_filename(curve_path, plot_type, '.png', TEMP_DIR)
+            plot_path = generate_curve_plot_filename(curve_path, plot_type, '.png', self.working_dir)
             
             # Save plot
             fig.savefig(plot_path, dpi=150, bbox_inches='tight')
