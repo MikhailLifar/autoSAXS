@@ -291,7 +291,7 @@ def _run_choose_profiles_gui(profiles):
 
     checkbox_vars = {}
     for i, profile in enumerate(profiles):
-        var = ctk.BooleanVar(value=True)
+        var = ctk.BooleanVar(value=False)
         cb = ctk.CTkCheckBox(
             master=checkbox_frame,
             text=profile["basename"],

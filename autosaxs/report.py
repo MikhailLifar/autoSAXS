@@ -238,7 +238,7 @@ def build_report_pdf(report_data: Dict[str, Any], output_path: str) -> None:
         integrated_curve_path: str — path to 1D .dat; a figure is generated and embedded
         difference_plot_path: str — path to diff_<basename>.png
         subtracted_plot_path: str — path to sub_<basename>.png
-        descriptors_table: list of (label, value) or dict — Rg, I(0), Quality
+        descriptors_table: list of (label, value) or dict — Rg, I(0), Quality, Dmax (nm), MW from Rg (kDa), MW from DATMW (kDa)
         plot_figures: dict with keys guinier, kratky, loglog (paths) — plot figures only (no I vs q)
         fits_comparison_figure_path: str or list of (path, label) — path(s) and optional label per figure (e.g. polydispfit, bodies, dammif)
         fits_table: list of (fit_kind_str, params_str) — two columns (used when no yml/polydisp paths)

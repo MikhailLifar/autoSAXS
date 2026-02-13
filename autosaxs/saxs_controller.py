@@ -2,6 +2,8 @@ import json
 import logging
 import os
 import queue
+import re
+import shutil
 import sys
 import time
 import warnings
@@ -109,7 +111,7 @@ def json_type_caster(s):
 
 
 def _parse_descriptors_from_results(results_path):
-    """Parse Rg, I(0), Quality from ATSAS results file. Returns dict or None."""
+    """Parse Rg, I(0), Quality, Dmax, MW from Rg, MW from DATMW from ATSAS results file. Returns dict or None."""
     if not results_path or not os.path.isfile(results_path):
         return None
     import re
@@ -125,6 +127,15 @@ def _parse_descriptors_from_results(results_path):
             m = re.match(r'\s*Quality:\s*(.+)', line)
             if m:
                 out['Quality'] = m.group(1).strip()
+            m = re.match(r'\s*Dmax\s*=\s*(.+?)\s*nm', line)
+            if m:
+                out['Dmax (nm)'] = m.group(1).strip()
+            m = re.match(r'\s*From Rg \(globular\):\s*(.+?)\s*kDa', line)
+            if m:
+                out['MW from Rg (kDa)'] = m.group(1).strip()
+            m = re.match(r'\s*From DATMW:\s*(.+?)\s*kDa', line)
+            if m:
+                out['MW from DATMW (kDa)'] = m.group(1).strip()
     return out if out else None
 
 
@@ -494,77 +505,150 @@ class Controller:
             results_file = os.path.join(dest_dir, f'{basename}_results.txt')
             gnom_file = os.path.join(dest_dir, f'{basename}.out')
             
+            # Define temporary files for capturing tool outputs
+            tmp_autorg = os.path.join(dest_dir, f'{basename}_autorg.tmp')
+            tmp_datgnom = os.path.join(dest_dir, f'{basename}_datgnom.tmp')
+            tmp_datporod = os.path.join(dest_dir, f'{basename}_datporod.tmp')
+            tmp_datmw = os.path.join(dest_dir, f'{basename}_datmw.tmp')
+
             # Check if analysis results exist in debug mode
             if fast_forward and all(os.path.exists(pp) for pp in (results_file, gnom_file)):
                 self._send_message(f'Fast-forward: Skipping analysis for {to_analyze_path} (results already exist)')
+                return results_file, gnom_file
             
-            else:            
-                os.system(f'''INPUT_FILE={to_analyze_path}
-BASENAME={os.path.join(root, basename)}
-RESULTS_FILE="{results_file}"
+            # Helper to quote paths for shell commands
+            def q(path):
+                return f'"{path}"'
 
-# Create output file
-echo "SAXS Analysis Results" > "$RESULTS_FILE"
-echo "====================" >> "$RESULTS_FILE"
-echo "Input file: $INPUT_FILE" >> "$RESULTS_FILE"
-echo "Analysis date: $(date)" >> "$RESULTS_FILE"
-echo "" >> "$RESULTS_FILE"
+            # Initialize descriptor variables
+            rg_val = None
+            i0_val = None
+            quality_val = None
+            dmax_val = None
+            porod_vol = None
+            mw_rg = None
+            mw_porod = None
+            mw_datmw = None
 
-# Step 1: Calculate Rg and I(0) using AUTORG
-AUTORG_OUTPUT=$({os.path.join(ATSAS_BIN_PREFIX, 'autorg')} "$INPUT_FILE")
-RG_VALUE=$(echo "$AUTORG_OUTPUT" | grep "Rg   =" | awk '{{print $3}}')
-I0_VALUE=$(echo "$AUTORG_OUTPUT" | grep "I(0) =" | awk '{{print $3}}')
-QUALITY=$(echo "$AUTORG_OUTPUT" | grep "Quality:" | awk '{{print $2}}')
+            # --- Step 1: Calculate Rg and I(0) using AUTORG ---
+            # Invoke as: autorg "<path>" (same as old shell: autorg "$INPUT_FILE"). Output goes to
+            # stdout (and possibly stderr); we capture both to tmp so parsing works regardless.
+            cmd_autorg = f'autorg {q(to_analyze_path)}'
+            os.system(f'{cmd_autorg} > {q(tmp_autorg)} 2>&1')
 
-echo "AUTORG Results:" >> "$RESULTS_FILE"
-echo "  Rg = $RG_VALUE nm" >> "$RESULTS_FILE"
-echo "  I(0) = $I0_VALUE" >> "$RESULTS_FILE"
-echo "  Quality = $QUALITY" >> "$RESULTS_FILE"
-echo "" >> "$RESULTS_FILE"
+            # Parse AUTORG output
+            if os.path.exists(tmp_autorg):
+                with open(tmp_autorg, 'r') as f:
+                    content = f.read()
+                    # Parse Rg
+                    match = re.search(r'Rg\s+=\s+([\d\.]+)', content)
+                    if match:
+                        rg_val = float(match.group(1))
+                    # Parse I(0)
+                    match = re.search(r'I\(0\)\s+=\s+([\d\.]+)', content)
+                    if match:
+                        i0_val = float(match.group(1))
+                    # Parse Quality
+                    match = re.search(r'Quality:\s+([\d\.]+)', content)
+                    if match:
+                        quality_val = float(match.group(1))
 
-# Step 1.5 Calculate P(R)
-{os.path.join(ATSAS_BIN_PREFIX, 'datgnom')} "$INPUT_FILE" -r $RG_VALUE -o {gnom_file}
+            # --- Step 1.5: Calculate P(r) using DATGNOM ---
+            # Requires Rg. Only run if Rg was successfully determined.
+            if rg_val is not None:
+                cmd_datgnom = f'datgnom {q(to_analyze_path)} -r {rg_val} -o {q(gnom_file)}'
+                os.system(f'{cmd_datgnom} > {q(tmp_datgnom)} 2>&1')
 
-# Step 2: Calculate Porod invariant using DATPOROD
-# DATPOROD_OUTPUT=$({os.path.join(ATSAS_BIN_PREFIX, 'datporod')} "$INPUT_FILE")
-# POROD_INV=$(echo "$DATPOROD_OUTPUT" | grep "Porod invariant" | awk '{{print $4}}')
-# POROD_VOL=$(echo "$DATPOROD_OUTPUT" | grep "Porod volume" | awk '{{print $4}}')
+                # Parse Dmax: datgnom often writes nothing to stdout; get it from the .out file
+                if os.path.exists(tmp_datgnom):
+                    with open(tmp_datgnom, 'r') as f:
+                        content = f.read()
+                        match = re.search(r'Dmax\s+=\s+([\d\.]+)', content)
+                        if match:
+                            dmax_val = float(match.group(1))
+                if dmax_val is None and os.path.exists(gnom_file):
+                    with open(gnom_file, 'r') as f:
+                        content = f.read()
+                        match = re.search(r'Maximum characteristic size:\s+([\d\.]+)', content)
+                        if match:
+                            dmax_val = float(match.group(1))
+            else:
+                print("Warning: Rg not found, skipping DATGNOM.")
 
-# echo "DATPOROD Results:" >> "$RESULTS_FILE"
-# echo "  Porod invariant = $POROD_INV" >> "$RESULTS_FILE"
-# echo "  Porod volume = $POROD_VOL nm^3" >> "$RESULTS_FILE"
-# echo "" >> "$RESULTS_FILE"
+            # --- Step 2: Calculate Porod volume using DATPOROD ---
+            # Requires the .out file from GNOM.
+            if os.path.exists(gnom_file):
+                cmd_datporod = f'datporod {q(gnom_file)}'
+                os.system(f'{cmd_datporod} > {q(tmp_datporod)} 2>&1')
 
-# Step 3: Calculate molecular weight estimates
-# Method 1: From I(0) and Porod volume
-# MW = I(0) * N_A / (c * (Δρ)^2 * V_porod)
-# This is a simplified formula; actual implementation depends on your sample conditions
-# MW_POROD=$(echo "scale=2; $I0_VALUE * 6.022e23 / (1 * 2.82e23 * $POROD_VOL)" | bc -l | awk '{{printf "%.2e", $1}}')
+                # Parse DATPOROD output: "Rg Volume Filename" (Volume is 2nd column)
+                if os.path.exists(tmp_datporod):
+                    with open(tmp_datporod, 'r') as f:
+                        content = f.read().strip()
+                        parts = content.split()
+                        if len(parts) >= 2:
+                            try:
+                                porod_vol = float(parts[1])
+                            except ValueError:
+                                pass
 
-# Method 2: From Rg (empirical relationship for globular proteins)
-# MW = (Rg / 0.715)^3 * 1e3 (kDa)
-MW_RG=$(echo "scale=2; ($RG_VALUE / 0.715)^3 * 1000" | bc -l | awk '{{printf "%.2f", $1}}')
+            # --- Step 3: Calculate Molecular Weight Estimates ---
+            # Method 1: From Rg (Empirical relationship for globular proteins)
+            # MW (kDa) = (Rg / 0.715)^3
+            if rg_val is not None:
+                mw_rg = (rg_val / 0.715)**3
 
-echo "Molecular Weight Estimates:" >> "$RESULTS_FILE"
-# echo "  From Porod volume: $MW_POROD g/mol" >> "$RESULTS_FILE"
-echo "  From Rg (globular): $MW_RG kDa" >> "$RESULTS_FILE"
-echo "" >> "$RESULTS_FILE"
+            # Method 2: From Porod Volume (assuming protein density)
+            # MW (kDa) = Volume (nm^3) * 0.824 (approx based on v_bar = 0.74 cm^3/g)
+            if porod_vol is not None:
+                mw_porod = porod_vol * 0.824
 
-# Print summary to console
-echo ""
-echo "===== Analysis Summary ====="
-echo "Radius of gyration (Rg): $RG_VALUE nm"
-echo "Forward scattering (I(0)): $I0_VALUE"
-# echo "Porod invariant: $POROD_INV"
-# echo "Porod volume: $POROD_VOL nm^3"
-echo ""
-echo "Molecular weight estimates:"
-# echo "  From Porod volume: $MW_POROD g/mol"
-echo "  From Rg (globular): $MW_RG kDa"
-echo ""
-echo "Full results saved to: $RESULTS_FILE"
-''')
-        
+            # Method 3: Using DATMW (if on PATH). Output is columnar: ... MW(Da) ... path
+            if shutil.which('datmw'):
+                cmd_datmw = f'datmw {q(to_analyze_path)}'
+                os.system(f'{cmd_datmw} > {q(tmp_datmw)} 2>&1')
+                if os.path.exists(tmp_datmw):
+                    with open(tmp_datmw, 'r') as f:
+                        content = f.read()
+                        match = re.search(r'MW\s+:\s+([\d\.]+)', content)
+                        if match:
+                            mw_datmw = float(match.group(1))
+                        else:
+                            # Column format: ... MW(Da) ... path; 4th column (index 3) is MW in Daltons
+                            parts = content.split()
+                            if len(parts) >= 4:
+                                try:
+                                    mw_datmw = float(parts[3]) / 1000.0  # Da -> kDa
+                                except ValueError:
+                                    pass
+
+            # --- Step 4: Write results to file ---
+            with open(results_file, 'w') as f:
+                f.write("SAXS Analysis Results\n")
+                f.write("====================\n")
+                f.write(f"Input file: {to_analyze_path}\n")
+                f.write(f"Analysis date: {time.ctime()}\n")
+                f.write("\n")
+                f.write("AUTORG Results:\n")
+                f.write(f"  Rg = {rg_val if rg_val else 'N/A'} nm\n")
+                f.write(f"  I(0) = {i0_val if i0_val else 'N/A'}\n")
+                f.write(f"  Quality = {quality_val if quality_val else 'N/A'}\n")
+                f.write("\n")
+                f.write("GNOM Results:\n")
+                f.write(f"  Dmax = {dmax_val if dmax_val else 'N/A'} nm\n")
+                f.write("\n")
+                f.write("Porod Results:\n")
+                f.write(f"  Porod Volume = {porod_vol if porod_vol else 'N/A'} nm^3\n")
+                f.write("\n")
+                f.write("Molecular Weight Estimates:\n")
+                if mw_rg:
+                    f.write(f"  From Rg (globular): {mw_rg:.2f} kDa\n")
+                if mw_porod:
+                    f.write(f"  From Porod Volume: {mw_porod:.2f} kDa\n")
+                if mw_datmw:
+                    f.write(f"  From DATMW: {mw_datmw:.2f} kDa\n")
+                f.write("\n")
+
         return results_file, gnom_file
     
     def plot(self, context: Context, to_plot_path, dest_dir, fast_forward=False):
@@ -1344,14 +1428,17 @@ echo "Full results saved to: $RESULTS_FILE"
                         profile_pic_paths.append(profile_pic_path)
                 # print('DEBUG: profile loading and plotting finished')
 
-            # simple_analysis for all sample profiles
+            # simple_analysis for all sample profiles (§10: try-except, report via MESSAGE)
             descriptors_by_basename = {}
             if 'simple_analysis' in steps and basename_list and profile_paths:
                 descriptors_dir = os.path.join(directory, 'descriptors')
                 for basename, profile_path in zip(basename_list, profile_paths):
-                    atsas_res_path, gnom_path = self.get_descriptors(
-                        context, profile_path, dest_dir=descriptors_dir, fast_forward=fast_forward)
-                    descriptors_by_basename[basename] = (atsas_res_path, gnom_path)
+                    try:
+                        atsas_res_path, gnom_path = self.get_descriptors(
+                            context, profile_path, dest_dir=descriptors_dir, fast_forward=fast_forward)
+                        descriptors_by_basename[basename] = (atsas_res_path, gnom_path)
+                    except Exception as e:
+                        self._send_message(f"simple_analysis failed for {basename}: {e}")
 
             # First report pass: all sample profiles (integration→subtraction; descriptors if simple_analysis run; §4 step 6)
             if basename_list and profile_paths:
@@ -1410,26 +1497,38 @@ echo "Full results saved to: $RESULTS_FILE"
                     plot_paths = [profile_pic_path, ] + plot_paths
                     context.append_path('plot', plot_paths)
                 if 'polydispfit' in steps:
-                    polydisp_dir = self.polydispfit(
-                        context, profile_path, dest_dir=os.path.join(directory, 'polydispfit'), fast_forward=fast_forward)
-                    context.append_path('polydisp', polydisp_dir)
+                    try:
+                        polydisp_dir = self.polydispfit(
+                            context, profile_path, dest_dir=os.path.join(directory, 'polydispfit'), fast_forward=fast_forward)
+                        context.append_path('polydisp', polydisp_dir)
+                    except Exception as e:
+                        self._send_message(f"polydispfit failed for {basename}: {e}")
                 if 'bodies' in steps:
-                    bodies_dir = self.bodies_fit(
-                        context, profile_path, dest_dir=os.path.join(directory, 'bodies'), fast_forward=fast_forward)
-                    context.append_path('bodies', bodies_dir)
+                    try:
+                        bodies_dir = self.bodies_fit(
+                            context, profile_path, dest_dir=os.path.join(directory, 'bodies'), fast_forward=fast_forward)
+                        context.append_path('bodies', bodies_dir)
+                    except Exception as e:
+                        self._send_message(f"bodies failed for {basename}: {e}")
                 if 'dammif' in steps:
                     assert profile_path is not None and gnom_path is not None
-                    dammif_dir = self.dammif_fit(
-                        context, profile_path, gnom_path, dest_dir=os.path.join(directory, 'dammif'), fast_forward=fast_forward)
-                    context.append_path('dammif', dammif_dir)
+                    try:
+                        dammif_dir = self.dammif_fit(
+                            context, profile_path, gnom_path, dest_dir=os.path.join(directory, 'dammif'), fast_forward=fast_forward)
+                        context.append_path('dammif', dammif_dir)
+                    except Exception as e:
+                        self._send_message(f"dammif failed for {basename}: {e}")
                 if 'ai_analysis' in steps:
                     assert len(selected_profiles) == 1
                     assert profile_path is not None and gnom_path is not None
                     assert len(plot_paths) > 1
-                    self.ai_analysis(atsas_res_path, plot_paths, 
-                    dest_dir=os.path.join(directory, 'ai_analysis'),
-                    text_model=model, vision_model=vision_model, 
-                    fast_forward=fast_forward)
+                    try:
+                        self.ai_analysis(atsas_res_path, plot_paths,
+                            dest_dir=os.path.join(directory, 'ai_analysis'),
+                            text_model=model, vision_model=vision_model,
+                            fast_forward=fast_forward)
+                    except Exception as e:
+                        self._send_message(f"ai_analysis failed for {basename}: {e}")
                 # self.ai_analysis(atsas_res_path, plot_paths, directory, text_model=model, vision_model=vision_model)
 
                 # Second report pass: full data for this selected profile (overwrites first-pass PDF)

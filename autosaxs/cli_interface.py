@@ -417,11 +417,13 @@ def connect(bus: EventBus) -> None:
             return
         for i, p in enumerate(profiles_data):
             CLIInterface.send_message(f"  {i}: {p.get('basename', '')}")
-        CLIInterface.send_message("Enter comma-separated indices to select, or 'all':")
+        CLIInterface.send_message("Enter comma-separated indices to select, or 'all' (empty = none):")
         try:
             line = input().strip().lower()
-            if line == "all" or not line:
+            if line == "all":
                 selected = {p["basename"]: p for p in profiles_data}
+            elif not line:
+                selected = {}
             else:
                 indices = []
                 for s in line.split(","):
