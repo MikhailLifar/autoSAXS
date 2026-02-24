@@ -412,6 +412,7 @@ def connect(bus: EventBus) -> None:
 
     def on_profile_selection_requested(data):
         profiles_data = (data or {}).get("profiles_data") or []
+        profiles_data = sorted(profiles_data, key=lambda p: p.get("basename", ""))
         if not profiles_data:
             bus.publish(EventType.PROFILE_SELECTION_SPECIFIED, {"selected_profiles": {}})
             return

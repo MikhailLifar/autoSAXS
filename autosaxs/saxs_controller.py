@@ -38,7 +38,7 @@ from .foreign.aiAssistantFramework.lib import llm
 # from aiAssistantFramework.lib import telegram
 # import controller as ai_controller
 from .polydispfit import polydispfit
-from .report import build_report_pdf
+from .report import build_report_pdf, build_summary_report_pdf
 
 # CONFIG_FILE = "calib_config.conf"
 # CALIBRATED_GEOMETRY_PATH = 'calibrated_geometry.conf'
@@ -648,6 +648,14 @@ class Controller:
                 if mw_datmw:
                     f.write(f"  From DATMW: {mw_datmw:.2f} kDa\n")
                 f.write("\n")
+
+            # # Remove temporary files after use
+            # for tmp_path in (tmp_autorg, tmp_datgnom, tmp_datporod, tmp_datmw):
+            #     if os.path.exists(tmp_path):
+            #         try:
+            #             os.remove(tmp_path)
+            #         except OSError:
+            #             pass
 
         return results_file, gnom_file
     
@@ -1428,6 +1436,17 @@ class Controller:
                         profile_pic_paths.append(profile_pic_path)
                 # print('DEBUG: profile loading and plotting finished')
 
+            # Keep profile lists sorted alphabetically by basename across the pipeline
+            if basename_list and profile_paths and len(profile_paths) == len(basename_list) and len(profile_pic_paths) == len(basename_list):
+                if sample_paths_1d is not None and len(sample_paths_1d) == len(basename_list):
+                    combined = list(zip(basename_list, profile_paths, profile_pic_paths, sample_paths_1d))
+                    combined.sort(key=lambda t: t[0])
+                    basename_list, profile_paths, profile_pic_paths, sample_paths_1d = [list(x) for x in zip(*combined)]
+                else:
+                    combined = list(zip(basename_list, profile_paths, profile_pic_paths))
+                    combined.sort(key=lambda t: t[0])
+                    basename_list, profile_paths, profile_pic_paths = [list(x) for x in zip(*combined)]
+
             # simple_analysis for all sample profiles (§10: try-except, report via MESSAGE)
             descriptors_by_basename = {}
             if 'simple_analysis' in steps and basename_list and profile_paths:
@@ -1440,7 +1459,19 @@ class Controller:
                     except Exception as e:
                         self._send_message(f"simple_analysis failed for {basename}: {e}")
 
-            # First report pass: all sample profiles (integration→subtraction; descriptors if simple_analysis run; §4 step 6)
+            # plots for all sample profiles (§4 step 5, §10: try-except, report via MESSAGE)
+            plots_by_basename = {}
+            if 'plots' in steps and basename_list and profile_paths:
+                plots_dir = os.path.join(directory, 'plots')
+                for basename, profile_path in zip(basename_list, profile_paths):
+                    try:
+                        plot_paths = self.plot(
+                            context, profile_path, dest_dir=plots_dir, fast_forward=fast_forward)
+                        plots_by_basename[basename] = plot_paths  # [guinier, kratky, loglog]
+                    except Exception as e:
+                        self._send_message(f"plots failed for {basename}: {e}")
+
+            # First report pass: all sample profiles (integration→subtraction; descriptors if simple_analysis run; plot figures if plots run; §4 step 6)
             if basename_list and profile_paths:
                 reports_dir = os.path.join(directory, 'reports')
                 for i in range(len(basename_list)):
@@ -1457,8 +1488,41 @@ class Controller:
                         desc = _parse_descriptors_from_results(descriptors_by_basename[basename][0])
                         if desc:
                             rd['descriptors_table'] = desc
+                    if basename in plots_by_basename:
+                        p = plots_by_basename[basename]
+                        if len(p) >= 3:
+                            rd['plot_figures'] = {'guinier': p[0], 'kratky': p[1], 'loglog': p[2]}
                     out_path = os.path.join(reports_dir, f'{basename}_report.pdf')
                     build_report_pdf(rd, out_path)
+
+                # Summary report: one PDF combining all sample curves (§6.2)
+                summary_samples = []
+                for i in range(len(basename_list)):
+                    basename = basename_list[i]
+                    entry = {'basename': basename}
+                    if 'integration' in steps and sample_paths_1d is not None and i < len(sample_paths_1d):
+                        entry['integrated_curve_path'] = sample_paths_1d[i]
+                    if i < len(profile_paths):
+                        entry['subtracted_curve_path'] = profile_paths[i]
+                    if basename in descriptors_by_basename:
+                        desc = _parse_descriptors_from_results(descriptors_by_basename[basename][0])
+                        if desc:
+                            entry['descriptors'] = desc
+                    if basename in plots_by_basename:
+                        p = plots_by_basename[basename]
+                        if len(p) >= 3:
+                            plots_dir = os.path.join(directory, 'plots')
+                            # Plot step uses basename from profile_path (e.g. sub_foo_sample), not from sample_paths_1d
+                            plot_basename = os.path.splitext(os.path.basename(profile_paths[i]))[0]
+                            entry['guinier_path'] = os.path.join(plots_dir, f'guinier_{plot_basename}.dat')
+                            entry['kratky_path'] = os.path.join(plots_dir, f'kratky_{plot_basename}.dat')
+                            entry['loglog_path'] = os.path.join(plots_dir, f'loglog_{plot_basename}.dat')
+                    summary_samples.append(entry)
+                if summary_samples:
+                    build_summary_report_pdf(
+                        {'samples': summary_samples},
+                        os.path.join(reports_dir, 'summary_report.pdf'),
+                    )
 
             profiles_data = []
             for basename, (idx, profile_path), plot_path in zip(
@@ -1474,15 +1538,17 @@ class Controller:
                         'plot_path': plot_path,
                     }
                 )
-            # Profile selection only if at least one step after simple_analysis (§4 step 7, §11)
-            steps_after_simple_analysis = {'plots', 'polydispfit', 'bodies', 'dammif', 'ai_analysis'}
+            # Profile selection only if at least one step after simple_analysis/plots (§4 step 7, §11)
+            steps_after_simple_analysis = {'polydispfit', 'bodies', 'dammif', 'ai_analysis'}
             request_profile_selection = bool(set(steps) & steps_after_simple_analysis)
             if request_profile_selection:
+                profiles_data = sorted(profiles_data, key=lambda p: p.get("basename", ""))
                 selected_profiles = self._request_profile_selection(profiles_data)
             else:
                 selected_profiles = {}
 
-            for basename, profile in selected_profiles.items():
+            for basename in sorted(selected_profiles):
+                profile = selected_profiles[basename]
                 profile_path = profile['path']
                 profile_pic_path = profile.get('plot_path')
                 atsas_res_path, gnom_path = descriptors_by_basename.get(basename, (None, None))
@@ -1490,12 +1556,11 @@ class Controller:
                     context.append_path('atsas_res', atsas_res_path)
                 if gnom_path:
                     context.append_path('P(r)', gnom_path)
-                plot_paths = [profile_pic_path] if profile_pic_path else []
-                polydisp_dir = bodies_dir = dammif_dir = ''
-                if 'plots' in steps:
-                    plot_paths = self.plot(context, profile_path, dest_dir=os.path.join(directory, 'plots'), fast_forward=fast_forward)
-                    plot_paths = [profile_pic_path, ] + plot_paths
+                # Plot paths: sub (profile_pic_path) + guinier, kratky, loglog from plots-for-all pass (§4 step 8; plots run in first pass)
+                plot_paths = ([profile_pic_path] if profile_pic_path else []) + list(plots_by_basename.get(basename, []))
+                if plot_paths:
                     context.append_path('plot', plot_paths)
+                polydisp_dir = bodies_dir = dammif_dir = ''
                 if 'polydispfit' in steps:
                     try:
                         polydisp_dir = self.polydispfit(

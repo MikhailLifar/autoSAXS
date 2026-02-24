@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.platypus import (
     SimpleDocTemplate,
@@ -32,6 +32,12 @@ except Exception:
     _HAS_MPL = False
 
 from .utils import read_saxs, read_data
+
+# Descriptor column order for summary table (§6.2)
+SUMMARY_DESCRIPTOR_COLUMNS = [
+    'Rg (nm)', 'I(0)', 'Quality', 'Dmax (nm)',
+    'MW from Rg (kDa)', 'MW from DATMW (kDa)',
+]
 
 
 REPORT_IMAGE_WIDTH = 14 * cm  # fit to A4 width with margins
@@ -59,6 +65,94 @@ def _fig_from_curve_dat(dat_path: str) -> Optional[str]:
         if path is not None:
             try:
                 os.unlink(path)
+            except Exception:
+                pass
+        return None
+
+
+def _fig_multi_curves_saxs(
+    paths_with_labels: List[Tuple[str, str]],
+    xlabel: str,
+    ylabel: str,
+    title: str,
+    log_scale: bool = True,
+) -> Optional[str]:
+    """Create one figure with multiple SAXS curves (q, I) from .dat paths; return temp PNG path or None.
+    log_scale: if True, y-axis is log (log I vs q); if False, linear (I vs q). No legend (avoids clutter for many samples)."""
+    if not _HAS_MPL or not paths_with_labels:
+        return None
+    path_out = None
+    try:
+        fig, ax = plt.subplots()
+        for dat_path, _label in paths_with_labels:
+            if not dat_path or not os.path.isfile(dat_path):
+                continue
+            try:
+                q, I, _, _ = read_saxs(dat_path)
+                ax.plot(q, I)
+            except Exception:
+                continue
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        if log_scale:
+            ax.set_yscale('log')
+        fig.tight_layout()
+        fd, path_out = tempfile.mkstemp(suffix='.png')
+        os.close(fd)
+        fig.savefig(path_out, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        return path_out
+    except Exception:
+        if path_out and os.path.isfile(path_out):
+            try:
+                os.unlink(path_out)
+            except Exception:
+                pass
+        return None
+
+
+def _fig_multi_derived_dat(
+    paths_with_labels: List[Tuple[str, str]],
+    xlabel: str,
+    ylabel: str,
+    title: str,
+    x_col: str,
+    y_col: str,
+) -> Optional[str]:
+    """Create one figure from multiple derived .dat files (e.g. guinier/kratky/loglog); columns by name or index. No legend."""
+    if not _HAS_MPL or not paths_with_labels:
+        return None
+    path_out = None
+    try:
+        fig, ax = plt.subplots()
+        for dat_path, _label in paths_with_labels:
+            if not dat_path or not os.path.isfile(dat_path):
+                continue
+            try:
+                df, _, _ = read_data(dat_path)
+                if x_col in df.columns and y_col in df.columns:
+                    x, y = df[x_col].to_numpy(), df[y_col].to_numpy()
+                elif len(df.columns) >= 2:
+                    x, y = df.iloc[:, 0].to_numpy(), df.iloc[:, 1].to_numpy()
+                else:
+                    continue
+                ax.plot(x, y)
+            except Exception:
+                continue
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        fig.tight_layout()
+        fd, path_out = tempfile.mkstemp(suffix='.png')
+        os.close(fd)
+        fig.savefig(path_out, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        return path_out
+    except Exception:
+        if path_out and os.path.isfile(path_out):
+            try:
+                os.unlink(path_out)
             except Exception:
                 pass
         return None
@@ -387,6 +481,213 @@ def build_report_pdf(report_data: Dict[str, Any], output_path: str) -> None:
                 t,
                 Spacer(1, 0.5 * cm),
             ]))
+
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+    doc = SimpleDocTemplate(
+        output_path,
+        pagesize=A4,
+        rightMargin=1.5 * cm,
+        leftMargin=1.5 * cm,
+        topMargin=1.5 * cm,
+        bottomMargin=1.5 * cm,
+    )
+    doc.build(story)
+
+    for p in temp_paths:
+        try:
+            os.unlink(p)
+        except Exception:
+            pass
+
+
+def build_summary_report_pdf(summary_data: Dict[str, Any], output_path: str) -> None:
+    """
+    Build a single PDF summary report combining all sample curves (§6.2).
+    Only sections for which data is present are included.
+
+    summary_data keys (all optional):
+        samples: list of dict. Each dict may contain:
+            basename: str
+            integrated_curve_path: str (optional)
+            subtracted_curve_path: str (optional)
+            descriptors: dict (optional) — same keys as per-profile (Rg (nm), I(0), etc.)
+            guinier_path: str (optional) — path to guinier_<basename>.dat
+            kratky_path: str (optional)
+            loglog_path: str (optional)
+    """
+    styles = getSampleStyleSheet()
+    story: list = []
+    temp_paths: List[str] = []
+
+    story.append(Paragraph("SAXS summary report (all curves)", styles['Title']))
+    story.append(Spacer(1, 0.5 * cm))
+
+    samples = summary_data.get('samples') or []
+    if not samples:
+        story.append(Paragraph("No sample data.", styles['Normal']))
+        os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+        doc = SimpleDocTemplate(
+            output_path,
+            pagesize=A4,
+            rightMargin=1.5 * cm,
+            leftMargin=1.5 * cm,
+            topMargin=1.5 * cm,
+            bottomMargin=1.5 * cm,
+        )
+        doc.build(story)
+        return
+
+    # (1) All integrated curves, one axes — both I vs q and log(I) vs q
+    integrated = [(s.get('integrated_curve_path'), s.get('basename', '')) for s in samples if s.get('integrated_curve_path')]
+    if integrated:
+        fig_lin = _fig_multi_curves_saxs(
+            integrated,
+            xlabel='q (nm⁻¹)',
+            ylabel='I (a.u.)',
+            title='All integrated curves (I vs q)',
+            log_scale=False,
+        )
+        if fig_lin:
+            temp_paths.append(fig_lin)
+            _add_image_if_exists(story, fig_lin, "All integrated curves (I vs q)", temp_paths, styles)
+        fig_log = _fig_multi_curves_saxs(
+            integrated,
+            xlabel='q (nm⁻¹)',
+            ylabel='I (a.u.)',
+            title='All integrated curves (log I vs q)',
+            log_scale=True,
+        )
+        if fig_log:
+            temp_paths.append(fig_log)
+            _add_image_if_exists(story, fig_log, "All integrated curves (log I vs q)", temp_paths, styles)
+
+    # (2) All subtracted curves, one axes — both I vs q and log(I) vs q
+    subtracted = [(s.get('subtracted_curve_path'), s.get('basename', '')) for s in samples if s.get('subtracted_curve_path')]
+    if subtracted:
+        fig_lin = _fig_multi_curves_saxs(
+            subtracted,
+            xlabel='q (nm⁻¹)',
+            ylabel='I (a.u.)',
+            title='All subtracted curves (I vs q)',
+            log_scale=False,
+        )
+        if fig_lin:
+            temp_paths.append(fig_lin)
+            _add_image_if_exists(story, fig_lin, "All subtracted curves (I vs q)", temp_paths, styles)
+        fig_log = _fig_multi_curves_saxs(
+            subtracted,
+            xlabel='q (nm⁻¹)',
+            ylabel='I (a.u.)',
+            title='All subtracted curves (log I vs q)',
+            log_scale=True,
+        )
+        if fig_log:
+            temp_paths.append(fig_log)
+            _add_image_if_exists(story, fig_log, "All subtracted curves (log I vs q)", temp_paths, styles)
+
+    # (3) Descriptors table — rows = samples, columns = descriptor set
+    desc_rows = []
+    for s in samples:
+        d = s.get('descriptors')
+        if isinstance(d, dict) and d:
+            desc_rows.append((s.get('basename', ''), d))
+    if desc_rows:
+        all_keys = []
+        for _, d in desc_rows:
+            for k in d:
+                if k not in all_keys:
+                    all_keys.append(k)
+        # Prefer spec column order, then any extra keys
+        col_order = [c for c in SUMMARY_DESCRIPTOR_COLUMNS if c in all_keys]
+        col_order += [k for k in all_keys if k not in col_order]
+        # Header and data as Paragraphs so all text wraps and doesn't overlap
+        header_style = ParagraphStyle(
+            name='SummaryTableHeader',
+            parent=styles['Normal'],
+            fontSize=8,
+            fontName='Helvetica-Bold',
+        )
+        cell_style = ParagraphStyle(
+            name='SummaryTableCell',
+            parent=styles['Normal'],
+            fontSize=8,
+        )
+        header = [Paragraph("Sample", header_style)] + [Paragraph(c, header_style) for c in col_order]
+        rows = [header]
+        for basename, d in desc_rows:
+            row = [Paragraph(str(basename), cell_style)] + [
+                Paragraph(str(d.get(k, '')), cell_style) for k in col_order
+            ]
+            rows.append(row)
+        if len(rows) > 1:
+            col_width = min(3.0 * cm, (14 * cm) / len(header))
+            t = Table(rows, colWidths=[2.5 * cm] + [col_width] * (len(header) - 1))
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+            story.append(KeepTogether([
+                Paragraph("Descriptors (all samples)", styles['Heading2']),
+                t,
+                Spacer(1, 0.5 * cm),
+            ]))
+
+    # (4) Guinier overplots
+    guinier = [(s.get('guinier_path'), s.get('basename', '')) for s in samples if s.get('guinier_path')]
+    if guinier:
+        fig_path = _fig_multi_derived_dat(
+            guinier,
+            xlabel='q² (nm⁻²)',
+            ylabel='log(I) (a.u.)',
+            title='Guinier: all samples',
+            x_col='q^2',
+            y_col='log(I)',
+        )
+        if fig_path:
+            temp_paths.append(fig_path)
+            _add_image_if_exists(story, fig_path, "Guinier: all samples", temp_paths, styles)
+
+    # (5) Kratky overplots
+    kratky = [(s.get('kratky_path'), s.get('basename', '')) for s in samples if s.get('kratky_path')]
+    if kratky:
+        fig_path = _fig_multi_derived_dat(
+            kratky,
+            xlabel='q (nm⁻¹)',
+            ylabel='I·q² (a.u.)',
+            title='Kratky: all samples',
+            x_col='q',
+            y_col='I * q^2',
+        )
+        if fig_path:
+            temp_paths.append(fig_path)
+            _add_image_if_exists(story, fig_path, "Kratky: all samples", temp_paths, styles)
+
+    # (6) Log-log overplots (columns may be log(q), log(I) or two unnamed; use iloc if needed)
+    loglog = [(s.get('loglog_path'), s.get('basename', '')) for s in samples if s.get('loglog_path')]
+    if loglog:
+        fig_path = _fig_multi_derived_dat(
+            loglog,
+            xlabel='log(q)',
+            ylabel='log(I)',
+            title='Log-log: all samples',
+            x_col='log(q)',
+            y_col='log(I)',
+        )
+        if fig_path is None:
+            fig_path = _fig_multi_derived_dat(
+                loglog,
+                xlabel='log(q)',
+                ylabel='log(I)',
+                title='Log-log: all samples',
+                x_col='_iloc0',
+                y_col='_iloc1',
+            )
+        if fig_path:
+            temp_paths.append(fig_path)
+            _add_image_if_exists(story, fig_path, "Log-log: all samples", temp_paths, styles)
 
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
     doc = SimpleDocTemplate(

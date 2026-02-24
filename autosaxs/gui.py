@@ -240,6 +240,7 @@ def _run_choose_profiles_gui(profiles):
     """
     if not profiles:
         return []
+    profiles = sorted(profiles, key=lambda p: p.get("basename", ""))
 
     ctk.set_appearance_mode("System")
     ctk.set_default_color_theme("blue")
@@ -375,6 +376,7 @@ def choose_profiles(profiles):
     """
     if not profiles:
         return {}
+    profiles = sorted(profiles, key=lambda p: p.get("basename", ""))
 
     helper_path = os.path.abspath(__file__)
     tmp_path = None
@@ -440,6 +442,7 @@ if __name__ == "__main__":
         profiles_path = Path(sys.argv[2])
         with profiles_path.open("r") as f:
             profiles = json.load(f)
+        profiles = sorted(profiles, key=lambda p: p.get("basename", ""))
         selected = _run_choose_profiles_gui(profiles)
         print(json.dumps({"selected_basenames": selected}))
     else:

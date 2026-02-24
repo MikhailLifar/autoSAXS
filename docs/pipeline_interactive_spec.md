@@ -6,7 +6,7 @@ Specification of `Controller.pipeline_interactive` in the **autosaxs** package (
 
 ## 1. Purpose and scope
 
-**Purpose:** Interactive SAXS pipeline: detector calibration; 2D→1D integration of buffer/sample images; optional buffer subtraction; descriptors (Rg, I(0), P(R) via ATSAS); Guinier/Kratky/log-log plots; optional shape fitting (BODIES, DAMMIF, polydisperse spheres); optional AI analysis; per-profile PDF reports for all sample profiles. File-based I/O with directory and file upload prompts.
+**Purpose:** Interactive SAXS pipeline: detector calibration; 2D→1D integration of buffer/sample images; optional buffer subtraction; descriptors (Rg, I(0), P(R) via ATSAS); Guinier/Kratky/log-log plots; optional shape fitting (BODIES, DAMMIF, polydisperse spheres); optional AI analysis; per-profile PDF reports for all sample profiles; and a single summary PDF report combining all sample curves (integrated, subtracted, descriptors table, Guinier/Kratky/log-log overplots). File-based I/O with directory and file upload prompts.
 
 ---
 
@@ -40,7 +40,7 @@ Specification of `Controller.pipeline_interactive` in the **autosaxs** package (
   - **polydispfit** (`autosaxs/polydispfit.py`): Polydisperse sphere fitting; used by Controller for the polydispfit step. Uses tabular lookup tables (e.g. `sphere.npz`) under `autosaxs/global/tabular/`; the pipeline regenerates missing .npz data before fitting.
   - **viewer** (`autosaxs/viewer.py`): Visualization (`view_calibration`, `view_mask`, `view_curves`, `plot_3d_views_and_scattering`, etc.); uses plot helpers from `autosaxs.foreign.supervised_ml.plot_util`. Entry point `pipeline.py` uses `PLTViewer` when wiring the pipeline.
   - **context** (`autosaxs/context.py`): `Context` — holds directory, config, and path groups; config and path accessors.
-  - **report** (`autosaxs/report.py`): All per-profile PDF functionality. Builds a single PDF from a report-data dictionary (e.g. `build_report_pdf(report_data: dict, output_path: str)`). Only sections for which data is present are included. See §6 Report.
+  - **report** (`autosaxs/report.py`): All per-profile PDF functionality and the summary (all-curves) PDF. Builds a single PDF from a report-data dictionary (e.g. `build_report_pdf(report_data: dict, output_path: str)`). Only sections for which data is present are included. Summary report: one PDF combining all sample curves (integrated, subtracted, descriptors table, Guinier/Kratky/log-log overplots). See §6 Report.
   - **api** (`autosaxs/api.py`): Script-based interface to the pipeline. Encapsulates responding to pipeline requests (directory, files, steps, profile selection, choices) from function arguments and hardcoded values instead of user input. Same EventBus contract as CLI/GUI. See §3.2 Script-based API.
   - **pipeline** (`repos/pipeline.py`): Entry point for the interactive pipeline. Wires EventBus; connects one of `autosaxs.cli_interface`, `autosaxs.gui_interface`, or scripted use via `autosaxs.api`; creates `Controller` from `autosaxs.saxs_controller` and `PLTViewer` from `autosaxs.viewer`; runs `controller.pipeline_interactive(...)`. No pipeline logic—only wiring and invocation.
 
@@ -61,7 +61,7 @@ Specification of `Controller.pipeline_interactive` in the **autosaxs** package (
   1. Create EventBus; Controller and one of `autosaxs.cli_interface` / `autosaxs.gui_interface` / API (via `autosaxs.api`) connect to it. Controller creates `Context()` when it runs the pipeline.
   2. Steps via EventBus (pipeline/step selection); then **DIRECTORY_REQUESTED** → **DIRECTORY_SPECIFIED** or **PROGRAM_INTERRUPTED**; then **FILE_REQUESTED** for `config.conf` → **FILE_UPLOADED** or cancel. Load config.
   3. If `calibration` in steps: **FILE_REQUESTED** (calibrant) → response; **CHOICE_REQUESTED** (mask mode) → **OPTION_CHOSEN** / cancel; if mask from file/combined, **FILE_REQUESTED** (mask) → response. Run `autocalib(...)` or load integrator from disk when `integration` without calibration.
-  4. Main loop: **FILE_REQUESTED** (buffer/sample 2D or 1D, or `subtracted/*.dat`) → **FILE_UPLOADED** or cancel; on alignment errors **MESSAGE** then retry. Run integration/subtraction as per steps. If `simple_analysis` is in steps, run **simple_analysis for all sample profiles** (before any profile choice); failures in simple_analysis (and in polydispfit, bodies, dammif, ai_analysis below) are caught and reported via **MESSAGE**. Then build and save reports for **all sample profiles** (first pass; report data from integration through subtraction and, if run, simple_analysis; see §6 Report). If there is at least one step **after** `simple_analysis` (i.e. one of `plots`, `polydispfit`, `bodies`, `dammif`, `ai_analysis`): profile selection via EventBus → `selected_profiles`; for each **selected** profile run those remaining steps (each of polydispfit, bodies, dammif, ai_analysis in try-except; report failures via **MESSAGE**) and build/save report again (second pass; full data; same output path). If there are **no** steps after `simple_analysis` (processing stops at `simple_analysis` or earlier), do **not** request profile selection; proceed directly to the “Upload more data?” step.
+  4. Main loop: **FILE_REQUESTED** (buffer/sample 2D or 1D, or `subtracted/*.dat`) → **FILE_UPLOADED** or cancel; on alignment errors **MESSAGE** then retry. Run integration/subtraction as per steps. If `simple_analysis` is in steps, run **simple_analysis for all sample profiles** (before any profile choice). If `plots` is in steps, run **plots for all sample profiles** (before any profile choice). Failures in simple_analysis, plots (and in polydispfit, bodies, dammif, ai_analysis below) are caught and reported via **MESSAGE**. Then build and save reports for **all sample profiles** (first pass; report data from integration through subtraction; descriptors if simple_analysis was run; plot figures if plots was run; see §6 Report). If there is at least one step **after** `simple_analysis` and **after** `plots` (i.e. one of `polydispfit`, `bodies`, `dammif`, `ai_analysis`): profile selection via EventBus → `selected_profiles`; for each **selected** profile run those remaining steps (each of polydispfit, bodies, dammif, ai_analysis in try-except; report failures via **MESSAGE**) and build/save report again (second pass; full data; same output path). If there are **no** steps after `simple_analysis`/`plots` (processing stops at simple_analysis or plots or earlier), do **not** request profile selection; proceed directly to the “Upload more data?” step.
   5. Return `context`. On **PROGRAM_INTERRUPTED**, exit (e.g. raise `PipelineInterrupt`).
 
 ### 3.1 EventBus: events and data flow
@@ -85,8 +85,8 @@ Specification of `Controller.pipeline_interactive` in the **autosaxs** package (
 
 #### 3.2.1 `fast_first_processing(directory, steps=None, mask_choice=None)`
 
-- **Signature:** `fast_first_processing(directory, steps=None, mask_choice=None)` — `directory` is the working directory path (str). `steps`: optional list of step names (e.g. `['calibration', 'integration']`); default `None` → `['calibration', 'integration', 'subtraction', 'simple_analysis']`. `mask_choice`: optional; when calibration asks for mask mode, use this choice: `'a'` (automask), `'f'` (from file), `'c'` (combine); default `None` → `'c'`.
-- **Steps:** Configurable via `steps`; default `['calibration', 'integration', 'subtraction', 'simple_analysis']`.
+- **Signature:** `fast_first_processing(directory, steps=None, mask_choice=None)` — `directory` is the working directory path (str). `steps`: optional list of step names (e.g. `['calibration', 'integration']`); default `None` → `['calibration', 'integration', 'subtraction', 'simple_analysis', 'plots']`. `mask_choice`: optional; when calibration asks for mask mode, use this choice: `'a'` (automask), `'f'` (from file), `'c'` (combine); default `None` → `'c'`.
+- **Steps:** Configurable via `steps`; default `['calibration', 'integration', 'subtraction', 'simple_analysis', 'plots']`.
 - **Responses to pipeline requests:**
   - **PIPELINE_STEPS_REQUESTED** → **PIPELINE_STEPS_SPECIFIED** with `steps` (the function argument or default).
   - **DIRECTORY_REQUESTED** → **DIRECTORY_SPECIFIED** with `path` = `directory` (the function argument).
@@ -105,7 +105,7 @@ All “expect to exist, else raise” behavior means: when the Controller reques
 #### 3.2.2 `slow_second_processing(directory, selected_profiles)`
 
 - **Signature:** `slow_second_processing(directory, selected_profiles)` — `directory` is the working directory path (str); `selected_profiles` is a list of file names (e.g. basenames from the subtracted subdirectory, such as `["sub_foo.dat", "sub_bar.dat"]`). The implementation filters the controller’s `profiles_data` by these names and publishes the resulting dict (basename → profile) in **PROFILE_SELECTION_SPECIFIED**.
-- **Steps:** `['simple_analysis', 'plots', 'polydispfit', 'bodies', 'dammif']` (hardcoded).
+- **Steps:** `['simple_analysis', 'polydispfit', 'bodies', 'dammif']` (hardcoded).
 - **Responses to pipeline requests:**
   - **PIPELINE_STEPS_REQUESTED** → **PIPELINE_STEPS_SPECIFIED** with `steps` as above.
   - **DIRECTORY_REQUESTED** → **DIRECTORY_SPECIFIED** with `path` = `directory` (the function argument).
@@ -140,10 +140,10 @@ The function assumes the pipeline is run in a context where calibration, integra
      - If `subtraction` in steps and `integration` not in steps: wait for buffer and sample 1D in `averaged/`; align; set `buffer_paths_1d` and `sample_paths_1d` (and basename list from sample names).
      - If `subtraction` in steps: align `sample_paths_1d` with `buffer_paths_1d`; for each aligned pair run `subtract` → outputs in `subtracted/`; extend context with buffer_1d and sample_1d paths.
      - If `subtraction` not in steps: wait for `subtracted/*.dat`; for each file load, plot, and build basename list and profile paths.
-  5. **simple_analysis for all:** If `simple_analysis` in steps, run for every sample profile (outputs in `descriptors/`). Before first report pass and before profile selection.
-  6. **First report pass:** For all sample profiles: collect report data (integration→subtraction; descriptors if simple_analysis was run); build and save one PDF per profile (`reports/<basename>_report.pdf`). After simple_analysis (when in steps), before profile selection. See §6.
-  7. **Profile selection (conditional):** If at least one step after `simple_analysis` (plots, polydispfit, bodies, dammif, ai_analysis): request **PROFILE_SELECTION_REQUESTED**; result `selected_profiles` (dict basename → profile). Otherwise skip to step 9.
-  8. **Per-selected steps and second report pass (conditional):** Only if step 7 was done. For each selected profile: run remaining steps (plots, polydispfit, bodies, dammif, ai_analysis); build and save report again (full data; same path as first pass). See §6.
+  5. **simple_analysis and plots for all:** If `simple_analysis` in steps, run for every sample profile (outputs in `descriptors/`). If `plots` in steps, run for every sample profile (outputs in `plots/`). Before first report pass and before profile selection.
+  6. **First report pass:** For all sample profiles: collect report data (integration→subtraction; descriptors if simple_analysis was run; plot figures if plots was run); build and save one PDF per profile (`reports/<basename>_report.pdf`). Then build and save the **summary report** once per cycle (`reports/summary_report.pdf` or equivalent), combining all sample curves (see §6). After simple_analysis and plots (when in steps), before profile selection. See §6.
+  7. **Profile selection (conditional):** If at least one step after `simple_analysis`/`plots` (polydispfit, bodies, dammif, ai_analysis): request **PROFILE_SELECTION_REQUESTED**; result `selected_profiles` (dict basename → profile). Otherwise skip to step 9.
+  8. **Per-selected steps and second report pass (conditional):** Only if step 7 was done. For each selected profile: run remaining steps (polydispfit, bodies, dammif, ai_analysis); build and save report again (full data; same path as first pass). See §6.
   9. Ask whether to upload more data (e.g. “Upload more data?” or extended prompt); if answer does not start with “n”, repeat from step 4 (new buffer/sample or profiles); otherwise exit and return context.
 
 - **Processing:** When `integration` in steps, 2D files are integrated in one go after alignment. Subtraction runs in the same cycle after integration (or after loading 1D files); pairing via `map_sample_files_to_buffer_files` (see §11 naming).
@@ -162,15 +162,31 @@ The function assumes the pipeline is run in a context where calibration, integra
 
 ---
 
-## 6. Report (per-profile PDF)
+## 6. Report (per-profile PDF and summary PDF)
 
-Reports: one PDF per sample profile in `reports/<basename>_report.pdf`. Not a selectable step.
+Reports: one PDF per sample profile in `reports/<basename>_report.pdf`, plus one **summary report** PDF combining all curves in `reports/summary_report.pdf`. Not a selectable step.
 
-- **First pass:** After main cycle (integration, subtraction) and, if in steps, after simple_analysis for all. For every sample profile: collect data (integration→subtraction; descriptors if simple_analysis was run). Build and save one PDF. Content: sections (1)–(3); (4) when simple_analysis was run. Not-selected profiles get no further passes.
-- **Second pass:** Only for selected profiles. After remaining steps (plots, polydispfit, bodies, dammif, ai_analysis): collect full report data; build and save PDF at same path (overwrites first pass). Content: sections (1)–(7) as data exists.
-- **Report data:** Dict per profile; only present keys rendered. Keys: integrated curve, difference plot (`diff_<basename>.png`), subtracted plot (`sub_<basename>.png`), descriptors table (Rg, I(0), Quality, Dmax (nm), MW from Rg (kDa), MW from DATMW (kDa)), plot figures (Guinier, Kratky, log-log; no I vs q — it duplicates the subtracted curve), fits comparison figure(s), fits table. First pass: integration→subtraction (+ descriptors if simple_analysis run). Second pass: add plots and fits.
+### 6.1 Per-profile reports
+
+- **First pass:** After main cycle (integration, subtraction) and, if in steps, after simple_analysis and plots for all. For every sample profile: collect data (integration→subtraction; descriptors if simple_analysis was run; plot figures if plots was run). Build and save one PDF. Content: sections (1)–(3); (4) when simple_analysis was run; (5) when plots was run. Not-selected profiles get no further passes.
+- **Second pass:** Only for selected profiles. After remaining steps (polydispfit, bodies, dammif, ai_analysis): collect full report data; build and save PDF at same path (overwrites first pass). Content: sections (1)–(7) as data exists.
+- **Report data:** Dict per profile; only present keys rendered. Keys: integrated curve, difference plot (`diff_<basename>.png`), subtracted plot (`sub_<basename>.png`), descriptors table (Rg, I(0), Quality, Dmax (nm), MW from Rg (kDa), MW from DATMW (kDa)), plot figures (Guinier, Kratky, log-log; no I vs q — it duplicates the subtracted curve), fits comparison figure(s), fits table. First pass: integration→subtraction (+ descriptors if simple_analysis run; + plot figures if plots run). Second pass: add fits.
 - **PDF sections (optional):** (1) Integrated curve. (2) Difference plot. (3) Subtracted plot. (4) Descriptors table. (5) Plot figures (Guinier, Kratky, log-log only). (6) Fits figure(s): each titled by fit type (e.g. "Fits comparison, polydispfit", "Fits comparison, bodies", "Fits comparison, dammif"). (7) Fits table.
 - **Implementation:** `autosaxs.report.build_report_pdf(report_data, output_path)`. No EventBus events.
+
+### 6.2 Summary report (all curves, one PDF)
+
+- **Purpose:** One PDF that aggregates all sample profiles for quick comparison. Output path: `reports/summary_report.pdf` (or equivalent single file per cycle).
+- **When built:** Once per main cycle, after the first report pass (after all per-profile reports are built for that cycle). Uses the same data already collected for per-profile reports (integration, subtraction, descriptors if simple_analysis was run, plot data if plots was run).
+- **Content (only sections for which data exists):**
+  1. **All integrated curves, one axes** — One figure: every sample’s integrated curve on the same axes (q vs intensity); legend or labels by sample basename.
+  2. **All subtracted curves, one axes** — One figure: every sample’s subtracted curve on the same axes; legend or labels by sample basename.
+  3. **Descriptors table** — Single table: **rows** = samples (one row per sample basename); **columns** = same descriptor set as in per-profile reports (Rg, I(0), Quality, Dmax (nm), MW from Rg (kDa), MW from DATMW (kDa)). Include only descriptors that exist for at least one sample; missing cells left empty or marked as N/A.
+  4. **Guinier plots for all samples, one axes** — One figure: Guinier representation (e.g. log I vs q²) for every sample on the same axes; legend or labels by sample basename.
+  5. **Kratky plots for all samples, one axes** — One figure: Kratky representation (e.g. q²×I vs q) for every sample on the same axes; legend or labels by sample basename.
+  6. **Log-log plots for all samples, one axes** — One figure: log I vs log q for every sample on the same axes; legend or labels by sample basename.
+- **Data source:** Integrated and subtracted curves from context/profile data; descriptors from simple_analysis results (e.g. `descriptors/<basename>_results.txt` or equivalent); Guinier/Kratky/log-log from plots step data or from curve data (same transforms as in per-profile plots). No new pipeline steps; summary report is assembled from existing outputs.
+- **Implementation:** New or extended function in `autosaxs.report` (e.g. `build_summary_report_pdf(summary_data, output_path)` or equivalent). No EventBus events. Only include a section if the corresponding data is available (e.g. no descriptors table if simple_analysis was not in steps; no Guinier/Kratky/log-log panels if plots was not in steps or data is missing).
 
 ---
 
@@ -265,7 +281,7 @@ No default values are defined in the controller for these; they must exist in co
 
 - **Alignment (buffer–sample):** Overlapped or unpaired → messages and retry (sleep 10 s). On subtraction, alignment rechecked; if still invalid, `RuntimeError` with overlapped/not_paired.
 
-- **Calibration/processing failure:** No try/except around `autocalib`, `integrate`, `subtract`; exceptions propagate. Steps **simple_analysis**, **polydispfit**, **bodies**, **dammif**, **ai_analysis** are each wrapped in try-except: any exception during the step is caught, reported to the user via the EventBus (**MESSAGE** with failure text), and the pipeline continues (next profile or next step); no propagation.
+- **Calibration/processing failure:** No try/except around `autocalib`, `integrate`, `subtract`; exceptions propagate. Steps **simple_analysis**, **plots**, **polydispfit**, **bodies**, **dammif**, **ai_analysis** are each wrapped in try-except: any exception during the step is caught, reported to the user via the EventBus (**MESSAGE** with failure text), and the pipeline continues (next profile or next step); no propagation.
 
 - **User interruption:** Interface publishes **PROGRAM_INTERRUPTED** (e.g. empty obligatory input or quit). Controller exits (e.g. raise `PipelineInterrupt`); not caught in main loop.
 - **Script-based API (§3.2):** Required files must exist under the given directory; missing file → API raises. Alignment-failure MESSAGE → `fast_first_processing` raises.
@@ -278,7 +294,7 @@ No default values are defined in the controller for these; they must exist in co
 - **Naming (buffer–sample):** Buffer ends with `_buffer<.ext>`, sample with `_sample<.ext>`. Pair when buffer base is **contained in** sample base. One sample ↔ multiple buffers = “overlapped”; unpaired = error. Loop requires no overlapped, no unpaired.
 - **LATEST_STEPS_PATH (within autosaxs):** Derived from the package directory `_autosaxs_dir`, e.g. `os.path.join(_autosaxs_dir, "temp", "latest_steps.yml")`.
 - **Empty selections:** All steps unchecked → `default_steps`. No profile selected → empty dict; per-profile loop runs zero times.
-- **Profile selection (§4 step 7):** **PROFILE_SELECTION_REQUESTED** only if at least one step after `simple_analysis` (plots, polydispfit, bodies, dammif, ai_analysis). Otherwise skip to “Upload more data?” .
+- **Profile selection (§4 step 7):** **PROFILE_SELECTION_REQUESTED** only if at least one step after `simple_analysis`/`plots` (polydispfit, bodies, dammif, ai_analysis). Otherwise skip to “Upload more data?” .
 - **Alignment order:** `buffer_paths_1d` from `aligned_pairs` then `list(set(...))`; buffer order not preserved; subtraction iterates `aligned_pairs`.
 - **Subtraction output:** `averaged/int_foo_sample.dat` → basename `foo_sample`, output `subtracted/sub_foo_sample.dat` (`int_` stripped once).
 - **dammif:** 2 replicates; fixed in code.

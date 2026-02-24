@@ -35,12 +35,12 @@ def _wrap_handler(bus: EventBus, callback):
 def fast_first_processing(directory: str, steps=None, mask_choice=None):
     """Run pipeline with configurable steps (§3.2.1).
     directory: working directory; required files must exist there.
-    steps: list of step names (e.g. ["calibration", "integration"]). Default: calibration, integration, subtraction, simple_analysis.
+    steps: list of step names (e.g. ["calibration", "integration"]). Default: calibration, integration, subtraction, simple_analysis, plots.
     mask_choice: when calibration asks for mask, use this choice: 'a' (automask), 'f' (from file), 'c' (combine). Default: 'c'.
     Raises if a required file is missing or on alignment failure.
     """
     if steps is None:
-        steps = ["calibration", "integration", "subtraction", "simple_analysis"]
+        steps = ["calibration", "integration", "subtraction", "simple_analysis", "plots"]
     if mask_choice is None:
         mask_choice = "c"
     pipeline_choice = "protein_v0"
@@ -92,12 +92,12 @@ def fast_first_processing(directory: str, steps=None, mask_choice=None):
 
 
 def slow_second_processing(directory: str, selected_profiles: list):
-    """Run pipeline with steps simple_analysis, plots, polydispfit, bodies (§3.2.2).
+    """Run pipeline with steps simple_analysis, polydispfit, bodies, dammif (§3.2.2). Plots are run in fast first processing.
     directory: working directory (assumes calibration, integration, subtraction already done).
     selected_profiles: list of file names from the subtracted subdirectory to process (e.g. ["sub_foo.dat", "sub_bar.dat"]).
     The controller sends profiles_data (list of profile dicts with full paths); we filter by these names and return the expected dict.
     """
-    steps = ["simple_analysis", "plots", "polydispfit", "bodies", "dammif"]
+    steps = ["simple_analysis", "polydispfit", "bodies", "dammif"]
     pipeline_choice = "protein_v0"
     selected_filenames = set(selected_profiles or [])
 
