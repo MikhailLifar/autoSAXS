@@ -21,6 +21,9 @@ from .utils import (
     calc_chi2,
     read_bodies_cif,
     compute_dammif_descriptors,
+    load_saxs_1d_any,
+    find_guinier_region,
+    find_porod_region,
 )
 from . import cli_interface
 
@@ -529,29 +532,43 @@ class Controller:
             mw_rg = None
             mw_porod = None
             mw_datmw = None
+            guinier_region = None
+            porod_region = None
+            rg_source = None  # 'guinier_fit' or 'autorg'
 
-            # --- Step 1: Calculate Rg and I(0) using AUTORG ---
-            # Invoke as: autorg "<path>" (same as old shell: autorg "$INPUT_FILE"). Output goes to
-            # stdout (and possibly stderr); we capture both to tmp so parsing works regardless.
-            cmd_autorg = f'autorg {q(to_analyze_path)}'
-            os.system(f'{cmd_autorg} > {q(tmp_autorg)} 2>&1')
+            # --- Step 0: Load 1D data and search for Guinier and Porod regions ---
+            try:
+                q_arr, I_arr, sigma_arr = load_saxs_1d_any(to_analyze_path)
+                guinier_region = find_guinier_region(q_arr, I_arr, sigma=sigma_arr)
+                porod_region = find_porod_region(q_arr, I_arr)
+                if guinier_region is not None:
+                    rg_val = guinier_region['rg']
+                    i0_val = guinier_region['i0']
+                    rg_source = 'guinier_fit'
+                    quality_val = guinier_region.get('r_squared')
+            except Exception as e:
+                if DEBUG:
+                    self._send_message(f'Guinier/Porod region search failed: {e}')
+                guinier_region = None
+                porod_region = None
 
-            # Parse AUTORG output
-            if os.path.exists(tmp_autorg):
-                with open(tmp_autorg, 'r') as f:
-                    content = f.read()
-                    # Parse Rg
-                    match = re.search(r'Rg\s+=\s+([\d\.]+)', content)
-                    if match:
-                        rg_val = float(match.group(1))
-                    # Parse I(0)
-                    match = re.search(r'I\(0\)\s+=\s+([\d\.]+)', content)
-                    if match:
-                        i0_val = float(match.group(1))
-                    # Parse Quality
-                    match = re.search(r'Quality:\s+([\d\.]+)', content)
-                    if match:
-                        quality_val = float(match.group(1))
+            # --- Step 1: Fallback to AUTORG if we did not get Rg from Guinier fit ---
+            if rg_val is None:
+                cmd_autorg = f'autorg {q(to_analyze_path)}'
+                os.system(f'{cmd_autorg} > {q(tmp_autorg)} 2>&1')
+                if os.path.exists(tmp_autorg):
+                    with open(tmp_autorg, 'r') as f:
+                        content = f.read()
+                        match = re.search(r'Rg\s+=\s+([\d\.]+)', content)
+                        if match:
+                            rg_val = float(match.group(1))
+                            rg_source = 'autorg'
+                        match = re.search(r'I\(0\)\s+=\s+([\d\.]+)', content)
+                        if match and i0_val is None:
+                            i0_val = float(match.group(1))
+                        match = re.search(r'Quality:\s+([\d\.]+)', content)
+                        if match and quality_val is None:
+                            quality_val = float(match.group(1))
 
             # --- Step 1.5: Calculate P(r) using DATGNOM ---
             # Requires Rg. Only run if Rg was successfully determined.
@@ -629,7 +646,35 @@ class Controller:
                 f.write(f"Input file: {to_analyze_path}\n")
                 f.write(f"Analysis date: {time.ctime()}\n")
                 f.write("\n")
-                f.write("AUTORG Results:\n")
+                f.write("Note: When both are available, AUTORG is generally more reliable (it evaluates\n")
+                f.write("many intervals and uses interval-to-interval variation for errors). Our Guinier\n")
+                f.write("fit is used as a fallback when AUTORG fails or when the file format is not\n")
+                f.write("accepted by ATSAS. See doc for find_guinier_region in utils.py for details.\n")
+                f.write("\n")
+                f.write("Guinier region (automatic search):\n")
+                if guinier_region is not None:
+                    sr = guinier_region.get('sigma_rg')
+                    si = guinier_region.get('sigma_i0')
+                    f.write(f"  Rg = {guinier_region['rg']:.4f} nm (source: {rg_source})\n")
+                    if sr is not None:
+                        f.write(f"  Rg StDev = {sr:.4g} nm (from fit; AUTORG also uses interval variation)\n")
+                    f.write(f"  I(0) = {guinier_region['i0']:.4g}\n")
+                    if si is not None:
+                        f.write(f"  I(0) StDev = {si:.4g}\n")
+                    f.write(f"  q range = [{guinier_region['q_min']:.5g}, {guinier_region['q_max']:.5g}] nm^-1\n")
+                    f.write(f"  n points = {guinier_region['n_points']}, R^2 = {guinier_region['r_squared']:.4f}\n")
+                else:
+                    f.write("  No valid Guinier region found.\n")
+                f.write("\n")
+                f.write("Porod region (automatic search):\n")
+                if porod_region is not None:
+                    f.write(f"  slope (log I vs log q) = {porod_region['slope']:.3f} (nominal -4)\n")
+                    f.write(f"  q range = [{porod_region['q_min']:.5g}, {porod_region['q_max']:.5g}] nm^-1\n")
+                    f.write(f"  n points = {porod_region['n_points']}\n")
+                else:
+                    f.write("  No valid Porod region found.\n")
+                f.write("\n")
+                f.write("Descriptors (used downstream):\n")
                 f.write(f"  Rg = {rg_val if rg_val else 'N/A'} nm\n")
                 f.write(f"  I(0) = {i0_val if i0_val else 'N/A'}\n")
                 f.write(f"  Quality = {quality_val if quality_val else 'N/A'}\n")
@@ -637,7 +682,7 @@ class Controller:
                 f.write("GNOM Results:\n")
                 f.write(f"  Dmax = {dmax_val if dmax_val else 'N/A'} nm\n")
                 f.write("\n")
-                f.write("Porod Results:\n")
+                f.write("Porod volume (DATPOROD):\n")
                 f.write(f"  Porod Volume = {porod_vol if porod_vol else 'N/A'} nm^3\n")
                 f.write("\n")
                 f.write("Molecular Weight Estimates:\n")
@@ -955,142 +1000,203 @@ class Controller:
             radius_dist_png = os.path.join(polydisp_subdir, f'{basename}_radius_distribution.png')
             fit_data_dat = os.path.join(polydisp_subdir, f'{basename}_fit.dat')
             
-            # Check if results exist in fast_forward mode
-            if fast_forward and all(os.path.exists(p) for p in (fit_comparison_png, radius_dist_png, fit_data_dat)):
+            # Polydisperse models: symmetric (Gaussian), heavy-tail (Schulz), skewed (lognormal)
+            polydisp_distributions = [
+                ("gaussian", {
+                    "name": "gaussian",
+                    "params": {"mean": 3.0, "std": 0.5},
+                    "bounds": {"mean": (0.05, 100.0), "std": (0.05, 30.0)},
+                }),
+                ("schulz", {
+                    "name": "schulz",
+                    "params": {"z": 8.0, "mean": 3.0},
+                    "bounds": {"z": (0.05, 100.0), "mean": (0.05, 100.0)},
+                }),
+                ("lognormal", {
+                    "name": "lognormal",
+                    "params": {"mu": np.log(3.0), "sigma": 0.4},
+                    "bounds": {"mu": (np.log(0.05), np.log(100.0)), "sigma": (0.05, 2.0)},
+                }),
+            ]
+            required_outputs = [fit_comparison_png, radius_dist_png, fit_data_dat]
+            if fast_forward and all(os.path.exists(p) for p in required_outputs):
                 self._send_message(f'Fast-forward: Skipping polydisperse fit for {saxs_1d_path} (results already exist)')
-            
             else:
                 q, I, sigma, metadata_orig = read_saxs(saxs_1d_path)
-                
-                # # Get q_range from context (similar to bodies_fit)
-                # try:
-                #     first_nm, last_nm = context['polydispfit', 'q_range_nm']
-                # except (KeyError, TypeError):
-                #     # Default to full range if not specified
-                #     first_nm = q.min()
-                #     last_nm = q.max()
                 first_nm = 0.1
                 last_nm = 5.0
                 q_range = (first_nm, last_nm)
-                
-                dist_config = {
-                    "name": "gaussian",
-                    "params": {"mean": 3.0, "std": 0.5},
-                    "bounds": {"mean": (0.5, 10.0), "std": (0.05, 3.0)},
-                }
-                
                 model_name = 'sphere'
-                
-                # Perform the fit
-                fit_res = polydispfit(saxs_1d_path, model_name, dist_config, q_range)
-                
-                q_fit = fit_res["q"]
-                I_fit = fit_res["intensity"]
-                sigma_fit = fit_res["sigma"]
-                model_I = fit_res["model"]
-                scale = fit_res["scale"]
-                background = fit_res["background"]
-                chi2 = fit_res["chi2"]
-                dist_info = fit_res["distribution"]
-                opt_info = fit_res["optimizer_info"]
-
-                q_fit, I_fit, model_I, sigma_fit = q_fit[2:], I_fit[2:], model_I[2:], sigma_fit[2:]
-                
-                # Plot 1: Fit comparison
-                self.viewer.view_curves(
-                    q_fit, I_fit, {'label': 'experimental', 'lw': 2},
-                    q_fit, model_I, {'label': f'polydisperse fit ($\\chi^2$: {chi2:.2f})', 'lw': 2},
-                    sigmas=(sigma_fit, None),
-                    title=f'Polydisperse sphere fit for\n{basename}',
-                    xlabel='q (nm-1)',
-                    ylabel='I',
-                    legend=True,
-                    plotFilePath=fit_comparison_png,
-                    save=False
-                )
-                
-                # Plot 2: Radius distribution
-                dist_name = dist_info["name"].lower()
-                dist_params = dist_info["params"]
-                
-                # Choose plotting range based on fit
-                mean = dist_params.get("mean") or dist_params.get("r_mean") or dist_params.get("mu")
-                std = dist_params.get("std") or dist_params.get("sigma") or 0.2
-                R_min = max(0.01, mean - 4 * std)
-                R_max = mean + 4 * std
-                R = np.linspace(R_min, R_max, 300)
-                
-                # Calculate PDF based on distribution type
                 from scipy.special import gamma as gammafn
-                if dist_name in ("gaussian", "normal"):
-                    pdf = np.exp(-0.5 * ((R - dist_params["mean"]) / dist_params["std"]) ** 2) / (dist_params["std"] * np.sqrt(2 * np.pi))
-                elif dist_name in ("lognormal", "log-normal"):
-                    safe_R = np.maximum(R, np.finfo(float).tiny)
-                    pdf = np.exp(-(np.log(safe_R) - dist_params["mu"]) ** 2 / (2 * dist_params["sigma"] ** 2)) / (
-                        safe_R * dist_params["sigma"] * np.sqrt(2 * np.pi)
+
+                results_by_dist = []
+                for suffix, dist_config in polydisp_distributions:
+                    try:
+                        fit_res = polydispfit(saxs_1d_path, model_name, dist_config, q_range)
+                    except Exception as e:
+                        self._send_message(f'Polydisperse fit ({suffix}) failed: {e}')
+                        continue
+                    q_fit = fit_res["q"]
+                    I_fit = fit_res["intensity"]
+                    sigma_fit = fit_res["sigma"]
+                    model_I = fit_res["model"]
+                    scale = fit_res["scale"]
+                    background = fit_res["background"]
+                    chi2 = fit_res["chi2"]
+                    dist_info = fit_res["distribution"]
+                    opt_info = fit_res["optimizer_info"]
+                    chi2_linear = fit_res.get("chi2_linear", chi2)
+                    chi2_log = fit_res.get("chi2_log", chi2)
+                    score_linear = fit_res.get("score_linear", 0.0)
+                    score_log = fit_res.get("score_log", 0.0)
+                    parameterization_used = fit_res.get("parameterization_used", "linear")
+                    self._send_message(
+                        f'  {suffix}: chi2_linear={chi2_linear:.4g} chi2_log={chi2_log:.4g} '
+                        f'score_linear={score_linear:.4g} score_log={score_log:.4g} best={parameterization_used}'
                     )
-                elif dist_name in ("schulz", "schultz", "gamma"):
-                    z = dist_params["z"]
-                    r_mean = dist_params.get("mean", dist_params.get("r_mean"))
-                    safe_R = np.maximum(R, np.finfo(float).tiny)
-                    prefactor = ((z + 1) ** (z + 1)) / (r_mean * gammafn(z + 1))
-                    pdf = prefactor * (safe_R / r_mean) ** z * np.exp(-(z + 1) * safe_R / r_mean)
+                    dist_name = dist_info["name"].lower()
+                    dist_params = dist_info["params"]
+
+                    # Plot range and PDF for radius distribution
+                    if dist_name in ("gaussian", "normal"):
+                        mean = dist_params["mean"]
+                        std = dist_params["std"]
+                        R_min = max(0.01, mean - 4 * std)
+                        R_max = mean + 4 * std
+                    elif dist_name in ("lognormal", "log-normal"):
+                        mu, sig = dist_params["mu"], dist_params["sigma"]
+                        R_min = max(0.01, np.exp(mu - 4 * sig))
+                        R_max = np.exp(mu + 4 * sig)
+                    else:
+                        r_mean = dist_params.get("mean", dist_params.get("r_mean"))
+                        z = dist_params.get("z", 1.0)
+                        pd_rel = 1.0 / np.sqrt(z + 1) if z > -1 else 0.5
+                        R_min = max(0.01, r_mean * (1 - 4 * pd_rel))
+                        R_max = r_mean * (1 + 4 * pd_rel)
+                    R = np.linspace(R_min, R_max, 300)
+
+                    if dist_name in ("gaussian", "normal"):
+                        pdf = np.exp(-0.5 * ((R - dist_params["mean"]) / dist_params["std"]) ** 2) / (dist_params["std"] * np.sqrt(2 * np.pi))
+                    elif dist_name in ("lognormal", "log-normal"):
+                        safe_R = np.maximum(R, np.finfo(float).tiny)
+                        pdf = np.exp(-(np.log(safe_R) - dist_params["mu"]) ** 2 / (2 * dist_params["sigma"] ** 2)) / (
+                            safe_R * dist_params["sigma"] * np.sqrt(2 * np.pi)
+                        )
+                    elif dist_name in ("schulz", "schultz", "gamma"):
+                        z = dist_params["z"]
+                        r_mean = dist_params.get("mean", dist_params.get("r_mean"))
+                        safe_R = np.maximum(R, np.finfo(float).tiny)
+                        prefactor = ((z + 1) ** (z + 1)) / (r_mean * gammafn(z + 1))
+                        pdf = prefactor * (safe_R / r_mean) ** z * np.exp(-(z + 1) * safe_R / r_mean)
+                    else:
+                        pdf = np.full_like(R, np.nan)
+
+                    comp_png = os.path.join(polydisp_subdir, f'{basename}_fit_comparison_{suffix}.png')
+                    dist_png = os.path.join(polydisp_subdir, f'{basename}_radius_distribution_{suffix}.png')
+                    dat_path = os.path.join(polydisp_subdir, f'{basename}_fit_{suffix}.dat')
+
+                    self.viewer.view_curves(
+                        q_fit, I_fit, {'label': 'experimental', 'lw': 2},
+                        q_fit, model_I, {'label': f'{suffix} ($\\chi^2$: {chi2:.2f})', 'lw': 2},
+                        sigmas=(sigma_fit, None),
+                        title=f'Polydisperse sphere fit ({suffix}) for\n{basename}',
+                        xlabel='q (nm-1)', ylabel='I', legend=True,
+                        plotFilePath=comp_png, save=False
+                    )
+                    self.viewer.view_curves(
+                        R, pdf, {'label': f'{dist_name}', 'lw': 2},
+                        title=f'Fitted radius distribution ({suffix}) for\n{basename}',
+                        xlabel='Radius (nm)', ylabel='Probability density',
+                        legend=True, plotFilePath=dist_png, save=False
+                    )
+                    fit_data_df = pd.DataFrame({
+                        'q': q_fit,
+                        'I_experimental': I_fit,
+                        'I_model': model_I,
+                        'sigma': sigma_fit if sigma_fit is not None else np.full_like(q_fit, np.nan),
+                    })
+                    fit_metadata = {
+                        'type': 'polydisperse_fit',
+                        'parent': saxs_1d_path,
+                        'model_name': model_name,
+                        'distribution_variant': suffix,
+                        'q_range': q_range,
+                        'scale': float(scale),
+                        'background': float(background),
+                        'distribution': dist_info,
+                        'optimizer_info': opt_info,
+                        'fit_quality': {
+                            'chi2': float(chi2),
+                            'chi2_linear': float(chi2_linear),
+                            'chi2_log': float(chi2_log),
+                            'score_linear': float(score_linear),
+                            'score_log': float(score_log),
+                            'parameterization_used': parameterization_used,
+                            'success': opt_info.get('success', False),
+                            'message': opt_info.get('message', ''),
+                            'nfev': opt_info.get('nfev', 0),
+                        },
+                        'fitted_parameters': dist_params,
+                    }
+                    if metadata_orig:
+                        fit_metadata['original_metadata'] = metadata_orig
+                    write_data(dat_path, fit_data_df, fit_metadata)
+                    results_by_dist.append({
+                        "suffix": suffix,
+                        "chi2": chi2,
+                        "chi2_linear": chi2_linear,
+                        "chi2_log": chi2_log,
+                        "score_linear": score_linear,
+                        "score_log": score_log,
+                        "parameterization_used": parameterization_used,
+                        "q_fit": q_fit,
+                        "I_fit": I_fit,
+                        "sigma_fit": sigma_fit,
+                        "model_I": model_I,
+                        "scale": scale,
+                        "background": background,
+                        "dist_info": dist_info,
+                        "dist_params": dist_params,
+                        "opt_info": opt_info,
+                        "R": R,
+                        "pdf": pdf,
+                        "comp_png": comp_png,
+                        "dist_png": dist_png,
+                        "dat_path": dat_path,
+                        "fit_data_df": fit_data_df,
+                        "fit_metadata": fit_metadata,
+                    })
+
+                if not results_by_dist:
+                    self._send_message('Polydisperse fit: all distribution variants failed.')
                 else:
-                    pdf = np.full_like(R, np.nan)
-                    self._send_message(f'Warning: Unknown distribution type {dist_name} for visualization.')
-                
-                # Plot radius distribution
-                self.viewer.view_curves(
-                    R, pdf, {'label': f'{dist_name.capitalize()} distribution', 'lw': 2},
-                    title=f'Fitted radius distribution for\n{basename}',
-                    xlabel='Radius (nm)',
-                    ylabel='Probability density',
-                    legend=True,
-                    plotFilePath=radius_dist_png,
-                    save=False
-                )
-                
-                # Save fitted curve and model curve with metadata
-                fit_data_df = pd.DataFrame({
-                    'q': q_fit,
-                    'I_experimental': I_fit,
-                    'I_model': model_I,
-                    'sigma': sigma_fit if sigma_fit is not None else np.full_like(q_fit, np.nan),
-                })
-                
-                fit_metadata = {
-                    'type': 'polydisperse_fit',
-                    'parent': saxs_1d_path,
-                    'model_name': model_name,
-                    'q_range': q_range,
-                    'scale': float(scale),
-                    'background': float(background),
-                    'distribution': dist_info,
-                    'optimizer_info': opt_info,
-                    'fit_quality': {
-                        'chi2': float(chi2),
-                        'success': opt_info.get('success', False),
-                        'message': opt_info.get('message', ''),
-                        'nfev': opt_info.get('nfev', 0),
-                    },
-                    'fitted_parameters': dist_params,
-                }
-                
-                # Merge with original metadata if available
-                if metadata_orig:
-                    fit_metadata['original_metadata'] = metadata_orig
-                
-                write_data(fit_data_dat, fit_data_df, fit_metadata)
-                
-                self._send_message(
-                    f'\n-- Polydisperse fit results --\n' +
-                    f'Model: {model_name}\n' +
-                    f'Distribution: {dist_name}\n' +
-                    f'Scale: {scale:.4g}\n' +
-                    f'Background: {background:.4g}\n' +
-                    f'Chi2: {chi2:.4g}\n' +
-                    f'Distribution parameters: {dist_params}\n'
-                )
+                    best = min(results_by_dist, key=lambda r: r["chi2"])
+                    # Write default (best) outputs for report and backward compatibility
+                    self.viewer.view_curves(
+                        best["q_fit"], best["I_fit"], {'label': 'experimental', 'lw': 2},
+                        best["q_fit"], best["model_I"], {'label': f"polydisperse fit ($\\chi^2$: {best['chi2']:.2f})", 'lw': 2},
+                        sigmas=(best["sigma_fit"], None),
+                        title=f'Polydisperse sphere fit for\n{basename}',
+                        xlabel='q (nm-1)', ylabel='I', legend=True,
+                        plotFilePath=fit_comparison_png, save=False
+                    )
+                    self.viewer.view_curves(
+                        best["R"], best["pdf"], {'label': f"{best['dist_info']['name']}", 'lw': 2},
+                        title=f'Fitted radius distribution for\n{basename}',
+                        xlabel='Radius (nm)', ylabel='Probability density',
+                        legend=True, plotFilePath=radius_dist_png, save=False
+                    )
+                    best_meta = best["fit_metadata"].copy()
+                    best_meta["distribution_variant"] = best["suffix"]
+                    write_data(fit_data_dat, best["fit_data_df"], best_meta)
+
+                    msg = '\n-- Polydisperse fit results (best = {} chi2: {:.4g}, param={}) --\n'.format(
+                        best["suffix"], best["chi2"], best.get("parameterization_used", "linear")
+                    )
+                    for r in results_by_dist:
+                        msg += f"  {r['suffix']}: chi2={r['chi2']:.4g}  param={r.get('parameterization_used', 'linear')}  params={r['dist_params']}\n"
+                    msg += f"Scale: {best['scale']:.4g}  Background: {best['background']:.4g}\n"
+                    self._send_message(msg)
         
         return polydisp_subdir
     

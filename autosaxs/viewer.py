@@ -442,42 +442,55 @@ class PLTViewer(Viewer):
         if fig_axs is not None:
             raise RuntimeError
         fig = plt.figure(figsize=(30, 24))
-        views = [
-            (221, 'Front (x–y)', (0, 1, 2), (90, 0)),      # front: look along z
-            (222, 'Side (y–z)', (1, 2, 0), (0, 0)),        # side: look along x
-            (223, 'Top (x–z)', (0, 2, 1), (0, 90)),        # top: look along y
-            (224, 'Scattering', None, None)
+        # Three 3D plane views. (vertical axis, horizontal axis) with (top-to-down, left-to-right).
+        # vert_transform maps (c0,c1,c2)=(x,y,z) to (ax.x=horizontal, ax.y=vertical, ax.z=depth). View along depth.
+        # (0,0): (x top-to-down, y left-to-right) -> (x,y) plane. Plot (y, -x, z), view from +z (elev=90)
+        # (0,1): (z left-to-right, y left-to-right) -> (z,y) plane. Plot (z, y, x), view from +x (elev=90)
+        # (1,0): (x top-to-down, z left-to-right) -> (x,z) plane. Plot (z, -x, y), view from +y (elev=90)
+        # For all, we look down plot's z (depth); elev=90, azim=-90 gives view from +z in plot coords.
+        def transform_00(v):
+            return np.column_stack([v[:, 1], -v[:, 0], v[:, 2]])   # horizontal=y, vertical=-x, depth=z
+        def transform_01(v):
+            return np.column_stack([v[:, 2], v[:, 1], v[:, 0]])    # horizontal=z, vertical=y, depth=x
+        def transform_10(v):
+            return np.column_stack([v[:, 2], -v[:, 0], v[:, 1]])   # horizontal=z, vertical=-x, depth=y
+        view_plane = (90, -90)  # look down plot z (depth) so we see the plane
+        views_3d = [
+            (221, '(x, y) plane', transform_00,
+             (min_coords[1], max_coords[1]), (-max_coords[0], -min_coords[0]), (min_coords[2], max_coords[2]),
+             view_plane),
+            (222, '(z, y) plane', transform_01,
+             (min_coords[2], max_coords[2]), (min_coords[1], max_coords[1]), (min_coords[0], max_coords[0]),
+             view_plane),
+            (223, '(x, z) plane', transform_10,
+             (min_coords[2], max_coords[2]), (-max_coords[0], -min_coords[0]), (min_coords[1], max_coords[1]),
+             view_plane),
         ]
 
-        for subplot_spec, title, axes_order, view_angle in views:
-            if title == 'Scattering':
-                ax = fig.add_subplot(subplot_spec)
-                ax.plot(q, I, 'o', label='Experimental', markersize=4, alpha=0.7)
-                ax.fill_between(q, I - sigma, I + sigma, alpha=0.5)
-                ax.plot(q, I_fit, '-', label='Fit', linewidth=2)
-                ax.set_xlabel(r'$q$ (Å$^{-1}$)')
-                ax.set_ylabel(r'$I(q)$ (a.u.)')
-                ax.set_yscale('log')
-                ax.set_title(f'Experiment vs fit comparison\n$\\chi^2$: {calc_chi2(I, I_fit, sigma):.5f}')
-                ax.legend()
-                continue
-
+        for subplot_spec, title, vert_transform, xlim, ylim, zlim, (view_elev, view_azim) in views_3d:
             ax = fig.add_subplot(subplot_spec, projection='3d')
             if verts is not None and faces is not None and face_colors is not None:
-                # Create mesh for this view with colors based on distance from center
-                mesh = Poly3DCollection(verts[faces], alpha=alpha_transparency,
+                verts_plot = vert_transform(verts)
+                mesh = Poly3DCollection(verts_plot[faces], alpha=alpha_transparency,
                                         facecolors=face_colors, edgecolor='k', linewidth=0.2)
                 ax.add_collection3d(mesh)
-                ax.view_init(elev=view_angle[0], azim=view_angle[1])
-                ax.set_xlim(min_coords[0], max_coords[0])
-                ax.set_ylim(min_coords[1], max_coords[1])
-                ax.set_zlim(min_coords[2], max_coords[2])
-            # else: marching_cubes failed (e.g. level outside volume range); leave axis empty
+            ax.view_init(elev=view_elev, azim=view_azim)
+            ax.set_xlim(xlim[0], xlim[1])
+            ax.set_ylim(ylim[0], ylim[1])
+            ax.set_zlim(zlim[0], zlim[1])
             ax.set_title(title)
-            ax.set_box_aspect([1, 1, 1])  # equal aspect
-            ax.set_xticks([])
-            ax.set_yticks([])
-            ax.set_zticks([])
+            ax.set_box_aspect([1, 1, 1])
+
+        # Scattering subplot
+        ax = fig.add_subplot(224)
+        ax.plot(q, I, 'o', label='Experimental', markersize=4, alpha=0.7)
+        ax.fill_between(q, I - sigma, I + sigma, alpha=0.5)
+        ax.plot(q, I_fit, '-', label='Fit', linewidth=2)
+        ax.set_xlabel(r'$q$ (nm$^{-1}$)')
+        ax.set_ylabel(r'$I(q)$ (a.u.)')
+        ax.set_yscale('log')
+        ax.set_title(f'Experiment vs fit comparison\n$\\chi^2$: {calc_chi2(I, I_fit, sigma):.5f}')
+        ax.legend()
 
         if plotFilePath is not None:
             savefig(fig, plotFilePath)

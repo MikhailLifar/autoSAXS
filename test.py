@@ -150,7 +150,7 @@ def polydispfit_test():
     else:
         plt.plot(q, I, 'o', ms=3, label='Data')
     plt.plot(q, model_I, '-', lw=2, label='Polydisperse fit')
-    plt.xlabel('q (1/Å)')
+    plt.xlabel('q (nm⁻¹)')
     plt.ylabel('Intensity (a.u.)')
     plt.title('Polydisperse sphere fit')
     plt.legend()

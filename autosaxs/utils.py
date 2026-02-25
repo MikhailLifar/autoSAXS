@@ -139,6 +139,200 @@ def read_chi(filename: str) -> Tuple[np.ndarray, np.ndarray]:
     return q, I
 
 
+def load_saxs_1d_any(filename: str) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+    """
+    Load q, I and optionally sigma from a SAXS 1D file.
+    Tries read_saxs (YAML+CSV), then two-column .chi-style, then any two-column numeric.
+    Returns (q, I, sigma); sigma is None if not available.
+    """
+    try:
+        q, I, sigma, _ = read_saxs(filename)
+        return np.asarray(q), np.asarray(I), np.asarray(sigma) if sigma is not None else None
+    except (ValueError, KeyError):
+        pass
+    try:
+        q, I = read_chi(filename)
+        return np.asarray(q), np.asarray(I), None
+    except (ValueError, Exception):
+        pass
+    data_lines = []
+    with open(filename, 'r') as f:
+        for line in f:
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    a, b = float(parts[0]), float(parts[1])
+                    data_lines.append((a, b))
+                except ValueError:
+                    pass
+    if len(data_lines) < 3:
+        raise ValueError(f"Cannot load 1D SAXS data from {filename}")
+    arr = np.array(data_lines)
+    q, I = np.sort(arr[:, 0]), arr[:, 1][np.argsort(arr[:, 0])]
+    return q, I, None
+
+
+def find_guinier_region(
+    q: np.ndarray,
+    I: np.ndarray,
+    sigma: Optional[np.ndarray] = None,
+    n_min: int = 5,
+    qrg_max: float = 1.3,
+    r2_min: float = 0.98,
+    max_pts: int = 80,
+    try_sliding: bool = True,
+) -> Optional[Dict]:
+    """
+    Find the Guinier region and fit Rg, I(0).
+    ln(I) = ln(I0) - (Rg²/3)*q²; valid for q*Rg < ~1.3.
+
+    Strategy (aligned with AUTORG where possible):
+    - Tries contiguous ranges: when try_sliding is True, considers intervals that may not
+      start at the first point (AUTORG does this: e.g. "Points 52 to 132").
+    - Among all fits with q_max*Rg < qrg_max and R² >= r2_min, selects the one with
+      the *largest* number of points (largest acceptable Guinier range), not best R²,
+      to avoid favouring too-short ranges.
+
+    Returns dict with keys: rg, i0, q_min, q_max, r_squared, n_points, sigma_rg, sigma_i0;
+    or None if no valid fit. sigma_rg/sigma_i0 are from the fit covariance (underestimate
+    vs AUTORG, which also uses variation across intervals).
+    """
+    q = np.asarray(q, dtype=float)
+    I = np.asarray(I, dtype=float)
+    if sigma is not None:
+        sigma = np.asarray(sigma, dtype=float)
+    idx = np.argsort(q)
+    q, I = q[idx], I[idx]
+    if sigma is not None:
+        sigma = sigma[idx]
+    valid = I > 0
+    if np.sum(valid) < n_min:
+        return None
+    q, I = q[valid], I[valid]
+    if sigma is not None:
+        sigma = sigma[valid]
+    n = len(q)
+    best = None
+    best_n_pts = -1
+
+    def fit_interval(i_start: int, n_pts: int):
+        if i_start + n_pts > n:
+            return None
+        q_sub = q[i_start : i_start + n_pts]
+        I_sub = I[i_start : i_start + n_pts]
+        sig_sub = sigma[i_start : i_start + n_pts] if sigma is not None else None
+        x = q_sub ** 2
+        y = np.log(I_sub)
+        if sig_sub is not None and np.all(sig_sub > 0):
+            w = (I_sub / sig_sub) ** 2
+        else:
+            w = None
+        try:
+            if w is not None:
+                coeffs = np.polyfit(x, y, 1, w=w)
+            else:
+                coeffs = np.polyfit(x, y, 1)
+        except Exception:
+            return None
+        slope, intercept = coeffs[0], coeffs[1]
+        if slope >= 0:
+            return None
+        rg = np.sqrt(-3.0 * slope)
+        i0 = np.exp(intercept)
+        if q_sub[-1] * rg > qrg_max:
+            return None
+        y_fit = intercept + slope * x
+        ss_res = np.sum((y - y_fit) ** 2)
+        ss_tot = np.sum((y - np.mean(y)) ** 2)
+        r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+        if r2 < r2_min:
+            return None
+        # Uncertainty from fit: var(slope) and var(intercept) via residual variance
+        dof = n_pts - 2
+        if dof > 0 and ss_res >= 0:
+            res_var = ss_res / dof
+            x_mean = np.mean(x)
+            sxx = np.sum((x - x_mean) ** 2)
+            if sxx > 0:
+                var_slope = res_var / sxx
+                var_intercept = res_var * (1.0 / n_pts + x_mean ** 2 / sxx)
+                # Rg = sqrt(-3*slope) => dRg/d(slope) = -3/(2*sqrt(-3*slope)) = -3/(2*Rg) up to sign
+                sigma_rg = 0.5 * (3.0 / rg) * (var_slope ** 0.5) if slope != 0 else np.nan
+                sigma_i0 = i0 * (var_intercept ** 0.5)
+            else:
+                sigma_rg = sigma_i0 = np.nan
+        else:
+            sigma_rg = sigma_i0 = np.nan
+        return {
+            'rg': float(rg),
+            'i0': float(i0),
+            'q_min': float(q_sub[0]),
+            'q_max': float(q_sub[-1]),
+            'r_squared': float(r2),
+            'n_points': n_pts,
+            'sigma_rg': float(sigma_rg) if not np.isnan(sigma_rg) else None,
+            'sigma_i0': float(sigma_i0) if not np.isnan(sigma_i0) else None,
+        }
+
+    starts = [0] if not try_sliding else range(0, max(1, n - n_min + 1))
+    for i_start in starts:
+        for n_pts in range(n_min, min(n - i_start, max_pts) + 1):
+            cand = fit_interval(i_start, n_pts)
+            if cand is not None and (best is None or n_pts > best_n_pts):
+                best = cand
+                best_n_pts = n_pts
+    return best
+
+
+def find_porod_region(
+    q: np.ndarray,
+    I: np.ndarray,
+    n_min: int = 5,
+    slope_nominal: float = -4.0,
+    slope_tol: float = 0.5,
+    max_pts: int = 60,
+) -> Optional[Dict]:
+    """
+    Find the Porod region at high q where I(q) ∝ q^(-4).
+    Fits log(I) vs log(q); slope should be ≈ -4.
+    Returns dict with keys: slope, K (I = K*q^slope), q_min, q_max, n_points; or None.
+    """
+    q = np.asarray(q, dtype=float)
+    I = np.asarray(I, dtype=float)
+    valid = (q > 0) & (I > 0)
+    if np.sum(valid) < n_min:
+        return None
+    q, I = q[valid], I[valid]
+    idx = np.argsort(q)
+    q, I = q[idx], I[idx]
+    n = len(q)
+    best = None
+    best_err = np.inf
+    for n_pts in range(n_min, min(n, max_pts) + 1):
+        q_sub = q[-n_pts:]
+        I_sub = I[-n_pts:]
+        x = np.log(q_sub)
+        y = np.log(I_sub)
+        try:
+            coeffs = np.polyfit(x, y, 1)
+        except Exception:
+            continue
+        slope, logK = coeffs[0], coeffs[1]
+        if abs(slope - slope_nominal) > slope_tol:
+            continue
+        err = abs(slope - slope_nominal)
+        if err < best_err:
+            best_err = err
+            best = {
+                'slope': float(slope),
+                'K': float(np.exp(logK)),
+                'q_min': float(q_sub[0]),
+                'q_max': float(q_sub[-1]),
+                'n_points': n_pts,
+            }
+    return best
+
+
 def read_reference_sub_dat(filename: str) -> Tuple[np.ndarray, np.ndarray, str]:
     """
     Read reference subtracted .dat file (format: header with Parent(s): sample.chi buffer.chi, then two-column q I).

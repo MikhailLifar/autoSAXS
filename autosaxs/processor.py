@@ -400,11 +400,20 @@ def refine(calib_data, rings, wavelength, dist, pixel_size, center_y_px, center_
             # Read mask BEFORE threadpool limits to avoid fabio/numpy threading conflicts
             file_mask = IntegratorExtended.read_mask(mask_path)
         
+        # For from_file: add only the center (beam-stop) mask, no IQR statistical filtering
+        center_only_mask = None
+        if mode == 'from_file':
+            print(f'DEBUG: Adding center (beam-stop) mask for from_file mode (no IQR filtering)')
+            center_only_mask = calc_beam_abnormal_mask(
+                calib_data, center_y_px, center_x_px, r_beam_px,
+                calc_abnormal_mask=False,
+            )
+        
         # Combine masks based on mode
         if mode == 'auto':
             mask = automask
         elif mode == 'from_file':
-            mask = file_mask
+            mask = file_mask | center_only_mask
         elif mode == 'combined':
             assert file_mask is not None and automask is not None, 'file_mask and automask must be not None'
             mask = file_mask | automask
