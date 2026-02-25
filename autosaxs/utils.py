@@ -31,6 +31,10 @@ with open(os.path.join(GLOBALS_DIR, 'env.yml'), 'r') as fread:
     ENV = yaml.safe_load(fread)
 ATSAS_BIN_PREFIX = ENV["ATSAS_BIN_PREFIX"]
 
+# Pipeline units convention: q in nm^-1 (inverse nanometers), Rg and lengths in nm.
+# PyFAI integrate1d must be called with unit='q_nm^-1'. ATSAS (autorg, datgnom, etc.)
+# accept .dat with q in nm^-1 and return Rg, Dmax in nm; use write_saxs_atsas_format for input.
+
 
 @contextmanager
 def timer(name="Timer"):
@@ -84,6 +88,25 @@ def write_saxs(filename, wavenumber, intensity, sigma, metadata):
 
     # Delegate actual writing to generic helper
     write_data(filename, df, metadata)
+
+
+def write_saxs_atsas_format(filename: str, q: np.ndarray, I: np.ndarray, sigma: Optional[np.ndarray] = None) -> None:
+    """
+    Write SAXS data in ATSAS .dat format: plain 3 columns (q, intensity, errors),
+    no headers or YAML. Pipeline convention: q in nm^-1; ATSAS returns Rg/Dmax in nm when given nm^-1.
+
+    If sigma is None, errors are set to 4% of I (ATSAS convention when errors absent).
+    """
+    q = np.asarray(q)
+    I = np.asarray(I)
+    if sigma is None or not np.all(np.isfinite(sigma)) or np.any(sigma <= 0):
+        sigma = 0.04 * np.maximum(I, 1e-300)
+    else:
+        sigma = np.asarray(sigma)
+    with open(filename, 'w') as f:
+        for i in range(len(q)):
+            f.write(f"{q[i]}\t{I[i]}\t{sigma[i]}\n")
+
 
 def read_saxs(filename):
     """
@@ -139,6 +162,23 @@ def read_chi(filename: str) -> Tuple[np.ndarray, np.ndarray]:
     return q, I
 
 
+def ensure_q_nm(
+    q: np.ndarray,
+    I: np.ndarray,
+    sigma: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+    """
+    Ensure q is in nm^-1 (pipeline convention). If q looks like Å^-1 (typical max < 0.6),
+    convert by q_nm = q_angstrom * 10. Returns (q, I, sigma) unchanged or with q converted.
+    """
+    q = np.asarray(q, dtype=float)
+    q_max = np.max(q)
+    # q in nm^-1 is typically ~0.05–5; q in Å^-1 is ~0.005–0.5
+    if q_max > 0 and q_max < 0.6:
+        q = q * 10.0
+    return q, np.asarray(I, dtype=float), sigma
+
+
 def load_saxs_1d_any(filename: str) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """
     Load q, I and optionally sigma from a SAXS 1D file.
@@ -178,7 +218,7 @@ def find_guinier_region(
     sigma: Optional[np.ndarray] = None,
     n_min: int = 5,
     qrg_max: float = 1.3,
-    r2_min: float = 0.98,
+    r2_min: float = 0.9,
     max_pts: int = 80,
     try_sliding: bool = True,
 ) -> Optional[Dict]:
@@ -291,11 +331,30 @@ def find_porod_region(
     slope_nominal: float = -4.0,
     slope_tol: float = 0.5,
     max_pts: int = 60,
+    Rg: Optional[float] = None,
+    qR_min: float = 2.0,
 ) -> Optional[Dict]:
     """
     Find the Porod region at high q where I(q) ∝ q^(-4).
+
+    When Rg is provided, uses the theoretical high-q condition: Porod's law is valid
+    for q*R >> 1; we require q >= qR_min/Rg (default qR_min=2, so q >= 2/Rg).
+    Only points in this range are used. If the data do not extend into this range
+    (q_max < qR_min/Rg), no fit is performed and a dict with
+    theoretical_range_absent=True is returned so callers can flag it.
+
+    When Rg is None, the search uses the rightmost points (legacy behavior) and
+    the result will have theoretical_range_checked=False.
+
     Fits log(I) vs log(q); slope should be ≈ -4.
-    Returns dict with keys: slope, K (I = K*q^slope), q_min, q_max, n_points; or None.
+    Assumes q and Rg in consistent units (e.g. q in 1/nm, Rg in nm).
+
+    Returns:
+        On success: dict with slope, K (I = K*q^slope), q_min, q_max, n_points,
+            and theoretical_range_used=True when Rg was given.
+        When Rg given but data don't reach theoretical range: dict with
+            theoretical_range_absent=True, q_min_required, q_max_data, Rg.
+        When no valid slope found: None.
     """
     q = np.asarray(q, dtype=float)
     I = np.asarray(I, dtype=float)
@@ -306,6 +365,32 @@ def find_porod_region(
     idx = np.argsort(q)
     q, I = q[idx], I[idx]
     n = len(q)
+    q_max_data = float(q[-1])
+
+    if Rg is not None and Rg > 0:
+        q_min_theory = qR_min / Rg
+        if q_max_data < q_min_theory:
+            return {
+                'theoretical_range_absent': True,
+                'q_min_required': q_min_theory,
+                'q_max_data': q_max_data,
+                'Rg': Rg,
+            }
+        mask = q >= q_min_theory
+        q_porod = q[mask]
+        I_porod = I[mask]
+        n_porod = len(q_porod)
+        if n_porod < n_min:
+            return {
+                'theoretical_range_absent': True,
+                'q_min_required': q_min_theory,
+                'q_max_data': q_max_data,
+                'Rg': Rg,
+            }
+        q, I, n = q_porod, I_porod, n_porod
+    else:
+        q_min_theory = None
+
     best = None
     best_err = np.inf
     for n_pts in range(n_min, min(n, max_pts) + 1):
@@ -330,6 +415,11 @@ def find_porod_region(
                 'q_max': float(q_sub[-1]),
                 'n_points': n_pts,
             }
+            if Rg is not None and Rg > 0:
+                best['theoretical_range_used'] = True
+                best['q_min_required'] = q_min_theory
+            else:
+                best['theoretical_range_checked'] = False
     return best
 
 

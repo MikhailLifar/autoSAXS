@@ -22,8 +22,10 @@ from .utils import (
     read_bodies_cif,
     compute_dammif_descriptors,
     load_saxs_1d_any,
+    ensure_q_nm,
     find_guinier_region,
     find_porod_region,
+    write_saxs_atsas_format,
 )
 from . import cli_interface
 
@@ -127,7 +129,7 @@ def _parse_descriptors_from_results(results_path):
             m = re.match(r'\s*I\(0\)\s*=\s*(.+)', line)
             if m:
                 out['I(0)'] = m.group(1).strip()
-            m = re.match(r'\s*Quality:\s*(.+)', line)
+            m = re.match(r'\s*Quality\s*[=:]\s*(.+)', line)
             if m:
                 out['Quality'] = m.group(1).strip()
             m = re.match(r'\s*Dmax\s*=\s*(.+?)\s*nm', line)
@@ -139,6 +141,9 @@ def _parse_descriptors_from_results(results_path):
             m = re.match(r'\s*From DATMW:\s*(.+?)\s*kDa', line)
             if m:
                 out['MW from DATMW (kDa)'] = m.group(1).strip()
+            m = re.match(r'\s*Porod Volume\s*=\s*(.+?)\s*nm\^?3', line, re.IGNORECASE)
+            if m:
+                out['Porod Volume (nm^3)'] = m.group(1).strip()
     return out if out else None
 
 
@@ -503,6 +508,10 @@ class Controller:
         if to_analyze_path:
             os.makedirs(dest_dir, exist_ok=True)
 
+            # ATSAS units (from official docs): Input .dat with q in nm^-1 -> AUTORG/DATGNOM return Rg, Dmax in nm.
+            # AUTORG infers q unit from data; we feed plain 3-column (q, I, errors) with q in nm^-1.
+            # DATGNOM -r expects Rg in same unit as input (nm). DATPOROD stdout: s_max, MW(Da), path (2nd col = MW in Daltons).
+
             root, basename = os.path.split(to_analyze_path)
             basename, _ = os.path.splitext(basename)
             results_file = os.path.join(dest_dir, f'{basename}_results.txt')
@@ -535,45 +544,75 @@ class Controller:
             guinier_region = None
             porod_region = None
             rg_source = None  # 'guinier_fit' or 'autorg'
+            atsas_dat_path = to_analyze_path  # fallback if we never write ATSAS format
 
-            # --- Step 0: Load 1D data and search for Guinier and Porod regions ---
+            # --- Step 0: Load 1D data, ensure q in nm^-1, write ATSAS file, run AUTORG, then Guinier ---
+            # Pipeline units: q in nm^-1, Rg in nm. ATSAS expects plain 3-column .dat (q, I, errors).
             try:
                 q_arr, I_arr, sigma_arr = load_saxs_1d_any(to_analyze_path)
-                guinier_region = find_guinier_region(q_arr, I_arr, sigma=sigma_arr)
-                porod_region = find_porod_region(q_arr, I_arr)
-                if guinier_region is not None:
-                    rg_val = guinier_region['rg']
-                    i0_val = guinier_region['i0']
-                    rg_source = 'guinier_fit'
-                    quality_val = guinier_region.get('r_squared')
+                q_arr, I_arr, sigma_arr = ensure_q_nm(q_arr, I_arr, sigma_arr)
+                atsas_dat_path = os.path.join(dest_dir, f'{basename}_atsas.dat')
+                write_saxs_atsas_format(atsas_dat_path, q_arr, I_arr, sigma_arr)
             except Exception as e:
                 if DEBUG:
-                    self._send_message(f'Guinier/Porod region search failed: {e}')
-                guinier_region = None
-                porod_region = None
+                    self._send_message(f'Load/write ATSAS failed: {e}')
+                atsas_dat_path = to_analyze_path
 
-            # --- Step 1: Fallback to AUTORG if we did not get Rg from Guinier fit ---
-            if rg_val is None:
-                cmd_autorg = f'autorg {q(to_analyze_path)}'
+            # --- Step 1: Run AUTORG and prefer it when it succeeds (align with reference pipelines) ---
+            if os.path.exists(atsas_dat_path):
+                cmd_autorg = f'autorg {q(atsas_dat_path)}'
                 os.system(f'{cmd_autorg} > {q(tmp_autorg)} 2>&1')
                 if os.path.exists(tmp_autorg):
                     with open(tmp_autorg, 'r') as f:
                         content = f.read()
-                        match = re.search(r'Rg\s+=\s+([\d\.]+)', content)
-                        if match:
-                            rg_val = float(match.group(1))
-                            rg_source = 'autorg'
-                        match = re.search(r'I\(0\)\s+=\s+([\d\.]+)', content)
-                        if match and i0_val is None:
-                            i0_val = float(match.group(1))
-                        match = re.search(r'Quality:\s+([\d\.]+)', content)
-                        if match and quality_val is None:
-                            quality_val = float(match.group(1))
+                    match = re.search(r'Rg\s+=\s+([\d\.]+)', content)
+                    if match:
+                        rg_val = float(match.group(1))
+                        rg_source = 'autorg'
+                        match_i0 = re.search(r'I\(0\)\s+=\s+([\d\.]+)', content)
+                        if match_i0:
+                            i0_val = float(match_i0.group(1))
+                        match_q = re.search(r'Quality:\s+([\d\.]+)', content)
+                        if match_q:
+                            quality_val = float(match_q.group(1))
+
+            # --- Step 1b: Guinier/Porod for report and fallback when AUTORG did not return Rg ---
+            if rg_val is None and atsas_dat_path != to_analyze_path:
+                try:
+                    q_arr, I_arr, sigma_arr = load_saxs_1d_any(to_analyze_path)
+                    q_arr, I_arr, sigma_arr = ensure_q_nm(q_arr, I_arr, sigma_arr)
+                    guinier_region = find_guinier_region(q_arr, I_arr, sigma=sigma_arr)
+                    porod_region = find_porod_region(
+                        q_arr, I_arr,
+                        Rg=guinier_region['rg'] if guinier_region is not None else None,
+                    )
+                    if guinier_region is not None:
+                        rg_val = guinier_region['rg']
+                        i0_val = guinier_region['i0']
+                        rg_source = 'guinier_fit'
+                        quality_val = guinier_region.get('r_squared')
+                except Exception as e:
+                    if DEBUG:
+                        self._send_message(f'Guinier/Porod region search failed: {e}')
+                    guinier_region = None
+                    porod_region = None
+            else:
+                try:
+                    q_arr, I_arr, sigma_arr = load_saxs_1d_any(to_analyze_path)
+                    q_arr, I_arr, sigma_arr = ensure_q_nm(q_arr, I_arr, sigma_arr)
+                    guinier_region = find_guinier_region(q_arr, I_arr, sigma=sigma_arr)
+                    porod_region = find_porod_region(
+                        q_arr, I_arr,
+                        Rg=rg_val if rg_val is not None else (guinier_region['rg'] if guinier_region else None),
+                    )
+                except Exception:
+                    guinier_region = None
+                    porod_region = None
 
             # --- Step 1.5: Calculate P(r) using DATGNOM ---
             # Requires Rg. Only run if Rg was successfully determined.
             if rg_val is not None:
-                cmd_datgnom = f'datgnom {q(to_analyze_path)} -r {rg_val} -o {q(gnom_file)}'
+                cmd_datgnom = f'datgnom {q(atsas_dat_path)} -r {rg_val} -o {q(gnom_file)}'
                 os.system(f'{cmd_datgnom} > {q(tmp_datgnom)} 2>&1')
 
                 # Parse Dmax: datgnom often writes nothing to stdout; get it from the .out file
@@ -592,46 +631,48 @@ class Controller:
             else:
                 print("Warning: Rg not found, skipping DATGNOM.")
 
-            # --- Step 2: Calculate Porod volume using DATPOROD ---
-            # Requires the .out file from GNOM.
+            # --- Step 2: Calculate Porod volume / MW using DATPOROD ---
+            # Requires the .out file from GNOM. ATSAS manual: "prints s_max, the volume estimate (Da), and the file name".
+            # The second column is molecular weight in Daltons (not volume); we convert to kDa and back-calc volume for display.
             if os.path.exists(gnom_file):
                 cmd_datporod = f'datporod {q(gnom_file)}'
                 os.system(f'{cmd_datporod} > {q(tmp_datporod)} 2>&1')
 
-                # Parse DATPOROD output: "Rg Volume Filename" (Volume is 2nd column)
                 if os.path.exists(tmp_datporod):
                     with open(tmp_datporod, 'r') as f:
                         content = f.read().strip()
                         parts = content.split()
                         if len(parts) >= 2:
                             try:
-                                porod_vol = float(parts[1])
+                                mw_da = float(parts[1])
+                                mw_porod = mw_da / 1000.0  # Da -> kDa
+                                # Back-calculate volume in nm^3 for report (MW_kDa ≈ V_nm3 * 0.824)
+                                porod_vol = mw_porod / 0.824 if mw_porod > 0 else None
                             except ValueError:
                                 pass
 
             # --- Step 3: Calculate Molecular Weight Estimates ---
             # Method 1: From Rg (Empirical relationship for globular proteins)
-            # MW (kDa) = (Rg / 0.715)^3
+            # MW (kDa) = (Rg / 0.715)^3  (Rg in nm)
             if rg_val is not None:
                 mw_rg = (rg_val / 0.715)**3
 
-            # Method 2: From Porod Volume (assuming protein density)
-            # MW (kDa) = Volume (nm^3) * 0.824 (approx based on v_bar = 0.74 cm^3/g)
-            if porod_vol is not None:
-                mw_porod = porod_vol * 0.824
+            # Method 2: From DATPOROD (already set above as mw_porod in kDa; porod_vol is back-calculated for display)
 
-            # Method 3: Using DATMW (if on PATH). Output is columnar: ... MW(Da) ... path
+            # Method 3: Using DATMW (if on PATH). Output: one line with columns; 4th column (index 3) is MW in Daltons.
+            # On error DATMW writes e.g. " path: error: rg/i0 required" - do not use in that case.
             if shutil.which('datmw'):
-                cmd_datmw = f'datmw {q(to_analyze_path)}'
+                cmd_datmw = f'datmw {q(atsas_dat_path)}'
                 os.system(f'{cmd_datmw} > {q(tmp_datmw)} 2>&1')
                 if os.path.exists(tmp_datmw):
                     with open(tmp_datmw, 'r') as f:
                         content = f.read()
+                    if 'error' not in content.lower():
                         match = re.search(r'MW\s+:\s+([\d\.]+)', content)
                         if match:
                             mw_datmw = float(match.group(1))
                         else:
-                            # Column format: ... MW(Da) ... path; 4th column (index 3) is MW in Daltons
+                            # Column format: e.g. "350.000  0.73E-02  0.0  372700.  0.905  path"
                             parts = content.split()
                             if len(parts) >= 4:
                                 try:
@@ -655,7 +696,8 @@ class Controller:
                 if guinier_region is not None:
                     sr = guinier_region.get('sigma_rg')
                     si = guinier_region.get('sigma_i0')
-                    f.write(f"  Rg = {guinier_region['rg']:.4f} nm (source: {rg_source})\n")
+                    rg_display = rg_val if rg_source == 'autorg' and rg_val is not None else guinier_region['rg']
+                    f.write(f"  Rg = {rg_display:.4f} nm (source: {rg_source})\n")
                     if sr is not None:
                         f.write(f"  Rg StDev = {sr:.4g} nm (from fit; AUTORG also uses interval variation)\n")
                     f.write(f"  I(0) = {guinier_region['i0']:.4g}\n")
@@ -666,13 +708,25 @@ class Controller:
                 else:
                     f.write("  No valid Guinier region found.\n")
                 f.write("\n")
-                f.write("Porod region (automatic search):\n")
+                f.write("Porod region (theoretical high-q range, q >= 2/Rg):\n")
                 if porod_region is not None:
-                    f.write(f"  slope (log I vs log q) = {porod_region['slope']:.3f} (nominal -4)\n")
-                    f.write(f"  q range = [{porod_region['q_min']:.5g}, {porod_region['q_max']:.5g}] nm^-1\n")
-                    f.write(f"  n points = {porod_region['n_points']}\n")
+                    if porod_region.get('theoretical_range_absent'):
+                        f.write("  FLAG: Theoretical high-q range not in data. Porod analysis not run.\n")
+                        f.write(f"  q_min_required (2/Rg) = {porod_region['q_min_required']:.5g} nm^-1\n")
+                        f.write(f"  q_max in data = {porod_region['q_max_data']:.5g} nm^-1\n")
+                        f.write(f"  Rg used = {porod_region['Rg']:.4f} nm\n")
+                    elif 'slope' in porod_region:
+                        f.write(f"  slope (log I vs log q) = {porod_region['slope']:.3f} (nominal -4)\n")
+                        f.write(f"  q range = [{porod_region['q_min']:.5g}, {porod_region['q_max']:.5g}] nm^-1\n")
+                        f.write(f"  n points = {porod_region['n_points']}\n")
+                        if porod_region.get('theoretical_range_used'):
+                            f.write(f"  q_min_required (2/Rg) = {porod_region.get('q_min_required', 'N/A')} nm^-1\n")
+                        elif porod_region.get('theoretical_range_checked') is False:
+                            f.write("  CAUTION: Rg was not available; theoretical high-q range was not applied.\n")
+                    else:
+                        f.write("  No valid Porod region found.\n")
                 else:
-                    f.write("  No valid Porod region found.\n")
+                    f.write("  No valid Porod region found (or Rg not available for theoretical range).\n")
                 f.write("\n")
                 f.write("Descriptors (used downstream):\n")
                 f.write(f"  Rg = {rg_val if rg_val else 'N/A'} nm\n")

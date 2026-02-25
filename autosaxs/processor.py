@@ -94,7 +94,11 @@ class IntegratorExtended:
             self.mask = mask
     
     def integrate1d(self, saxs_2d, npt):
-        q, I, sigma = self.ai.integrate1d(saxs_2d, npt=npt, mask=self.mask, error_model='poisson')
+        # Pipeline convention: q in nm^-1, Rg in nm. Explicit unit ensures consistency
+        # (pyFAI default is 2th_deg which would break Guinier/Porod analysis).
+        q, I, sigma = self.ai.integrate1d(
+            saxs_2d, npt=npt, mask=self.mask, error_model='poisson', unit='q_nm^-1'
+        )
         return q, I, sigma
 
 
