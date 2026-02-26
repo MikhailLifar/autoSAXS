@@ -1,8 +1,9 @@
-from typing import Optional, Any, Tuple, List
+from typing import Optional, Any, Tuple, List, Dict
 import os, re
 import json, yaml
 import glob
 import subprocess
+import tempfile
 
 import numpy as np
 import scipy.ndimage as ndi
@@ -30,6 +31,364 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from .utils import *
+
+
+# --- Guinier analysis pipeline constants ---
+GUINIER_FIRST5_R2_MIN = 0.85
+GUINIER_FIRST10_R2_MIN = 0.85
+AUTORG_MIN_POINTS = 5
+GUINIER_MANUAL_N_MIN = 5
+GUINIER_MANUAL_R2_MIN = 0.88
+GUINIER_MANUAL_QRG_MAX = 1.35
+# Validation: Guinier holds for q*Rg <= k (k=1). q_max = k/Rg; validation on [q_max/2, q_max]
+GUINIER_QRG_VALIDATION_K = 1.0
+GUINIER_VALIDATION_MIN_POINTS = 2
+GUINIER_VALIDATION_R2_MIN = 0.85  # only use validation-based selection if some method has validation_r2 >= this
+GUINIER_CLASSIFICATION_R2_MIN = 0.85  # R² >= this in [0, q_max/2] -> "linear"
+GUINIER_UPTURN_DOWNTURN_FRACTION = 0.85  # non-parametric: if this fraction above/below line (through next pt, Guinier slope) -> upturn/downturn
+
+
+def _validation_r2_guinier(
+    q: np.ndarray,
+    I: np.ndarray,
+    Rg: float,
+    I0: float,
+    k: float = GUINIER_QRG_VALIDATION_K,
+) -> Optional[float]:
+    """
+    R² between Guinier line ln(I0) - (Rg²/3)*q² and actual ln(I) on [q_max/2, q_max],
+    where q_max = k/Rg (Guinier valid for q*Rg <= k). Returns None if too few points.
+    """
+    if Rg <= 0 or I0 <= 0 or len(q) == 0:
+        return None
+    q_max = k / Rg
+    q_lo, q_hi = q_max / 2.0, q_max
+    mask = (q >= q_lo) & (q <= q_hi) & (I > 0)
+    qv = q[mask]
+    Iv = I[mask]
+    if len(qv) < GUINIER_VALIDATION_MIN_POINTS:
+        return None
+    y_actual = np.log(Iv)
+    y_fit = np.log(I0) - (Rg ** 2 / 3.0) * (qv ** 2)
+    ss_res = np.sum((y_actual - y_fit) ** 2)
+    ss_tot = np.sum((y_actual - np.mean(y_actual)) ** 2)
+    if ss_tot <= 0:
+        return None
+    return float(1.0 - ss_res / ss_tot)
+
+
+def _upturn_downturn_nonparametric(
+    x: np.ndarray, y: np.ndarray, Rg: float
+) -> Optional[str]:
+    """
+    Non-parametric upturn/downturn: for each point i, compare y[i] to the line through
+    the next point (x[i+1], y[i+1]) with slope from the Guinier approximation, -Rg²/3
+    (in q² vs ln(I) space). Returns "upturn" if >= 85% of points are above that line,
+    "downturn" if >= 85% below, else None. x, y must be sorted by x; requires at least 2 points.
+    """
+    n = len(x)
+    if n < 2 or Rg <= 0:
+        return None
+    slope = -(Rg ** 2) / 3.0  # Guinier: ln(I) = ln(I0) - (Rg²/3)*q²
+    above = 0
+    below = 0
+    total = 0
+    for i in range(n - 1):
+        y_line = y[i + 1] + slope * (x[i] - x[i + 1])
+        total += 1
+        if y[i] > y_line:
+            above += 1
+        elif y[i] < y_line:
+            below += 1
+    if total == 0:
+        return None
+    if above / total >= GUINIER_UPTURN_DOWNTURN_FRACTION:
+        return "upturn"
+    if below / total >= GUINIER_UPTURN_DOWNTURN_FRACTION:
+        return "downturn"
+    return None
+
+
+def _classification_guinier(
+    q: np.ndarray,
+    I: np.ndarray,
+    Rg: float,
+    I0: float,
+    k: float = GUINIER_QRG_VALIDATION_K,
+) -> Optional[str]:
+    """
+    Classify behavior in [0, q_max/2] for the best Rg approximation.
+    Returns "linear" | "upturn" | "downturn" | "chaotic" or None if not enough points.
+    """
+    if Rg <= 0 or I0 <= 0 or len(q) == 0:
+        return None
+    q_max = k / Rg
+    q_hi = q_max / 2.0
+    mask = (q >= 0) & (q <= q_hi) & (I > 0)
+    qc = q[mask]
+    Ic = I[mask]
+    if len(qc) < GUINIER_VALIDATION_MIN_POINTS:
+        return None
+    y_actual = np.log(Ic)
+    y_fit = np.log(I0) - (Rg ** 2 / 3.0) * (qc ** 2)
+    residuals = y_actual - y_fit
+    ss_res = np.sum(residuals ** 2)
+    ss_tot = np.sum((y_actual - np.mean(y_actual)) ** 2)
+    r2 = (1.0 - ss_res / ss_tot) if ss_tot > 0 else None
+    if r2 is not None and r2 >= GUINIER_CLASSIFICATION_R2_MIN:
+        return "linear"
+    # Non-parametric test: point above/below line through next point with Guinier slope -Rg²/3
+    xc = qc ** 2
+    np_result = _upturn_downturn_nonparametric(xc, y_actual, Rg)
+    if np_result is not None:
+        return np_result
+    return "chaotic"
+
+
+def _guinier_fit_n_points(
+    q: np.ndarray, I: np.ndarray, n_pts: int
+) -> Optional[Dict[str, Any]]:
+    """Fit Guinier ln(I) = ln(I0) - (Rg²/3)*q² on the first n_pts points. Returns dict or None."""
+    if len(q) < n_pts or np.any(I[:n_pts] <= 0):
+        return None
+    qn = q[:n_pts]
+    In = I[:n_pts]
+    x = qn ** 2
+    y = np.log(In)
+    try:
+        coeffs = np.polyfit(x, y, 1)
+    except Exception:
+        return None
+    slope, intercept = coeffs[0], coeffs[1]
+    if slope >= 0:
+        return None
+    rg = np.sqrt(-3.0 * slope)
+    i0 = np.exp(intercept)
+    y_fit = intercept + slope * x
+    ss_res = np.sum((y - y_fit) ** 2)
+    ss_tot = np.sum((y - np.mean(y)) ** 2)
+    r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+    return {
+        'Rg': float(rg),
+        'I0': float(i0),
+        'n_points': n_pts,
+        'fit_quality': float(r2),
+        'guinier_interval': (float(qn[0]), float(qn[-1])),
+    }
+
+
+def run_guinier_analysis(
+    q: np.ndarray,
+    I: np.ndarray,
+    sigma: Optional[np.ndarray] = None,
+    atsas_dat_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Run all Guinier analyses on SAXS data and return a unified result dict.
+
+    Two-phase selection:
+      Phase 1: Compute four approximations (first5, first10, autorg, manual).
+      Phase 2: For each, compute validation R² on [q_max/2, q_max] where q_max = k/Rg
+      (Guinier holds for q*Rg <= k, k=1). If at least one method has validation_r2 >= 0.85,
+      the method with the best validation R² is chosen; else fallback: first5 (R²>=0.85) ->
+      first10 (R²>=0.85) -> autorg (>=5 pts) -> manual.
+
+    Classification (for the chosen approximation, in [0, q_max/2]):
+      "linear" = good fit (R² >= 0.85), narrow unimodal; "upturn" = intensity above fit
+      (aggregation/large particles); "downturn" = below fit (repulsion/bad subtraction);
+      "chaotic" = large non-systematic deviations (polydisperse/corrupted).
+
+    Each method result includes validation_r2. Input q, I, sigma in pipeline units (q in nm^-1).
+
+    Parameters
+    ----------
+    q, I, sigma : array-like
+        1D SAXS data (q in nm^-1). sigma can be None.
+    atsas_dat_path : str or None
+        If provided, this path is used for AUTORG (file must exist with 3-column ATSAS format).
+        If None, a temporary file is written for AUTORG.
+
+    Returns
+    -------
+    dict
+        Keys:
+        - 'first5', 'first10', 'autorg', 'manual': per-method results, each with
+          Rg, n_points, fit_quality, guinier_interval, validation_r2 (and I0 where applicable).
+        - 'chosen': one of 'first5', 'first10', 'autorg', 'manual' (by best validation_r2, or fallback)
+        - 'chosen_Rg', 'chosen_I0', 'chosen_quality', 'chosen_n_points', 'chosen_interval'
+        - 'chosen_validation_r2': validation R² on [q_max/2, q_max] for chosen method
+        - 'classification': "linear" | "upturn" | "downturn" | "chaotic" (behavior in [0, q_max/2])
+    """
+    q = np.asarray(q, dtype=float)
+    I = np.asarray(I, dtype=float)
+    sigma = np.asarray(sigma, dtype=float) if sigma is not None else None
+    idx = np.argsort(q)
+    q = q[idx]
+    I = I[idx]
+    if sigma is not None:
+        sigma = sigma[idx]
+    n_total = len(q)
+
+    out: Dict[str, Any] = {
+        'first5': None,
+        'first10': None,
+        'autorg': None,
+        'manual': None,
+        'chosen': None,
+        'chosen_Rg': None,
+        'chosen_I0': None,
+        'chosen_quality': None,
+        'chosen_n_points': None,
+        'chosen_interval': None,
+        'chosen_validation_r2': None,
+        'classification': None,
+    }
+
+    # --- 1. Fit first 5 points ---
+    res5 = _guinier_fit_n_points(q, I, 5)
+    if res5 is not None:
+        out['first5'] = res5
+
+    # --- 2. Fit first 10 points ---
+    res10 = _guinier_fit_n_points(q, I, 10)
+    if res10 is not None:
+        out['first10'] = res10
+
+    # --- 3. AUTORG ---
+    path_for_autorg = atsas_dat_path
+    if path_for_autorg is None:
+        fd, path_for_autorg = tempfile.mkstemp(suffix='.dat', prefix='autosaxs_guinier_')
+        try:
+            os.close(fd)
+            write_saxs_atsas_format(path_for_autorg, q, I, sigma)
+        except Exception:
+            path_for_autorg = None
+    if path_for_autorg is not None and os.path.exists(path_for_autorg):
+        tmp_autorg = path_for_autorg + '_autorg.tmp'
+        try:
+            cmd = f'autorg "{path_for_autorg}"'
+            os.system(f'{cmd} > "{tmp_autorg}" 2>&1')
+            if os.path.exists(tmp_autorg):
+                with open(tmp_autorg, 'r') as f:
+                    content = f.read()
+                mr = re.search(r'Rg\s+=\s+([\d\.]+)', content)
+                mi0 = re.search(r'I\(0\)\s+=\s+([\d\.]+)', content)
+                mq = re.search(r'Quality:\s+([\d\.]+)', content)
+                mpts = re.search(r'Points\s+(\d+)\s+to\s+(\d+)\s+\((\d+)\s+total\)', content)
+                if mr:
+                    autorg_rg = float(mr.group(1))
+                    autorg_i0 = float(mi0.group(1)) if mi0 else None
+                    autorg_quality = float(mq.group(1)) if mq else None
+                    autorg_n_pts = int(mpts.group(3)) if mpts else None
+                    # Optional: q interval from point indices (1-based in ATSAS)
+                    q_min_autorg = q_max_autorg = None
+                    if mpts and autorg_n_pts is not None:
+                        i1, i2 = int(mpts.group(1)), int(mpts.group(2))
+                        # convert 1-based to 0-based; clamp to array
+                        j1 = max(0, min(i1 - 1, n_total - 1))
+                        j2 = max(0, min(i2 - 1, n_total - 1))
+                        if j1 <= j2:
+                            q_min_autorg = float(q[j1])
+                            q_max_autorg = float(q[j2])
+                    out['autorg'] = {
+                        'Rg': autorg_rg,
+                        'I0': autorg_i0,
+                        'n_points': autorg_n_pts,
+                        'fit_quality': autorg_quality,
+                        'guinier_interval': (q_min_autorg, q_max_autorg) if (q_min_autorg is not None and q_max_autorg is not None) else None,
+                    }
+        finally:
+            if path_for_autorg == atsas_dat_path:
+                pass  # do not delete user-provided file
+            else:
+                try:
+                    if os.path.exists(path_for_autorg):
+                        os.remove(path_for_autorg)
+                    if os.path.exists(tmp_autorg):
+                        os.remove(tmp_autorg)
+                except OSError:
+                    pass
+
+    # --- 4. Manual Guinier (find_guinier_region) ---
+    manual = find_guinier_region(
+        q, I, sigma=sigma,
+        n_min=GUINIER_MANUAL_N_MIN,
+        r2_min=GUINIER_MANUAL_R2_MIN,
+        qrg_max=GUINIER_MANUAL_QRG_MAX,
+    )
+    if manual is not None:
+        out['manual'] = {
+            'Rg': manual['rg'],
+            'I0': manual['i0'],
+            'n_points': manual['n_points'],
+            'fit_quality': manual['r_squared'],
+            'guinier_interval': (manual['q_min'], manual['q_max']),
+            'sigma_rg': manual.get('sigma_rg'),
+            'sigma_i0': manual.get('sigma_i0'),
+        }
+
+    # --- Phase 2: validation R² on [q_max/2, q_max] for each method (q_max = k/Rg, k=1) ---
+    for method in ('first5', 'first10', 'autorg', 'manual'):
+        r = out.get(method)
+        if r is None:
+            continue
+        rg_val = r.get('Rg')
+        i0_val = r.get('I0')
+        if rg_val is not None and i0_val is not None and i0_val > 0:
+            val_r2 = _validation_r2_guinier(q, I, rg_val, i0_val)
+            r['validation_r2'] = val_r2
+        else:
+            r['validation_r2'] = None
+
+    # --- Selection: best validation_r2 if any method has validation_r2 >= 0.85, else fallback ---
+    chosen = None
+    best_val_r2 = None
+    methods_with_validation = [
+        m for m in ('first5', 'first10', 'autorg', 'manual')
+        if out.get(m) and (out[m].get('validation_r2') or -1.0) >= GUINIER_VALIDATION_R2_MIN
+    ]
+    if methods_with_validation:
+        best_method = max(
+            methods_with_validation,
+            key=lambda m: (out[m].get('validation_r2') or -1.0),
+        )
+        best_val_r2 = out[best_method].get('validation_r2')
+        chosen = best_method
+
+    if chosen is None:
+        # Fallback: first5 (R2>=0.85) → first10 (R2>=0.85) → autorg (>=5 pts) → manual
+        if out['first5'] is not None and (out['first5'].get('fit_quality') or 0) >= GUINIER_FIRST5_R2_MIN:
+            chosen = 'first5'
+        elif out['first10'] is not None and (out['first10'].get('fit_quality') or 0) >= GUINIER_FIRST10_R2_MIN:
+            chosen = 'first10'
+        elif out['autorg'] is not None:
+            n_autorg = out['autorg'].get('n_points') if isinstance(out['autorg'], dict) else None
+            if n_autorg is not None and n_autorg >= AUTORG_MIN_POINTS:
+                chosen = 'autorg'
+        if chosen is None and out['manual'] is not None:
+            n_manual = out['manual'].get('n_points') if isinstance(out['manual'], dict) else None
+            if n_manual is not None and n_manual >= GUINIER_MANUAL_N_MIN:
+                chosen = 'manual'
+
+    if chosen is not None:
+        r = out.get(chosen)
+        if r is not None:
+            out['chosen'] = chosen
+            out['chosen_Rg'] = r.get('Rg')
+            out['chosen_I0'] = r.get('I0')
+            out['chosen_quality'] = r.get('fit_quality')
+            out['chosen_n_points'] = r.get('n_points')
+            out['chosen_interval'] = r.get('guinier_interval')
+            out['chosen_validation_r2'] = r.get('validation_r2')
+            # Classification on [0, q_max/2] for the chosen approximation
+            rg_ch = out['chosen_Rg']
+            i0_ch = out['chosen_I0']
+            if rg_ch is not None and i0_ch is not None:
+                out['classification'] = _classification_guinier(q, I, rg_ch, i0_ch)
+            else:
+                out['classification'] = None
+
+    return out
 
 
 class IntegratorExtended:

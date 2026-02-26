@@ -226,16 +226,11 @@ def find_guinier_region(
     Find the Guinier region and fit Rg, I(0).
     ln(I) = ln(I0) - (Rg²/3)*q²; valid for q*Rg < ~1.3.
 
-    Strategy (aligned with AUTORG where possible):
-    - Tries contiguous ranges: when try_sliding is True, considers intervals that may not
-      start at the first point (AUTORG does this: e.g. "Points 52 to 132").
-    - Among all fits with q_max*Rg < qrg_max and R² >= r2_min, selects the one with
-      the *largest* number of points (largest acceptable Guinier range), not best R²,
-      to avoid favouring too-short ranges.
+    Tries contiguous ranges (try_sliding); among fits with q_max*Rg < qrg_max
+    and R² >= r2_min, selects the one with the *largest* number of points.
 
     Returns dict with keys: rg, i0, q_min, q_max, r_squared, n_points, sigma_rg, sigma_i0;
-    or None if no valid fit. sigma_rg/sigma_i0 are from the fit covariance (underestimate
-    vs AUTORG, which also uses variation across intervals).
+    or None if no valid fit.
     """
     q = np.asarray(q, dtype=float)
     I = np.asarray(I, dtype=float)
@@ -252,8 +247,6 @@ def find_guinier_region(
     if sigma is not None:
         sigma = sigma[valid]
     n = len(q)
-    best = None
-    best_n_pts = -1
 
     def fit_interval(i_start: int, n_pts: int):
         if i_start + n_pts > n:
@@ -314,6 +307,8 @@ def find_guinier_region(
             'sigma_i0': float(sigma_i0) if not np.isnan(sigma_i0) else None,
         }
 
+    best = None
+    best_n_pts = -1
     starts = [0] if not try_sliding else range(0, max(1, n - n_min + 1))
     for i_start in starts:
         for n_pts in range(n_min, min(n - i_start, max_pts) + 1):

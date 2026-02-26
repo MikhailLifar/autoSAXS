@@ -23,7 +23,6 @@ from .utils import (
     compute_dammif_descriptors,
     load_saxs_1d_any,
     ensure_q_nm,
-    find_guinier_region,
     find_porod_region,
     write_saxs_atsas_format,
 )
@@ -116,13 +115,40 @@ def json_type_caster(s):
 
 
 def _parse_descriptors_from_results(results_path):
-    """Parse Rg, I(0), Quality, Dmax, MW from Rg, MW from DATMW from ATSAS results file. Returns dict or None."""
+    """Parse Rg, I(0), Quality, Dmax, MW, Rg autorg, Guinier intervals from results file. Returns dict or None."""
     if not results_path or not os.path.isfile(results_path):
         return None
     import re
     out = {}
+    in_chosen = False
+    in_methods = False
     with open(results_path, 'r') as f:
         for line in f:
+            if 'Chosen Guinier result' in line:
+                in_chosen = True
+                in_methods = False
+            elif 'All Guinier methods' in line:
+                in_chosen = False
+                in_methods = True
+            elif line.strip().startswith(('Porod region', 'Descriptors (used downstream)', 'GNOM Results')):
+                in_chosen = False
+                in_methods = False
+            if in_chosen:
+                m = re.match(r'\s*q range\s*=\s*\[([\d.]+),\s*([\d.]+)\]\s*nm\^-1', line)
+                if m:
+                    out['Guinier interval (final)'] = f"[{m.group(1)}, {m.group(2)}] nm^-1"
+            if in_methods and re.match(r'\s*autorg\s*:', line):
+                # autorg: Rg=3.4300 nm, ..., interval=[0.35087, 0.36887] ... or (no result)
+                m = re.search(r'Rg=([\d.]+)\s*nm', line)
+                if m:
+                    out['Rg autorg (nm)'] = m.group(1).strip()
+                else:
+                    out['Rg autorg (nm)'] = 'N/A'
+                mi = re.search(r'interval=\[([\d.]+),\s*([\d.]+)\]', line)
+                if mi:
+                    out['Guinier interval (autorg)'] = f"[{mi.group(1)}, {mi.group(2)}] nm^-1"
+                else:
+                    out['Guinier interval (autorg)'] = 'N/A'
             m = re.match(r'\s*Rg\s*=\s*(.+?)\s*nm', line)
             if m:
                 out['Rg (nm)'] = m.group(1).strip()
@@ -144,6 +170,16 @@ def _parse_descriptors_from_results(results_path):
             m = re.match(r'\s*Porod Volume\s*=\s*(.+?)\s*nm\^?3', line, re.IGNORECASE)
             if m:
                 out['Porod Volume (nm^3)'] = m.group(1).strip()
+            m = re.match(r'\s*classification\s*\([^)]*\)\s*=\s*(.+)', line)
+            if m:
+                out['Classification'] = m.group(1).strip()
+    # If no chosen q range was found (e.g. old format or no result), set final interval to N/A
+    if 'Guinier interval (final)' not in out:
+        out['Guinier interval (final)'] = 'N/A'
+    if 'Rg autorg (nm)' not in out:
+        out['Rg autorg (nm)'] = 'N/A'
+    if 'Guinier interval (autorg)' not in out:
+        out['Guinier interval (autorg)'] = 'N/A'
     return out if out else None
 
 
@@ -500,7 +536,7 @@ class Controller:
         
         return sub_path, sub_plot_path
     
-    def get_descriptors(self, context: Context, to_analyze_path, 
+    def get_descriptors(self, context: Context, to_analyze_path,
                         dest_dir, fast_forward=False,
                         ):
         results_file, gnom_file = '', ''
@@ -558,56 +594,42 @@ class Controller:
                     self._send_message(f'Load/write ATSAS failed: {e}')
                 atsas_dat_path = to_analyze_path
 
-            # --- Step 1: Run AUTORG and prefer it when it succeeds (align with reference pipelines) ---
-            if os.path.exists(atsas_dat_path):
-                cmd_autorg = f'autorg {q(atsas_dat_path)}'
-                os.system(f'{cmd_autorg} > {q(tmp_autorg)} 2>&1')
-                if os.path.exists(tmp_autorg):
-                    with open(tmp_autorg, 'r') as f:
-                        content = f.read()
-                    match = re.search(r'Rg\s+=\s+([\d\.]+)', content)
-                    if match:
-                        rg_val = float(match.group(1))
-                        rg_source = 'autorg'
-                        match_i0 = re.search(r'I\(0\)\s+=\s+([\d\.]+)', content)
-                        if match_i0:
-                            i0_val = float(match_i0.group(1))
-                        match_q = re.search(r'Quality:\s+([\d\.]+)', content)
-                        if match_q:
-                            quality_val = float(match_q.group(1))
-
-            # --- Step 1b: Guinier/Porod for report and fallback when AUTORG did not return Rg ---
-            if rg_val is None and atsas_dat_path != to_analyze_path:
-                try:
-                    q_arr, I_arr, sigma_arr = load_saxs_1d_any(to_analyze_path)
-                    q_arr, I_arr, sigma_arr = ensure_q_nm(q_arr, I_arr, sigma_arr)
-                    guinier_region = find_guinier_region(q_arr, I_arr, sigma=sigma_arr)
-                    porod_region = find_porod_region(
-                        q_arr, I_arr,
-                        Rg=guinier_region['rg'] if guinier_region is not None else None,
-                    )
-                    if guinier_region is not None:
-                        rg_val = guinier_region['rg']
-                        i0_val = guinier_region['i0']
-                        rg_source = 'guinier_fit'
-                        quality_val = guinier_region.get('r_squared')
-                except Exception as e:
-                    if DEBUG:
-                        self._send_message(f'Guinier/Porod region search failed: {e}')
-                    guinier_region = None
-                    porod_region = None
-            else:
-                try:
-                    q_arr, I_arr, sigma_arr = load_saxs_1d_any(to_analyze_path)
-                    q_arr, I_arr, sigma_arr = ensure_q_nm(q_arr, I_arr, sigma_arr)
-                    guinier_region = find_guinier_region(q_arr, I_arr, sigma=sigma_arr)
-                    porod_region = find_porod_region(
-                        q_arr, I_arr,
-                        Rg=rg_val if rg_val is not None else (guinier_region['rg'] if guinier_region else None),
-                    )
-                except Exception:
-                    guinier_region = None
-                    porod_region = None
+            # --- Step 1: Guinier analysis (all methods + selection) via processor ---
+            guinier_results = None
+            guinier_region = None
+            porod_region = None
+            try:
+                q_arr, I_arr, sigma_arr = load_saxs_1d_any(to_analyze_path)
+                q_arr, I_arr, sigma_arr = ensure_q_nm(q_arr, I_arr, sigma_arr)
+                guinier_results = run_guinier_analysis(
+                    q_arr, I_arr, sigma_arr, atsas_dat_path=atsas_dat_path
+                )
+                chosen = guinier_results.get('chosen')
+                if chosen is not None:
+                    rg_val = guinier_results['chosen_Rg']
+                    i0_val = guinier_results.get('chosen_I0')
+                    quality_val = guinier_results.get('chosen_quality')
+                    rg_source = chosen
+                    ch_int = guinier_results.get('chosen_interval')
+                    chosen_result = guinier_results.get(chosen) or {}
+                    guinier_region = {
+                        'rg': rg_val,
+                        'i0': i0_val,
+                        'q_min': ch_int[0] if ch_int else None,
+                        'q_max': ch_int[1] if ch_int else None,
+                        'r_squared': quality_val,
+                        'n_points': guinier_results.get('chosen_n_points'),
+                        'sigma_rg': chosen_result.get('sigma_rg'),
+                        'sigma_i0': chosen_result.get('sigma_i0'),
+                    }
+                chosen_rg = rg_val if rg_val is not None else None
+                porod_region = find_porod_region(q_arr, I_arr, Rg=chosen_rg)
+            except Exception as e:
+                if DEBUG:
+                    self._send_message(f'Guinier/Porod region search failed: {e}')
+                guinier_results = None
+                guinier_region = None
+                porod_region = None
 
             # --- Step 1.5: Calculate P(r) using DATGNOM ---
             # Requires Rg. Only run if Rg was successfully determined.
@@ -687,26 +709,68 @@ class Controller:
                 f.write(f"Input file: {to_analyze_path}\n")
                 f.write(f"Analysis date: {time.ctime()}\n")
                 f.write("\n")
-                f.write("Note: When both are available, AUTORG is generally more reliable (it evaluates\n")
-                f.write("many intervals and uses interval-to-interval variation for errors). Our Guinier\n")
-                f.write("fit is used as a fallback when AUTORG fails or when the file format is not\n")
-                f.write("accepted by ATSAS. See doc for find_guinier_region in utils.py for details.\n")
+                f.write("Guinier: two-phase selection. Phase 1: four methods (first5, first10, autorg, manual).\n")
+                f.write("Phase 2: validation R2 on [q_max/2, q_max] (q_max=1/Rg); best validation R2 wins.\n")
+                f.write("If validation not possible, fallback: first5->first10->autorg->manual. Classification in [0,q_max/2].\n")
                 f.write("\n")
-                f.write("Guinier region (automatic search):\n")
+                f.write("Chosen Guinier result (used downstream):\n")
                 if guinier_region is not None:
                     sr = guinier_region.get('sigma_rg')
                     si = guinier_region.get('sigma_i0')
-                    rg_display = rg_val if rg_source == 'autorg' and rg_val is not None else guinier_region['rg']
-                    f.write(f"  Rg = {rg_display:.4f} nm (source: {rg_source})\n")
+                    f.write(f"  Source = {rg_source}\n")
+                    f.write(f"  Rg = {guinier_region['rg']:.4f} nm\n")
                     if sr is not None:
-                        f.write(f"  Rg StDev = {sr:.4g} nm (from fit; AUTORG also uses interval variation)\n")
-                    f.write(f"  I(0) = {guinier_region['i0']:.4g}\n")
+                        f.write(f"  Rg StDev = {sr:.4g} nm\n")
+                    if guinier_region.get('i0') is not None:
+                        f.write(f"  I(0) = {guinier_region['i0']:.4g}\n")
                     if si is not None:
                         f.write(f"  I(0) StDev = {si:.4g}\n")
-                    f.write(f"  q range = [{guinier_region['q_min']:.5g}, {guinier_region['q_max']:.5g}] nm^-1\n")
-                    f.write(f"  n points = {guinier_region['n_points']}, R^2 = {guinier_region['r_squared']:.4f}\n")
+                    qmn, qmx = guinier_region.get('q_min'), guinier_region.get('q_max')
+                    if qmn is not None and qmx is not None:
+                        f.write(f"  q range = [{qmn:.5g}, {qmx:.5g}] nm^-1\n")
+                    if guinier_region.get('n_points') is not None:
+                        f.write(f"  n points = {guinier_region['n_points']}\n")
+                    if guinier_region.get('r_squared') is not None:
+                        f.write(f"  R^2 = {guinier_region['r_squared']:.4f}\n")
+                    if guinier_results is not None:
+                        val_r2 = guinier_results.get('chosen_validation_r2')
+                        if val_r2 is not None:
+                            f.write(f"  validation R^2 (on [q_max/2, q_max]) = {val_r2:.4f}\n")
+                        cl = guinier_results.get('classification')
+                        if cl is not None:
+                            f.write(f"  classification ([0, q_max/2]) = {cl}\n")
+                            if cl == 'linear':
+                                f.write("    (good fit; narrow unimodal size distribution)\n")
+                            elif cl == 'upturn':
+                                f.write("    (intensity above fit; aggregation / large particle contamination likely)\n")
+                            elif cl == 'downturn':
+                                f.write("    (intensity below fit; repulsion / bad subtraction likely)\n")
+                            elif cl == 'chaotic':
+                                f.write("    (large non-systematic deviations; polydisperse or corrupted sample)\n")
                 else:
-                    f.write("  No valid Guinier region found.\n")
+                    f.write("  No valid Guinier result chosen.\n")
+                f.write("\n")
+                f.write("All Guinier methods (Rg, n_points, fit_quality, guinier_interval, validation_r2):\n")
+                if guinier_results is not None:
+                    for method in ('first5', 'first10', 'autorg', 'manual'):
+                        r = guinier_results.get(method)
+                        mark = " [CHOSEN]" if guinier_results.get('chosen') == method else ""
+                        if r is not None:
+                            rg = r.get('Rg')
+                            np_ = r.get('n_points')
+                            qq = r.get('fit_quality')
+                            interval = r.get('guinier_interval')
+                            val_r2 = r.get('validation_r2')
+                            rg_s = f"{rg:.4f}" if rg is not None else "N/A"
+                            np_s = str(np_) if np_ is not None else "N/A"
+                            qq_s = f"{qq:.4f}" if qq is not None else "N/A"
+                            int_s = f"[{interval[0]:.5g}, {interval[1]:.5g}]" if interval and interval[0] is not None and interval[1] is not None else "N/A"
+                            val_s = f"{val_r2:.4f}" if val_r2 is not None else "N/A"
+                            f.write(f"  {method}: Rg={rg_s} nm, n_points={np_s}, fit_quality={qq_s}, interval={int_s}, validation_r2={val_s}{mark}\n")
+                        else:
+                            f.write(f"  {method}: (no result)\n")
+                else:
+                    f.write("  (Guinier analysis not run or failed.)\n")
                 f.write("\n")
                 f.write("Porod region (theoretical high-q range, q >= 2/Rg):\n")
                 if porod_region is not None:
@@ -1083,10 +1147,16 @@ class Controller:
                 model_name = 'sphere'
                 from scipy.special import gamma as gammafn
 
+                optimizer = "sobol_trf"
+                if context.config and "polydispfit" in context.config and isinstance(context.config["polydispfit"], dict):
+                    tb = context.config["polydispfit"].get("time_budget")
+                    if tb is not None:
+                        optimizer = {"method": "sobol_trf", "time_budget_linear": float(tb), "time_budget_log": float(tb)}
+
                 results_by_dist = []
                 for suffix, dist_config in polydisp_distributions:
                     try:
-                        fit_res = polydispfit(saxs_1d_path, model_name, dist_config, q_range)
+                        fit_res = polydispfit(saxs_1d_path, model_name, dist_config, q_range, optimizer=optimizer)
                     except Exception as e:
                         self._send_message(f'Polydisperse fit ({suffix}) failed: {e}')
                         continue

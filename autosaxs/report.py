@@ -33,10 +33,12 @@ except Exception:
 
 from .utils import read_saxs, read_data
 
-# Descriptor column order for summary table (§6.2)
+# Descriptor column order for summary table (§6.2) and per-profile descriptors table
 SUMMARY_DESCRIPTOR_COLUMNS = [
-    'Rg (nm)', 'I(0)', 'Quality', 'Dmax (nm)',
+    'Rg (nm)', 'Rg autorg (nm)', 'Guinier interval (final)', 'Guinier interval (autorg)',
+    'I(0)', 'Quality', 'Dmax (nm)',
     'MW from Rg (kDa)', 'MW from DATMW (kDa)',
+    'Classification',
 ]
 
 
@@ -382,7 +384,10 @@ def build_report_pdf(report_data: Dict[str, Any], output_path: str) -> None:
     descriptors = report_data.get('descriptors_table')
     if descriptors is not None:
         if isinstance(descriptors, dict):
-            rows = [["Parameter", "Value"]] + [[k, _fmt_num(v)] for k, v in descriptors.items()]
+            # Use spec order for known keys, then any extra keys
+            order = [c for c in SUMMARY_DESCRIPTOR_COLUMNS if c in descriptors]
+            order += [k for k in descriptors if k not in order]
+            rows = [["Parameter", "Value"]] + [[k, _fmt_num(descriptors[k])] for k in order]
         elif isinstance(descriptors, (list, tuple)) and descriptors:
             if isinstance(descriptors[0], (list, tuple)):
                 rows = [list(r) for r in descriptors]
