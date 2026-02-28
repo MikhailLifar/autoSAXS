@@ -108,6 +108,25 @@ def write_saxs_atsas_format(filename: str, q: np.ndarray, I: np.ndarray, sigma: 
             f.write(f"{q[i]}\t{I[i]}\t{sigma[i]}\n")
 
 
+# -----------------------------------------------------------------------------
+# Size distribution PDFs (for MIXTURE / polydisperse sphere plots)
+# -----------------------------------------------------------------------------
+
+
+def gaussian_pdf(R: np.ndarray, R0: float, sigma: float) -> np.ndarray:
+    """Unnormalized Gaussian in R (size). R0 = mean, sigma = width."""
+    return np.exp(-0.5 * ((R - R0) / max(sigma, 1e-6)) ** 2)
+
+
+def schultz_pdf(R: np.ndarray, R0: float, sigma: float) -> np.ndarray:
+    """Schultz-Zimm (unnormalized). R0 = mean radius, sigma = width (e.g. dRout in MIXTURE)."""
+    z = (R0 / max(sigma, 1e-6)) ** 2 - 1
+    z = max(z, 0.1)
+    # P(R) ~ R^z * exp(-R*(z+1)/R0) for R>0
+    lnp = z * np.log(R + 1e-10) - R * (z + 1) / max(R0, 1e-6)
+    return np.exp(lnp - np.max(lnp))
+
+
 def read_saxs(filename):
     """
     Read SAXS data and metadata from a file with YAML metadata and CSV data.

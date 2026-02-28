@@ -70,6 +70,7 @@ def _run_gui_interactive():
                 # "scaling",
                 "simple_analysis",
                 "plots",
+                "mixture",
                 "polydispfit",
                 "bodies",
                 "dammif",

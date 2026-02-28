@@ -256,6 +256,7 @@ ALL_STEPS = [
     "subtraction",
     "simple_analysis",
     "plots",
+    "mixture",
     "polydispfit",
     "bodies",
     "dammif",

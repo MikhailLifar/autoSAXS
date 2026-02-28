@@ -42,6 +42,7 @@ from .foreign.aiAssistantFramework.lib import llm
 # from aiAssistantFramework.lib import telegram
 # import controller as ai_controller
 from .polydispfit import polydispfit
+from .mixture import fit_mixtures
 from .report import build_report_pdf, build_summary_report_pdf
 
 # CONFIG_FILE = "calib_config.conf"
@@ -1102,7 +1103,21 @@ class Controller:
                                         plotFilePath=os.path.join(dammif_subdir, f'{basename}_fits.png'))
         
         return dammif_subdir
-    
+
+    def mixture_fit(self, context: Context, profile_path, dest_dir, fast_forward=False):
+        """Run MIXTURE fits (6 models, SPHERE-only); return result dict for report or None."""
+        if not profile_path:
+            return None
+        self._send_message('MIXTURE fit...')
+        try:
+            return fit_mixtures(
+                profile_path,
+                output_dir=dest_dir,
+                fast_forward=fast_forward,
+            )
+        except Exception:
+            raise
+
     def polydispfit(self, context: Context, saxs_1d_path, dest_dir, fast_forward=False):
         polydisp_subdir = ''
         
@@ -1769,7 +1784,7 @@ class Controller:
                     }
                 )
             # Profile selection only if at least one step after simple_analysis/plots (§4 step 7, §11)
-            steps_after_simple_analysis = {'polydispfit', 'bodies', 'dammif', 'ai_analysis'}
+            steps_after_simple_analysis = {'mixture', 'polydispfit', 'bodies', 'dammif', 'ai_analysis'}
             request_profile_selection = bool(set(steps) & steps_after_simple_analysis)
             if request_profile_selection:
                 profiles_data = sorted(profiles_data, key=lambda p: p.get("basename", ""))
@@ -1790,7 +1805,17 @@ class Controller:
                 plot_paths = ([profile_pic_path] if profile_pic_path else []) + list(plots_by_basename.get(basename, []))
                 if plot_paths:
                     context.append_path('plot', plot_paths)
-                polydisp_dir = bodies_dir = dammif_dir = ''
+                mixture_dir = polydisp_dir = bodies_dir = dammif_dir = ''
+                mixture_result = None
+                if 'mixture' in steps:
+                    try:
+                        mixture_result = self.mixture_fit(
+                            context, profile_path, dest_dir=os.path.join(directory, 'mixture'), fast_forward=fast_forward)
+                        if mixture_result:
+                            mixture_dir = mixture_result.get('output_subdir', '')
+                            context.append_path('mixture', mixture_dir)
+                    except Exception as e:
+                        self._send_message(f"mixture failed for {basename}: {e}")
                 if 'polydispfit' in steps:
                     try:
                         polydisp_dir = self.polydispfit(
@@ -1844,6 +1869,10 @@ class Controller:
                 if len(plot_paths) >= 4:
                     rd['plot_figures'] = {'sub': plot_paths[0], 'guinier': plot_paths[1], 'kratky': plot_paths[2], 'loglog': plot_paths[3]}
                 fits_figs = []
+                if mixture_result:
+                    comp_path = mixture_result.get('comparison_path')
+                    if comp_path and os.path.isfile(comp_path):
+                        fits_figs.append((comp_path, 'mixture'))
                 if polydisp_dir:
                     fc = os.path.join(polydisp_dir, f'{basename_from_path}_fit_comparison.png')
                     if os.path.isfile(fc):
@@ -1874,6 +1903,15 @@ class Controller:
                     rd['dammif_fits_yml_path'] = dammif_yml
                 if dammif_csv and os.path.isfile(dammif_csv):
                     rd['dammif_fits_csv_path'] = dammif_csv
+                if mixture_result:
+                    rd['mixture_best_label'] = mixture_result.get('best_label', '')
+                    rd['mixture_BIC_log'] = mixture_result.get('BIC_log')
+                    if mixture_result.get('comparison_path') and os.path.isfile(mixture_result['comparison_path']):
+                        rd['mixture_comparison_figure_path'] = mixture_result['comparison_path']
+                    if mixture_result.get('distributions_path') and os.path.isfile(mixture_result['distributions_path']):
+                        rd['mixture_distributions_figure_path'] = mixture_result['distributions_path']
+                    if mixture_result.get('results_csv_path') and os.path.isfile(mixture_result['results_csv_path']):
+                        rd['mixture_results_csv_path'] = mixture_result['results_csv_path']
                 out_path = os.path.join(directory, 'reports', f'{basename}_report.pdf')
                 build_report_pdf(rd, out_path)
 

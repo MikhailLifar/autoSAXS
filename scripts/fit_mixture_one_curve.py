@@ -28,6 +28,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from autosaxs.utils import gaussian_pdf, schultz_pdf
+
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
@@ -57,7 +59,7 @@ def load_subtracted_dat(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]
         df = pd.read_csv(path, comment="#")
     q = df["q"].to_numpy().astype(np.float64)
     I = df["intensity"].to_numpy().astype(np.float64)
-    sigma = df["sigma"].to_numpy().astype(np.float64) if "sigma" in df.columns else 0.04 * I
+    sigma = df["sigma"].to_numpy().astype(np.float64) if "sigma" in df.columns else 0.03 * np.abs(I)
     return q, I, sigma
 
 
@@ -263,22 +265,15 @@ def extract_sphere_params_from_log(log_path: Path, n_phases: int) -> list[dict]:
     return spheres
 
 
-def gaussian_pdf(R: np.ndarray, R0: float, sigma: float) -> np.ndarray:
-    """Unnormalized Gaussian in R (size)."""
-    return np.exp(-0.5 * ((R - R0) / max(sigma, 1e-6)) ** 2)
-
-
-def schultz_pdf(R: np.ndarray, R0: float, sigma: float) -> np.ndarray:
-    """Schultz-Zimm (unnormalized). R0 = mean radius, sigma = width (dRout in MIXTURE)."""
-    z = (R0 / max(sigma, 1e-6)) ** 2 - 1
-    z = max(z, 0.1)
-    # P(R) ~ R^z * exp(-R*(z+1)/R0) for R>0
-    lnp = z * np.log(R + 1e-10) - R * (z + 1) / max(R0, 1e-6)
-    return np.exp(lnp - np.max(lnp))
-
-
 # 8 fitted parameters per SPHERE phase (vol, Rin, rho_in, Rout, rho_out, dRout, Rhs, tau)
 N_PARAMS_PER_PHASE = 8
+# Clip log(I) from below to avoid extreme negative values when computing quality on log scale
+LOG_I_CLIP = -7.0
+
+
+def _log_clip(I: np.ndarray, clip: float = LOG_I_CLIP) -> np.ndarray:
+    """log(I) with lower clip so that log(I) >= clip (avoids -inf and huge negatives)."""
+    return np.log(np.maximum(np.asarray(I, dtype=float), np.exp(clip)))
 
 
 def calc_R2_and_R2_adj(I_exp: np.ndarray, I_fit: np.ndarray, n_params: int) -> tuple[float, float]:
@@ -293,9 +288,20 @@ def calc_R2_and_R2_adj(I_exp: np.ndarray, I_fit: np.ndarray, n_params: int) -> t
     if ss_tot <= 0:
         return np.nan, np.nan
     R2 = 1.0 - ss_res / ss_tot
-    # R²_adj = 1 - (1 - R²) * (n - 1) / (n - k - 1)
     R2_adj = 1.0 - (1.0 - R2) * (n - 1) / (n - n_params - 1)
     return float(R2), float(R2_adj)
+
+
+def calc_BIC(I_exp: np.ndarray, I_fit: np.ndarray, n_params: int) -> float:
+    """Bayesian Information Criterion for regression: BIC = n*ln(SS_res/n) + k*ln(n). Lower is better."""
+    if I_exp is None or I_fit is None or len(I_exp) != len(I_fit) or len(I_exp) < 2:
+        return np.nan
+    n = len(I_exp)
+    ss_res = np.sum((I_exp - I_fit) ** 2)
+    if ss_res <= 0:
+        return np.nan
+    bic = n * np.log(ss_res / n) + n_params * np.log(n)
+    return float(bic)
 
 
 def run_all_fits(
@@ -348,10 +354,10 @@ def run_all_fits(
 
 
 def _fit_label(r: dict) -> str:
-    """Label with R²_adj when available (format .3f)."""
-    adj = r.get("R2_adj")
-    if adj is not None and np.isfinite(adj):
-        return f"{r['label']} (R²_adj={adj:.3f})"
+    """Label with BIC on log(I) when available (format .3f; lower is better)."""
+    bic_log = r.get("BIC_log")
+    if bic_log is not None and np.isfinite(bic_log):
+        return f"{r['label']} (BIC_log={bic_log:.3f})"
     return r["label"]
 
 
@@ -361,7 +367,7 @@ def plot_comparison(
     results: list[dict],
     out_path: Path,
 ) -> None:
-    """Plot experimental and all fits: left I vs q, right log(I) vs q. Labels include R²_adj."""
+    """Plot experimental and all fits: left I vs q, right log(I) vs q. Labels include BIC."""
     import matplotlib.pyplot as plt
     from matplotlib import rcParams
 
@@ -389,7 +395,7 @@ def plot_comparison(
     ax_log.set_yscale("log")
     ax_log.set_ylabel(r"$I(q)$ (a.u.)")
     ax_log.set_title(r"$\log I$ vs $q$")
-    fig.suptitle("MIXTURE fits (spheres only) — labels: R²_adj", fontsize=12)
+    fig.suptitle("MIXTURE fits (spheres only) — labels: BIC on log(I)", fontsize=12)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -430,7 +436,7 @@ def plot_distributions(results: list[dict], out_path: Path) -> None:
     ax.set_ylim(0, None)
     ax.legend(loc="best", fontsize=8)
     ax.grid(True, alpha=0.3)
-    ax.set_title("Fitted size distributions (spheres) — R in nm, labels: R²_adj")
+    ax.set_title("Fitted size distributions (spheres) — R in nm, labels: BIC on log(I)")
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -447,6 +453,10 @@ def save_results_csv(results: list[dict], out_path: Path) -> None:
             "f_min": r["f_min"],
             "R2": r.get("R2", np.nan),
             "R2_adj": r.get("R2_adj", np.nan),
+            "BIC": r.get("BIC", np.nan),
+            "R2_log": r.get("R2_log", np.nan),
+            "R2_adj_log": r.get("R2_adj_log", np.nan),
+            "BIC_log": r.get("BIC_log", np.nan),
             "returncode": r["returncode"],
         }
         for i, s in enumerate(r.get("spheres") or []):
@@ -496,12 +506,23 @@ def main() -> int:
                 if m:
                     r["f_min"] = float(m.group(1))
 
-    # R² and R²_adj for each fit
+    # Quality on I and on log(I) (log clipped at LOG_I_CLIP)
     for r in results:
         k = r["n_phases"] * N_PARAMS_PER_PHASE
-        R2, R2_adj = calc_R2_and_R2_adj(r.get("I_exp"), r.get("I_fit"), k)
+        I_exp, I_fit = r.get("I_exp"), r.get("I_fit")
+        R2, R2_adj = calc_R2_and_R2_adj(I_exp, I_fit, k)
         r["R2"] = R2
         r["R2_adj"] = R2_adj
+        r["BIC"] = calc_BIC(I_exp, I_fit, k)
+        if I_exp is not None and I_fit is not None:
+            log_exp = _log_clip(I_exp)
+            log_fit = _log_clip(I_fit)
+            R2_log, R2_adj_log = calc_R2_and_R2_adj(log_exp, log_fit, k)
+            r["R2_log"] = R2_log
+            r["R2_adj_log"] = R2_adj_log
+            r["BIC_log"] = calc_BIC(log_exp, log_fit, k)
+        else:
+            r["R2_log"] = r["R2_adj_log"] = r["BIC_log"] = np.nan
 
     # Outputs
     stem = input_path.stem

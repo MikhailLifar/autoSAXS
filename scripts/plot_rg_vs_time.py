@@ -14,6 +14,9 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any
+
+from autosaxs.utils import read_saxs, gaussian_pdf, schultz_pdf
 
 try:
     import numpy as np
@@ -76,34 +79,6 @@ def parse_all_guinier_rg(results_path: Path) -> dict[str, float]:
     return out
 
 
-def read_subtracted_q_intensity(dat_path: Path) -> tuple[list[float], list[float]] | None:
-    """Read q and intensity from a subtracted .dat (YAML + CSV). Returns (q, intensity) or None."""
-    if not dat_path.is_file():
-        return None
-    try:
-        content = dat_path.read_text()
-        marker = "\n# Data in CSV format\n"
-        idx = content.find(marker)
-        if idx == -1:
-            return None
-        csv_text = content[idx + len(marker) :].strip()
-        if not csv_text:
-            return None
-        lines = [l for l in csv_text.splitlines() if l.strip()]
-        if not lines:
-            return None
-        # Header: q,intensity,sigma
-        reader = csv.DictReader(lines)
-        rows = list(reader)
-        if not rows or "q" not in rows[0] or "intensity" not in rows[0]:
-            return None
-        q = [float(r["q"]) for r in rows]
-        intensity = [float(r["intensity"]) for r in rows]
-        return (q, intensity)
-    except Exception:
-        return None
-
-
 def mean_intensity_in_q_range(
     q: list[float], intensity: list[float], q_min: float, q_max: float
 ) -> float | None:
@@ -118,37 +93,55 @@ def mean_intensity_in_q_range(
     return float(np.mean(I_a[mask]))
 
 
-def get_tiff_datetime(tif_path: Path, fallback_mtime: Path | None = None) -> datetime | None:
-    """Read acquisition time from TIFF metadata (DateTime tag 306). If TIFF is missing and fallback_mtime is set, use that file's modification time (e.g. results file) so that Rg vs time can still be produced when raw/ is absent."""
+# DateTime in TIFF raw header: format YYYY:MM:DD HH:MM:SS (e.g. after "II*" in first 300 bytes)
+_TIFF_DATETIME_RE = re.compile(rb"(\d{4}:\d{2}:\d{2}\s+\d{2}:\d{2}:\d{2})")
+
+
+def get_tiff_datetime(tif_path: Path) -> datetime:
+    """Read acquisition time from TIFF header. Time is always present; raises if missing or unparseable.
+    Tries TIFF tag 306 (DateTime) via PIL, then parses first 300 bytes for YYYY:MM:DD HH:MM:SS (encoding-safe)."""
+    if not tif_path.is_file():
+        raise FileNotFoundError(f"TIFF file not found: {tif_path}")
+
+    datetime_str = None
     try:
         from PIL import Image
         from PIL.TiffTags import TAGS
-    except ImportError:
-        return None
-    if not tif_path.is_file():
-        if fallback_mtime and fallback_mtime.is_file():
-            return datetime.fromtimestamp(fallback_mtime.stat().st_mtime)
-        return None
-    try:
         with Image.open(tif_path) as img:
             img.load()
-            # TIFF tag 306 = DateTime, format "YYYY:MM:DD HH:MM:SS"
-            for tag_id, value in img.tag_v2.items():
+            tag_v2 = getattr(img, "tag_v2", None) or {}
+            for tag_id, value in tag_v2.items():
                 if tag_id == 306 or TAGS.get(tag_id) == "DateTime":
-                    s = value if isinstance(value, str) else (value[0] if isinstance(value, (tuple, list)) else None)
-                    if not s:
+                    raw = value if isinstance(value, str) else (value[0] if isinstance(value, (tuple, list)) else None)
+                    if raw is None:
                         continue
-                    # Normalize colon-separated date to ISO for parsing
-                    s = s.strip().strip("\x00")[:19]
-                    for fmt in ("%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-                        try:
-                            return datetime.strptime(s, fmt)
-                        except ValueError:
-                            continue
-                    return None
-    except Exception:
+                    if isinstance(raw, bytes):
+                        raw = raw.decode("latin-1", errors="replace")
+                    s = str(raw).strip().strip("\x00")[:19]
+                    if s:
+                        datetime_str = s
+                        break
+    except ImportError:
         pass
-    return None
+
+    if not datetime_str:
+        with open(tif_path, "rb") as f:
+            head = f.read(300)
+        match = _TIFF_DATETIME_RE.search(head)
+        if match:
+            datetime_str = match.group(1).decode("ascii")
+        if not datetime_str:
+            raise ValueError(f"DateTime not found in TIFF header (tag 306 or YYYY:MM:DD HH:MM:SS in first 300 bytes): {tif_path}")
+
+    for fmt in ("%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(datetime_str, fmt)
+        except ValueError:
+            continue
+    raise ValueError(
+        f"DateTime in TIFF could not be parsed (value={datetime_str!r}); "
+        f"expected YYYY:MM:DD HH:MM:SS or YYYY-MM-DD HH:MM:SS: {tif_path}"
+    )
 
 
 def collect_rg_and_time(run_root: Path) -> list[tuple[datetime, float | None, str, float | None, float | None, dict[str, float]]]:
@@ -160,30 +153,208 @@ def collect_rg_and_time(run_root: Path) -> list[tuple[datetime, float | None, st
         return []
 
     out: list[tuple[datetime, float | None, str, float | None, float | None, dict[str, float]]] = []
+
     for sub_path in sorted(subtracted_dir.glob("*.dat")):
         stem = sub_path.stem
-        parsed = read_subtracted_q_intensity(sub_path)
+        # Subtracted files are sub_<basename>.dat; raw TIFFs and descriptors use <basename>
+        base = stem[4:] if stem.startswith("sub_") else stem
         q_09_11: float | None = None
         q_39_41: float | None = None
-        if parsed is not None:
-            q_list, I_list = parsed
-            q_09_11 = mean_intensity_in_q_range(q_list, I_list, 0.9, 1.1)
-            q_39_41 = mean_intensity_in_q_range(q_list, I_list, 3.9, 4.1)
-        # Time: from TIFF or descriptor results mtime, else subtracted file mtime
-        tif_path = raw_dir / f"{stem}.tif"
+        if sub_path.is_file():
+            try:
+                q_arr, intensity_arr, _sigma, _metadata = read_saxs(str(sub_path))
+                q_list = q_arr.tolist()
+                I_list = intensity_arr.tolist()
+                q_09_11 = mean_intensity_in_q_range(q_list, I_list, 0.9, 1.1)
+                q_39_41 = mean_intensity_in_q_range(q_list, I_list, 3.9, 4.1)
+            except Exception:
+                pass
+        # Time: always from TIFF header (raises if missing)
+        tif_path = raw_dir / f"{base}.tif"
         res_path = descriptors_dir / f"{stem}_results.txt"
-        fallback = res_path if res_path.is_file() else sub_path
-        dt = get_tiff_datetime(tif_path, fallback_mtime=fallback)
-        if dt is None:
-            dt = datetime.fromtimestamp(sub_path.stat().st_mtime)
+        dt = get_tiff_datetime(tif_path)
         rg: float | None = parse_rg_from_results(res_path) if res_path.is_file() else None
         all_guinier_rg = parse_all_guinier_rg(res_path) if res_path.is_file() else {}
         out.append((dt, rg, stem, q_09_11, q_39_41, all_guinier_rg))
     return sorted(out, key=lambda x: x[0])
 
 
+def _load_best_mixture_pdf(
+    run_root: Path, stem: str, r_nm: Any,
+) -> Any:
+    """Load mixture_results.csv for sample stem, pick row with lowest BIC_log, compute PDF on r_nm (R in nm). Returns P(R) array or None."""
+    mixture_dir = run_root / "mixture" / f"mixture_{stem}"
+    csv_path = mixture_dir / "mixture_results.csv"
+    if not csv_path.is_file() or np is None:
+        return None
+    r_ang = r_nm * 10.0  # R in Angstrom for utils PDFs
+    try:
+        with open(csv_path, newline="") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        if not rows:
+            return None
+        def bic_log_val(r):
+            v = r.get("BIC_log") or r.get("BIC")
+            if v == "" or v is None:
+                return float("inf")
+            try:
+                return float(v)
+            except ValueError:
+                return float("inf")
+        best = min(rows, key=bic_log_val)
+        if bic_log_val(best) == float("inf"):
+            return None
+        dist_name = (best.get("dist") or "Gauss").strip()
+        total = np.zeros_like(r_ang, dtype=float)
+        for i in range(1, 4):
+            vol_key = f"vol_{i}"
+            r_key = f"Rout_Ang_{i}"
+            dr_key = f"dRout_Ang_{i}"
+            vol_s = best.get(vol_key, "")
+            r_s = best.get(r_key, "")
+            dr_s = best.get(dr_key, "")
+            if vol_s == "" or r_s == "" or dr_s == "":
+                continue
+            try:
+                vol, r0, dr = float(vol_s), float(r_s), float(dr_s)
+            except ValueError:
+                continue
+            if dist_name == "Schultz":
+                y = schultz_pdf(r_ang, r0, dr)
+            else:
+                y = gaussian_pdf(r_ang, r0, dr)
+            area = np.trapz(y, r_ang)  # type: ignore[attr-defined]
+            y = y / (area + 1e-20) * vol
+            total += y
+        if np.max(total) <= 0:
+            return None
+        return total
+    except Exception:
+        return None
+
+
+def plot_ridge_curves(
+    ax: Any,
+    R_nm: Any,
+    curves: list[Any],
+    y_spacing: float = 0.08,
+    curve_scale: float = 1.0,
+    colors: list[Any] | None = None,
+) -> None:
+    """Draw ridge-plot style curves on ax: same axes, constant y-offset between curves, fill_between + line. R_nm and each curve are 1d arrays. colors: optional list of color (one per curve); if None, use viridis by index."""
+    if np is None or not curves:
+        return
+    from matplotlib import cm
+    n = len(curves)
+    if colors is None:
+        colors = [cm.get_cmap("viridis")(i / max(n - 1, 1)) for i in range(n)]
+    for i, curve in enumerate(curves):
+        y_offset = i * y_spacing
+        arr = np.asarray(curve, dtype=float)
+        y_curve = y_offset + curve_scale * arr
+        color = colors[i % len(colors)]
+        ax.fill_between(R_nm, y_offset, y_curve, color=color, alpha=0.5)
+        ax.plot(R_nm, y_curve, color=color, lw=1.2, alpha=0.85)
+    y_vals = [
+        (i * y_spacing + curve_scale * np.asarray(c)) for i, c in enumerate(curves)
+    ]
+    y_min = min(np.min(yv) for yv in y_vals)
+    y_max = max(np.max(yv) for yv in y_vals)
+    margin = (y_max - y_min) * 0.02 if y_max > y_min else 1.0
+    ax.set_xlabel(r"$R$ (nm)")
+    ax.set_ylabel(r"P(R) (arb.) + offset")
+    ax.set_xlim(0, 13)
+    ax.set_ylim(y_min - margin, y_max + margin)
+    ax.grid(True, alpha=0.35, linestyle="--")
+    ax.tick_params(axis="both", labelsize=9)
+
+
+def _save_mixture_ridge_plot(
+    run_root: Path,
+    data: list[tuple[datetime, float | None, str, float | None, float | None, dict[str, float]]],
+    y_spacing: float = 0.08,
+) -> None:
+    """Ridge plot of best-BIC mixture PDFs for samples with q_09_11 >= 0.1. Same axes, y-offset by time order, color by time. No legend."""
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    from matplotlib import cm
+    from matplotlib.colors import Normalize
+
+    if np is None:
+        return
+    selected = [(dt, stem, q09) for dt, _rg, stem, q09, _q39, _ in data if q09 is not None and q09 >= 0.1]
+    if not selected:
+        return
+    R_plot_nm = np.linspace(0.1, 13.0, 400)
+    pdfs: list[tuple[datetime, Any]] = []
+    for dt, stem, _ in selected:
+        pdf = _load_best_mixture_pdf(run_root, stem, R_plot_nm)
+        if pdf is not None:
+            pdfs.append((dt, pdf))
+    if not pdfs:
+        return
+    # Sort by time
+    pdfs.sort(key=lambda x: x[0])
+    times = [p[0] for p in pdfs]
+    times_num = mdates.date2num(times)
+    t_min, t_max = min(times_num), max(times_num)
+    norm = Normalize(vmin=t_min, vmax=t_max)
+    cmap = cm.get_cmap("viridis")
+    fig, ax = plt.subplots(figsize=(8, 6))
+    pdf_scale = 3.0
+    for i, (dt, pdf) in enumerate(pdfs):
+        y_offset = i * y_spacing
+        color = cmap(norm(mdates.date2num(dt)))
+        y_curve = y_offset + pdf_scale * pdf
+        ax.fill_between(R_plot_nm, y_offset, y_curve, color=color, alpha=0.5)
+        ax.plot(R_plot_nm, y_curve, color=color, lw=1.2, alpha=0.85)
+    ax.set_xlabel(r"$R$ (nm)")
+    ax.set_ylabel(r"P(R) (arb.) + offset")
+    ax.set_xlim(0, 13)
+    y_max = max(
+        (i + 1) * y_spacing + pdf_scale * np.max(pdf) for i, (_, pdf) in enumerate(pdfs)
+    )
+    ax.set_ylim(0, y_max * 1.02)
+    ax.grid(True, alpha=0.35, linestyle="--")
+    ax.tick_params(axis="both", labelsize=9)
+    cbar = fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax)
+    cbar.set_label("Time")
+    cbar.ax.yaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    fig.tight_layout()
+    out_path = run_root / "mixture_ridge_PDFs.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {out_path} ({len(pdfs)} PDFs)")
+
+
+def _save_mixture_pdfs_txt(
+    run_root: Path,
+    data: list[tuple[datetime, float | None, str, float | None, float | None, dict[str, float]]],
+    pdf_scale: float = 3.0,
+) -> None:
+    """Save PDF matrix to NumPy-readable .txt: one row per R value, first column R (nm), then one column per sample (data order). Samples with q_09_11 < 0.1 get zeros."""
+    if np is None:
+        return
+    R_plot_nm = np.linspace(0.1, 13.0, 400)
+    n_samples = len(data)
+    pdf_matrix = np.zeros((n_samples, len(R_plot_nm)))
+    for i, (_dt, _rg, stem, q09, _q39, _) in enumerate(data):
+        if q09 is not None and q09 >= 0.1:
+            pdf = _load_best_mixture_pdf(run_root, stem, R_plot_nm)
+            if pdf is not None:
+                pdf_matrix[i, :] = pdf_scale * pdf
+    # Shape (n_R, 1 + n_samples): column 0 = R, columns 1..n = PDF per sample
+    out_array = np.column_stack([R_plot_nm, pdf_matrix.T])
+    out_path = run_root / "mixture_ridge_PDFs.txt"
+    with open(out_path, "w") as f:
+        f.write("# Column 0: R (nm). Columns 1..n: P(R) per sample (data order); zeros where q_09_11 < 0.1. pdf_scale=%g\n" % pdf_scale)
+        np.savetxt(f, out_array, fmt="%.6g")
+    print(f"Wrote {out_path} (R + {n_samples} samples)")
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.strip().split("\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").strip().split("\n")[0])
     parser.add_argument(
         "directory",
         type=Path,
@@ -338,6 +509,13 @@ def main() -> int:
     # Plot 3: Rg_vs_time.png — all Guinier Rg approximations vs time (new-format results)
     _save_all_rg_vs_time(run_root / "Rg_vs_time.png", times, all_guinier_rg_list)
     print(f"Wrote {run_root / 'Rg_vs_time.png'}")
+
+    # Plot 4: Ridge plot of mixture PDFs (samples with q_09_11 >= 0.1, best BIC per sample, color by time)
+    _save_mixture_ridge_plot(run_root, data, y_spacing=0.08)
+
+    # Save PDF matrix to .txt: all samples (zeros where q_09_11 < 0.1), same scale as plot
+    _save_mixture_pdfs_txt(run_root, data, pdf_scale=3.0)
+
     return 0
 
 

@@ -92,12 +92,12 @@ def fast_first_processing(directory: str, steps=None, mask_choice=None):
 
 
 def slow_second_processing(directory: str, selected_profiles: list):
-    """Run pipeline with steps simple_analysis, polydispfit, bodies, dammif (§3.2.2). Plots are run in fast first processing.
+    """Run pipeline with steps mixture, polydispfit, bodies, dammif (§3.2.2). simple_analysis and plots are in fast first processing.
     directory: working directory (assumes calibration, integration, subtraction already done).
     selected_profiles: list of file names from the subtracted subdirectory to process (e.g. ["sub_foo.dat", "sub_bar.dat"]).
     The controller sends profiles_data (list of profile dicts with full paths); we filter by these names and return the expected dict.
     """
-    steps = ["simple_analysis", "polydispfit", "bodies", "dammif"]
+    steps = ["mixture", "polydispfit", "bodies", "dammif"]
     pipeline_choice = "protein_v0"
     selected_filenames = set(selected_profiles or [])
 
