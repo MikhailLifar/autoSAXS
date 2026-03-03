@@ -1108,12 +1108,14 @@ class Controller:
         """Run MIXTURE fits (6 models, SPHERE-only); return result dict for report or None."""
         if not profile_path:
             return None
+        q_range_nm = context.config["mixture"]["q_range_nm"]  # required; None = full q range
         self._send_message('MIXTURE fit...')
         try:
             return fit_mixtures(
                 profile_path,
                 output_dir=dest_dir,
                 fast_forward=fast_forward,
+                q_range_nm=q_range_nm,
             )
         except Exception:
             raise

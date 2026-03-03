@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Load mixture_ridge_PDFs.txt from two run directories. Compute difference (first_dir - second_dir),
-select sample indices where both have non-zero PDFs, and plot as a ridge plot.
+Load mixture_ridge_PDFs.txt from two run directories. Compute difference (first_dir - second_dir)
+between scaled PDFs: scale = A/C (A from file, C from CLI: C1 for first dir, C2 for second).
+Select sample indices where both have non-zero scaled PDFs, and plot as a ridge plot.
 Save the plot to the first directory.
 """
 
@@ -13,21 +14,37 @@ from pathlib import Path
 
 import numpy as np
 
-# Import plotting helper from plot_rg_vs_time (run from repo root with PYTHONPATH=repos or from repos/)
-try:
-    from scripts.plot_rg_vs_time import plot_ridge_curves
-except ImportError:
-    from plot_rg_vs_time import plot_ridge_curves
+# Import plotting helper from kinetic analysis script (module name starts with digit, use importlib)
+import importlib.util
+_script_dir = Path(__file__).resolve().parent
+_kinetic_path = _script_dir / "2026_Pt_NPs_kinetic_analysis.py"
+_legacy_path = _script_dir / "plot_rg_vs_time.py"
+_path = _kinetic_path if _kinetic_path.is_file() else _legacy_path if _legacy_path.is_file() else None
+if _path is not None:
+    _spec = importlib.util.spec_from_file_location("kinetic_analysis", _path)
+    if _spec is not None and _spec.loader is not None:
+        _mod = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        plot_ridge_curves = _mod.plot_ridge_curves
+    else:
+        raise RuntimeError("Could not load kinetic analysis module")
+else:
+    raise RuntimeError("Neither 2026_Pt_NPs_kinetic_analysis.py nor plot_rg_vs_time.py found in scripts/")
 
 
-def load_pdf_matrix(txt_path: Path) -> tuple[np.ndarray, np.ndarray] | None:
-    """Load mixture_ridge_PDFs.txt. Returns (R_nm, pdf_matrix) where pdf_matrix is (n_samples, n_R), or None."""
+def load_pdf_matrix(txt_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Load mixture_ridge_PDFs.txt (new format: row 1 = R=nan, A_1..A_n; rows 2.. = R, P(R)).
+    Returns (R_nm, A_list, pdf_matrix) where pdf_matrix is (n_samples, n_R), or None."""
     if not txt_path.is_file():
         return None
     data = np.loadtxt(txt_path, comments="#")
-    R_nm = data[:, 0]
-    pdf_matrix = data[:, 1:].T  # (n_samples, n_R)
-    return R_nm, pdf_matrix
+    if data.shape[0] < 2:
+        return None
+    # Row 0: nan, A_1, A_2, ...
+    A_list = np.asarray(data[0, 1:], dtype=float)
+    R_nm = data[1:, 0]
+    pdf_matrix = data[1:, 1:].T  # (n_samples, n_R)
+    return R_nm, A_list, pdf_matrix
 
 
 def main() -> int:
@@ -45,16 +62,22 @@ def main() -> int:
         help="Second directory (mixture_ridge_PDFs.txt). Subtracted from first.",
     )
     parser.add_argument(
+        "--C1",
+        type=float,
+        metavar="C1",
+        help="Scaling constant for first directory: scale = A/C1 (default: 50.0).",
+    )
+    parser.add_argument(
+        "--C2",
+        type=float,
+        metavar="C2",
+        help="Scaling constant for second directory: scale = A/C2 (default: 50.0).",
+    )
+    parser.add_argument(
         "--y-spacing",
         type=float,
         default=0.08,
         help="Vertical spacing between curves in ridge plot (default: 0.08).",
-    )
-    parser.add_argument(
-        "--curve-scale",
-        type=float,
-        default=3.0,
-        help="Scale factor for curves (default: 3.0, same as main PDF plot).",
     )
     args = parser.parse_args()
     first_dir = args.first_dir.resolve()
@@ -74,25 +97,26 @@ def main() -> int:
     if loaded_first is None or loaded_second is None:
         print("Failed to load PDF data.", file=sys.stderr)
         return 1
-    R_nm, first_data = loaded_first
-    R_nm_2, second_data = loaded_second
-    if first_data.shape[1] != second_data.shape[1] or not np.allclose(R_nm, R_nm_2):
+    R_nm, A1, first_pdf = loaded_first
+    R_nm_2, A2, second_pdf = loaded_second
+    if first_pdf.shape[1] != second_pdf.shape[1] or not np.allclose(R_nm, R_nm_2):
         print("R grids or sizes differ between the two files.", file=sys.stderr)
         return 1
 
-    n_1, n_2 = first_data.shape[0], second_data.shape[0]
-    assert n_1 == n_2, "Number of samples in first and second directories must be the same."
-
-    non_zero_first = np.any(first_data != 0, axis=1)
-    non_zero_second = np.any(second_data != 0, axis=1)
-    selected = non_zero_first & non_zero_second
-    indices = np.where(selected)[0]
-    if len(indices) == 0:
-        print("No sample index has non-zero PDFs in both arrays.", file=sys.stderr)
+    n_1, n_2 = first_pdf.shape[0], second_pdf.shape[0]
+    if n_1 != n_2:
+        print("Number of samples in first and second directories must be the same.", file=sys.stderr)
         return 1
 
-    # Difference = first_dir - second_dir
-    diff = first_data[selected] - second_data[selected]
+    # Scale PDFs: (A/C) * P(R)
+    C1, C2 = args.C1, args.C2
+    scale1 = (A1 / C1).reshape(-1, 1)
+    scale2 = (A2 / C2).reshape(-1, 1)
+    first_scaled = first_pdf * scale1
+    second_scaled = second_pdf * scale2
+
+    # Difference = scaled first - scaled second
+    diff = first_scaled - second_scaled
     curves = [diff[i] for i in range(diff.shape[0])]
 
     import matplotlib.pyplot as plt
@@ -105,7 +129,7 @@ def main() -> int:
         R_nm,
         curves,
         y_spacing=args.y_spacing,
-        curve_scale=args.curve_scale,
+        curve_scale=1.0,
         colors=colors,
     )
     first_name = first_dir.name

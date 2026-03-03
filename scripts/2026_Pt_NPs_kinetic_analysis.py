@@ -16,7 +16,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from autosaxs.utils import read_saxs, gaussian_pdf, schultz_pdf
+from autosaxs.utils import calc_chi2, read_saxs, gaussian_pdf, schultz_pdf
+
+try:
+    from autosaxs.mixture import _parse_fit_file as _mixture_parse_fit_file
+except ImportError:
+    _mixture_parse_fit_file = None
 
 try:
     import numpy as np
@@ -91,6 +96,35 @@ def mean_intensity_in_q_range(
     if not np.any(mask):
         return None
     return float(np.mean(I_a[mask]))
+
+
+def fit_I0(q: list[float], intensity: list[float], q_max: float = 2.0) -> float:
+    """Fit I(q) ≈ A * exp(-alpha * q) on q in [0, q_max] nm⁻¹. Returns A (I(0) approximation); if fitted A < 0, returns 0. Raises only if no points in q range."""
+    from scipy.optimize import curve_fit
+    import numpy as _np
+    q_a = _np.asarray(q, dtype=float)
+    I_a = _np.asarray(intensity, dtype=float)
+    mask = (q_a >= 0) & (q_a <= q_max)
+    if not _np.any(mask):
+        raise ValueError(f"No points in q range [0, {q_max}]")
+    q_fit = q_a[mask]
+    I_fit = I_a[mask]
+    I0_guess = float(_np.max(_np.abs(I_fit))) if _np.any(_np.isfinite(I_fit)) else 1.0
+    alpha_guess = 0.5
+
+    def model(q: Any, A: float, alpha: float) -> Any:
+        return A * _np.exp(-alpha * q)
+
+    popt, _pcov = curve_fit(
+        model, q_fit, I_fit,
+        p0=[I0_guess, alpha_guess],
+        bounds=([-_np.inf, 0], [_np.inf, _np.inf]),
+        maxfev=5000,
+    )
+    A = float(popt[0])
+    if A < 0:
+        A = 0.0
+    return A
 
 
 # DateTime in TIFF raw header: format YYYY:MM:DD HH:MM:SS (e.g. after "II*" in first 300 bytes)
@@ -179,6 +213,121 @@ def collect_rg_and_time(run_root: Path) -> list[tuple[datetime, float | None, st
     return sorted(out, key=lambda x: x[0])
 
 
+def compute_I0_per_sample(
+    run_root: Path,
+    data: list[tuple[datetime, float | None, str, float | None, float | None, dict[str, float]]],
+    q_max: float = 2.0,
+) -> list[float]:
+    """For each sample load subtracted curve and fit I(q) ≈ A*exp(-alpha*q) on q in [0, q_max]. Return list of A (same order as data). Raises on any failure."""
+    subtracted_dir = run_root / "subtracted"
+    A_list: list[float] = []
+    for _dt, _rg, stem, _q09, _q39, _ in data:
+        sub_path = subtracted_dir / f"{stem}.dat"
+        if not sub_path.is_file():
+            raise FileNotFoundError(f"Subtracted file not found: {sub_path}")
+        q_arr, intensity_arr, _sigma, _metadata = read_saxs(str(sub_path))
+        A = fit_I0(q_arr.tolist(), intensity_arr.tolist(), q_max=q_max)
+        A_list.append(A)
+    return A_list
+
+
+def _get_best_mixture_label(run_root: Path, stem: str) -> str | None:
+    """Load mixture_results.csv for sample stem, pick row with lowest BIC_log. Returns best model label (e.g. nph1_Gauss) or None."""
+    mixture_dir = run_root / "mixture" / f"mixture_{stem}"
+    csv_path = mixture_dir / "mixture_results.csv"
+    if not csv_path.is_file():
+        return None
+    try:
+        with open(csv_path, newline="") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        if not rows:
+            return None
+        def bic_log_val(r):
+            v = r.get("BIC_log")
+            if v == "" or v is None:
+                return float("inf")
+            try:
+                return float(v)
+            except ValueError:
+                return float("inf")
+        best = min(rows, key=bic_log_val)
+        if bic_log_val(best) == float("inf"):
+            return None
+        return (best.get("label") or "").strip() or None
+    except Exception:
+        return None
+
+
+def _load_best_fit_curve(
+    run_root: Path, stem: str,
+) -> tuple[Any, Any, Any] | None:
+    """Load (q_nm, I_exp, I_fit) from the best MIXTURE run's .fit file for sample stem. Returns None if missing or parse fails."""
+    if _mixture_parse_fit_file is None:
+        return None
+    best_label = _get_best_mixture_label(run_root, stem)
+    if not best_label:
+        return None
+    mixture_dir = run_root / "mixture" / f"mixture_{stem}"
+    fit_path = mixture_dir / best_label / "exp.fit"
+    return _mixture_parse_fit_file(fit_path)
+
+
+def _get_best_fit_metrics(run_root: Path, stem: str) -> dict[str, float] | None:
+    """Get chi2, R2, R2_log for the best (BIC_log) fit from mixture_results.csv. If chi2 is absent, recalc from exp.fit and subtracted sigma. Returns None if no results."""
+    mixture_dir = run_root / "mixture" / f"mixture_{stem}"
+    csv_path = mixture_dir / "mixture_results.csv"
+    if not csv_path.is_file() or np is None:
+        return None
+    try:
+        with open(csv_path, newline="") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        if not rows:
+            return None
+        def bic_log_val(r):
+            v = r.get("BIC_log")
+            if v == "" or v is None:
+                return float("inf")
+            try:
+                return float(v)
+            except ValueError:
+                return float("inf")
+        best = min(rows, key=bic_log_val)
+        if bic_log_val(best) == float("inf"):
+            return None
+        def _f(s: str | None) -> float | None:
+            if s is None or (isinstance(s, str) and s.strip() == ""):
+                return None
+            try:
+                return float(s)
+            except (ValueError, TypeError):
+                return None
+        R2 = _f(best.get("R2"))
+        R2_log = _f(best.get("R2_log"))
+        chi2_val = _f(best.get("chi2"))
+        if chi2_val is None:
+            parsed = _load_best_fit_curve(run_root, stem)
+            if parsed is None:
+                return {"chi2": float("nan"), "R2": R2 if R2 is not None else float("nan"), "R2_log": R2_log if R2_log is not None else float("nan")}
+            q_fit, I_exp, I_fit = parsed
+            if np is None or len(I_exp) < 2:
+                return {"chi2": float("nan"), "R2": R2 or float("nan"), "R2_log": R2_log or float("nan")}
+            sub_path = run_root / "subtracted" / f"{stem}.dat"
+            if not sub_path.is_file():
+                return {"chi2": float("nan"), "R2": R2 or float("nan"), "R2_log": R2_log or float("nan")}
+            _q_sub, _I_sub, sigma_sub, _meta = read_saxs(str(sub_path))
+            q_sub = np.asarray(_q_sub, dtype=float)
+            sigma_sub = np.asarray(sigma_sub, dtype=float)
+            idx = np.argsort(q_sub)
+            q_s, sigma_s = q_sub[idx], sigma_sub[idx]
+            sigma_fit = np.interp(np.asarray(q_fit), q_s, sigma_s)
+            chi2_val = float(calc_chi2(np.asarray(I_exp), np.asarray(I_fit), sigma_fit))
+        return {"chi2": chi2_val, "R2": R2 or float("nan"), "R2_log": R2_log or float("nan")}
+    except Exception:
+        return None
+
+
 def _load_best_mixture_pdf(
     run_root: Path, stem: str, r_nm: Any,
 ) -> Any:
@@ -195,7 +344,7 @@ def _load_best_mixture_pdf(
         if not rows:
             return None
         def bic_log_val(r):
-            v = r.get("BIC_log") or r.get("BIC")
+            v = r.get("BIC_log")
             if v == "" or v is None:
                 return float("inf")
             try:
@@ -270,12 +419,17 @@ def plot_ridge_curves(
     ax.tick_params(axis="both", labelsize=9)
 
 
+I0_SCALE_CONSTANT_C = 50.0
+
+
 def _save_mixture_ridge_plot(
     run_root: Path,
     data: list[tuple[datetime, float | None, str, float | None, float | None, dict[str, float]]],
+    A_list: list[float],
     y_spacing: float = 0.08,
+    C: float = I0_SCALE_CONSTANT_C,
 ) -> None:
-    """Ridge plot of best-BIC mixture PDFs for samples with q_09_11 >= 0.1. Same axes, y-offset by time order, color by time. No legend."""
+    """Ridge plot of best-BIC mixture PDFs for all samples; each PDF scaled by A/C (A from I(0) fit). Same axes, y-offset by time order, color by time. Raises if any sample has no fitted PDF."""
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
     from matplotlib import cm
@@ -283,37 +437,33 @@ def _save_mixture_ridge_plot(
 
     if np is None:
         return
-    selected = [(dt, stem, q09) for dt, _rg, stem, q09, _q39, _ in data if q09 is not None and q09 >= 0.1]
-    if not selected:
-        return
+    if len(A_list) != len(data):
+        raise ValueError("A_list length must match data length")
     R_plot_nm = np.linspace(0.1, 13.0, 400)
-    pdfs: list[tuple[datetime, Any]] = []
-    for dt, stem, _ in selected:
+    pdfs: list[tuple[datetime, Any, float]] = []
+    for i, (dt, _rg, stem, _q09, _q39, _) in enumerate(data):
         pdf = _load_best_mixture_pdf(run_root, stem, R_plot_nm)
-        if pdf is not None:
-            pdfs.append((dt, pdf))
-    if not pdfs:
-        return
-    # Sort by time
-    pdfs.sort(key=lambda x: x[0])
+        if pdf is None:
+            raise FileNotFoundError(f"No fitted mixture PDF for sample {stem}")
+        scale = A_list[i] / C
+        pdfs.append((dt, pdf, scale))
     times = [p[0] for p in pdfs]
     times_num = mdates.date2num(times)
     t_min, t_max = min(times_num), max(times_num)
     norm = Normalize(vmin=t_min, vmax=t_max)
     cmap = cm.get_cmap("viridis")
     fig, ax = plt.subplots(figsize=(8, 6))
-    pdf_scale = 3.0
-    for i, (dt, pdf) in enumerate(pdfs):
+    for i, (dt, pdf, scale) in enumerate(pdfs):
         y_offset = i * y_spacing
         color = cmap(norm(mdates.date2num(dt)))
-        y_curve = y_offset + pdf_scale * pdf
+        y_curve = y_offset + scale * pdf
         ax.fill_between(R_plot_nm, y_offset, y_curve, color=color, alpha=0.5)
         ax.plot(R_plot_nm, y_curve, color=color, lw=1.2, alpha=0.85)
     ax.set_xlabel(r"$R$ (nm)")
     ax.set_ylabel(r"P(R) (arb.) + offset")
     ax.set_xlim(0, 13)
     y_max = max(
-        (i + 1) * y_spacing + pdf_scale * np.max(pdf) for i, (_, pdf) in enumerate(pdfs)
+        (i + 1) * y_spacing + scale * np.max(pdf) for i, (_, pdf, scale) in enumerate(pdfs)
     )
     ax.set_ylim(0, y_max * 1.02)
     ax.grid(True, alpha=0.35, linestyle="--")
@@ -331,26 +481,221 @@ def _save_mixture_ridge_plot(
 def _save_mixture_pdfs_txt(
     run_root: Path,
     data: list[tuple[datetime, float | None, str, float | None, float | None, dict[str, float]]],
-    pdf_scale: float = 3.0,
+    A_list: list[float],
 ) -> None:
-    """Save PDF matrix to NumPy-readable .txt: one row per R value, first column R (nm), then one column per sample (data order). Samples with q_09_11 < 0.1 get zeros."""
+    """Save PDF matrix to NumPy-readable .txt: first row R=np.nan and scale factors A per sample; then one row per R value, column 0 = R (nm), columns 1..n = P(R). Raises if any sample has no fitted PDF."""
     if np is None:
         return
+    if len(A_list) != len(data):
+        raise ValueError("A_list length must match data length")
     R_plot_nm = np.linspace(0.1, 13.0, 400)
     n_samples = len(data)
     pdf_matrix = np.zeros((n_samples, len(R_plot_nm)))
-    for i, (_dt, _rg, stem, q09, _q39, _) in enumerate(data):
-        if q09 is not None and q09 >= 0.1:
-            pdf = _load_best_mixture_pdf(run_root, stem, R_plot_nm)
-            if pdf is not None:
-                pdf_matrix[i, :] = pdf_scale * pdf
-    # Shape (n_R, 1 + n_samples): column 0 = R, columns 1..n = PDF per sample
-    out_array = np.column_stack([R_plot_nm, pdf_matrix.T])
+    for i, (_dt, _rg, stem, _q09, _q39, _) in enumerate(data):
+        pdf = _load_best_mixture_pdf(run_root, stem, R_plot_nm)
+        if pdf is None:
+            raise FileNotFoundError(f"No fitted mixture PDF for sample {stem}")
+        pdf_matrix[i, :] = pdf
+    # First row: R = nan, then A_1, A_2, ... (scale factors stored as A)
+    scale_row = np.concatenate([[np.nan], np.asarray(A_list, dtype=float)])
+    # Rows 2..: R and PDF columns
+    out_block = np.column_stack([R_plot_nm, pdf_matrix.T])
     out_path = run_root / "mixture_ridge_PDFs.txt"
     with open(out_path, "w") as f:
-        f.write("# Column 0: R (nm). Columns 1..n: P(R) per sample (data order); zeros where q_09_11 < 0.1. pdf_scale=%g\n" % pdf_scale)
-        np.savetxt(f, out_array, fmt="%.6g")
-    print(f"Wrote {out_path} (R + {n_samples} samples)")
+        f.write("# Row 1: R=nan, columns 1..n = I(0) scale factor A per sample. Rows 2..: column 0 = R (nm), columns 1..n = P(R)\n")
+        np.savetxt(f, scale_row.reshape(1, -1), fmt="%.6g")
+        np.savetxt(f, out_block, fmt="%.6g")
+    print(f"Wrote {out_path} (scale row + R + {n_samples} samples)")
+
+
+def _save_error_ridge_plots(
+    run_root: Path,
+    data: list[tuple[datetime, float | None, str, float | None, float | None, dict[str, float]]],
+    y_spacing: float = 0.08,
+    curve_scale: float = 1.0,
+) -> None:
+    """Save two error ridge plots: (exp - fit) in I vs q and exp(log(I_exp)-log(I_fit)) = I_exp/I_fit in log I vs log q. Per-sample q grid, no A/C scaling. Raises if any sample has no .fit."""
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    from matplotlib import cm
+    from matplotlib.colors import Normalize
+
+    if np is None:
+        return
+    curves_lin: list[tuple[Any, Any]] = []  # (q, residual) per sample
+    curves_log: list[tuple[Any, Any]] = []  # (q, ratio) per sample
+    times: list[datetime] = []
+    for _dt, _rg, stem, _q09, _q39, _ in data:
+        parsed = _load_best_fit_curve(run_root, stem)
+        if parsed is None:
+            raise FileNotFoundError(f"No fitted mixture .fit for sample {stem}")
+        q_nm, I_exp, I_fit = parsed
+        q_nm = np.asarray(q_nm, dtype=float)
+        I_exp = np.asarray(I_exp, dtype=float)
+        I_fit = np.asarray(I_fit, dtype=float)
+        residual = I_exp - I_fit
+        # log-space error exponentiated: exp(log(I_exp)-log(I_fit)) = I_exp/I_fit; avoid div by zero
+        ratio = np.where(I_fit > 1e-4, I_exp / I_fit, np.nan)
+        curves_lin.append((q_nm, residual))
+        curves_log.append((q_nm, ratio))
+        times.append(_dt)
+
+    times_num = mdates.date2num(times)
+    t_min, t_max = min(times_num), max(times_num)
+    norm = Normalize(vmin=t_min, vmax=t_max)
+    cmap = cm.get_cmap("viridis")
+
+    # (1) I vs q — linear axes, ridge of (exp - fit)
+    fig_lin, ax_lin = plt.subplots()
+    for i, (q, y) in enumerate(curves_lin):
+        y_offset = i * y_spacing
+        y_curve = y_offset + curve_scale * y
+        color = cmap(norm(times_num[i]))
+        ax_lin.fill_between(q, y_offset, y_curve, color=color, alpha=0.5)
+        ax_lin.plot(q, y_curve, color=color, lw=1.2, alpha=0.85)
+    ax_lin.set_xlabel(r"$q$ (nm$^{-1}$)")
+    ax_lin.set_ylabel(r"$I_{\mathrm{exp}} - I_{\mathrm{fit}}$ (arb.) + offset")
+    q_all = np.concatenate([q for q, _ in curves_lin])
+    ax_lin.set_xlim(np.nanmin(q_all), np.nanmax(q_all))
+    y_vals_lin = [
+        i * y_spacing + curve_scale * np.asarray(y) for i, (_, y) in enumerate(curves_lin)
+    ]
+    y_min_lin = min(np.nanmin(yv) for yv in y_vals_lin)
+    y_max_lin = max(np.nanmax(yv) for yv in y_vals_lin)
+    margin = (y_max_lin - y_min_lin) * 0.02 if y_max_lin > y_min_lin else 1.0
+    ax_lin.set_ylim(y_min_lin - margin, y_max_lin + margin)
+    ax_lin.grid(True, alpha=0.35, linestyle="--")
+    ax_lin.tick_params(axis="both")
+    cbar_lin = fig_lin.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax_lin)
+    cbar_lin.set_label("Time")
+    cbar_lin.ax.yaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    fig_lin.tight_layout()
+    out_lin = run_root / "mixture_ridge_error_I_vs_q.png"
+    fig_lin.savefig(out_lin, dpi=400, bbox_inches="tight")
+    plt.close(fig_lin)
+    print(f"Wrote {out_lin} ({len(curves_lin)} curves)")
+
+    # (2) log I vs log q — exp(log(I_exp)-log(I_fit)) = I_exp/I_fit; multiplicative offset exp(i*y_spacing) per ridge
+    fig_log, ax_log = plt.subplots()
+    for i, (q, ratio) in enumerate(curves_log):
+        mult = np.exp(i * y_spacing)
+        baseline = mult
+        y_curve = mult * curve_scale * ratio
+        color = cmap(norm(times_num[i]))
+        ax_log.fill_between(q, baseline, y_curve, color=color, alpha=0.5)
+        ax_log.plot(q, y_curve, color=color, lw=1.2, alpha=0.85)
+    ax_log.set_xscale("log")
+    ax_log.set_yscale("log")
+    ax_log.set_xlabel(r"$q$ (nm$^{-1}$)")
+    ax_log.set_ylabel(r"$I_{\mathrm{exp}} / I_{\mathrm{fit}}$ (mult. offset)")
+    ax_log.set_xlim(np.nanmin(q_all), np.nanmax(q_all))
+    y_vals_log = [
+        np.exp(i * y_spacing) * curve_scale * np.asarray(r) for i, (_, r) in enumerate(curves_log)
+    ]
+    baselines = [np.exp(i * y_spacing) for i in range(len(curves_log))]
+    finite_vals = [yv[np.isfinite(yv)] for yv in y_vals_log if np.any(np.isfinite(yv))]
+    if finite_vals or baselines:
+        all_vals = list(baselines) + [v for fv in finite_vals for v in fv]
+        y_min_log = min(all_vals)
+        y_max_log = max(all_vals)
+        if y_max_log > y_min_log:
+            margin = (y_max_log - y_min_log) * 0.05
+            ax_log.set_ylim(max(1e-10, y_min_log - margin), y_max_log + margin)
+    ax_log.grid(True, alpha=0.35, linestyle="--")
+    ax_log.tick_params(axis="both")
+    cbar_log = fig_log.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax_log)
+    cbar_log.set_label("Time")
+    cbar_log.ax.yaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    fig_log.tight_layout()
+    out_log = run_root / "mixture_ridge_error_logI_vs_logq.png"
+    fig_log.savefig(out_log, dpi=400, bbox_inches="tight")
+    plt.close(fig_log)
+    print(f"Wrote {out_log} ({len(curves_log)} curves)")
+
+
+def _save_fit_quality_plot(run_root: Path, data: list[tuple[Any, ...]]) -> None:
+    """Plot chi2 (left), R2 and R2_log (two right y-axes) vs time for best BIC_log fits. Two right axes with same limits [-0.05, 1.05], distinct colors."""
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+
+    times = [x[0] for x in data]
+    stems = [x[2] for x in data]
+    points: list[tuple[datetime, float, float, float]] = []
+    for t, stem in zip(times, stems):
+        m = _get_best_fit_metrics(run_root, stem)
+        if m is None:
+            continue
+        chi2 = m["chi2"]
+        R2 = m["R2"]
+        R2_log = m["R2_log"]
+        if not np.isfinite(chi2) and not np.isfinite(R2) and not np.isfinite(R2_log):
+            continue
+        points.append((t, chi2, R2, R2_log))
+    if not points:
+        return
+    t_vals, chi2_vals, r2_vals, r2_log_vals = zip(*points)
+    t_vals = list(t_vals)
+    chi2_arr = np.asarray(chi2_vals, dtype=float)
+    r2_arr = np.asarray(r2_vals, dtype=float)
+    r2_log_arr = np.asarray(r2_log_vals, dtype=float)
+    # For log scale, avoid zero chi2
+    chi2_plot = np.maximum(chi2_arr, 1e-10)
+    r2_clipped = np.clip(r2_arr, 0.0, None)
+    r2_log_clipped = np.clip(r2_log_arr, 0.0, None)
+    edge_r2 = ["red" if v < 0 else "white" for v in r2_arr]
+    edge_r2_log = ["red" if v < 0 else "white" for v in r2_log_arr]
+
+    color_chi2 = "#1b5e20"   # dark green
+    color_r2 = "#0d47a1"    # dark blue
+    color_r2_log = "#b71c1c"  # dark red
+
+    fig, ax_left = plt.subplots(figsize=(10, 5.5))
+    ax_left.scatter(
+        t_vals, chi2_plot,
+        c=color_chi2, marker="o", s=52, alpha=0.78, edgecolors="white", linewidths=0.8,
+        label=r"$\chi^2$", zorder=3,
+    )
+    ax_left.set_xlabel("Time")
+    ax_left.set_ylabel(r"$\chi^2$ (best fit)", color=color_chi2)
+    ax_left.tick_params(axis="y", labelcolor=color_chi2)
+    ax_left.set_yscale("log")
+    ax_left.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    ax_left.xaxis.set_major_locator(mdates.AutoDateLocator())
+    plt.setp(ax_left.xaxis.get_majorticklabels(), rotation=45, ha="right")
+    ax_left.grid(True, alpha=0.4, linestyle="--")
+    ax_left.set_ylim(bottom=None)
+
+    ax_right1 = ax_left.twinx()
+    ax_right1.scatter(
+        t_vals, r2_clipped,
+        c=color_r2, marker="s", s=48, alpha=0.78, edgecolors=edge_r2, linewidths=0.8,
+        label=r"$R^2$ (direct)", zorder=3,
+    )
+    ax_right1.set_ylabel(r"$R^2$ (direct)", color=color_r2)
+    ax_right1.tick_params(axis="y", labelcolor=color_r2)
+    ax_right1.set_ylim(-0.05, 1.05)
+    ax_right1.spines["right"].set_position(("axes", 1.0))
+
+    ax_right2 = ax_left.twinx()
+    ax_right2.spines["right"].set_position(("axes", 1.12))
+    ax_right2.scatter(
+        t_vals, r2_log_clipped,
+        c=color_r2_log, marker="^", s=48, alpha=0.78, edgecolors=edge_r2_log, linewidths=0.8,
+        label=r"$R^2$ (log)", zorder=3,
+    )
+    ax_right2.set_ylabel(r"$R^2$ (log)", color=color_r2_log)
+    ax_right2.tick_params(axis="y", labelcolor=color_r2_log)
+    ax_right2.set_ylim(-0.05, 1.05)
+
+    ax_left.legend(loc="upper left", framealpha=0.92, fontsize=9)
+    ax_right1.legend(loc="upper right", framealpha=0.92, fontsize=9)
+    ax_right2.legend(loc="upper right", bbox_to_anchor=(1.14, 1.0), framealpha=0.92, fontsize=9)
+    ax_left.set_title("Fit quality vs time (best BIC_log model)")
+    fig.subplots_adjust(right=0.88)
+    out_path = run_root / "mixture_fit_quality_vs_time.png"
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {out_path} ({len(points)} points)")
 
 
 def main() -> int:
@@ -361,6 +706,14 @@ def main() -> int:
         default=Path("data/260119_PtNPs/Pt_NPs_formatted/Pt_NPs_insitu"),
         nargs="?",
         help="Run root containing descriptors/ and raw/",
+    )
+    parser.add_argument(
+        "--scale-constant",
+        "-C",
+        type=float,
+        default=I0_SCALE_CONSTANT_C,
+        metavar="C",
+        help="Constant C for PDF scaling: each ridge PDF is scaled by A/C (A = I(0) fit). Default: %(default)s",
     )
     args = parser.parse_args()
     run_root = args.directory.resolve()
@@ -510,11 +863,20 @@ def main() -> int:
     _save_all_rg_vs_time(run_root / "Rg_vs_time.png", times, all_guinier_rg_list)
     print(f"Wrote {run_root / 'Rg_vs_time.png'}")
 
-    # Plot 4: Ridge plot of mixture PDFs (samples with q_09_11 >= 0.1, best BIC per sample, color by time)
-    _save_mixture_ridge_plot(run_root, data, y_spacing=0.08)
+    # I(0) fit per sample (q in [0, 2] nm⁻¹); raises on failure
+    A_list = compute_I0_per_sample(run_root, data, q_max=2.0)
 
-    # Save PDF matrix to .txt: all samples (zeros where q_09_11 < 0.1), same scale as plot
-    _save_mixture_pdfs_txt(run_root, data, pdf_scale=3.0)
+    # Plot 4: Ridge plot of mixture PDFs (all samples, scaled by A/C, color by time)
+    _save_mixture_ridge_plot(run_root, data, A_list, y_spacing=0.08, C=args.scale_constant)
+
+    # Save PDF matrix to .txt: first row scale factors A, then R and (A/C)*P(R) per sample
+    _save_mixture_pdfs_txt(run_root, data, A_list)
+
+    # Error ridge plots: (exp - fit) in I vs q and I_exp/I_fit in log I vs log q
+    _save_error_ridge_plots(run_root, data, y_spacing=1.0, curve_scale=1.0)
+
+    # Fit quality: chi2, R2, R2_log vs time (best BIC_log fit per sample)
+    _save_fit_quality_plot(run_root, data)
 
     return 0
 

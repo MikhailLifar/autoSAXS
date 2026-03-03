@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .utils import gaussian_pdf, schultz_pdf
+from .utils import calc_chi2, gaussian_pdf, schultz_pdf
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -34,11 +34,8 @@ LOG_I_CLIP = -7.0
 def _load_curve(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Load q, intensity, sigma from a subtracted .dat (YAML+CSV or plain CSV)."""
     path = Path(path)
-    try:
-        from .utils import read_data
-        df, _, _ = read_data(str(path))
-    except Exception:
-        df = pd.read_csv(path, comment="#")
+    from .utils import read_data
+    df, _, _ = read_data(str(path))
     q = df["q"].to_numpy().astype(np.float64)
     I = df["intensity"].to_numpy().astype(np.float64)
     sigma = df["sigma"].to_numpy().astype(np.float64) if "sigma" in df.columns else 0.03 * np.abs(I)
@@ -228,14 +225,18 @@ def _run_all_fits(
     return results
 
 
-def _fit_label(r: dict) -> str:
-    bic_log = r.get("BIC_log")
-    if bic_log is not None and np.isfinite(bic_log):
-        return f"{r['label']} (BIC_log={bic_log:.3f})"
+def _fit_label(r: dict, *, use_bic_log: bool = True) -> str:
+    key = "BIC_log" if use_bic_log else "BIC"
+    val = r.get(key)
+    if val is not None and np.isfinite(val):
+        return f"{r['label']} ({key}={val:.3f})"
     return r["label"]
 
 
-def _plot_comparison(q: np.ndarray, I: np.ndarray, results: list[dict], out_path_lin: Path, out_path_log: Path) -> None:
+def _plot_comparison(
+    q: np.ndarray, I: np.ndarray, results: list[dict], out_path_lin: Path, out_path_log: Path,
+    fit_range_title: str,
+) -> None:
     """Save two separate comparison plots: I vs q (linear y) and log I vs q (log y)."""
     import matplotlib.pyplot as plt
     colors = plt.cm.tab10(np.linspace(0, 1, 10))
@@ -244,18 +245,18 @@ def _plot_comparison(q: np.ndarray, I: np.ndarray, results: list[dict], out_path
     fit_lw = 1.5
     fit_alpha = 0.65
 
-    # (1) I vs q — linear y
+    # (1) I vs q — linear x and y
     fig_lin, ax = plt.subplots()
     ax.plot(q, I, "k-", lw=exp_lw, alpha=0.95, label="Experiment")
     for i, r in enumerate(results):
         if r["q_fit"] is None or r["I_fit"] is None:
             continue
-        ax.plot(r["q_fit"], r["I_fit"], "-", color=colors[i % len(colors)], lw=fit_lw, alpha=fit_alpha, label=_fit_label(r))
-    ax.set_xscale("log")
+        ax.plot(r["q_fit"], r["I_fit"], "-", color=colors[i % len(colors)], lw=fit_lw, alpha=fit_alpha, label=_fit_label(r, use_bic_log=False))
+    ax.set_xscale("linear")
     ax.set_yscale("linear")
     ax.set_xlabel(r"$q$ (nm$^{-1}$)")
     ax.set_ylabel(r"$I(q)$ (a.u.)")
-    ax.set_title(r"MIXTURE fits — $I$ vs $q$")
+    ax.set_title(r"MIXTURE fits — $I$ vs $q$" + f" ({fit_range_title})")
     ax.legend(loc="best")
     ax.grid(True, alpha=0.3)
     fig_lin.tight_layout()
@@ -268,12 +269,12 @@ def _plot_comparison(q: np.ndarray, I: np.ndarray, results: list[dict], out_path
     for i, r in enumerate(results):
         if r["q_fit"] is None or r["I_fit"] is None:
             continue
-        ax.plot(r["q_fit"], r["I_fit"], "-", color=colors[i % len(colors)], lw=fit_lw, alpha=fit_alpha, label=_fit_label(r))
+        ax.plot(r["q_fit"], r["I_fit"], "-", color=colors[i % len(colors)], lw=fit_lw, alpha=fit_alpha, label=_fit_label(r, use_bic_log=True))
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel(r"$q$ (nm$^{-1}$)")
     ax.set_ylabel(r"$I(q)$ (a.u.)")
-    ax.set_title(r"MIXTURE fits — $\log I$ vs $q$")
+    ax.set_title(r"MIXTURE fits — $\log I$ vs $q$" + f" ({fit_range_title})")
     ax.legend(loc="best")
     ax.grid(True, alpha=0.3)
     fig_log.tight_layout()
@@ -315,7 +316,8 @@ def _save_results_csv(results: list[dict], out_path: Path) -> None:
     for r in results:
         base = {
             "label": r["label"], "n_phases": r["n_phases"], "dist": r["dist"],
-            "f_min": r["f_min"], "R2": r.get("R2", np.nan), "R2_adj": r.get("R2_adj", np.nan),
+            "f_min": r["f_min"], "chi2": r.get("chi2", np.nan),
+            "R2": r.get("R2", np.nan), "R2_adj": r.get("R2_adj", np.nan),
             "BIC": r.get("BIC", np.nan), "R2_log": r.get("R2_log", np.nan),
             "R2_adj_log": r.get("R2_adj_log", np.nan), "BIC_log": r.get("BIC_log", np.nan),
             "returncode": r["returncode"],
@@ -332,6 +334,7 @@ def fit_mixtures(
     profile_path: str | Path,
     output_dir: str | Path,
     fast_forward: bool = False,
+    q_range_nm: tuple[float, float] | None = None,
 ) -> dict[str, Any] | None:
     """
     Run 6 MIXTURE fits (1-, 2-, 3-phase × Gaussian, Schultz–Zimm; SPHERE-only),
@@ -341,6 +344,8 @@ def fit_mixtures(
     profile_path: path to 1D subtracted .dat (q in nm⁻¹, intensity, sigma).
     output_dir: directory under which mixture_<basename>/ is created (e.g. directory/mixture).
     fast_forward: if True and comparison, distribution, CSV exist for this basename, skip and return result dict.
+    q_range_nm: (q_min, q_max) in nm⁻¹ to use for fitting; None = use full q range. Only data in this range
+        is passed to MIXTURE; comparison plot shows full experiment and fits over the fit range.
 
     Returns dict with keys: output_subdir (path), best_label, BIC_log, comparison_path, distributions_path, results_csv_path;
     or None on failure.
@@ -357,18 +362,13 @@ def fit_mixtures(
     distributions_path = work_base / "mixture_distributions.png"
     results_csv_path = work_base / "mixture_results.csv"
     if fast_forward and comparison_path.exists() and comparison_log_path.exists() and distributions_path.exists() and results_csv_path.exists():
-        # Load best from CSV
-        try:
-            df = pd.read_csv(results_csv_path)
-            if "BIC_log" in df.columns:
-                idx = df["BIC_log"].idxmin()
-                best_label = str(df.loc[idx, "label"])
-                bic_log = float(df.loc[idx, "BIC_log"])
-            else:
-                best_label = str(df.loc[0, "label"]) if len(df) else ""
-                bic_log = np.nan
-        except Exception:
-            best_label = ""
+        df = pd.read_csv(results_csv_path)
+        if "BIC_log" in df.columns:
+            idx = df["BIC_log"].idxmin()
+            best_label = str(df.loc[idx, "label"])
+            bic_log = float(df.loc[idx, "BIC_log"])
+        else:
+            best_label = str(df.loc[0, "label"]) if len(df) else ""
             bic_log = np.nan
         return {
             "output_subdir": str(work_base),
@@ -379,10 +379,17 @@ def fit_mixtures(
             "results_csv_path": str(results_csv_path),
         }
 
-    try:
-        q, I, sigma = _load_curve(profile_path)
-    except Exception:
-        return None
+    q_full, I_full, sigma_full = _load_curve(profile_path)
+    if q_range_nm is not None:
+        q_min, q_max = q_range_nm
+        mask = (q_full >= q_min) & (q_full <= q_max)
+        q, I, sigma = q_full[mask], I_full[mask], sigma_full[mask]
+        if len(q) < 2:
+            raise ValueError(f"q_range_nm {q_range_nm} yields fewer than 2 points (got {len(q)})")
+        fit_range_title = f"fit range: [{q_min}, {q_max}] nm⁻¹"
+    else:
+        q, I, sigma = q_full, I_full, sigma_full
+        fit_range_title = "full q range"
     dat_basename = "exp.dat"
     results = _run_all_fits(q, I, sigma, work_base, dat_basename)
 
@@ -397,8 +404,16 @@ def fit_mixtures(
     for r in results:
         k = r["n_phases"] * N_PARAMS_PER_PHASE
         I_exp, I_fit = r.get("I_exp"), r.get("I_fit")
+        q_fit = r.get("q_fit")
         r["R2"], r["R2_adj"] = _calc_R2_and_R2_adj(I_exp, I_fit, k)
         r["BIC"] = _calc_BIC(I_exp, I_fit, k)
+        if I_exp is not None and I_fit is not None and q_fit is not None and len(I_exp) >= 2:
+            idx = np.argsort(q)
+            q_s, sigma_s = q[idx], sigma[idx]
+            sigma_fit = np.interp(np.asarray(q_fit), q_s, sigma_s)
+            r["chi2"] = float(calc_chi2(I_exp, I_fit, sigma_fit))
+        else:
+            r["chi2"] = np.nan
         if I_exp is not None and I_fit is not None:
             log_exp = _log_clip(I_exp)
             log_fit = _log_clip(I_fit)
@@ -407,7 +422,7 @@ def fit_mixtures(
         else:
             r["R2_log"] = r["R2_adj_log"] = r["BIC_log"] = np.nan
 
-    _plot_comparison(q, I, results, comparison_path, comparison_log_path)
+    _plot_comparison(q_full, I_full, results, comparison_path, comparison_log_path, fit_range_title)
     _plot_distributions(results, distributions_path)
     _save_results_csv(results, results_csv_path)
 
