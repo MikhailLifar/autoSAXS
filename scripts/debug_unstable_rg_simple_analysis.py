@@ -18,7 +18,8 @@ matplotlib.use("Agg")
 
 from autosaxs.context import Context
 from autosaxs.event_bus import EventBus, EventType
-from autosaxs.saxs_controller import Controller, _parse_descriptors_from_results
+from autosaxs.saxs_controller import Controller
+from autosaxs.report import _parse_descriptors_from_results
 from autosaxs import viewer
 
 

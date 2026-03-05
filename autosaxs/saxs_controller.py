@@ -41,12 +41,7 @@ from ase.io import read
 from .foreign.aiAssistantFramework.lib import llm
 # from aiAssistantFramework.lib import telegram
 # import controller as ai_controller
-from .polydispfit import polydispfit
-from .mixture import fit_mixtures
-from .report import build_report_pdf, build_summary_report_pdf
-
-# CONFIG_FILE = "calib_config.conf"
-# CALIBRATED_GEOMETRY_PATH = 'calibrated_geometry.conf'
+from . import skill
 
 PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prompts')
 DEBUG = True
@@ -115,75 +110,6 @@ def json_type_caster(s):
         raise ValueError('Incorrect JSON passed')
 
 
-def _parse_descriptors_from_results(results_path):
-    """Parse Rg, I(0), Quality, Dmax, MW, Rg autorg, Guinier intervals from results file. Returns dict or None."""
-    if not results_path or not os.path.isfile(results_path):
-        return None
-    import re
-    out = {}
-    in_chosen = False
-    in_methods = False
-    with open(results_path, 'r') as f:
-        for line in f:
-            if 'Chosen Guinier result' in line:
-                in_chosen = True
-                in_methods = False
-            elif 'All Guinier methods' in line:
-                in_chosen = False
-                in_methods = True
-            elif line.strip().startswith(('Porod region', 'Descriptors (used downstream)', 'GNOM Results')):
-                in_chosen = False
-                in_methods = False
-            if in_chosen:
-                m = re.match(r'\s*q range\s*=\s*\[([\d.]+),\s*([\d.]+)\]\s*nm\^-1', line)
-                if m:
-                    out['Guinier interval (final)'] = f"[{m.group(1)}, {m.group(2)}] nm^-1"
-            if in_methods and re.match(r'\s*autorg\s*:', line):
-                # autorg: Rg=3.4300 nm, ..., interval=[0.35087, 0.36887] ... or (no result)
-                m = re.search(r'Rg=([\d.]+)\s*nm', line)
-                if m:
-                    out['Rg autorg (nm)'] = m.group(1).strip()
-                else:
-                    out['Rg autorg (nm)'] = 'N/A'
-                mi = re.search(r'interval=\[([\d.]+),\s*([\d.]+)\]', line)
-                if mi:
-                    out['Guinier interval (autorg)'] = f"[{mi.group(1)}, {mi.group(2)}] nm^-1"
-                else:
-                    out['Guinier interval (autorg)'] = 'N/A'
-            m = re.match(r'\s*Rg\s*=\s*(.+?)\s*nm', line)
-            if m:
-                out['Rg (nm)'] = m.group(1).strip()
-            m = re.match(r'\s*I\(0\)\s*=\s*(.+)', line)
-            if m:
-                out['I(0)'] = m.group(1).strip()
-            m = re.match(r'\s*Quality\s*[=:]\s*(.+)', line)
-            if m:
-                out['Quality'] = m.group(1).strip()
-            m = re.match(r'\s*Dmax\s*=\s*(.+?)\s*nm', line)
-            if m:
-                out['Dmax (nm)'] = m.group(1).strip()
-            m = re.match(r'\s*From Rg \(globular\):\s*(.+?)\s*kDa', line)
-            if m:
-                out['MW from Rg (kDa)'] = m.group(1).strip()
-            m = re.match(r'\s*From DATMW:\s*(.+?)\s*kDa', line)
-            if m:
-                out['MW from DATMW (kDa)'] = m.group(1).strip()
-            m = re.match(r'\s*Porod Volume\s*=\s*(.+?)\s*nm\^?3', line, re.IGNORECASE)
-            if m:
-                out['Porod Volume (nm^3)'] = m.group(1).strip()
-            m = re.match(r'\s*classification\s*\([^)]*\)\s*=\s*(.+)', line)
-            if m:
-                out['Classification'] = m.group(1).strip()
-    # If no chosen q range was found (e.g. old format or no result), set final interval to N/A
-    if 'Guinier interval (final)' not in out:
-        out['Guinier interval (final)'] = 'N/A'
-    if 'Rg autorg (nm)' not in out:
-        out['Rg autorg (nm)'] = 'N/A'
-    if 'Guinier interval (autorg)' not in out:
-        out['Guinier interval (autorg)'] = 'N/A'
-    return out if out else None
-
-
 def save_latest_steps(pipeline_choice, steps):
     """
     Persist the last selected steps so they can be offered as a default later.
@@ -191,107 +117,6 @@ def save_latest_steps(pipeline_choice, steps):
     os.makedirs(os.path.dirname(LATEST_STEPS_PATH), exist_ok=True)
     with open(LATEST_STEPS_PATH, 'w') as f:
         yaml.safe_dump({'pipeline': pipeline_choice, 'steps': list(steps)}, f)
-
-
-# class Block:
-#     def __init__(self, interface: Interface, viewer: Viewer, required_paths: list):
-#         self.interface = interface
-#         self.viewer = viewer
-#         self.required_paths = required_paths
-    
-#     def __call__(self, paths: Paths, dest_dir, config, *args, **kwargs):
-#         raise NotImplementedError
-    
-#     def check_paths(self, paths: Paths):
-#         return all(paths_group in paths.paths for paths_group in self.required_paths)
-
-
-# class Autocalib(Block):
-#     def __init__(self, *args, required_paths=None, **kwargs):
-#         if required_paths is None:
-#             required_paths = ['calibrant_2d', 'config']
-#         Block.__init__(self, *args, required_paths=required_paths, **kwargs)
-
-#     def __call__(self, paths: Paths, dest_dir, config, paths_mode, debug=False):
-#         config_path = paths.get_paths('config', paths_mode)
-#         calibrant_path = paths.get_paths('calibrant_2d', paths_mode)
-        
-#         # Check if calibration results exist in debug mode
-#         calibration_results_file = os.path.join(dest_dir, 'calibration.png')
-#         integrator_subd = os.path.join(dest_dir, 'integrator_params')
-#         refined_config_exists = 'refined' in config
-        
-#         calibrant_name = config['calibrant_name']
-#         calib_data = read_from_tiff(calibrant_path)
-        
-#         if debug and refined_config_exists and all(
-#             os.path.exists(p) for p in (calibration_results_file, integrator_subd)
-#         ):
-#             self._send_message('Debug mode: Skipping calibration (results already exist)')
-#             refined = config['refined']
-#             integrator = IntegratorExtended.from_disk(integrator_subd)
-#             return {'integrator': integrator, 'refined': refined}
-#         else:
-#             self._send_message('Autocalibration...')
-
-#             center_ref_params = {k: config['center_refinement'][k] 
-#                                 for k in ['q_start', 'q_stop', 'min_segment_len']}
-#             self._send_message('    Center search...')
-#             center_step_ret = find_center(calib_data, **center_ref_params)
-#             # self.viewer.view_center(calib_data, calibrant_path, **center_search_res)
-            
-#             d_geom = config['detector_geometry']
-#             interring_dist_px = get_interring_dist_px(
-#                 d_geom['dist'], d_geom['wavelength'], d_geom['pixel_size'][0]
-#             )
-
-#             ring_search_params = {k: config['ring_search'][k] 
-#                                   for k in ['q_stop', 'ring_I_threshold', 'r_max_px', 'r_step_px']}
-#             ring_search_params.update({
-#                 'r_beam_px': config['r_beam_px'],
-#                 'center_y_px': center_step_ret['center_y_px'],
-#                 'center_x_px': center_step_ret['center_x_px'],
-#                 'interring_dist_px': interring_dist_px
-#             })
-#             self._send_message('    Rings identification...')
-#             rings_step_ret = find_rings(calib_data, **ring_search_params)
-#             # self.viewer.view_rings(calib_data, calibrant_path, rings=find_rings_res['rings'])
-            
-#             geometry_params = {k: config['detector_geometry'][k] 
-#                                 for k in ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3']}
-#             geometry_params.update({
-#                 'r_beam_px': config['r_beam_px'],
-#                 'center_y_px': center_step_ret['center_y_px'],
-#                 'center_x_px': center_step_ret['center_x_px'],
-#                 'calibrant_name': calibrant_name,
-#             })
-#             self._send_message('    Geometry refinement...')
-#             refine_step_ret = refine(calib_data, rings_step_ret['rings'], **geometry_params)
-#             # self.viewer.view_refined_curve(refine_step_ret['curve_calibrated'], refine_step_ret['theoretical_peaks'])
-            
-#             refine_step_ret['integrator'].to_disk(integrator_subd)
-
-#             self.viewer.view_calibration(
-#                 img_data=calib_data, tiff_path=calibrant_path,
-#                 show=False, plotFilePath=calibration_results_file,
-#                 **center_step_ret, **rings_step_ret, **refine_step_ret)
-#             refined = refine_step_ret['refined']
-#             refined.update({'wavelength': config['detector_geometry']['wavelength']})
-#             self._send_message(
-#                 f'\n-- Calibrated geometry parameters --\n' + '\n'.join(f'{p}: {v}' for p, v in refined.items())  + '\n'
-#             )
-#             self._send_message('Finished calibration')
-#             update_config(config, config_path, 'refined', values=refined)
-#             return None, {k: refine_step_ret[k] for k in ('refined', 'integrator')}
-
-
-# class Ingegration(Block):
-#     def __init__(self, *args, **kwargs):
-#         required_paths = ['calibrant_2d', 'config']
-#         Block.__init__(self, *args, required_paths=required_paths, **kwargs)
-
-#     def __call__(self, paths: Paths, dest_dir, config, paths_mode, debug=False):
-#         pass
 
 
 class Controller:
@@ -366,177 +191,7 @@ class Controller:
         if evt == EventType.PROFILE_SELECTION_SPECIFIED:
             return (data or {}).get("selected_profiles", {})
         return {}
-    
-    def center_refinement_step(self, calib_data, visualize=True, calib_tiff_path='', **center_ref_params):
-        center_search_res = find_center(calib_data, **center_ref_params)
-        if visualize:
-            self.viewer.view_center(calib_data, calib_tiff_path, 
-                                    **center_search_res)
-        return center_search_res
-    
-    def rings_refinement_step(self, calib_data, visualize=True, calib_tiff_path='', **ring_search_params):
-        find_rings_res = find_rings(calib_data, **ring_search_params)
-        if visualize:
-            self.viewer.view_rings(calib_data, calib_tiff_path, rings=find_rings_res['rings'])
-        return find_rings_res
 
-    def geometry_refinement_step(self, calib_data, rings, visualize=True, **geometry_params):
-        # print(f'geometry_refinement_step is called. Parameters are: {", ".join(geometry_params.keys())}')
-        refine_res = refine(calib_data, rings, **geometry_params)
-        if visualize:
-            self.viewer.view_refined_curve(refine_res['curve_calibrated'], refine_res['theoretical_peaks'])
-        return refine_res
-
-    def autocalib(self, calibrant_path, mask_path, context: Context, fast_forward=False):
-        directory = context.directory
-        assert directory is not None
-        
-        # Check if calibration results exist in debug mode
-        calibration_results_file = os.path.join(directory, 'calibration.png')
-        integrator_subd = os.path.join(directory, 'integrator_params')
-        refined_config_exists = 'refined' in context
-        
-        if fast_forward and refined_config_exists and all(
-            os.path.exists(p) for p in (calibration_results_file, integrator_subd)
-        ):
-            self._send_message('Fast-forward: Skipping calibration (results already exist)')
-            refined = context['refined']
-            integrator = IntegratorExtended.from_disk(integrator_subd)
-            return {'integrator': integrator, 'refined': refined}
-        else:
-            if not calibrant_path:
-                return {'integrator': None, 'refined': None}
-
-            calibrant_name = context['calibrant_name']
-            calib_data = read_from_tiff(calibrant_path)
-            
-            self._send_message('Autocalibration...')
-
-            center_ref_params = {k: context['center_refinement', k] 
-                                for k in ['q_start', 'q_stop', 'min_segment_len']}
-            self._send_message('    Center search...')
-            center_step_ret = self.center_refinement_step(calib_data, visualize=False, calib_tiff_path=calibrant_path, **center_ref_params)
-            
-            d_geom = context['detector_geometry']
-            interring_dist_px = get_interring_dist_px(
-                d_geom['dist'], d_geom['wavelength'], d_geom['pixel_size'][0]
-            )
-
-            ring_search_params = {k: context['ring_search', k] 
-                                  for k in ['q_stop', 'ring_I_threshold', 'r_max_px', 'r_step_px']}
-            ring_search_params.update({
-                'r_beam_px': context['r_beam_px'],
-                'center_y_px': center_step_ret['center_y_px'],
-                'center_x_px': center_step_ret['center_x_px'],
-                'interring_dist_px': interring_dist_px
-            })
-            self._send_message('    Rings identification...')
-            rings_step_ret = self.rings_refinement_step(calib_data, visualize=False, calib_tiff_path=calibrant_path, **ring_search_params)
-            
-            geometry_params = {k: context['detector_geometry', k] 
-                                for k in ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3']}
-            geometry_params.update({
-                'r_beam_px': context['r_beam_px'],
-                'center_y_px': center_step_ret['center_y_px'],
-                'center_x_px': center_step_ret['center_x_px'],
-                'calibrant_name': calibrant_name,
-                'mask_path': mask_path,
-                'mask_config': context['mask_config'],
-            })
-            self._send_message('    Geometry refinement...')
-            refine_step_ret = self.geometry_refinement_step(
-                calib_data, rings_step_ret['rings'], visualize=False, **geometry_params)
-            
-            refine_step_ret['integrator'].to_disk(integrator_subd)
-
-            self.viewer.view_calibration(
-                img_data=calib_data,
-                tiff_path=calibrant_path,
-                show_duration=None,
-                plotFilePath=calibration_results_file,
-                **center_step_ret,
-                **rings_step_ret,
-                **refine_step_ret,
-            )
-            self.viewer.view_mask(
-                calib_data, refine_step_ret['integrator'].mask,
-                tiff_path=calibrant_path,
-                plotFilePath=os.path.join(directory, 'calibration_mask.png')
-            )
-            
-            refined = refine_step_ret['refined']
-            refined.update({'wavelength': context['detector_geometry', 'wavelength']})
-            self._send_message(
-                f'\n-- Calibrated geometry parameters --\n' + '\n'.join(f'{p}: {v}' for p, v in refined.items())  + '\n'
-            )
-            self._send_message('Finished calibration')
-            context['refined'] = refined
-            context.update_config('refined', values=refined)
-            return {k: refine_step_ret[k] for k in ('refined', 'integrator')}
-        
-    def integrate(self, ai, context: Context, to_int_path, dest_dir, metadata, 
-                  fast_forward=False):
-        int_path = ''
-        
-        if to_int_path:
-            os.makedirs(dest_dir, exist_ok=True)
-
-            root, fname = os.path.split(to_int_path)
-            fname = os.path.splitext(fname)[0]
-            int_path = os.path.join(dest_dir, f'int_{fname}.dat')
-            
-            # Check if integration results exist in debug mode
-            if fast_forward and os.path.exists(int_path):
-                self._send_message(f'Fast-forward: Skipping integration for {to_int_path} (results already exist)')
-            else:
-                integrate_2d_to_1d(ai, read_from_tiff(to_int_path), destpath=int_path,
-                                    metadata=metadata)
-        
-        return int_path
-    
-    def subtract(self, context: Context, to_sub_path, buffer_path, dest_dir, fast_forward=False):
-        sub_path, sub_plot_path = '', ''
-        
-        if to_sub_path:
-            os.makedirs(dest_dir, exist_ok=True)
-
-            q, sample, sigma_sample, _ = read_saxs(to_sub_path)
-            root, basename = os.path.split(to_sub_path)
-            basename, _ = os.path.splitext(basename)
-            basename = basename.replace('int_', '', 1)
-            sub_path = os.path.join(dest_dir, f"sub_{basename}.dat")
-            diff_plot_path = os.path.join(dest_dir, f'diff_{basename}.png')
-            sub_plot_path = os.path.join(dest_dir, f'sub_{basename}.png')
-            
-            # Check if subtraction results exist in debug mode
-            if fast_forward and all(os.path.exists(p) for p in (sub_path, diff_plot_path, sub_plot_path)):
-                self._send_message(f'Fast-forward: Skipping subtraction for {to_sub_path} (results already exist)')
-                
-            else:
-                _, I_sub, I_buff_scaled, sigma_sub, sigma_buff_scaled = subtract_buffer(
-                    buffer_path, to_sub_path, sub_path, 
-                    match_tail_ops={
-                        'q_range_rel': None, 
-                        'q_range_abs': context['sub', 'q_range_abs'], 
-                    })
-                self.viewer.view_curves(
-                    q, sample, 'sample',
-                    q, I_buff_scaled, 'buffer scaled',
-                    sigmas=(sigma_sample, sigma_buff_scaled),
-                    legend=True,
-                    plotFilePath=diff_plot_path,
-                    save=False
-                )
-                self.viewer.view_curves(
-                    q, I_sub, 'sample',
-                    sigmas=(sigma_sub, ),
-                    legend=True,
-                    plotFilePath=sub_plot_path,
-                    save=False
-                )
-        
-        return sub_path, sub_plot_path
-    
     def get_descriptors(self, context: Context, to_analyze_path,
                         dest_dir, fast_forward=False,
                         ):
@@ -822,525 +477,7 @@ class Controller:
             #             pass
 
         return results_file, gnom_file
-    
-    def plot(self, context: Context, to_plot_path, dest_dir, fast_forward=False):
-        guinier_plot_path = kratky_plot_path = loglog_plot_path = ''
-        
-        if to_plot_path:
-            os.makedirs(dest_dir, exist_ok=True)
 
-            root, basename = os.path.split(to_plot_path)
-            basename, _ = os.path.splitext(basename)
-            # sub_plot_path = os.path.join(dest_dir, f'{basename}.png')
-            guinier_plot_path = os.path.join(dest_dir, f'guinier_{basename}.png')
-            kratky_plot_path = os.path.join(dest_dir, f'kratky_{basename}.png')
-            loglog_plot_path = os.path.join(dest_dir, f'loglog_{basename}.png')
-            
-            if fast_forward and all(os.path.exists(p) for p in (
-                # sub_plot_path, 
-                guinier_plot_path, kratky_plot_path, loglog_plot_path)):
-                self._send_message(f'Fast-forward: Skipping plots for {to_plot_path} (results already exist)')
-
-            else:
-                # plots
-                q, I, _, _ = read_saxs(to_plot_path)
-
-                # self.viewer.view_curves(
-                #     q, I, 'I vs q',
-                #     xlabel='q (nm-1)', ylabel='I (a.u.)',
-                #     legend=True,
-                #     plotFilePath=sub_plot_path,
-                #     save=False
-                # )
-
-                write_data(
-                    os.path.join(dest_dir, f'guinier_{basename}.dat'),
-                    pd.DataFrame(np.stack([q*q, np.log(I)], axis=-1), columns=['q^2', 'log(I)']),
-                    metadata={'type': 'guinier', 'parent': to_plot_path}
-                )
-                self.viewer.view_curves(
-                    q*q, np.log(I), 'log(I) vs q^2',
-                    xlabel='q^2 (nm-2)', ylabel='log(I) (a.u.)',
-                    legend=True,
-                    plotFilePath=guinier_plot_path,
-                    save=False
-                )
-
-                write_data(
-                    os.path.join(dest_dir, f'kratky_{basename}.dat'),
-                    pd.DataFrame(np.stack([q, q * q * I], axis=-1), columns=['q', 'I * q^2']),
-                    metadata={'type': 'kratky', 'parent': to_plot_path}
-                )
-                self.viewer.view_curves(
-                    q, q * q * I, 'I * q^2 vs q',
-                    xlabel='q (nm-1)', ylabel='I * q^2 (a.u.)',
-                    legend=True,
-                    plotFilePath=kratky_plot_path,
-                    save=False
-                )
-
-                write_data(
-                    os.path.join(dest_dir, f'loglog_{basename}.dat'),
-                    pd.DataFrame(np.stack([np.log(q), np.log(I)], axis=-1), columns=['log(q)', 'log(q)']),
-                    metadata={'type': 'loglog', 'parent': to_plot_path}
-                )
-                self.viewer.view_curves(
-                    np.log(q), np.log(I), 'log(I) vs log(q)',
-                    xlabel='log(q)', ylabel='log(I)',
-                    legend=True,
-                    plotFilePath=loglog_plot_path,
-                    save=False
-                )
-        
-        ret = [
-            # sub_plot_path, 
-            guinier_plot_path, kratky_plot_path, loglog_plot_path
-        ]
-        return ret
-    
-    def bodies_fit(self, context: Context, saxs_1d_path, dest_dir, fast_forward=False):
-        if saxs_1d_path:
-            self._send_message('BODIES fit...')
-            root, basename = os.path.split(saxs_1d_path)
-            basename, _ = os.path.splitext(basename)
-            
-            bodies_subdir = os.path.join(dest_dir, f'bodies_{basename}')
-            os.makedirs(bodies_subdir, exist_ok=True)
-            bodies_call = os.path.join(ATSAS_BIN_PREFIX, 'bodies')
-            bodies_prefix = os.path.join(bodies_subdir, 'bodies_fit')
-
-            bodies_fits_png = os.path.join(bodies_subdir, f'{basename}_fits.png')
-            bodies_fits_yml = os.path.join(bodies_subdir, 'bodies_fits.yml')
-            bodies_fits_csv = os.path.join(bodies_subdir, 'bodies_fits.csv')
-
-            exists_bodies = all(
-                os.path.exists(os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir'))
-                for shape in BODIES_SHAPES
-            )
-            exists_bodies_exports = os.path.exists(bodies_fits_yml) and os.path.exists(bodies_fits_csv)
-
-            if fast_forward and exists_bodies and os.path.exists(bodies_fits_png) and exists_bodies_exports:
-                self._send_message(f'Fast-forward: Skipping BODIES fit for {saxs_1d_path} (results already exist)')
-
-            else:
-                q, I, sigma, _ = read_saxs(saxs_1d_path)
-                
-                first_nm, last_nm = context['bodies', 'q_range_nm']
-                first_chnl, last_chnl = context['bodies', 'q_range_channels']
-                if first_nm is not None and last_nm is not None:
-                    assert first_chnl is None and last_chnl is None
-                    first_chnl = np.argmin(np.abs(q - first_nm)) + 1
-                    last_chnl = np.argmin(np.abs(q - last_nm)) + 1
-                assert first_chnl is not None and last_chnl is not None
-
-                # print(f'DEBUG - how BODIES is called: {bodies_call} --prefix={bodies_prefix} --first={first_chnl} --last={last_chnl} {saxs_1d_path}')
-                # os.system(f"{bodies_call} --prefix={bodies_prefix} {saxs_1d_path} --first={first_chnl} --last={last_chnl}")
-                os.system(f"{bodies_call} --prefix={bodies_prefix} {saxs_1d_path}")
-
-                to_plot = []
-
-                fit_failed = all(
-                    not os.path.exists(os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir'))
-                    for shape in BODIES_SHAPES
-                )
-                if fit_failed:
-                    self._send_message(f'BODIES fit for {saxs_1d_path} failed (resulting files were not found, probably integration or data cleaning error)')
-                    return bodies_subdir
-
-                fits_data = []
-                for shape in BODIES_SHAPES:
-                    fir_path = os.path.join(bodies_subdir, f'bodies_fit-{shape}.fir')
-                    # cif_path = os.path.join(bodies_subdir, f'bodies_fit-{shape}-damstart.cif')
-                    
-                    with open(fir_path, 'r') as f:
-                        first_line = f.readline().strip()
-                        # Example line: 'elliptic-cylinder: a=2.20304, c=1.30633, h=2.43344, scale=0.488440'
-                        import re
-                        params_dict = {}
-                        # Match pattern: <shape_name>: <param1>=<value1>, <param2>=<value2>, ...
-                        match = re.match(r'^(?P<shape>[\w\-]+):\s*(?P<params>.+)$', first_line)
-                        if match:
-                            params_str = match.group('params')
-                            # Split by comma, then extract param=value for each
-                            for param_assignment in params_str.split(','):
-                                param_assignment = param_assignment.strip()
-                                kv_match = re.match(r'^(\w+)\s*=\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)$', param_assignment)
-                                if kv_match:
-                                    key, value = kv_match.group(1), kv_match.group(2)
-                                    params_dict[key] = float(value)
-                        else:
-                            params_dict = {}
-
-                    structure = (shape, params_dict)
-                    
-                    data = np.loadtxt(fir_path, skiprows=1, dtype=np.float64)
-                    q_fit, I_fit, sigma_bodies = data[:, 0], data[:, 3], data[:, 2]
-                    idx_intersection = (q <= q_fit[-1])
-                    q_intersetcion, I_intersection = q[idx_intersection], I[idx_intersection]
-                    sigma_interp = np.interp(q_intersetcion, q_fit, sigma_bodies)
-                    I_fit_interp = np.interp(q_intersetcion, q_fit, I_fit)
-
-                    chi2 = calc_chi2(I_intersection, I_fit_interp, sigma_interp)
-                    fits_data.append((shape, params_dict, chi2, q_intersetcion, I_fit_interp))
-                    params_str = ';'.join(
-                        f"{p_name}:{p_v:.2f}" for p_name, p_v in params_dict.items()
-                        if p_name != "scale"
-                        )
-                    to_plot.extend([q_intersetcion, I_fit_interp, f'{shape} ({params_str});$\\chi^2$: {chi2:.2f}'])
-
-                    self.viewer.plot_3d_views_and_scattering(
-                        structure, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
-                        plotFilePath=os.path.join(bodies_subdir, f'{shape}_view.png')
-                    )
-                    # atoms = read_bodies_cif(cif_path)
-                    # self.viewer.plot_structure_and_scattering(
-                    #     atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
-                    #     plotFilePath=os.path.join(bodies_subdir, f'{shape}_view.png'))
-                
-                q_max = max(to_plot[i][-1] for i in range(0, len(to_plot), 3))
-                idx = q <= q_max
-                q_csv = q[idx]
-                I_exp_csv = I[idx]
-
-                fits_yml = {s: {**p, 'chi2': float(c)} for s, p, c, _q, _i in fits_data}
-                with open(bodies_fits_yml, 'w') as f:
-                    yaml.dump(fits_yml, f, default_flow_style=False)
-
-                csv_cols = ['q', 'exp'] + [s for s, *_ in fits_data]
-                csv_arrays = [q_csv, I_exp_csv] + [
-                    np.interp(q_csv, _q, _i) for _s, _p, _c, _q, _i in fits_data
-                ]
-                pd.DataFrame(dict(zip(csv_cols, csv_arrays))).to_csv(bodies_fits_csv, index=False)
-
-                to_plot = [q[idx], I[idx], {'label': 'exp', 'lw': 4}] + to_plot
-                self.viewer.view_curves(*to_plot,
-                                        sigmas=(sigma[idx], ),
-                                        title=f'Fits comparison for\n{basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
-                                        plotFilePath=os.path.join(bodies_subdir, f'{basename}_fits.png'))
-        
-        return bodies_subdir
-    
-    def dammif_fit(self, context: Context, saxs_1d_path, gnom_path, dest_dir, fast_forward=False):
-        if gnom_path:
-            self._send_message('DAMMIF fit...')
-            root, basename = os.path.split(gnom_path)
-            basename, _ = os.path.splitext(basename)
-            
-            dammif_subdir = os.path.join(dest_dir, f'dammif_{basename}')
-            os.makedirs(dammif_subdir, exist_ok=True)
-            dammif_call = os.path.join(ATSAS_BIN_PREFIX, "dammif")
-            dammif_prefix = os.path.join(dammif_subdir, 'dammif')
-            dammif_reps_num = 2  # 5
-
-            dammif_fits_png = os.path.join(dammif_subdir, f'{basename}_fits.png')
-            dammif_fits_yml = os.path.join(dammif_subdir, 'dammif_fits.yml')
-            dammif_fits_csv = os.path.join(dammif_subdir, 'dammif_fits.csv')
-
-            exists_dammif = all(os.path.exists(os.path.join(dammif_subdir, f'dammif-{i+1}.fir')) for i in range(dammif_reps_num))
-            exists_dammif_exports = os.path.exists(dammif_fits_yml) and os.path.exists(dammif_fits_csv)
-
-            if fast_forward and exists_dammif and os.path.exists(dammif_fits_png) and exists_dammif_exports:
-                self._send_message(f'Fast-forward: Skipping DAMMIF fit for {gnom_path} (results already exist)')
-            
-            else:
-                os.system(f'for i in `seq 1 {dammif_reps_num}`; do {dammif_call} --prefix={dammif_prefix}-$i --mode=fast {gnom_path}; done')
-
-                q, I, sigma, _ = read_saxs(saxs_1d_path)
-                to_plot = []
-                fits_data = []
-
-                for i in range(dammif_reps_num):
-                    fir_path = f'{dammif_prefix}-{i+1}.fir'
-                    cif_path = f'{dammif_prefix}-{i+1}-1.cif'
-
-                    data = np.loadtxt(fir_path, skiprows=1, dtype=np.float64)
-                    q_fit, I_fit, sigma_dammif = data[:, 0], data[:, 3], data[:, 2]
-                    q_fit = q_fit * 10.0  # from A^-1 to nm ^-1
-
-                    # self.viewer.view_curves(q_fit, I_fit, 'fitted curve', 
-                    #                         plotFilePath=os.path.join(dammif_subdir, f'{basename}_{i}_shit_here_0.png'))
-
-                    idx_intersection = (q <= q_fit[-1])
-                    q_intersetcion, I_intersection = q[idx_intersection], I[idx_intersection]
-                    sigma_interp = np.interp(q_intersetcion, q_fit, sigma_dammif)
-                    I_fit_interp = np.interp(q_intersetcion, q_fit, I_fit)
-
-                    # self.viewer.view_curves(q_intersetcion, I_fit_interp, 'fitted curve', 
-                    #                         plotFilePath=os.path.join(dammif_subdir, f'{basename}_{i}_shit_here_1.png'))
-
-                    chi2 = calc_chi2(I_intersection, I_fit_interp, sigma_interp)
-                    atoms = read_bodies_cif(cif_path)
-                    descr = compute_dammif_descriptors(atoms)
-                    fits_data.append((f'dammif-{i}', {**descr, 'chi2': float(chi2)}, q_intersetcion, I_fit_interp))
-                    to_plot.extend([q_intersetcion, I_fit_interp, f'dammif-{i}; $\\chi^2$: {chi2:.2f}'])
-
-                    # self.viewer.plot_structure_and_scattering(
-                    #     atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
-                    #     plotFilePath=os.path.join(dammif_subdir, f'dammif-{i}_view.png'))
-                    self.viewer.plot_3d_views_and_scattering(
-                        atoms, q_intersetcion, I_intersection, sigma_interp, I_fit_interp, 
-                        plotFilePath=os.path.join(dammif_subdir, f'dammif-{i}_view.png'))
-
-                q_max = max(to_plot[i][-1] for i in range(0, len(to_plot), 3))
-                idx = q <= q_max
-                q_csv = q[idx]
-                I_exp_csv = I[idx]
-
-                fits_yml = {k: {kk: float(vv) for kk, vv in d.items()} for k, d, _q, _i in fits_data}
-                with open(dammif_fits_yml, 'w') as f:
-                    yaml.dump(fits_yml, f, default_flow_style=False)
-
-                csv_cols = ['q', 'exp'] + [k for k, *_ in fits_data]
-                csv_arrays = [q_csv, I_exp_csv] + [
-                    np.interp(q_csv, _q, _i) for _k, _d, _q, _i in fits_data
-                ]
-                pd.DataFrame(dict(zip(csv_cols, csv_arrays))).to_csv(dammif_fits_csv, index=False)
-
-                to_plot = [q[idx], I[idx], {'label': 'exp', 'lw': 4}] + to_plot
-                self.viewer.view_curves(*to_plot,
-                                        sigmas=(sigma[idx], ), 
-                                        title=f'Fits comparison for\n{basename}', xlabel='q (nm-1)', ylabel='I', legend=True,
-                                        plotFilePath=os.path.join(dammif_subdir, f'{basename}_fits.png'))
-        
-        return dammif_subdir
-
-    def mixture_fit(self, context: Context, profile_path, dest_dir, fast_forward=False):
-        """Run MIXTURE fits (6 models, SPHERE-only); return result dict for report or None."""
-        if not profile_path:
-            return None
-        q_range_nm = context.config["mixture"]["q_range_nm"]  # required; None = full q range
-        self._send_message('MIXTURE fit...')
-        try:
-            return fit_mixtures(
-                profile_path,
-                output_dir=dest_dir,
-                fast_forward=fast_forward,
-                q_range_nm=q_range_nm,
-            )
-        except Exception:
-            raise
-
-    def polydispfit(self, context: Context, saxs_1d_path, dest_dir, fast_forward=False):
-        polydisp_subdir = ''
-        
-        if saxs_1d_path:
-            self._send_message('Polydisperse sphere fit...')
-            root, basename = os.path.split(saxs_1d_path)
-            basename, _ = os.path.splitext(basename)
-            
-            polydisp_subdir = os.path.join(dest_dir, f'polydispfit_{basename}')
-            os.makedirs(polydisp_subdir, exist_ok=True)
-            
-            fit_comparison_png = os.path.join(polydisp_subdir, f'{basename}_fit_comparison.png')
-            radius_dist_png = os.path.join(polydisp_subdir, f'{basename}_radius_distribution.png')
-            fit_data_dat = os.path.join(polydisp_subdir, f'{basename}_fit.dat')
-            
-            # Polydisperse models: symmetric (Gaussian), heavy-tail (Schulz), skewed (lognormal)
-            polydisp_distributions = [
-                ("gaussian", {
-                    "name": "gaussian",
-                    "params": {"mean": 3.0, "std": 0.5},
-                    "bounds": {"mean": (0.05, 100.0), "std": (0.05, 30.0)},
-                }),
-                ("schulz", {
-                    "name": "schulz",
-                    "params": {"z": 8.0, "mean": 3.0},
-                    "bounds": {"z": (0.05, 100.0), "mean": (0.05, 100.0)},
-                }),
-                ("lognormal", {
-                    "name": "lognormal",
-                    "params": {"mu": np.log(3.0), "sigma": 0.4},
-                    "bounds": {"mu": (np.log(0.05), np.log(100.0)), "sigma": (0.05, 2.0)},
-                }),
-            ]
-            required_outputs = [fit_comparison_png, radius_dist_png, fit_data_dat]
-            if fast_forward and all(os.path.exists(p) for p in required_outputs):
-                self._send_message(f'Fast-forward: Skipping polydisperse fit for {saxs_1d_path} (results already exist)')
-            else:
-                q, I, sigma, metadata_orig = read_saxs(saxs_1d_path)
-                first_nm = 0.1
-                last_nm = 5.0
-                q_range = (first_nm, last_nm)
-                model_name = 'sphere'
-                from scipy.special import gamma as gammafn
-
-                optimizer = "sobol_trf"
-                if context.config and "polydispfit" in context.config and isinstance(context.config["polydispfit"], dict):
-                    tb = context.config["polydispfit"].get("time_budget")
-                    if tb is not None:
-                        optimizer = {"method": "sobol_trf", "time_budget_linear": float(tb), "time_budget_log": float(tb)}
-
-                results_by_dist = []
-                for suffix, dist_config in polydisp_distributions:
-                    try:
-                        fit_res = polydispfit(saxs_1d_path, model_name, dist_config, q_range, optimizer=optimizer)
-                    except Exception as e:
-                        self._send_message(f'Polydisperse fit ({suffix}) failed: {e}')
-                        continue
-                    q_fit = fit_res["q"]
-                    I_fit = fit_res["intensity"]
-                    sigma_fit = fit_res["sigma"]
-                    model_I = fit_res["model"]
-                    scale = fit_res["scale"]
-                    background = fit_res["background"]
-                    chi2 = fit_res["chi2"]
-                    dist_info = fit_res["distribution"]
-                    opt_info = fit_res["optimizer_info"]
-                    chi2_linear = fit_res.get("chi2_linear", chi2)
-                    chi2_log = fit_res.get("chi2_log", chi2)
-                    score_linear = fit_res.get("score_linear", 0.0)
-                    score_log = fit_res.get("score_log", 0.0)
-                    parameterization_used = fit_res.get("parameterization_used", "linear")
-                    self._send_message(
-                        f'  {suffix}: chi2_linear={chi2_linear:.4g} chi2_log={chi2_log:.4g} '
-                        f'score_linear={score_linear:.4g} score_log={score_log:.4g} best={parameterization_used}'
-                    )
-                    dist_name = dist_info["name"].lower()
-                    dist_params = dist_info["params"]
-
-                    # Plot range and PDF for radius distribution
-                    if dist_name in ("gaussian", "normal"):
-                        mean = dist_params["mean"]
-                        std = dist_params["std"]
-                        R_min = max(0.01, mean - 4 * std)
-                        R_max = mean + 4 * std
-                    elif dist_name in ("lognormal", "log-normal"):
-                        mu, sig = dist_params["mu"], dist_params["sigma"]
-                        R_min = max(0.01, np.exp(mu - 4 * sig))
-                        R_max = np.exp(mu + 4 * sig)
-                    else:
-                        r_mean = dist_params.get("mean", dist_params.get("r_mean"))
-                        z = dist_params.get("z", 1.0)
-                        pd_rel = 1.0 / np.sqrt(z + 1) if z > -1 else 0.5
-                        R_min = max(0.01, r_mean * (1 - 4 * pd_rel))
-                        R_max = r_mean * (1 + 4 * pd_rel)
-                    R = np.linspace(R_min, R_max, 300)
-
-                    if dist_name in ("gaussian", "normal"):
-                        pdf = np.exp(-0.5 * ((R - dist_params["mean"]) / dist_params["std"]) ** 2) / (dist_params["std"] * np.sqrt(2 * np.pi))
-                    elif dist_name in ("lognormal", "log-normal"):
-                        safe_R = np.maximum(R, np.finfo(float).tiny)
-                        pdf = np.exp(-(np.log(safe_R) - dist_params["mu"]) ** 2 / (2 * dist_params["sigma"] ** 2)) / (
-                            safe_R * dist_params["sigma"] * np.sqrt(2 * np.pi)
-                        )
-                    elif dist_name in ("schulz", "schultz", "gamma"):
-                        z = dist_params["z"]
-                        r_mean = dist_params.get("mean", dist_params.get("r_mean"))
-                        safe_R = np.maximum(R, np.finfo(float).tiny)
-                        prefactor = ((z + 1) ** (z + 1)) / (r_mean * gammafn(z + 1))
-                        pdf = prefactor * (safe_R / r_mean) ** z * np.exp(-(z + 1) * safe_R / r_mean)
-                    else:
-                        pdf = np.full_like(R, np.nan)
-
-                    comp_png = os.path.join(polydisp_subdir, f'{basename}_fit_comparison_{suffix}.png')
-                    dist_png = os.path.join(polydisp_subdir, f'{basename}_radius_distribution_{suffix}.png')
-                    dat_path = os.path.join(polydisp_subdir, f'{basename}_fit_{suffix}.dat')
-
-                    self.viewer.view_curves(
-                        q_fit, I_fit, {'label': 'experimental', 'lw': 2},
-                        q_fit, model_I, {'label': f'{suffix} ($\\chi^2$: {chi2:.2f})', 'lw': 2},
-                        sigmas=(sigma_fit, None),
-                        title=f'Polydisperse sphere fit ({suffix}) for\n{basename}',
-                        xlabel='q (nm-1)', ylabel='I', legend=True,
-                        plotFilePath=comp_png, save=False
-                    )
-                    self.viewer.view_curves(
-                        R, pdf, {'label': f'{dist_name}', 'lw': 2},
-                        title=f'Fitted radius distribution ({suffix}) for\n{basename}',
-                        xlabel='Radius (nm)', ylabel='Probability density',
-                        legend=True, plotFilePath=dist_png, save=False
-                    )
-                    fit_data_df = pd.DataFrame({
-                        'q': q_fit,
-                        'I_experimental': I_fit,
-                        'I_model': model_I,
-                        'sigma': sigma_fit if sigma_fit is not None else np.full_like(q_fit, np.nan),
-                    })
-                    fit_metadata = {
-                        'type': 'polydisperse_fit',
-                        'parent': saxs_1d_path,
-                        'model_name': model_name,
-                        'distribution_variant': suffix,
-                        'q_range': q_range,
-                        'scale': float(scale),
-                        'background': float(background),
-                        'distribution': dist_info,
-                        'optimizer_info': opt_info,
-                        'fit_quality': {
-                            'chi2': float(chi2),
-                            'chi2_linear': float(chi2_linear),
-                            'chi2_log': float(chi2_log),
-                            'score_linear': float(score_linear),
-                            'score_log': float(score_log),
-                            'parameterization_used': parameterization_used,
-                            'success': opt_info.get('success', False),
-                            'message': opt_info.get('message', ''),
-                            'nfev': opt_info.get('nfev', 0),
-                        },
-                        'fitted_parameters': dist_params,
-                    }
-                    if metadata_orig:
-                        fit_metadata['original_metadata'] = metadata_orig
-                    write_data(dat_path, fit_data_df, fit_metadata)
-                    results_by_dist.append({
-                        "suffix": suffix,
-                        "chi2": chi2,
-                        "chi2_linear": chi2_linear,
-                        "chi2_log": chi2_log,
-                        "score_linear": score_linear,
-                        "score_log": score_log,
-                        "parameterization_used": parameterization_used,
-                        "q_fit": q_fit,
-                        "I_fit": I_fit,
-                        "sigma_fit": sigma_fit,
-                        "model_I": model_I,
-                        "scale": scale,
-                        "background": background,
-                        "dist_info": dist_info,
-                        "dist_params": dist_params,
-                        "opt_info": opt_info,
-                        "R": R,
-                        "pdf": pdf,
-                        "comp_png": comp_png,
-                        "dist_png": dist_png,
-                        "dat_path": dat_path,
-                        "fit_data_df": fit_data_df,
-                        "fit_metadata": fit_metadata,
-                    })
-
-                if not results_by_dist:
-                    self._send_message('Polydisperse fit: all distribution variants failed.')
-                else:
-                    best = min(results_by_dist, key=lambda r: r["chi2"])
-                    # Write default (best) outputs for report and backward compatibility
-                    self.viewer.view_curves(
-                        best["q_fit"], best["I_fit"], {'label': 'experimental', 'lw': 2},
-                        best["q_fit"], best["model_I"], {'label': f"polydisperse fit ($\\chi^2$: {best['chi2']:.2f})", 'lw': 2},
-                        sigmas=(best["sigma_fit"], None),
-                        title=f'Polydisperse sphere fit for\n{basename}',
-                        xlabel='q (nm-1)', ylabel='I', legend=True,
-                        plotFilePath=fit_comparison_png, save=False
-                    )
-                    self.viewer.view_curves(
-                        best["R"], best["pdf"], {'label': f"{best['dist_info']['name']}", 'lw': 2},
-                        title=f'Fitted radius distribution for\n{basename}',
-                        xlabel='Radius (nm)', ylabel='Probability density',
-                        legend=True, plotFilePath=radius_dist_png, save=False
-                    )
-                    best_meta = best["fit_metadata"].copy()
-                    best_meta["distribution_variant"] = best["suffix"]
-                    write_data(fit_data_dat, best["fit_data_df"], best_meta)
-
-                    msg = '\n-- Polydisperse fit results (best = {} chi2: {:.4g}, param={}) --\n'.format(
-                        best["suffix"], best["chi2"], best.get("parameterization_used", "linear")
-                    )
-                    for r in results_by_dist:
-                        msg += f"  {r['suffix']}: chi2={r['chi2']:.4g}  param={r.get('parameterization_used', 'linear')}  params={r['dist_params']}\n"
-                    msg += f"Scale: {best['scale']:.4g}  Background: {best['background']:.4g}\n"
-                    self._send_message(msg)
-        
-        return polydisp_subdir
-    
     def ai_analysis(self, atsas_analysis_path, plot_paths, dest_dir,
                     text_model, vision_model,
                     fast_forward=False):
@@ -1459,7 +596,9 @@ class Controller:
         )
         config_path, = config_paths
         context.set_config(config_path)
+        config = context.config
 
+        integrator_dir = None
         if 'calibration' in steps:
             calibrant_paths = self._request_file(
                 directory,
@@ -1491,9 +630,19 @@ class Controller:
                 mask_path = mask_paths[0] if mask_paths else None
                 if mask_path:
                     context.append_path('calib_mask', mask_path)
-            res_calib = self.autocalib(
-                calibrant_path, mask_path, context=context, fast_forward=fast_forward)
-            ai = res_calib['integrator']
+            if calibrant_path:
+                out_cal = skill.calibrate(
+                    input_paths={'calib_image': calibrant_path, 'config': config_path, 'mask': mask_path},
+                    output_dir=directory,
+                    config=config,
+                    event_bus=self._event_bus,
+                    use_cache=fast_forward,
+                )
+                integrator_dir = out_cal['integrator_dir']
+                with open(out_cal['refined_path'], 'r') as f:
+                    refined = yaml.safe_load(f)
+                context['refined'] = refined
+                context.update_config('refined', values=refined)
 
         if 'integration' in steps and 'calibration' not in steps:
             ai_subdir = 'integrator_params'
@@ -1523,7 +672,7 @@ class Controller:
                 time.sleep(2.0)
                 if not exit_condition():
                     self._send_message(f'Wrong "{ai_subdir}" directory structure. Reupload')
-            ai = IntegratorExtended.from_disk(os.path.join(directory, ai_subdir))
+            integrator_dir = os.path.join(directory, ai_subdir)
 
         run_process_cycle = True
         iteration_number = 0
@@ -1573,25 +722,49 @@ class Controller:
                         os.path.splitext(os.path.split(sample_path)[1])[0]
                         for sample_path in sample_paths
                     ]
-            
-                buffer_paths_1d = [
-                    self.integrate(
-                        ai, context, buffer_path, 
-                        dest_dir=os.path.join(directory, 'averaged'), metadata={'type': 'buffer'}, fast_forward=fast_forward)
-                        for buffer_path in buffer_paths
-                    ]
-                sample_paths_1d = [
-                    self.integrate(
-                        ai, context, 
-                        sample_path, dest_dir=os.path.join(directory, 'averaged'), 
-                        metadata={'type': 'sample'}, 
-                        fast_forward=fast_forward)
-                        for sample_path in sample_paths
-                    ]
-                # print('DEBUG: integration finished')
 
-                # add only processed paths to context
-                # though, in pipeline_batch all paths are saved to paths variable, not just inprocessed...
+                averaged_dir = os.path.join(directory, 'averaged')
+                buffer_2d_to_1d = {}
+                sample_2d_to_1d = {}
+                if buffer_paths:
+                    list_inputs_buf = [
+                        {'images': [p], 'integrator_dir': integrator_dir} for p in buffer_paths
+                    ]
+                    out_buf = skill.integrate(
+                        input_paths=list_inputs_buf,
+                        output_dir=averaged_dir,
+                        config=config,
+                        event_bus=self._event_bus,
+                        use_cache=fast_forward,
+                    )
+                    integrated_buf = out_buf['integrated_1d']
+                    integrated_buf_list = integrated_buf if isinstance(integrated_buf, list) else [integrated_buf]
+                    buffer_2d_to_1d = dict(zip(buffer_paths, integrated_buf_list))
+                if sample_paths:
+                    list_inputs_sam = [
+                        {'images': [p], 'integrator_dir': integrator_dir} for p in sample_paths
+                    ]
+                    out_sam = skill.integrate(
+                        input_paths=list_inputs_sam,
+                        output_dir=averaged_dir,
+                        config=config,
+                        event_bus=self._event_bus,
+                        use_cache=fast_forward,
+                    )
+                    integrated_sam = out_sam['integrated_1d']
+                    integrated_sam_list = integrated_sam if isinstance(integrated_sam, list) else [integrated_sam]
+                    sample_2d_to_1d = dict(zip(sample_paths, integrated_sam_list))
+                if buffer_paths and sample_paths:
+                    alignment_res = map_sample_files_to_buffer_files(sample_paths, buffer_paths)
+                    aligned_pairs_2d = alignment_res['aligned_pairs']
+                    sample_paths_1d = [sample_2d_to_1d[s] for s, _ in aligned_pairs_2d]
+                    buffer_paths_1d = [buffer_2d_to_1d[b] for _, b in aligned_pairs_2d]
+                elif sample_paths:
+                    sample_paths_1d = list(sample_2d_to_1d.values())
+                    buffer_paths_1d = []
+                else:
+                    sample_paths_1d = []
+                    buffer_paths_1d = []
                 context.extend_paths('buffer_2d', buffer_paths)
                 context.extend_paths('sample_2d', sample_paths)
 
@@ -1638,9 +811,8 @@ class Controller:
             
             profile_paths = []
             profile_pic_paths = []
+            diff_plot_paths = []  # from subtract skill (diff_*.png), same order as profile_pic_paths
             if 'subtraction' in steps:
-                # print('DEBUG: subtraction started')
-
                 alignment_res = map_sample_files_to_buffer_files(sample_paths_1d, buffer_paths_1d)
                 aligned_pairs = alignment_res['aligned_pairs']
                 alignment_check = not (alignment_res['overlapped'] or alignment_res['not_paired'])
@@ -1649,16 +821,35 @@ class Controller:
                     not_paired_str = '\n'.join(alignment_res['not_paired'])
                     raise RuntimeError(f"Buffer-sample alignment failed!\n\nOverlapped:\n{overlap_str}\n\nNot paired:\n{not_paired_str}")
 
-                for s_p, b_p in aligned_pairs:
-                    profile_path, profile_pic_path = self.subtract(
-                        context, s_p, b_p, 
-                        dest_dir=os.path.join(directory, 'subtracted'), fast_forward=fast_forward)
-                    profile_paths.append(profile_path)
-                    profile_pic_paths.append(profile_pic_path)
-                
+                subtracted_dir = os.path.join(directory, 'subtracted')
+                q_range_abs = context.config.get('sub', {}).get('q_range_abs') if context.config else None
+                match_tail_ops = {'q_range_rel': None, 'q_range_abs': q_range_abs}
+                list_inputs_subtract = [
+                    {'sample_1d': s_p, 'buffer_1d': b_p} for (s_p, b_p) in aligned_pairs
+                ]
+                out_sub = skill.subtract(
+                    input_paths=list_inputs_subtract,
+                    output_dir=subtracted_dir,
+                    config=config,
+                    event_bus=self._event_bus,
+                    use_cache=fast_forward,
+                    match_tail_ops=match_tail_ops,
+                )
+                subtracted_1d = out_sub['subtracted_1d']
+                profile_paths = subtracted_1d if isinstance(subtracted_1d, list) else [subtracted_1d]
+                sub_plot_paths = out_sub.get('sub_plot_path')
+                if sub_plot_paths is not None:
+                    profile_pic_paths.extend(
+                        sub_plot_paths if isinstance(sub_plot_paths, list) else [sub_plot_paths]
+                    )
+                diff_plot_paths_raw = out_sub.get('diff_plot_path')
+                if diff_plot_paths_raw is not None:
+                    diff_plot_paths.extend(
+                        diff_plot_paths_raw if isinstance(diff_plot_paths_raw, list) else [diff_plot_paths_raw]
+                    )
+
                 context.extend_paths('buffer_1d', buffer_paths_1d)
                 context.extend_paths('sample_1d', sample_paths_1d)
-                # print('DEBUG: subtraction finished')
             else:
                 profile_paths = self._request_file(
                     directory,
@@ -1685,14 +876,17 @@ class Controller:
 
             # Keep profile lists sorted alphabetically by basename across the pipeline
             if basename_list and profile_paths and len(profile_paths) == len(basename_list) and len(profile_pic_paths) == len(basename_list):
+                # Align diff_plot_paths with basename_list (pad with None if shorter)
+                while len(diff_plot_paths) < len(basename_list):
+                    diff_plot_paths.append(None)
                 if sample_paths_1d is not None and len(sample_paths_1d) == len(basename_list):
-                    combined = list(zip(basename_list, profile_paths, profile_pic_paths, sample_paths_1d))
+                    combined = list(zip(basename_list, profile_paths, profile_pic_paths, sample_paths_1d, diff_plot_paths))
                     combined.sort(key=lambda t: t[0])
-                    basename_list, profile_paths, profile_pic_paths, sample_paths_1d = [list(x) for x in zip(*combined)]
+                    basename_list, profile_paths, profile_pic_paths, sample_paths_1d, diff_plot_paths = [list(x) for x in zip(*combined)]
                 else:
-                    combined = list(zip(basename_list, profile_paths, profile_pic_paths))
+                    combined = list(zip(basename_list, profile_paths, profile_pic_paths, diff_plot_paths))
                     combined.sort(key=lambda t: t[0])
-                    basename_list, profile_paths, profile_pic_paths = [list(x) for x in zip(*combined)]
+                    basename_list, profile_paths, profile_pic_paths, diff_plot_paths = [list(x) for x in zip(*combined)]
 
             # simple_analysis for all sample profiles (§10: try-except, report via MESSAGE)
             descriptors_by_basename = {}
@@ -1710,66 +904,49 @@ class Controller:
             plots_by_basename = {}
             if 'plots' in steps and basename_list and profile_paths:
                 plots_dir = os.path.join(directory, 'plots')
-                for basename, profile_path in zip(basename_list, profile_paths):
-                    try:
-                        plot_paths = self.plot(
-                            context, profile_path, dest_dir=plots_dir, fast_forward=fast_forward)
-                        plots_by_basename[basename] = plot_paths  # [guinier, kratky, loglog]
-                    except Exception as e:
-                        self._send_message(f"plots failed for {basename}: {e}")
+                try:
+                    list_inputs_plot = [{'profile': p} for p in profile_paths]
+                    out_plot = skill.plot(
+                        input_paths=list_inputs_plot,
+                        output_dir=plots_dir,
+                        config=config,
+                        event_bus=self._event_bus,
+                        use_cache=fast_forward,
+                    )
+                    guinier = out_plot.get('guinier_plot_path')
+                    kratky = out_plot.get('kratky_plot_path')
+                    loglog = out_plot.get('loglog_plot_path')
+                    guinier_list = guinier if isinstance(guinier, list) else [guinier] if guinier else []
+                    kratky_list = kratky if isinstance(kratky, list) else [kratky] if kratky else []
+                    loglog_list = loglog if isinstance(loglog, list) else [loglog] if loglog else []
+                    for idx, basename in enumerate(basename_list):
+                        if idx < len(guinier_list) and idx < len(kratky_list) and idx < len(loglog_list):
+                            plots_by_basename[basename] = [
+                                guinier_list[idx],
+                                kratky_list[idx],
+                                loglog_list[idx],
+                            ]
+                except Exception as e:
+                    self._send_message(f"plots failed: {e}")
 
-            # First report pass: all sample profiles (integration→subtraction; descriptors if simple_analysis run; plot figures if plots run; §4 step 6)
+            # First report pass: all sample profiles via report skills (§4 step 6)
             if basename_list and profile_paths:
                 reports_dir = os.path.join(directory, 'reports')
-                for i in range(len(basename_list)):
-                    basename = basename_list[i]
-                    rd = {'basename': basename}
-                    if 'integration' in steps and sample_paths_1d is not None and i < len(sample_paths_1d):
-                        rd['integrated_curve_path'] = sample_paths_1d[i]
-                    if 'subtraction' in steps:
-                        rd['difference_plot_path'] = os.path.join(directory, 'subtracted', f'diff_{basename}.png')
-                        rd['subtracted_plot_path'] = os.path.join(directory, 'subtracted', f'sub_{basename}.png')
-                    else:
-                        rd['subtracted_plot_path'] = profile_pic_paths[i] if i < len(profile_pic_paths) else None
-                    if basename in descriptors_by_basename:
-                        desc = _parse_descriptors_from_results(descriptors_by_basename[basename][0])
-                        if desc:
-                            rd['descriptors_table'] = desc
-                    if basename in plots_by_basename:
-                        p = plots_by_basename[basename]
-                        if len(p) >= 3:
-                            rd['plot_figures'] = {'guinier': p[0], 'kratky': p[1], 'loglog': p[2]}
-                    out_path = os.path.join(reports_dir, f'{basename}_report.pdf')
-                    build_report_pdf(rd, out_path)
-
-                # Summary report: one PDF combining all sample curves (§6.2)
-                summary_samples = []
-                for i in range(len(basename_list)):
-                    basename = basename_list[i]
-                    entry = {'basename': basename}
-                    if 'integration' in steps and sample_paths_1d is not None and i < len(sample_paths_1d):
-                        entry['integrated_curve_path'] = sample_paths_1d[i]
-                    if i < len(profile_paths):
-                        entry['subtracted_curve_path'] = profile_paths[i]
-                    if basename in descriptors_by_basename:
-                        desc = _parse_descriptors_from_results(descriptors_by_basename[basename][0])
-                        if desc:
-                            entry['descriptors'] = desc
-                    if basename in plots_by_basename:
-                        p = plots_by_basename[basename]
-                        if len(p) >= 3:
-                            plots_dir = os.path.join(directory, 'plots')
-                            # Plot step uses basename from profile_path (e.g. sub_foo_sample), not from sample_paths_1d
-                            plot_basename = os.path.splitext(os.path.basename(profile_paths[i]))[0]
-                            entry['guinier_path'] = os.path.join(plots_dir, f'guinier_{plot_basename}.dat')
-                            entry['kratky_path'] = os.path.join(plots_dir, f'kratky_{plot_basename}.dat')
-                            entry['loglog_path'] = os.path.join(plots_dir, f'loglog_{plot_basename}.dat')
-                    summary_samples.append(entry)
-                if summary_samples:
-                    build_summary_report_pdf(
-                        {'samples': summary_samples},
-                        os.path.join(reports_dir, 'summary_report.pdf'),
+                for basename in basename_list:
+                    try:
+                        skill.report_individual(
+                            directory, basename,
+                            output_path=os.path.join(reports_dir, f'{basename}_report.pdf'),
+                        )
+                    except Exception as e:
+                        self._send_message(f"report (individual) failed for {basename}: {e}")
+                try:
+                    skill.report_summary(
+                        directory,
+                        output_path=os.path.join(reports_dir, 'summary_report.pdf'),
                     )
+                except Exception as e:
+                    self._send_message(f"report (summary) failed: {e}")
 
             profiles_data = []
             for basename, (idx, profile_path), plot_path in zip(
@@ -1786,7 +963,7 @@ class Controller:
                     }
                 )
             # Profile selection only if at least one step after simple_analysis/plots (§4 step 7, §11)
-            steps_after_simple_analysis = {'mixture', 'polydispfit', 'bodies', 'dammif', 'ai_analysis'}
+            steps_after_simple_analysis = {'mixture', 'bodies', 'dammif', 'ai_analysis'}
             request_profile_selection = bool(set(steps) & steps_after_simple_analysis)
             if request_profile_selection:
                 profiles_data = sorted(profiles_data, key=lambda p: p.get("basename", ""))
@@ -1794,7 +971,81 @@ class Controller:
             else:
                 selected_profiles = {}
 
-            for basename in sorted(selected_profiles):
+            # Batch run mixture, bodies, dammif so apply_batch creates per-sample subdirs
+            selected_order = sorted(selected_profiles)
+            mixture_results_by_idx = {}
+            bodies_dirs_list = []
+            dammif_dirs_list = []
+            if selected_order:
+                if 'mixture' in steps:
+                    try:
+                        q_range_nm = context.config.get('mixture', {}).get('q_range_nm') if context.config else None
+                        list_mixture = [{'profile': selected_profiles[b]['path']} for b in selected_order]
+                        out_mixture = skill.fit_mixture(
+                            input_paths=list_mixture,
+                            output_dir=os.path.join(directory, 'mixture'),
+                            config=config,
+                            event_bus=self._event_bus,
+                            use_cache=fast_forward,
+                            q_range_nm=q_range_nm,
+                        )
+                        os_list = out_mixture.get('output_subdir')
+                        comp_list = out_mixture.get('comparison_path')
+                        dist_list = out_mixture.get('distributions_path')
+                        csv_list = out_mixture.get('results_csv_path')
+                        os_list = os_list if isinstance(os_list, list) else [os_list] if os_list else []
+                        comp_list = comp_list if isinstance(comp_list, list) else [comp_list] if comp_list else []
+                        dist_list = dist_list if isinstance(dist_list, list) else [dist_list] if dist_list else []
+                        csv_list = csv_list if isinstance(csv_list, list) else [csv_list] if csv_list else []
+                        for i in range(len(selected_order)):
+                            context.append_path('mixture', os_list[i] if i < len(os_list) else '')
+                            mixture_results_by_idx[i] = {
+                                'output_subdir': os_list[i] if i < len(os_list) else '',
+                                'comparison_path': comp_list[i] if i < len(comp_list) else None,
+                                'distributions_path': dist_list[i] if i < len(dist_list) else None,
+                                'results_csv_path': csv_list[i] if i < len(csv_list) else None,
+                            }
+                    except Exception as e:
+                        self._send_message(f"mixture failed: {e}")
+                if 'bodies' in steps:
+                    try:
+                        list_bodies = [{'profile': selected_profiles[b]['path']} for b in selected_order]
+                        out_bodies = skill.fit_bodies(
+                            input_paths=list_bodies,
+                            output_dir=os.path.join(directory, 'bodies'),
+                            config=config,
+                            event_bus=self._event_bus,
+                            use_cache=fast_forward,
+                        )
+                        os_list = out_bodies.get('output_subdir')
+                        os_list = os_list if isinstance(os_list, list) else [os_list] if os_list else []
+                        bodies_dirs_list = os_list
+                        for d in bodies_dirs_list:
+                            context.append_path('bodies', d)
+                    except Exception as e:
+                        self._send_message(f"bodies failed: {e}")
+                if 'dammif' in steps:
+                    try:
+                        list_dammif = [
+                            {'profile': selected_profiles[b]['path'], 'gnom_path': descriptors_by_basename.get(b, (None, None))[1] or selected_profiles[b]['path']}
+                            for b in selected_order
+                        ]
+                        out_dammif = skill.fit_dammif(
+                            input_paths=list_dammif,
+                            output_dir=os.path.join(directory, 'dammif'),
+                            config=config,
+                            event_bus=self._event_bus,
+                            use_cache=fast_forward,
+                        )
+                        os_list = out_dammif.get('output_subdir')
+                        os_list = os_list if isinstance(os_list, list) else [os_list] if os_list else []
+                        dammif_dirs_list = os_list
+                        for d in dammif_dirs_list:
+                            context.append_path('dammif', d)
+                    except Exception as e:
+                        self._send_message(f"dammif failed: {e}")
+
+            for idx, basename in enumerate(selected_order):
                 profile = selected_profiles[basename]
                 profile_path = profile['path']
                 profile_pic_path = profile.get('plot_path')
@@ -1807,39 +1058,10 @@ class Controller:
                 plot_paths = ([profile_pic_path] if profile_pic_path else []) + list(plots_by_basename.get(basename, []))
                 if plot_paths:
                     context.append_path('plot', plot_paths)
-                mixture_dir = polydisp_dir = bodies_dir = dammif_dir = ''
-                mixture_result = None
-                if 'mixture' in steps:
-                    try:
-                        mixture_result = self.mixture_fit(
-                            context, profile_path, dest_dir=os.path.join(directory, 'mixture'), fast_forward=fast_forward)
-                        if mixture_result:
-                            mixture_dir = mixture_result.get('output_subdir', '')
-                            context.append_path('mixture', mixture_dir)
-                    except Exception as e:
-                        self._send_message(f"mixture failed for {basename}: {e}")
-                if 'polydispfit' in steps:
-                    try:
-                        polydisp_dir = self.polydispfit(
-                            context, profile_path, dest_dir=os.path.join(directory, 'polydispfit'), fast_forward=fast_forward)
-                        context.append_path('polydisp', polydisp_dir)
-                    except Exception as e:
-                        self._send_message(f"polydispfit failed for {basename}: {e}")
-                if 'bodies' in steps:
-                    try:
-                        bodies_dir = self.bodies_fit(
-                            context, profile_path, dest_dir=os.path.join(directory, 'bodies'), fast_forward=fast_forward)
-                        context.append_path('bodies', bodies_dir)
-                    except Exception as e:
-                        self._send_message(f"bodies failed for {basename}: {e}")
-                if 'dammif' in steps:
-                    assert profile_path is not None and gnom_path is not None
-                    try:
-                        dammif_dir = self.dammif_fit(
-                            context, profile_path, gnom_path, dest_dir=os.path.join(directory, 'dammif'), fast_forward=fast_forward)
-                        context.append_path('dammif', dammif_dir)
-                    except Exception as e:
-                        self._send_message(f"dammif failed for {basename}: {e}")
+                mixture_result = mixture_results_by_idx.get(idx) or {}
+                mixture_dir = mixture_result.get('output_subdir', '')
+                bodies_dir = bodies_dirs_list[idx] if idx < len(bodies_dirs_list) else ''
+                dammif_dir = dammif_dirs_list[idx] if idx < len(dammif_dirs_list) else ''
                 if 'ai_analysis' in steps:
                     assert len(selected_profiles) == 1
                     assert profile_path is not None and gnom_path is not None
@@ -1853,69 +1075,14 @@ class Controller:
                         self._send_message(f"ai_analysis failed for {basename}: {e}")
                 # self.ai_analysis(atsas_res_path, plot_paths, directory, text_model=model, vision_model=vision_model)
 
-                # Second report pass: full data for this selected profile (overwrites first-pass PDF)
-                # Use basename from profile_path for fit outputs (polydisp/bodies/dammif derive it from profile_path)
-                basename_from_path = os.path.splitext(os.path.basename(profile_path))[0] if profile_path else basename
-                rd = {'basename': basename}
-                idx = next((j for j, p in enumerate(profile_paths) if p == profile_path), None)
-                if idx is not None and sample_paths_1d is not None and idx < len(sample_paths_1d):
-                    rd['integrated_curve_path'] = sample_paths_1d[idx]
-                if 'subtraction' in steps:
-                    rd['difference_plot_path'] = os.path.join(directory, 'subtracted', f'diff_{basename}.png')
-                    rd['subtracted_plot_path'] = os.path.join(directory, 'subtracted', f'sub_{basename}.png')
-                else:
-                    rd['subtracted_plot_path'] = profile_pic_path
-                desc = _parse_descriptors_from_results(atsas_res_path)
-                if desc:
-                    rd['descriptors_table'] = desc
-                if len(plot_paths) >= 4:
-                    rd['plot_figures'] = {'sub': plot_paths[0], 'guinier': plot_paths[1], 'kratky': plot_paths[2], 'loglog': plot_paths[3]}
-                fits_figs = []
-                if mixture_result:
-                    comp_path = mixture_result.get('comparison_path')
-                    if comp_path and os.path.isfile(comp_path):
-                        fits_figs.append((comp_path, 'mixture'))
-                if polydisp_dir:
-                    fc = os.path.join(polydisp_dir, f'{basename_from_path}_fit_comparison.png')
-                    if os.path.isfile(fc):
-                        fits_figs.append((fc, 'polydispfit'))
-                if bodies_dir:
-                    bf = os.path.join(bodies_dir, f'{basename_from_path}_fits.png')
-                    if os.path.isfile(bf):
-                        fits_figs.append((bf, 'bodies'))
-                if dammif_dir:
-                    df = os.path.join(dammif_dir, f'{basename_from_path}_fits.png')
-                    if os.path.isfile(df):
-                        fits_figs.append((df, 'dammif'))
-                if fits_figs:
-                    rd['fits_comparison_figure_path'] = fits_figs
-                if polydisp_dir:
-                    polydisp_fit_dat = os.path.join(polydisp_dir, f'{basename_from_path}_fit.dat')
-                    if os.path.isfile(polydisp_fit_dat):
-                        rd['polydisp_fit_dat_path'] = polydisp_fit_dat
-                bodies_yml = os.path.join(bodies_dir, 'bodies_fits.yml') if bodies_dir else None
-                bodies_csv = os.path.join(bodies_dir, 'bodies_fits.csv') if bodies_dir else None
-                dammif_yml = os.path.join(dammif_dir, 'dammif_fits.yml') if dammif_dir else None
-                dammif_csv = os.path.join(dammif_dir, 'dammif_fits.csv') if dammif_dir else None
-                if bodies_yml and os.path.isfile(bodies_yml):
-                    rd['bodies_fits_yml_path'] = bodies_yml
-                if bodies_csv and os.path.isfile(bodies_csv):
-                    rd['bodies_fits_csv_path'] = bodies_csv
-                if dammif_yml and os.path.isfile(dammif_yml):
-                    rd['dammif_fits_yml_path'] = dammif_yml
-                if dammif_csv and os.path.isfile(dammif_csv):
-                    rd['dammif_fits_csv_path'] = dammif_csv
-                if mixture_result:
-                    rd['mixture_best_label'] = mixture_result.get('best_label', '')
-                    rd['mixture_BIC_log'] = mixture_result.get('BIC_log')
-                    if mixture_result.get('comparison_path') and os.path.isfile(mixture_result['comparison_path']):
-                        rd['mixture_comparison_figure_path'] = mixture_result['comparison_path']
-                    if mixture_result.get('distributions_path') and os.path.isfile(mixture_result['distributions_path']):
-                        rd['mixture_distributions_figure_path'] = mixture_result['distributions_path']
-                    if mixture_result.get('results_csv_path') and os.path.isfile(mixture_result['results_csv_path']):
-                        rd['mixture_results_csv_path'] = mixture_result['results_csv_path']
-                out_path = os.path.join(directory, 'reports', f'{basename}_report.pdf')
-                build_report_pdf(rd, out_path)
+                # Second report pass: full data for this selected profile via report skill (overwrites first-pass PDF)
+                try:
+                    skill.report_individual(
+                        directory, basename,
+                        output_path=os.path.join(directory, 'reports', f'{basename}_report.pdf'),
+                    )
+                except Exception as e:
+                    self._send_message(f"report (individual) failed for {basename}: {e}")
 
             context.extend_paths('profile', profile_paths)
 
@@ -2037,12 +1204,6 @@ class Controller:
                 plot_paths = [sub_pic_path, ] + plot_paths
                 context.append_path('plot', plot_paths)
         
-        if 'polydispfit' in steps:
-            for p in context['paths', 'sub']:
-                self.polydispfit(
-                    context, p, os.path.join(directory, 'polydispfit'), fast_forward=fast_forward
-                )
-        
         if 'bodies' in steps:
             for p in context['paths', 'sub']:
                 self.bodies_fit(
@@ -2058,137 +1219,6 @@ class Controller:
         
         # if context['analyze_with_ai']:
         #     self.ai_analysis(atsas_res_path, plot_paths, directory, text_model=model, vision_model=vision_model)
-    
-    # def protein_v0(self, fast_forward=False):
-    #     model = 'GLM-4.6'
-    #     # model = 'DeepSeek-V3.1'
-    #     vision_model = 'GLM-4.5V'
-        
-    #     descr, descr_path = get_pipeline_description('protein_v0')
-    #     # print(descr)
-    #     directory = self.interface.ask_for_file('Write a path to a directory for your data')
-    #     online_or_offline = self.interface.ask_question(
-    #         'Do you want to run a pipeline in "online" or "offline" mode? Type 1 for "online" mode and "2" for "offline" mode'
-    #     )
-    #     data_load_mode = 'online' if online_or_offline.startswith('1') else 'offline'
-    #     self._send_message(f'Interaction mode is set to {data_load_mode}')
-
-    #     context = Context(directory, descr_path, interface=self.interface)
-        
-    #     calibrant_path = context.get_path(
-    #         'calib_2d', 
-    #         query='Drop raw/*_calib.tif file with calibration data your directory',
-    #         pattern='raw/*_calib.tif',
-    #         interaction_mode=data_load_mode
-    #     )
-    #     res_calib = self.autocalib(
-    #         calibrant_path, context=context, fast_forward=fast_forward)
-    #     ai = res_calib['integrator']
-
-    #     run_load_cycle = True
-    #     buffer_loaded = False
-    #     while run_load_cycle:
-    #         buffer_path = context.get_path(
-    #             'buffer_2d', 
-    #             query='Drop buffer 2d data raw/*_buffer.tif to the directory',
-    #             pattern='raw/*_buffer.tif',
-    #             interaction_mode=data_load_mode)
-    #         if not buffer_path and buffer_loaded:
-    #             buffer_path = context.paths['buffer_2d'][-1]
-    #         else:
-    #             buffer_loaded = True
-            
-    #         sample_path = context.get_path(
-    #             'sample_2d', query='Drop sample 2d data raw/*_sample.tif to the directory',
-    #             pattern='raw/*_sample.tif',
-    #             interaction_mode=data_load_mode)
-    #         if sample_path:
-    #             basename, _ = os.path.splitext(os.path.split(sample_path)[1])
-            
-    #         buffer_path_1d = self.integrate(
-    #             ai, context, 
-    #             buffer_path, dest_dir=os.path.join(directory, 'int'), 
-    #             metadata={'type': 'buffer'}, 
-    #             fast_forward=fast_forward)
-    #         sample_path_1d = self.integrate(
-    #             ai, context, 
-    #             sample_path, dest_dir=os.path.join(directory, 'int'), 
-    #             metadata={'type': 'sample'}, 
-    #             fast_forward=fast_forward)
-    #         if sample_path_1d and buffer_path_1d:
-    #             # print('Paths are added to context')
-    #             context.append_path('buffer_1d', buffer_path_1d)
-    #             context.append_path('sample_1d', sample_path_1d)
-    #             # print('Check paths', context.paths['buffer_1d'])
-    #             # print('Check paths', context.paths['sample_1d'])
-             
-    #         # print('Check paths 0:', buffer_path_1d, sample_path_1d)
-
-    #         load_mode_1d = 'online' if data_load_mode == 'online' and not sample_path_1d and not buffer_path_1d else 'offline'
-    #         # print('Check iterators:', context.path_iterators)
-    #         buffer_path_1d = context.get_path(
-    #             'buffer_1d', query='Drop buffer 1d data int/*_buffer.dat to the directory', pattern='int/*_buffer.dat',
-    #             interaction_mode=load_mode_1d)            
-    #         sample_path_1d = context.get_path(
-    #             'sample_1d', query='Drop sample 1d data int/*_sample.dat to the directory', pattern='int/*_sample.dat',
-    #             interaction_mode=load_mode_1d)            
-    #         # print('Check paths 1', buffer_path_1d, sample_path_1d)
-    #         profile_path, profile_pic_path = self.subtract(
-    #             context, sample_path_1d, buffer_path_1d, 
-    #             directory, fast_forward=fast_forward)
-    #         if profile_path:
-    #             context.append_path('sub', profile_path)
-
-    #         # profile_path = self.scale(...)
-            
-    #         load_mode_1d = 'online' if data_load_mode == 'online' and not profile_path else 'offline'
-    #         profile_path = context.get_path(
-    #             'sub', query='Drop sample data sub/*.dat to the directory', pattern='sub/*.dat',
-    #             interaction_mode=load_mode_1d)
-
-    #         if_file_is_good = 'yes'
-    #         if data_load_mode == 'online':
-    #             q, I, _ = read_saxs(profile_path)
-    #             self.viewer.view_curves(q, I, basename,
-    #                                     xlabel='q, (nm-1)', ylabel='I, (a.u.)',
-    #                                     title=f'{basename} SAXS profile',
-    #                                     show=True)
-    #             if_file_is_good = self.interface.ask_question(
-    #                 f'Should I continue to analyze {basename} SAXS profile? type Enter to proceed, type "No" to skip'
-    #             )
-            
-    #         if not if_file_is_good.lower().startswith('n'):
-    #             atsas_res_path, gnom_path = self.get_descriptors(context, profile_path, directory, fast_forward=fast_forward)
-    #             context.append_path('atsas_analysis', atsas_res_path)
-    #             context.append_path('p(R)', gnom_path)
-                
-    #             plot_paths = self.plot(context, profile_path, directory, fast_forward=fast_forward)
-    #             plot_paths = [profile_pic_path, ] + plot_paths
-    #             context.append_path('plots', plot_paths)
-                
-    #             self.fit_geometry(context, profile_path, gnom_path, directory, fast_forward=fast_forward)
-    #             # self.ai_analysis(atsas_res_path, plot_paths, directory, text_model=model, vision_model=vision_model)
-        
-        # # self._send_message('Integration...')
-        # paths['buffer_1d'], = self.integrate(ai, [paths['buffer_2d'], ], directory, [{'type': 'buffer'}, ], debug=debug)
-        # paths['sample_1d'] = self.integrate(
-        #     ai, paths['sample_2d'], directory, [{'type': 'sample'} for _ in range(len(paths['sample_2d']))], debug=debug)
-        
-        # # self._send_message('Subtraction...')
-        # paths['sample_sub'] = self.subtract(paths['sample_1d'], paths['buffer_1d'], dest_dir=directory,
-        #                                     config_sub=config['sub'])
-        
-        # # TODO scaling step
-
-        # # self._send_message('Calculating the parameters...')
-        # paths['atsas_analysis'], paths['p(R)']  = self.get_descriptors(paths['sample_sub'], dest_dir=directory, debug=debug)
-
-        # paths['plots'] = self.plot(paths['sample_sub'], dest_dir=directory, debug=debug)
-
-        # self.fit_geometry(paths['sample_sub'], paths['p(R)'], dest_dir=directory, debug=debug)
-
-        # self.ai_analysis(paths['atsas_analysis'], paths['plots'], dest_dir=directory, 
-        #                  text_model=model, vision_model=vision_model, debug=debug)
     
     # def pipeline(self):
     #     try:

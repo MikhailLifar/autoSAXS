@@ -342,7 +342,7 @@ def fit_mixtures(
     MIXTURE is invoked as the command `mixture` from the terminal (PATH).
 
     profile_path: path to 1D subtracted .dat (q in nm⁻¹, intensity, sigma).
-    output_dir: directory under which mixture_<basename>/ is created (e.g. directory/mixture).
+    output_dir: directory for this sample's output (caller e.g. apply_batch provides per-sample dir).
     fast_forward: if True and comparison, distribution, CSV exist for this basename, skip and return result dict.
     q_range_nm: (q_min, q_max) in nm⁻¹ to use for fitting; None = use full q range. Only data in this range
         is passed to MIXTURE; comparison plot shows full experiment and fits over the fit range.
@@ -353,8 +353,7 @@ def fit_mixtures(
     output_dir = Path(output_dir)
     profile_path = Path(profile_path)
     basename = profile_path.stem
-    subdir_name = f"mixture_{basename}"
-    work_base = output_dir / subdir_name
+    work_base = output_dir
     work_base.mkdir(parents=True, exist_ok=True)
 
     comparison_path = work_base / "mixture_comparison_I_vs_q.png"

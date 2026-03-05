@@ -4,6 +4,7 @@ Builds a single PDF from a report-data dictionary; only sections for which data 
 See pipeline_interactive_spec.md §6 Report.
 """
 import os
+import re
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -734,3 +735,308 @@ def build_summary_report_pdf(summary_data: Dict[str, Any], output_path: str) -> 
             os.unlink(p)
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Path collection from directory (for report skills)
+# ---------------------------------------------------------------------------
+
+
+def _strip_sub_int_prefix(stem: str) -> str:
+    """Remove leading 'sub_' or 'int_' from stem repeatedly until stable."""
+    while stem.startswith("sub_"):
+        stem = stem[4:]
+    while stem.startswith("int_"):
+        stem = stem[4:]
+    return stem
+
+
+def _parse_descriptors_from_results(results_path: Optional[str]) -> Optional[Dict[str, str]]:
+    """Parse Rg, I(0), Quality, Dmax, MW, Rg autorg, Guinier intervals from results file. Returns dict or None."""
+    if not results_path or not os.path.isfile(results_path):
+        return None
+    out: Dict[str, str] = {}
+    in_chosen = False
+    in_methods = False
+    with open(results_path, "r") as f:
+        for line in f:
+            if "Chosen Guinier result" in line:
+                in_chosen = True
+                in_methods = False
+            elif "All Guinier methods" in line:
+                in_chosen = False
+                in_methods = True
+            elif line.strip().startswith(("Porod region", "Descriptors (used downstream)", "GNOM Results")):
+                in_chosen = False
+                in_methods = False
+            if in_chosen:
+                m = re.match(r"\s*q range\s*=\s*\[([\d.]+),\s*([\d.]+)\]\s*nm\^-1", line)
+                if m:
+                    out["Guinier interval (final)"] = f"[{m.group(1)}, {m.group(2)}] nm^-1"
+            if in_methods and re.match(r"\s*autorg\s*:", line):
+                m = re.search(r"Rg=([\d.]+)\s*nm", line)
+                if m:
+                    out["Rg autorg (nm)"] = m.group(1).strip()
+                else:
+                    out["Rg autorg (nm)"] = "N/A"
+                mi = re.search(r"interval=\[([\d.]+),\s*([\d.]+)\]", line)
+                if mi:
+                    out["Guinier interval (autorg)"] = f"[{mi.group(1)}, {mi.group(2)}] nm^-1"
+                else:
+                    out["Guinier interval (autorg)"] = "N/A"
+            m = re.match(r"\s*Rg\s*=\s*(.+?)\s*nm", line)
+            if m:
+                out["Rg (nm)"] = m.group(1).strip()
+            m = re.match(r"\s*I\(0\)\s*=\s*(.+)", line)
+            if m:
+                out["I(0)"] = m.group(1).strip()
+            m = re.match(r"\s*Quality\s*[=:]\s*(.+)", line)
+            if m:
+                out["Quality"] = m.group(1).strip()
+            m = re.match(r"\s*Dmax\s*=\s*(.+?)\s*nm", line)
+            if m:
+                out["Dmax (nm)"] = m.group(1).strip()
+            m = re.match(r"\s*From Rg \(globular\):\s*(.+?)\s*kDa", line)
+            if m:
+                out["MW from Rg (kDa)"] = m.group(1).strip()
+            m = re.match(r"\s*From DATMW:\s*(.+?)\s*kDa", line)
+            if m:
+                out["MW from DATMW (kDa)"] = m.group(1).strip()
+            m = re.match(r"\s*Porod Volume\s*=\s*(.+?)\s*nm\^?3", line, re.IGNORECASE)
+            if m:
+                out["Porod Volume (nm^3)"] = m.group(1).strip()
+            m = re.match(r"\s*classification\s*\([^)]*\)\s*=\s*(.+)", line)
+            if m:
+                out["Classification"] = m.group(1).strip()
+    if "Guinier interval (final)" not in out:
+        out["Guinier interval (final)"] = "N/A"
+    if "Rg autorg (nm)" not in out:
+        out["Rg autorg (nm)"] = "N/A"
+    if "Guinier interval (autorg)" not in out:
+        out["Guinier interval (autorg)"] = "N/A"
+    return out if out else None
+
+
+def _first_existing(paths: List[str]) -> Optional[str]:
+    """Return the first path in the list that exists as a file or directory."""
+    for p in paths:
+        if p and os.path.exists(p):
+            return p
+    return None
+
+
+def collect_report_data_from_directory(directory: str, basename: str) -> Dict[str, Any]:
+    """
+    Build report_data dict by scanning pipeline directory for files matching basename.
+    basename is the canonical sample name (e.g. ihs27_sample). Tries common prefixes (int_, sub_, sub_int_)
+    for integrated/descriptor paths. Output plot names use stripped base, so diff_<base>.png, sub_<base>.png.
+    """
+    rd: Dict[str, Any] = {"basename": basename}
+    base = _strip_sub_int_prefix(basename)
+    averaged_dir = os.path.join(directory, "averaged")
+    subtracted_dir = os.path.join(directory, "subtracted")
+    plots_dir = os.path.join(directory, "plots")
+    descriptors_dir = os.path.join(directory, "descriptors")
+    mixture_dir = os.path.join(directory, "mixture")
+    bodies_dir = os.path.join(directory, "bodies")
+    dammif_dir = os.path.join(directory, "dammif")
+
+    # Integrated curve
+    for stem in (f"int_{base}", base, f"sub_int_{base}", f"sub_{base}"):
+        p = os.path.join(averaged_dir, f"{stem}.dat")
+        if os.path.isfile(p):
+            rd["integrated_curve_path"] = p
+            break
+
+    # Difference and subtracted plots (files use stripped base)
+    diff_path = os.path.join(subtracted_dir, f"diff_{base}.png")
+    sub_plot_path = os.path.join(subtracted_dir, f"sub_{base}.png")
+    if os.path.isfile(diff_path):
+        rd["difference_plot_path"] = diff_path
+    if os.path.isfile(sub_plot_path):
+        rd["subtracted_plot_path"] = sub_plot_path
+
+    # Descriptors: try stems that might be used (profile path stem)
+    for stem in (base, f"sub_{base}", f"int_{base}", f"sub_int_{base}"):
+        res_path = os.path.join(descriptors_dir, f"{stem}_results.txt")
+        if os.path.isfile(res_path):
+            desc = _parse_descriptors_from_results(res_path)
+            if desc:
+                rd["descriptors_table"] = desc
+            break
+
+    # Plot figures (guinier, kratky, loglog) — plot step writes .png; use those for embedding (not .dat)
+    guinier_png = os.path.join(plots_dir, f"guinier_{base}.png")
+    kratky_png = os.path.join(plots_dir, f"kratky_{base}.png")
+    loglog_png = os.path.join(plots_dir, f"loglog_{base}.png")
+    if os.path.isfile(guinier_png) or os.path.isfile(kratky_png) or os.path.isfile(loglog_png):
+        rd["plot_figures"] = {}
+        if os.path.isfile(guinier_png):
+            rd["plot_figures"]["guinier"] = guinier_png
+        if os.path.isfile(kratky_png):
+            rd["plot_figures"]["kratky"] = kratky_png
+        if os.path.isfile(loglog_png):
+            rd["plot_figures"]["loglog"] = loglog_png
+
+    # Mixture: per-sample subdir named by stripped base (apply_batch creates these)
+    sample_mixture = os.path.join(mixture_dir, base)
+    if os.path.isdir(sample_mixture):
+        comp = _first_existing([
+            os.path.join(sample_mixture, "mixture_comparison_I_vs_q.png"),
+            os.path.join(sample_mixture, "comparison.png"),
+            os.path.join(sample_mixture, "mixture_comparison.png"),
+        ])
+        dist = _first_existing([
+            os.path.join(sample_mixture, "mixture_distributions.png"),
+            os.path.join(sample_mixture, "distributions.png"),
+        ])
+        csv_path = _first_existing([
+            os.path.join(sample_mixture, "mixture_results.csv"),
+            os.path.join(sample_mixture, "results.csv"),
+        ])
+        if comp and os.path.isfile(comp):
+            rd["mixture_comparison_figure_path"] = comp
+        if dist and os.path.isfile(dist):
+            rd["mixture_distributions_figure_path"] = dist
+        if csv_path and os.path.isfile(csv_path):
+            rd["mixture_results_csv_path"] = csv_path
+
+    # Bodies: per-sample subdir (same naming as mixture)
+    sample_bodies = os.path.join(bodies_dir, base)
+    if os.path.isdir(sample_bodies):
+        b_yml = os.path.join(sample_bodies, "bodies_fits.yml")
+        b_csv = os.path.join(sample_bodies, "bodies_fits.csv")
+        b_fits = os.path.join(sample_bodies, f"{base}_fits.png")
+        if os.path.isfile(b_yml):
+            rd["bodies_fits_yml_path"] = b_yml
+        if os.path.isfile(b_csv):
+            rd["bodies_fits_csv_path"] = b_csv
+        if os.path.isfile(b_fits):
+            fits = rd.get("fits_comparison_figure_path") or []
+            if isinstance(fits, list):
+                fits = list(fits)
+            else:
+                fits = [fits] if fits else []
+            fits.append((b_fits, "bodies"))
+            rd["fits_comparison_figure_path"] = fits
+
+    # Dammif: per-sample subdir (same naming as mixture)
+    sample_dammif = os.path.join(dammif_dir, base)
+    if os.path.isdir(sample_dammif):
+        d_yml = os.path.join(sample_dammif, "dammif_fits.yml")
+        d_csv = os.path.join(sample_dammif, "dammif_fits.csv")
+        d_fits = os.path.join(sample_dammif, f"{base}_fits.png")
+        if os.path.isfile(d_yml):
+            rd["dammif_fits_yml_path"] = d_yml
+        if os.path.isfile(d_csv):
+            rd["dammif_fits_csv_path"] = d_csv
+        if os.path.isfile(d_fits):
+            fits = rd.get("fits_comparison_figure_path") or []
+            if isinstance(fits, list):
+                fits = list(fits)
+            else:
+                fits = [fits] if fits else []
+            fits.append((d_fits, "dammif"))
+            rd["fits_comparison_figure_path"] = fits
+
+    return rd
+
+
+def collect_summary_data_from_directory(directory: str) -> Dict[str, Any]:
+    """
+    Build summary_data dict by discovering samples from subtracted/ and plots/.
+    Returns {'samples': [{'basename', 'integrated_curve_path', 'subtracted_curve_path', 'descriptors', 'guinier_path', ...}, ...]}.
+    """
+    subtracted_dir = os.path.join(directory, "subtracted")
+    plots_dir = os.path.join(directory, "plots")
+    averaged_dir = os.path.join(directory, "averaged")
+    descriptors_dir = os.path.join(directory, "descriptors")
+    samples: List[Dict[str, Any]] = []
+    seen_bases: set = set()
+
+    # Discover basenames from subtracted .dat files (sub_<base>.dat)
+    if os.path.isdir(subtracted_dir):
+        for name in os.listdir(subtracted_dir):
+            if name.endswith(".dat") and name.startswith("sub_"):
+                base = _strip_sub_int_prefix(name[:-4])  # stem without .dat, then strip sub_/int_
+                if base in seen_bases:
+                    continue
+                seen_bases.add(base)
+                entry: Dict[str, Any] = {"basename": base}
+                sub_dat = os.path.join(subtracted_dir, name)
+                if os.path.isfile(sub_dat):
+                    entry["subtracted_curve_path"] = sub_dat
+                for stem in (f"int_{base}", base, f"sub_{base}", f"sub_int_{base}"):
+                    p = os.path.join(averaged_dir, f"{stem}.dat")
+                    if os.path.isfile(p):
+                        entry["integrated_curve_path"] = p
+                        break
+                res_path = os.path.join(descriptors_dir, f"{base}_results.txt")
+                if not os.path.isfile(res_path):
+                    for st in (f"sub_{base}", f"sub_int_{base}"):
+                        res_path = os.path.join(descriptors_dir, f"{st}_results.txt")
+                        if os.path.isfile(res_path):
+                            break
+                if os.path.isfile(res_path):
+                    desc = _parse_descriptors_from_results(res_path)
+                    if desc:
+                        entry["descriptors"] = desc
+                for stem in (base, f"sub_{base}", f"sub_int_{base}"):
+                    guinier_p = os.path.join(plots_dir, f"guinier_{stem}.dat")
+                    if os.path.isfile(guinier_p):
+                        entry["guinier_path"] = guinier_p
+                        entry["kratky_path"] = os.path.join(plots_dir, f"kratky_{stem}.dat")
+                        entry["loglog_path"] = os.path.join(plots_dir, f"loglog_{stem}.dat")
+                        break
+                samples.append(entry)
+
+    if not samples:
+        # Fallback: any .dat in subtracted with sub_ prefix
+        for name in sorted(os.listdir(subtracted_dir) if os.path.isdir(subtracted_dir) else []):
+            if name.endswith(".dat"):
+                stem = name[:-4]
+                base = _strip_sub_int_prefix(stem)
+                if base not in seen_bases:
+                    seen_bases.add(base)
+                    entry = {"basename": base}
+                    entry["subtracted_curve_path"] = os.path.join(subtracted_dir, name)
+                    samples.append(entry)
+
+    return {"samples": samples}
+
+
+def write_individual_report_pdf(
+    directory: str,
+    basename: str,
+    output_path: Optional[str] = None,
+) -> str:
+    """
+    Collect report data from directory for the given basename, build PDF, write to output_path.
+    If output_path is None, uses directory/reports/<basename>_report.pdf.
+    Returns the path to the written PDF.
+    """
+    reports_dir = os.path.join(directory, "reports")
+    if output_path is None:
+        output_path = os.path.join(reports_dir, f"{basename}_report.pdf")
+    os.makedirs(reports_dir, exist_ok=True)
+    rd = collect_report_data_from_directory(directory, basename)
+    build_report_pdf(rd, output_path)
+    return output_path
+
+
+def write_summary_report_pdf(
+    directory: str,
+    output_path: Optional[str] = None,
+) -> str:
+    """
+    Collect summary data from directory, build summary PDF, write to output_path.
+    If output_path is None, uses directory/reports/summary_report.pdf.
+    Returns the path to the written PDF.
+    """
+    reports_dir = os.path.join(directory, "reports")
+    if output_path is None:
+        output_path = os.path.join(reports_dir, "summary_report.pdf")
+    os.makedirs(reports_dir, exist_ok=True)
+    summary_data = collect_summary_data_from_directory(directory)
+    build_summary_report_pdf(summary_data, output_path)
+    return output_path

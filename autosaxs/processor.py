@@ -933,7 +933,17 @@ def autocalib(calibration_image_path: str, config: dict, mask_path: Optional[str
     # Extract refined parameters and add wavelength
     refined = refine_step_ret['refined'].copy()
     refined['wavelength'] = config['detector_geometry']['wavelength']
-    return {'refined': refined, 'integrator': refine_step_ret['integrator']}
+    return {
+        'refined': refined,
+        'integrator': refine_step_ret['integrator'],
+        'calib_data': calib_data,
+        'center_y_px': center_step_ret['center_y_px'],
+        'center_x_px': center_step_ret['center_x_px'],
+        'clusters': center_step_ret['clusters'],
+        'rings': rings_step_ret['rings'],
+        'curve_calibrated': refine_step_ret['curve_calibrated'],
+        'theoretical_peaks': refine_step_ret['theoretical_peaks'],
+    }
 
 
 def integrate_2d_to_1d(integrator, saxs_2d, npt=1000, destpath=None, metadata=None):

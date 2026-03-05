@@ -32,13 +32,14 @@ except ImportError:
     def tqdm(iterable, desc="", leave=True, disable=False, position=0, unit="", **kwargs):
         return iterable
 
-# Project root; we need repos/autosaxs on path for Controller and _parse_descriptors_from_results
+# Project root; we need repos/autosaxs on path for Controller and report._parse_descriptors_from_results
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_AUTOSAXS = SCRIPT_DIR / "repos" / "autosaxs"
 if str(REPO_AUTOSAXS) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR / "repos"))
 
-from autosaxs.saxs_controller import Controller, _parse_descriptors_from_results
+from autosaxs.saxs_controller import Controller
+from autosaxs.report import _parse_descriptors_from_results
 from autosaxs.context import Context
 from autosaxs.event_bus import EventBus, EventType
 from autosaxs import viewer
