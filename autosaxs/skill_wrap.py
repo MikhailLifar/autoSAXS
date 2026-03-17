@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 import yaml
 
-from .event_bus import EventBus
+from .event_bus import EventBus, EventType
 
 CACHE_FILENAME = ".cache"
 
@@ -234,12 +234,16 @@ def run_with_cache(
                     if _debug:
                         print(f"[cache] integrity={ok} paths={paths_to_check!r} finish={finish}")
                     if ok:
+                        if event_bus:
+                            event_bus.publish(EventType.MESSAGE, {"text": f"{skill_impl.__name__}: cache hit, reusing previous results."})
                         out_cached = dict(rec["output_paths"])
                         out_cached["from_cache"] = True
                         return out_cached
                     records.pop(idx)
                 elif _debug and idx is None:
                     print(f"[cache] miss (no matching record), running skill")
+                if event_bus:
+                    event_bus.publish(EventType.MESSAGE, {"text": f"{skill_impl.__name__}: cache miss, running skill."})
 
             out = skill_impl(
                 input_paths, output_dir, config=config, event_bus=event_bus, use_cache=False, **kwargs

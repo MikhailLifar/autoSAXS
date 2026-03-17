@@ -1,5 +1,5 @@
-# autosaxs: interactive SAXS pipeline core (controller, processor, skill, utils, event_bus, cli, viewer, context, gui, gui_interface, api, polydispfit, report)
-__version__ = "0.1.0"
+# autosaxs: interactive SAXS pipeline core (controller, processor, skill, utils, guinier, event_bus, cli, viewer, context, gui, gui_interface, api, polydispfit, report)
+__version__ = "1.0.0"
 
 import re
 import subprocess
@@ -39,6 +39,7 @@ from .context import Context
 from . import cli_interface
 from . import processor
 from . import utils
+from . import guinier
 from . import viewer
 from . import gui
 from . import gui_interface
@@ -56,6 +57,7 @@ __all__ = [
     "cli_interface",
     "processor",
     "utils",
+    "guinier",
     "viewer",
     "gui",
     "gui_interface",

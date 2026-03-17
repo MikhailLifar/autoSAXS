@@ -19,8 +19,8 @@ from .processor import (
     autocalib,
     integrate_2d_to_1d,
     subtract_buffer,
-    run_guinier_analysis,
 )
+from .guinier import run_guinier_analysis, find_guinier_region
 from .utils import (
     ATSAS_BIN_PREFIX,
     load_config,
@@ -30,7 +30,6 @@ from .utils import (
     write_data,
     write_saxs,
     write_saxs_atsas_format,
-    find_guinier_region,
     read_bodies_cif,
     compute_dammif_descriptors,
     calc_chi2,
@@ -353,8 +352,8 @@ def guinier_analysis(
     **kwargs: Any,
 ) -> Dict[str, str]:
     """
-    Run Guinier analysis on a 1D profile (four methods: first5, first10, autorg, manual;
-    two-phase selection by validation R²). Writes results file and ATSAS-format .dat for downstream.
+    Run Guinier analysis on a 1D profile (first5, first10, autorg, adaptive).
+    Chosen result is always adaptive when available. Writes results file and ATSAS-format .dat for downstream.
 
     Inputs: input_paths['profile'] (1D path).
 
@@ -433,7 +432,7 @@ def guinier_analysis(
         else:
             f.write("  No valid Guinier result chosen.\n")
         f.write("\nAll Guinier methods (Rg, n_points, fit_quality, guinier_interval, validation_r2):\n")
-        for method in ("first5", "first10", "autorg", "manual"):
+        for method in ("first5", "first10", "autorg", "adaptive"):
             r = guinier_results.get(method)
             mark = " [CHOSEN]" if guinier_results.get("chosen") == method else ""
             if r is not None:

@@ -1,4 +1,4 @@
-from typing import Tuple, Union, Dict, Optional
+from typing import Tuple, Union, Dict, Optional, List
 import yaml
 import pandas as pd
 import numpy as np
@@ -229,113 +229,6 @@ def load_saxs_1d_any(filename: str) -> Tuple[np.ndarray, np.ndarray, Optional[np
     arr = np.array(data_lines)
     q, I = np.sort(arr[:, 0]), arr[:, 1][np.argsort(arr[:, 0])]
     return q, I, None
-
-
-def find_guinier_region(
-    q: np.ndarray,
-    I: np.ndarray,
-    sigma: Optional[np.ndarray] = None,
-    n_min: int = 5,
-    qrg_max: float = 1.3,
-    r2_min: float = 0.9,
-    max_pts: int = 80,
-    try_sliding: bool = True,
-) -> Optional[Dict]:
-    """
-    Find the Guinier region and fit Rg, I(0).
-    ln(I) = ln(I0) - (Rg²/3)*q²; valid for q*Rg < ~1.3.
-
-    Tries contiguous ranges (try_sliding); among fits with q_max*Rg < qrg_max
-    and R² >= r2_min, selects the one with the *largest* number of points.
-
-    Returns dict with keys: rg, i0, q_min, q_max, r_squared, n_points, sigma_rg, sigma_i0;
-    or None if no valid fit.
-    """
-    q = np.asarray(q, dtype=float)
-    I = np.asarray(I, dtype=float)
-    if sigma is not None:
-        sigma = np.asarray(sigma, dtype=float)
-    idx = np.argsort(q)
-    q, I = q[idx], I[idx]
-    if sigma is not None:
-        sigma = sigma[idx]
-    valid = I > 0
-    if np.sum(valid) < n_min:
-        return None
-    q, I = q[valid], I[valid]
-    if sigma is not None:
-        sigma = sigma[valid]
-    n = len(q)
-
-    def fit_interval(i_start: int, n_pts: int):
-        if i_start + n_pts > n:
-            return None
-        q_sub = q[i_start : i_start + n_pts]
-        I_sub = I[i_start : i_start + n_pts]
-        sig_sub = sigma[i_start : i_start + n_pts] if sigma is not None else None
-        x = q_sub ** 2
-        y = np.log(I_sub)
-        if sig_sub is not None and np.all(sig_sub > 0):
-            w = (I_sub / sig_sub) ** 2
-        else:
-            w = None
-        try:
-            if w is not None:
-                coeffs = np.polyfit(x, y, 1, w=w)
-            else:
-                coeffs = np.polyfit(x, y, 1)
-        except Exception:
-            return None
-        slope, intercept = coeffs[0], coeffs[1]
-        if slope >= 0:
-            return None
-        rg = np.sqrt(-3.0 * slope)
-        i0 = np.exp(intercept)
-        if q_sub[-1] * rg > qrg_max:
-            return None
-        y_fit = intercept + slope * x
-        ss_res = np.sum((y - y_fit) ** 2)
-        ss_tot = np.sum((y - np.mean(y)) ** 2)
-        r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
-        if r2 < r2_min:
-            return None
-        # Uncertainty from fit: var(slope) and var(intercept) via residual variance
-        dof = n_pts - 2
-        if dof > 0 and ss_res >= 0:
-            res_var = ss_res / dof
-            x_mean = np.mean(x)
-            sxx = np.sum((x - x_mean) ** 2)
-            if sxx > 0:
-                var_slope = res_var / sxx
-                var_intercept = res_var * (1.0 / n_pts + x_mean ** 2 / sxx)
-                # Rg = sqrt(-3*slope) => dRg/d(slope) = -3/(2*sqrt(-3*slope)) = -3/(2*Rg) up to sign
-                sigma_rg = 0.5 * (3.0 / rg) * (var_slope ** 0.5) if slope != 0 else np.nan
-                sigma_i0 = i0 * (var_intercept ** 0.5)
-            else:
-                sigma_rg = sigma_i0 = np.nan
-        else:
-            sigma_rg = sigma_i0 = np.nan
-        return {
-            'rg': float(rg),
-            'i0': float(i0),
-            'q_min': float(q_sub[0]),
-            'q_max': float(q_sub[-1]),
-            'r_squared': float(r2),
-            'n_points': n_pts,
-            'sigma_rg': float(sigma_rg) if not np.isnan(sigma_rg) else None,
-            'sigma_i0': float(sigma_i0) if not np.isnan(sigma_i0) else None,
-        }
-
-    best = None
-    best_n_pts = -1
-    starts = [0] if not try_sliding else range(0, max(1, n - n_min + 1))
-    for i_start in starts:
-        for n_pts in range(n_min, min(n - i_start, max_pts) + 1):
-            cand = fit_interval(i_start, n_pts)
-            if cand is not None and (best is None or n_pts > best_n_pts):
-                best = cand
-                best_n_pts = n_pts
-    return best
 
 
 def find_porod_region(
@@ -937,7 +830,7 @@ def map_sample_files_to_buffer_files(sample_paths, buffer_paths):
                 if aligned_pairs:
                     prev_s_p, _ = aligned_pairs[-1]
                     if prev_s_p == s_p and s_p not in overlapped:
-                        overlapped.append(s_p)
+                        overlapped.extend([aligned_pairs[-1], (s_p, b_p)])
                 aligned_pairs.append((s_p, b_p))
         if not aligned_pairs or aligned_pairs[-1][0] != s_p:
             not_paired.append(s_p)

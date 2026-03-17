@@ -8,6 +8,7 @@ import tempfile
 import numpy as np
 import scipy.ndimage as ndi
 from scipy.spatial.distance import cdist
+from scipy.stats import mannwhitneyu
 from sklearn.cluster import DBSCAN
 import pyFAI
 import pyFAI.calibrant
@@ -31,364 +32,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from .utils import *
-
-
-# --- Guinier analysis pipeline constants ---
-GUINIER_FIRST5_R2_MIN = 0.85
-GUINIER_FIRST10_R2_MIN = 0.85
-AUTORG_MIN_POINTS = 5
-GUINIER_MANUAL_N_MIN = 5
-GUINIER_MANUAL_R2_MIN = 0.88
-GUINIER_MANUAL_QRG_MAX = 1.35
-# Validation: Guinier holds for q*Rg <= k (k=1). q_max = k/Rg; validation on [q_max/2, q_max]
-GUINIER_QRG_VALIDATION_K = 1.0
-GUINIER_VALIDATION_MIN_POINTS = 2
-GUINIER_VALIDATION_R2_MIN = 0.85  # only use validation-based selection if some method has validation_r2 >= this
-GUINIER_CLASSIFICATION_R2_MIN = 0.85  # R² >= this in [0, q_max/2] -> "linear"
-GUINIER_UPTURN_DOWNTURN_FRACTION = 0.85  # non-parametric: if this fraction above/below line (through next pt, Guinier slope) -> upturn/downturn
-
-
-def _validation_r2_guinier(
-    q: np.ndarray,
-    I: np.ndarray,
-    Rg: float,
-    I0: float,
-    k: float = GUINIER_QRG_VALIDATION_K,
-) -> Optional[float]:
-    """
-    R² between Guinier line ln(I0) - (Rg²/3)*q² and actual ln(I) on [q_max/2, q_max],
-    where q_max = k/Rg (Guinier valid for q*Rg <= k). Returns None if too few points.
-    """
-    if Rg <= 0 or I0 <= 0 or len(q) == 0:
-        return None
-    q_max = k / Rg
-    q_lo, q_hi = q_max / 2.0, q_max
-    mask = (q >= q_lo) & (q <= q_hi) & (I > 0)
-    qv = q[mask]
-    Iv = I[mask]
-    if len(qv) < GUINIER_VALIDATION_MIN_POINTS:
-        return None
-    y_actual = np.log(Iv)
-    y_fit = np.log(I0) - (Rg ** 2 / 3.0) * (qv ** 2)
-    ss_res = np.sum((y_actual - y_fit) ** 2)
-    ss_tot = np.sum((y_actual - np.mean(y_actual)) ** 2)
-    if ss_tot <= 0:
-        return None
-    return float(1.0 - ss_res / ss_tot)
-
-
-def _upturn_downturn_nonparametric(
-    x: np.ndarray, y: np.ndarray, Rg: float
-) -> Optional[str]:
-    """
-    Non-parametric upturn/downturn: for each point i, compare y[i] to the line through
-    the next point (x[i+1], y[i+1]) with slope from the Guinier approximation, -Rg²/3
-    (in q² vs ln(I) space). Returns "upturn" if >= 85% of points are above that line,
-    "downturn" if >= 85% below, else None. x, y must be sorted by x; requires at least 2 points.
-    """
-    n = len(x)
-    if n < 2 or Rg <= 0:
-        return None
-    slope = -(Rg ** 2) / 3.0  # Guinier: ln(I) = ln(I0) - (Rg²/3)*q²
-    above = 0
-    below = 0
-    total = 0
-    for i in range(n - 1):
-        y_line = y[i + 1] + slope * (x[i] - x[i + 1])
-        total += 1
-        if y[i] > y_line:
-            above += 1
-        elif y[i] < y_line:
-            below += 1
-    if total == 0:
-        return None
-    if above / total >= GUINIER_UPTURN_DOWNTURN_FRACTION:
-        return "upturn"
-    if below / total >= GUINIER_UPTURN_DOWNTURN_FRACTION:
-        return "downturn"
-    return None
-
-
-def _classification_guinier(
-    q: np.ndarray,
-    I: np.ndarray,
-    Rg: float,
-    I0: float,
-    k: float = GUINIER_QRG_VALIDATION_K,
-) -> Optional[str]:
-    """
-    Classify behavior in [0, q_max/2] for the best Rg approximation.
-    Returns "linear" | "upturn" | "downturn" | "chaotic" or None if not enough points.
-    """
-    if Rg <= 0 or I0 <= 0 or len(q) == 0:
-        return None
-    q_max = k / Rg
-    q_hi = q_max / 2.0
-    mask = (q >= 0) & (q <= q_hi) & (I > 0)
-    qc = q[mask]
-    Ic = I[mask]
-    if len(qc) < GUINIER_VALIDATION_MIN_POINTS:
-        return None
-    y_actual = np.log(Ic)
-    y_fit = np.log(I0) - (Rg ** 2 / 3.0) * (qc ** 2)
-    residuals = y_actual - y_fit
-    ss_res = np.sum(residuals ** 2)
-    ss_tot = np.sum((y_actual - np.mean(y_actual)) ** 2)
-    r2 = (1.0 - ss_res / ss_tot) if ss_tot > 0 else None
-    if r2 is not None and r2 >= GUINIER_CLASSIFICATION_R2_MIN:
-        return "linear"
-    # Non-parametric test: point above/below line through next point with Guinier slope -Rg²/3
-    xc = qc ** 2
-    np_result = _upturn_downturn_nonparametric(xc, y_actual, Rg)
-    if np_result is not None:
-        return np_result
-    return "chaotic"
-
-
-def _guinier_fit_n_points(
-    q: np.ndarray, I: np.ndarray, n_pts: int
-) -> Optional[Dict[str, Any]]:
-    """Fit Guinier ln(I) = ln(I0) - (Rg²/3)*q² on the first n_pts points. Returns dict or None."""
-    if len(q) < n_pts or np.any(I[:n_pts] <= 0):
-        return None
-    qn = q[:n_pts]
-    In = I[:n_pts]
-    x = qn ** 2
-    y = np.log(In)
-    try:
-        coeffs = np.polyfit(x, y, 1)
-    except Exception:
-        return None
-    slope, intercept = coeffs[0], coeffs[1]
-    if slope >= 0:
-        return None
-    rg = np.sqrt(-3.0 * slope)
-    i0 = np.exp(intercept)
-    y_fit = intercept + slope * x
-    ss_res = np.sum((y - y_fit) ** 2)
-    ss_tot = np.sum((y - np.mean(y)) ** 2)
-    r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
-    return {
-        'Rg': float(rg),
-        'I0': float(i0),
-        'n_points': n_pts,
-        'fit_quality': float(r2),
-        'guinier_interval': (float(qn[0]), float(qn[-1])),
-    }
-
-
-def run_guinier_analysis(
-    q: np.ndarray,
-    I: np.ndarray,
-    sigma: Optional[np.ndarray] = None,
-    atsas_dat_path: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Run all Guinier analyses on SAXS data and return a unified result dict.
-
-    Two-phase selection:
-      Phase 1: Compute four approximations (first5, first10, autorg, manual).
-      Phase 2: For each, compute validation R² on [q_max/2, q_max] where q_max = k/Rg
-      (Guinier holds for q*Rg <= k, k=1). If at least one method has validation_r2 >= 0.85,
-      the method with the best validation R² is chosen; else fallback: first5 (R²>=0.85) ->
-      first10 (R²>=0.85) -> autorg (>=5 pts) -> manual.
-
-    Classification (for the chosen approximation, in [0, q_max/2]):
-      "linear" = good fit (R² >= 0.85), narrow unimodal; "upturn" = intensity above fit
-      (aggregation/large particles); "downturn" = below fit (repulsion/bad subtraction);
-      "chaotic" = large non-systematic deviations (polydisperse/corrupted).
-
-    Each method result includes validation_r2. Input q, I, sigma in pipeline units (q in nm^-1).
-
-    Parameters
-    ----------
-    q, I, sigma : array-like
-        1D SAXS data (q in nm^-1). sigma can be None.
-    atsas_dat_path : str or None
-        If provided, this path is used for AUTORG (file must exist with 3-column ATSAS format).
-        If None, a temporary file is written for AUTORG.
-
-    Returns
-    -------
-    dict
-        Keys:
-        - 'first5', 'first10', 'autorg', 'manual': per-method results, each with
-          Rg, n_points, fit_quality, guinier_interval, validation_r2 (and I0 where applicable).
-        - 'chosen': one of 'first5', 'first10', 'autorg', 'manual' (by best validation_r2, or fallback)
-        - 'chosen_Rg', 'chosen_I0', 'chosen_quality', 'chosen_n_points', 'chosen_interval'
-        - 'chosen_validation_r2': validation R² on [q_max/2, q_max] for chosen method
-        - 'classification': "linear" | "upturn" | "downturn" | "chaotic" (behavior in [0, q_max/2])
-    """
-    q = np.asarray(q, dtype=float)
-    I = np.asarray(I, dtype=float)
-    sigma = np.asarray(sigma, dtype=float) if sigma is not None else None
-    idx = np.argsort(q)
-    q = q[idx]
-    I = I[idx]
-    if sigma is not None:
-        sigma = sigma[idx]
-    n_total = len(q)
-
-    out: Dict[str, Any] = {
-        'first5': None,
-        'first10': None,
-        'autorg': None,
-        'manual': None,
-        'chosen': None,
-        'chosen_Rg': None,
-        'chosen_I0': None,
-        'chosen_quality': None,
-        'chosen_n_points': None,
-        'chosen_interval': None,
-        'chosen_validation_r2': None,
-        'classification': None,
-    }
-
-    # --- 1. Fit first 5 points ---
-    res5 = _guinier_fit_n_points(q, I, 5)
-    if res5 is not None:
-        out['first5'] = res5
-
-    # --- 2. Fit first 10 points ---
-    res10 = _guinier_fit_n_points(q, I, 10)
-    if res10 is not None:
-        out['first10'] = res10
-
-    # --- 3. AUTORG ---
-    path_for_autorg = atsas_dat_path
-    if path_for_autorg is None:
-        fd, path_for_autorg = tempfile.mkstemp(suffix='.dat', prefix='autosaxs_guinier_')
-        try:
-            os.close(fd)
-            write_saxs_atsas_format(path_for_autorg, q, I, sigma)
-        except Exception:
-            path_for_autorg = None
-    if path_for_autorg is not None and os.path.exists(path_for_autorg):
-        tmp_autorg = path_for_autorg + '_autorg.tmp'
-        try:
-            cmd = f'autorg "{path_for_autorg}"'
-            os.system(f'{cmd} > "{tmp_autorg}" 2>&1')
-            if os.path.exists(tmp_autorg):
-                with open(tmp_autorg, 'r') as f:
-                    content = f.read()
-                mr = re.search(r'Rg\s+=\s+([\d\.]+)', content)
-                mi0 = re.search(r'I\(0\)\s+=\s+([\d\.]+)', content)
-                mq = re.search(r'Quality:\s+([\d\.]+)', content)
-                mpts = re.search(r'Points\s+(\d+)\s+to\s+(\d+)\s+\((\d+)\s+total\)', content)
-                if mr:
-                    autorg_rg = float(mr.group(1))
-                    autorg_i0 = float(mi0.group(1)) if mi0 else None
-                    autorg_quality = float(mq.group(1)) if mq else None
-                    autorg_n_pts = int(mpts.group(3)) if mpts else None
-                    # Optional: q interval from point indices (1-based in ATSAS)
-                    q_min_autorg = q_max_autorg = None
-                    if mpts and autorg_n_pts is not None:
-                        i1, i2 = int(mpts.group(1)), int(mpts.group(2))
-                        # convert 1-based to 0-based; clamp to array
-                        j1 = max(0, min(i1 - 1, n_total - 1))
-                        j2 = max(0, min(i2 - 1, n_total - 1))
-                        if j1 <= j2:
-                            q_min_autorg = float(q[j1])
-                            q_max_autorg = float(q[j2])
-                    out['autorg'] = {
-                        'Rg': autorg_rg,
-                        'I0': autorg_i0,
-                        'n_points': autorg_n_pts,
-                        'fit_quality': autorg_quality,
-                        'guinier_interval': (q_min_autorg, q_max_autorg) if (q_min_autorg is not None and q_max_autorg is not None) else None,
-                    }
-        finally:
-            if path_for_autorg == atsas_dat_path:
-                pass  # do not delete user-provided file
-            else:
-                try:
-                    if os.path.exists(path_for_autorg):
-                        os.remove(path_for_autorg)
-                    if os.path.exists(tmp_autorg):
-                        os.remove(tmp_autorg)
-                except OSError:
-                    pass
-
-    # --- 4. Manual Guinier (find_guinier_region) ---
-    manual = find_guinier_region(
-        q, I, sigma=sigma,
-        n_min=GUINIER_MANUAL_N_MIN,
-        r2_min=GUINIER_MANUAL_R2_MIN,
-        qrg_max=GUINIER_MANUAL_QRG_MAX,
-    )
-    if manual is not None:
-        out['manual'] = {
-            'Rg': manual['rg'],
-            'I0': manual['i0'],
-            'n_points': manual['n_points'],
-            'fit_quality': manual['r_squared'],
-            'guinier_interval': (manual['q_min'], manual['q_max']),
-            'sigma_rg': manual.get('sigma_rg'),
-            'sigma_i0': manual.get('sigma_i0'),
-        }
-
-    # --- Phase 2: validation R² on [q_max/2, q_max] for each method (q_max = k/Rg, k=1) ---
-    for method in ('first5', 'first10', 'autorg', 'manual'):
-        r = out.get(method)
-        if r is None:
-            continue
-        rg_val = r.get('Rg')
-        i0_val = r.get('I0')
-        if rg_val is not None and i0_val is not None and i0_val > 0:
-            val_r2 = _validation_r2_guinier(q, I, rg_val, i0_val)
-            r['validation_r2'] = val_r2
-        else:
-            r['validation_r2'] = None
-
-    # --- Selection: best validation_r2 if any method has validation_r2 >= 0.85, else fallback ---
-    chosen = None
-    best_val_r2 = None
-    methods_with_validation = [
-        m for m in ('first5', 'first10', 'autorg', 'manual')
-        if out.get(m) and (out[m].get('validation_r2') or -1.0) >= GUINIER_VALIDATION_R2_MIN
-    ]
-    if methods_with_validation:
-        best_method = max(
-            methods_with_validation,
-            key=lambda m: (out[m].get('validation_r2') or -1.0),
-        )
-        best_val_r2 = out[best_method].get('validation_r2')
-        chosen = best_method
-
-    if chosen is None:
-        # Fallback: first5 (R2>=0.85) → first10 (R2>=0.85) → autorg (>=5 pts) → manual
-        if out['first5'] is not None and (out['first5'].get('fit_quality') or 0) >= GUINIER_FIRST5_R2_MIN:
-            chosen = 'first5'
-        elif out['first10'] is not None and (out['first10'].get('fit_quality') or 0) >= GUINIER_FIRST10_R2_MIN:
-            chosen = 'first10'
-        elif out['autorg'] is not None:
-            n_autorg = out['autorg'].get('n_points') if isinstance(out['autorg'], dict) else None
-            if n_autorg is not None and n_autorg >= AUTORG_MIN_POINTS:
-                chosen = 'autorg'
-        if chosen is None and out['manual'] is not None:
-            n_manual = out['manual'].get('n_points') if isinstance(out['manual'], dict) else None
-            if n_manual is not None and n_manual >= GUINIER_MANUAL_N_MIN:
-                chosen = 'manual'
-
-    if chosen is not None:
-        r = out.get(chosen)
-        if r is not None:
-            out['chosen'] = chosen
-            out['chosen_Rg'] = r.get('Rg')
-            out['chosen_I0'] = r.get('I0')
-            out['chosen_quality'] = r.get('fit_quality')
-            out['chosen_n_points'] = r.get('n_points')
-            out['chosen_interval'] = r.get('guinier_interval')
-            out['chosen_validation_r2'] = r.get('validation_r2')
-            # Classification on [0, q_max/2] for the chosen approximation
-            rg_ch = out['chosen_Rg']
-            i0_ch = out['chosen_I0']
-            if rg_ch is not None and i0_ch is not None:
-                out['classification'] = _classification_guinier(q, I, rg_ch, i0_ch)
-            else:
-                out['classification'] = None
-
-    return out
 
 
 class IntegratorExtended:
@@ -552,57 +195,101 @@ def get_interring_dist_px(dist_guess, lmbd, px_size, calibrant_name='AgBh'):
     return interring_dist
 
 
-def get_r_beam_px(image: np.ndarray, center_y_px, center_x_px):
+def get_r_beam_px(
+    image: np.ndarray,
+    center_y_px,
+    center_x_px,
+    *,
+    r_min: float = 5.0,
+    r_max: float = 50.0,
+    ring_width: float = 2.0,
+    min_ring_pixels: int = 10,
+    alpha: float = 0.05,
+    max_sample: int = 400,
+    refine_quantile_alpha: float = 0.05,
+):
     """
     Estimate the radius of the dark beam-stop circle at the beam center.
-    
-    The function finds the minimum radius at which all pixels are "bright",
-    i.e., the minimum brightness of pixels at that radius is much higher than
-    in the dark center circle.
-    
+
+    First finds the smallest r >= r_min where the disk is stochastically
+    darker than the ring (Mann–Whitney U). Then refines by looking at thin
+    rings [r0-2, r0], [r0-1, r0+1], ..., [r0+2, r0+4], computing the
+    refine_quantile_alpha-quantile per ring, and taking the outer edge of the
+    inner ring where the largest increase in that quantile occurs. Result is
+    clamped to [r_min, r_max].
+
     Args:
         image: 2D detector image
         center_y_px: Beam center Y coordinate in pixels
         center_x_px: Beam center X coordinate in pixels
-    
+        r_min: Minimum allowed beam-stop radius (pixels)
+        r_max: Maximum allowed beam-stop radius (pixels)
+        ring_width: Width of the "outside" annulus in pixels (Mann–Whitney step)
+        min_ring_pixels: Minimum number of pixels in the ring to run the test
+        alpha: Significance level for the Mann–Whitney test
+        max_sample: Max pixels per group for the test (subsample if larger; 0 = no cap)
+        refine_quantile_alpha: Small quantile (e.g. 0.05) for the refinement step
+
     Returns:
         Estimated beam-stop radius in pixels, or None if no clear edge is found
     """
-    # Calculate radial distances from center for all pixels
     y_coords, x_coords = np.ogrid[:image.shape[0], :image.shape[1]]
-    r = np.sqrt((y_coords - center_y_px)**2 + (x_coords - center_x_px)**2)
-    
-    # Get intensity at center (dark region)
-    center_radius = 5  # Small radius around center to estimate dark intensity
-    center_mask = r <= center_radius
-    center_intensity = np.median(image[center_mask]) if np.any(center_mask) else np.percentile(image, 5)
-    
-    # Define "bright" threshold as multiple of center intensity
-    brightness_threshold = np.percentile(image, 50.0)
-    
-    # Maximum radius to check: strictly limited to about 50 pixels
-    max_r_to_check = 50.0
-    
-    # Check radii from center outward
-    r_step = 1.0
-    r_values = np.arange(0, max_r_to_check + r_step, r_step)
-    
-    for r_check in r_values:
-        # Create ring mask (pixels at approximately this radius)
-        ring_width = 2.0  # Width of ring to check
-        ring_mask = (r >= r_check) & (r < r_check + ring_width)
-        
-        if np.any(ring_mask):
-            # Get minimum intensity in this ring
-            ring_intensities = image[ring_mask]
-            min_ring_intensity = np.min(ring_intensities)
-            
-            # If minimum intensity in ring is above threshold, we've found the edge
-            if min_ring_intensity > brightness_threshold:
-                return float(r_check)
-    
-    # If we didn't find a clear edge within the max radius, return None
-    return None
+    r = np.sqrt((y_coords - center_y_px) ** 2 + (x_coords - center_x_px) ** 2)
+    flat_r = r.ravel()
+    flat_img = image.ravel()
+
+    def test_r(r_cand: int) -> bool:
+        inside_idx = np.flatnonzero(flat_r < r_cand)
+        ring_idx = np.flatnonzero(
+            (flat_r >= r_cand) & (flat_r < r_cand + ring_width)
+        )
+        n_in, n_out = len(inside_idx), len(ring_idx)
+        if n_out < min_ring_pixels or n_in < min_ring_pixels:
+            return False
+        if max_sample > 0 and n_in > max_sample:
+            inside_idx = np.random.choice(inside_idx, max_sample, replace=False)
+        if max_sample > 0 and n_out > max_sample:
+            ring_idx = np.random.choice(ring_idx, max_sample, replace=False)
+        inside = flat_img[inside_idx]
+        outside = flat_img[ring_idx]
+        _, p = mannwhitneyu(
+            inside, outside, alternative="less", method="asymptotic"
+        )
+        return bool(p < alpha and np.median(inside) < np.median(outside))
+
+    r_int_max = int(np.floor(r_max))
+    r_int_min = int(np.ceil(r_min))
+    step = 2
+    found = None
+    for r_cand in range(r_int_min, r_int_max + 1, step):
+        if test_r(r_cand):
+            found = r_cand
+            break
+    if found is None:
+        return None
+    for r_cand in range(max(r_int_min, found - step + 1), found):
+        if test_r(r_cand):
+            found = r_cand
+            break
+    r0 = found
+
+    # Refinement: thin rings [r0-2, r0], [r0-1, r0+1], ..., [r0+10, r0+12]
+    # Outer edge of ring i is r0 + i; inner ring of pair (i, i+1) has outer edge r0 + i
+    n_rings = 13
+    q_vals = np.full(n_rings, np.nan)
+    for i in range(n_rings):
+        lo, hi = r0 - 2 + i, r0 + i
+        mask = (flat_r >= lo) & (flat_r < hi)
+        if np.sum(mask) >= min_ring_pixels:
+            q_vals[i] = np.quantile(flat_img[mask], refine_quantile_alpha)
+    increases = np.diff(q_vals)
+    if not np.any(np.isfinite(increases)):
+        r_beam_px = float(r0) + 0.5 * ring_width
+        return float(np.clip(r_beam_px, r_min, r_max))
+    i_max = int(np.nanargmax(increases))
+    # Outer edge of inner ring of the pair where the largest increase occurs
+    r_beam_px = float(r0 + i_max)
+    return float(np.clip(r_beam_px, r_min, r_max))
 
 
 def find_rings(
@@ -889,7 +576,17 @@ def autocalib(calibration_image_path: str, config: dict, mask_path: Optional[str
     }
     center_step_ret = find_center(calib_data, **center_ref_params)
     print(f'DEBUG: Center refinement is done. Parameters are: {", ".join(center_step_ret.keys())}')
-    
+
+    # Beam-stop radius from data (fallback to config if estimation fails)
+    r_beam_px = get_r_beam_px(
+        calib_data,
+        center_step_ret['center_y_px'],
+        center_step_ret['center_x_px'],
+    )
+    if r_beam_px is None:
+        r_beam_px = config.get('r_beam_px', 35.0)
+    print(f'DEBUG: r_beam_px = {r_beam_px}')
+
     # Step 2: Calculate interring distance
     d_geom = config['detector_geometry']
     interring_dist_px = get_interring_dist_px(
@@ -903,7 +600,7 @@ def autocalib(calibration_image_path: str, config: dict, mask_path: Optional[str
         for k in ['q_stop', 'ring_I_threshold', 'r_max_px', 'r_step_px']
     }
     ring_search_params.update({
-        'r_beam_px': config['r_beam_px'],
+        'r_beam_px': r_beam_px,
         'center_y_px': center_step_ret['center_y_px'],
         'center_x_px': center_step_ret['center_x_px'],
         'interring_dist_px': interring_dist_px
@@ -919,7 +616,7 @@ def autocalib(calibration_image_path: str, config: dict, mask_path: Optional[str
         for k in ['dist', 'wavelength', 'pixel_size', 'rot1', 'rot2', 'rot3']
     }
     geometry_params.update({
-        'r_beam_px': config['r_beam_px'],
+        'r_beam_px': r_beam_px,
         'center_y_px': center_step_ret['center_y_px'],
         'center_x_px': center_step_ret['center_x_px'],
         'calibrant_name': config['calibrant_name'],
@@ -955,6 +652,44 @@ def integrate_2d_to_1d(integrator, saxs_2d, npt=1000, destpath=None, metadata=No
     return q, I, sigma
 
 
+def _match_tail_scale_two_step(
+    q_tail: np.ndarray,
+    I_tail: np.ndarray,
+    I_buff_tail: np.ndarray,
+    n_min: int = 2,
+    n_max: int = 6,
+) -> float:
+    """
+    Two-step tail-matching: (1) fit buffer f_buff(q)=A*q+B; (2) fit sample
+    I = A_s*q^{-n} + scale*f_buff(q) over integer n, return best scale.
+    """
+    if q_tail.size < 3:
+        return 1.0
+    # Step 1: linear fit buffer in tail
+    coeffs_buff = np.polyfit(q_tail, I_buff_tail, 1)
+    A_buff, B_buff = coeffs_buff[0], coeffs_buff[1]
+    f_buff_tail = A_buff * q_tail + B_buff
+
+    # Step 2: for each integer n, fit I_tail = A_s * q^{-n} + scale * f_buff_tail (linear in A_s, scale)
+    best_scale = 1.0
+    best_rss = np.inf
+    for n in range(n_min, int(n_max) + 1):
+        if np.any(q_tail <= 0):
+            continue
+        q_inv_n = np.power(q_tail, -n)
+        # design matrix: columns [q^{-n}, f_buff(q)]
+        X = np.column_stack([q_inv_n, f_buff_tail])
+        try:
+            beta, residuals, _, _ = np.linalg.lstsq(X, I_tail, rcond=None)
+            rss = float(np.sum(residuals ** 2)) if residuals.size else np.inf
+            if rss < best_rss:
+                best_rss = rss
+                best_scale = float(beta[1])
+        except (np.linalg.LinAlgError, IndexError, TypeError):
+            continue
+    return best_scale
+
+
 def subtract_buffer(
     buffer_path, src_path, destpath,
     image_path=None, 
@@ -962,13 +697,14 @@ def subtract_buffer(
     ):
     q_buff, I_buff, sigma_buff, _ = read_saxs(buffer_path)
 
-    scaling_factor = 1.
+    scaling_factor = 1.00
 
     q, I, sigma, _ = read_saxs(src_path)
     if method == 'match_tail':
         algo_ops = {'q_range_abs': None, 
                     'q_range_rel': (0.8, None), 
-                    'approach_factor': 0.98}
+                    'approach_factor': 1.00,
+                    'n_min': 2, 'n_max': 6}
         if match_tail_ops is None:
             match_tail_ops = dict()
         algo_ops.update(match_tail_ops)
@@ -994,18 +730,13 @@ def subtract_buffer(
         I_tail = I[idx]
         I_buff_tail = I_buff[idx]
 
-        I_tail = whittaker_smooth(I_tail, lmbd=1.e+10, d=3)
-        I_buff_tail = whittaker_smooth(I_buff_tail, lmbd=1.e+10, d=3)
-        
-        # idx = I_buff_tail > 1.e-4 * np.max(I_buff)
-        # q_tail = q_tail[idx]
-        # I_tail = I_tail[idx]
-        # I_buff_tail = I_buff_tail[idx]
+        scaling_factor = _match_tail_scale_two_step(
+            q_tail, I_tail, I_buff_tail,
+            n_min=int(algo_ops.get('n_min', 2)),
+            n_max=int(algo_ops.get('n_max', 6)),
+        )
+        scaling_factor *= algo_ops.get('approach_factor', 1.00)
 
-        ratios = I_tail / I_buff_tail
-        scaling_factor = np.min(ratios)
-
-    scaling_factor *= algo_ops['approach_factor']
     I_buffer_scaled = I_buff * scaling_factor
     I_sub = I - I_buffer_scaled
 

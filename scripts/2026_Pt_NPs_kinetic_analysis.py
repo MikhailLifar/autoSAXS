@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import re
 import sys
 from datetime import datetime
@@ -27,6 +28,11 @@ try:
     import numpy as np
 except ImportError:
     np = None
+
+# Same as autosaxs.mixture for BIC_chi2 fallback (k = n_phases * N_PARAMS_PER_PHASE)
+N_PARAMS_PER_PHASE = 8
+# Metrics where higher value is better (we minimize -value to select best)
+HIGHER_IS_BETTER = frozenset({"R2", "R2_adj", "R2_log", "R2_adj_log"})
 
 
 def parse_rg_from_results(results_path: Path) -> float | None:
@@ -98,8 +104,14 @@ def mean_intensity_in_q_range(
     return float(np.mean(I_a[mask]))
 
 
-def fit_I0(q: list[float], intensity: list[float], q_max: float = 2.0) -> float:
-    """Fit I(q) ≈ A * exp(-alpha * q) on q in [0, q_max] nm⁻¹. Returns A (I(0) approximation); if fitted A < 0, returns 0. Raises only if no points in q range."""
+def fit_I0(
+    q: list[float],
+    intensity: list[float],
+    q_max: float = 2.0,
+    sigma: list[float] | None = None,
+) -> float:
+    """Fit I(q) ≈ A * exp(-alpha * q²) (Guinier) on q in [0, q_max] nm⁻¹. Returns A (I(0) approximation); if fitted A < 0, returns 0. Raises only if no points in q range.
+    Alpha is bounded above by 1/(3*q_min²) with q_min = min(q) in the fit range. If sigma is provided, fitting is weighted with w_i = 1/sigma_i."""
     from scipy.optimize import curve_fit
     import numpy as _np
     q_a = _np.asarray(q, dtype=float)
@@ -110,17 +122,28 @@ def fit_I0(q: list[float], intensity: list[float], q_max: float = 2.0) -> float:
     q_fit = q_a[mask]
     I_fit = I_a[mask]
     I0_guess = float(_np.max(_np.abs(I_fit))) if _np.any(_np.isfinite(I_fit)) else 1.0
-    alpha_guess = 0.5
+    # Guinier: I(q) = I(0)*exp(-Rg²q²/3), so alpha = Rg²/3; use modest initial guess
+    alpha_guess = 0.1
+    q_min = float(_np.maximum(_np.min(q_fit), 1e-10))  # avoid zero
+    alpha_max = 1.0 / (3.0 * q_min * q_min)
 
     def model(q: Any, A: float, alpha: float) -> Any:
-        return A * _np.exp(-alpha * q)
+        return A * _np.exp(-alpha * q * q)
 
-    popt, _pcov = curve_fit(
-        model, q_fit, I_fit,
-        p0=[I0_guess, alpha_guess],
-        bounds=([-_np.inf, 0], [_np.inf, _np.inf]),
-        maxfev=5000,
-    )
+    kwargs: dict[str, Any] = {
+        "p0": [I0_guess, alpha_guess],
+        "bounds": ([-_np.inf, 0], [_np.inf, alpha_max]),
+        "maxfev": 5000,
+    }
+    if sigma is not None:
+        sigma_a = _np.asarray(sigma, dtype=float)
+        sigma_fit = sigma_a[mask]
+        # Avoid zero or negative sigma (infinite weight)
+        sigma_fit = _np.maximum(_np.asarray(sigma_fit, dtype=float), 1e-10)
+        kwargs["sigma"] = sigma_fit
+        kwargs["absolute_sigma"] = True
+
+    popt, _pcov = curve_fit(model, q_fit, I_fit, **kwargs)
     A = float(popt[0])
     if A < 0:
         A = 0.0
@@ -178,6 +201,11 @@ def get_tiff_datetime(tif_path: Path) -> datetime:
     )
 
 
+def _descriptor_stem(stem: str) -> str:
+    """Return name used for descriptor/mixture paths. New pipeline omits sub_ prefix in results subdirs."""
+    return stem[4:] if stem.startswith("sub_") else stem
+
+
 def collect_rg_and_time(run_root: Path) -> list[tuple[datetime, float | None, str, float | None, float | None, dict[str, float]]]:
     """Collect (time, Rg_nm, stem, q_09_11, q_39_41, all_guinier_rg) for every subtracted curve. all_guinier_rg is dict method_name -> Rg from 'All Guinier methods' (new format)."""
     descriptors_dir = run_root / "descriptors"
@@ -190,8 +218,8 @@ def collect_rg_and_time(run_root: Path) -> list[tuple[datetime, float | None, st
 
     for sub_path in sorted(subtracted_dir.glob("*.dat")):
         stem = sub_path.stem
-        # Subtracted files are sub_<basename>.dat; raw TIFFs and descriptors use <basename>
-        base = stem[4:] if stem.startswith("sub_") else stem
+        # Subtracted files are sub_<basename>.dat; raw TIFFs and descriptors/mixture use <basename> (no sub_)
+        base = _descriptor_stem(stem)
         q_09_11: float | None = None
         q_39_41: float | None = None
         if sub_path.is_file():
@@ -218,22 +246,29 @@ def compute_I0_per_sample(
     data: list[tuple[datetime, float | None, str, float | None, float | None, dict[str, float]]],
     q_max: float = 2.0,
 ) -> list[float]:
-    """For each sample load subtracted curve and fit I(q) ≈ A*exp(-alpha*q) on q in [0, q_max]. Return list of A (same order as data). Raises on any failure."""
+    """For each sample load subtracted curve and fit I(q) ≈ A*exp(-alpha*q²) (Guinier) on q in [0, q_max]. Return list of A (same order as data). Fitting is weighted by 1/sigma from the subtracted file. Raises on any failure."""
     subtracted_dir = run_root / "subtracted"
     A_list: list[float] = []
     for _dt, _rg, stem, _q09, _q39, _ in data:
         sub_path = subtracted_dir / f"{stem}.dat"
         if not sub_path.is_file():
             raise FileNotFoundError(f"Subtracted file not found: {sub_path}")
-        q_arr, intensity_arr, _sigma, _metadata = read_saxs(str(sub_path))
-        A = fit_I0(q_arr.tolist(), intensity_arr.tolist(), q_max=q_max)
+        q_arr, intensity_arr, sigma_arr, _metadata = read_saxs(str(sub_path))
+        sigma_list = sigma_arr.tolist() if sigma_arr is not None else None
+        A = fit_I0(
+            q_arr.tolist(),
+            intensity_arr.tolist(),
+            q_max=q_max,
+            sigma=sigma_list,
+        )
         A_list.append(A)
     return A_list
 
 
-def _get_best_mixture_label(run_root: Path, stem: str) -> str | None:
-    """Load mixture_results.csv for sample stem, pick row with lowest BIC_log. Returns best model label (e.g. nph1_Gauss) or None."""
-    mixture_dir = run_root / "mixture" / f"mixture_{stem}"
+def _best_mixture_row(run_root: Path, stem: str, best_by: str) -> dict | None:
+    """Load mixture_results.csv for sample stem, pick row with best value of column best_by. Returns best row dict or None. Lower is better except for columns in HIGHER_IS_BETTER (R2, R2_adj, R2_log, R2_adj_log). For BIC_chi2, if column missing, fallback: chi2*(n_fit-1) + k*ln(n_fit) using k and n_fit from CSV."""
+    base = _descriptor_stem(stem)
+    mixture_dir = run_root / "mixture" / base
     csv_path = mixture_dir / "mixture_results.csv"
     if not csv_path.is_file():
         return None
@@ -243,59 +278,105 @@ def _get_best_mixture_label(run_root: Path, stem: str) -> str | None:
             rows = list(reader)
         if not rows:
             return None
-        def bic_log_val(r):
-            v = r.get("BIC_log")
-            if v == "" or v is None:
-                return float("inf")
+
+        def _parse_float(s: str | None) -> float | None:
+            if s is None or (isinstance(s, str) and s.strip() == ""):
+                return None
             try:
-                return float(v)
+                return float(s)
             except ValueError:
+                return None
+
+        def key_fn(r: dict) -> float:
+            # BIC_chi2 fallback when column missing
+            if best_by == "BIC_chi2":
+                v = r.get("BIC_chi2")
+                if v is not None and isinstance(v, str) and v.strip() != "":
+                    try:
+                        return float(v)
+                    except ValueError:
+                        pass
+                chi2 = r.get("chi2")
+                k_s = r.get("k")
+                n_fit_s = r.get("n_fit") or r.get("n")
+                if k_s is None or (isinstance(k_s, str) and k_s.strip() == ""):
+                    n_phases_s = r.get("n_phases")
+                    if n_phases_s is None or (isinstance(n_phases_s, str) and n_phases_s.strip() == ""):
+                        return float("inf")
+                    try:
+                        k = int(float(n_phases_s)) * N_PARAMS_PER_PHASE
+                    except (ValueError, TypeError):
+                        return float("inf")
+                else:
+                    try:
+                        k = int(float(k_s))
+                    except (ValueError, TypeError):
+                        return float("inf")
+                chi2_f = _parse_float(chi2)
+                if chi2_f is None:
+                    return float("inf")
+                n_fit_f = _parse_float(n_fit_s)
+                if n_fit_f is None or n_fit_f < 1:
+                    # Backward compatibility: infer n from this row's exp.fit
+                    label = (r.get("label") or "").strip()
+                    if label and _mixture_parse_fit_file is not None:
+                        fit_path = mixture_dir / label / "exp.fit"
+                        if fit_path.exists():
+                            parsed = _mixture_parse_fit_file(fit_path)
+                            if parsed and len(parsed) >= 2 and parsed[1] is not None:
+                                n = len(parsed[1])
+                                if n >= 1:
+                                    return chi2_f * (n - 1) + k * math.log(n)
+                    raise RuntimeError(f"Could not infer n_fit from exp.fit for {label}")
+                return chi2_f * (n_fit_f - 1) + k * math.log(n_fit_f)
+
+            val = r.get(best_by)
+            parsed = _parse_float(val)
+            if parsed is None:
                 return float("inf")
-        best = min(rows, key=bic_log_val)
-        if bic_log_val(best) == float("inf"):
+            if best_by in HIGHER_IS_BETTER:
+                return -parsed  # minimize -value => maximize value
+            return parsed
+
+        best = min(rows, key=key_fn)
+        if key_fn(best) == float("inf"):
             return None
-        return (best.get("label") or "").strip() or None
+        return best
     except Exception:
         return None
 
 
+def _get_best_mixture_label(run_root: Path, stem: str, best_by: str = "BIC_log") -> str | None:
+    """Load mixture_results.csv for sample stem, pick row with lowest metric (best_by). Returns best model label (e.g. nph1_Gauss) or None."""
+    best = _best_mixture_row(run_root, stem, best_by)
+    if not best:
+        return None
+    return (best.get("label") or "").strip() or None
+
+
 def _load_best_fit_curve(
-    run_root: Path, stem: str,
+    run_root: Path, stem: str, best_by: str = "BIC_log",
 ) -> tuple[Any, Any, Any] | None:
     """Load (q_nm, I_exp, I_fit) from the best MIXTURE run's .fit file for sample stem. Returns None if missing or parse fails."""
     if _mixture_parse_fit_file is None:
         return None
-    best_label = _get_best_mixture_label(run_root, stem)
+    best_label = _get_best_mixture_label(run_root, stem, best_by)
     if not best_label:
         return None
-    mixture_dir = run_root / "mixture" / f"mixture_{stem}"
+    base = _descriptor_stem(stem)
+    mixture_dir = run_root / "mixture" / base
     fit_path = mixture_dir / best_label / "exp.fit"
     return _mixture_parse_fit_file(fit_path)
 
 
-def _get_best_fit_metrics(run_root: Path, stem: str) -> dict[str, float] | None:
-    """Get chi2, R2, R2_log for the best (BIC_log) fit from mixture_results.csv. If chi2 is absent, recalc from exp.fit and subtracted sigma. Returns None if no results."""
-    mixture_dir = run_root / "mixture" / f"mixture_{stem}"
-    csv_path = mixture_dir / "mixture_results.csv"
-    if not csv_path.is_file() or np is None:
+def _get_best_fit_metrics(run_root: Path, stem: str, best_by: str = "BIC_log") -> dict[str, float] | None:
+    """Get chi2, R2, R2_log for the best (by best_by metric) fit from mixture_results.csv. If chi2 is absent, recalc from exp.fit and subtracted sigma. Returns None if no results."""
+    if np is None:
+        return None
+    best = _best_mixture_row(run_root, stem, best_by)
+    if not best:
         return None
     try:
-        with open(csv_path, newline="") as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
-        if not rows:
-            return None
-        def bic_log_val(r):
-            v = r.get("BIC_log")
-            if v == "" or v is None:
-                return float("inf")
-            try:
-                return float(v)
-            except ValueError:
-                return float("inf")
-        best = min(rows, key=bic_log_val)
-        if bic_log_val(best) == float("inf"):
-            return None
         def _f(s: str | None) -> float | None:
             if s is None or (isinstance(s, str) and s.strip() == ""):
                 return None
@@ -307,11 +388,11 @@ def _get_best_fit_metrics(run_root: Path, stem: str) -> dict[str, float] | None:
         R2_log = _f(best.get("R2_log"))
         chi2_val = _f(best.get("chi2"))
         if chi2_val is None:
-            parsed = _load_best_fit_curve(run_root, stem)
+            parsed = _load_best_fit_curve(run_root, stem, best_by)
             if parsed is None:
                 return {"chi2": float("nan"), "R2": R2 if R2 is not None else float("nan"), "R2_log": R2_log if R2_log is not None else float("nan")}
             q_fit, I_exp, I_fit = parsed
-            if np is None or len(I_exp) < 2:
+            if len(I_exp) < 2:
                 return {"chi2": float("nan"), "R2": R2 or float("nan"), "R2_log": R2_log or float("nan")}
             sub_path = run_root / "subtracted" / f"{stem}.dat"
             if not sub_path.is_file():
@@ -329,31 +410,16 @@ def _get_best_fit_metrics(run_root: Path, stem: str) -> dict[str, float] | None:
 
 
 def _load_best_mixture_pdf(
-    run_root: Path, stem: str, r_nm: Any,
+    run_root: Path, stem: str, r_nm: Any, best_by: str = "BIC_log",
 ) -> Any:
-    """Load mixture_results.csv for sample stem, pick row with lowest BIC_log, compute PDF on r_nm (R in nm). Returns P(R) array or None."""
-    mixture_dir = run_root / "mixture" / f"mixture_{stem}"
-    csv_path = mixture_dir / "mixture_results.csv"
-    if not csv_path.is_file() or np is None:
+    """Load mixture_results.csv for sample stem, pick row with lowest metric (best_by), compute PDF on r_nm (R in nm). Returns P(R) array or None."""
+    if np is None:
+        return None
+    best = _best_mixture_row(run_root, stem, best_by)
+    if not best:
         return None
     r_ang = r_nm * 10.0  # R in Angstrom for utils PDFs
     try:
-        with open(csv_path, newline="") as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
-        if not rows:
-            return None
-        def bic_log_val(r):
-            v = r.get("BIC_log")
-            if v == "" or v is None:
-                return float("inf")
-            try:
-                return float(v)
-            except ValueError:
-                return float("inf")
-        best = min(rows, key=bic_log_val)
-        if bic_log_val(best) == float("inf"):
-            return None
         dist_name = (best.get("dist") or "Gauss").strip()
         total = np.zeros_like(r_ang, dtype=float)
         for i in range(1, 4):
@@ -428,8 +494,9 @@ def _save_mixture_ridge_plot(
     A_list: list[float],
     y_spacing: float = 0.08,
     C: float = I0_SCALE_CONSTANT_C,
+    best_by: str = "BIC_log",
 ) -> None:
-    """Ridge plot of best-BIC mixture PDFs for all samples; each PDF scaled by A/C (A from I(0) fit). Same axes, y-offset by time order, color by time. Raises if any sample has no fitted PDF."""
+    """Ridge plot of best (by best_by) mixture PDFs for all samples; each PDF scaled by A/C (A from I(0) fit). Same axes, y-offset by time order, color by time. Raises if any sample has no fitted PDF."""
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
     from matplotlib import cm
@@ -442,7 +509,7 @@ def _save_mixture_ridge_plot(
     R_plot_nm = np.linspace(0.1, 13.0, 400)
     pdfs: list[tuple[datetime, Any, float]] = []
     for i, (dt, _rg, stem, _q09, _q39, _) in enumerate(data):
-        pdf = _load_best_mixture_pdf(run_root, stem, R_plot_nm)
+        pdf = _load_best_mixture_pdf(run_root, stem, R_plot_nm, best_by)
         if pdf is None:
             raise FileNotFoundError(f"No fitted mixture PDF for sample {stem}")
         scale = A_list[i] / C
@@ -482,6 +549,7 @@ def _save_mixture_pdfs_txt(
     run_root: Path,
     data: list[tuple[datetime, float | None, str, float | None, float | None, dict[str, float]]],
     A_list: list[float],
+    best_by: str = "BIC_log",
 ) -> None:
     """Save PDF matrix to NumPy-readable .txt: first row R=np.nan and scale factors A per sample; then one row per R value, column 0 = R (nm), columns 1..n = P(R). Raises if any sample has no fitted PDF."""
     if np is None:
@@ -492,7 +560,7 @@ def _save_mixture_pdfs_txt(
     n_samples = len(data)
     pdf_matrix = np.zeros((n_samples, len(R_plot_nm)))
     for i, (_dt, _rg, stem, _q09, _q39, _) in enumerate(data):
-        pdf = _load_best_mixture_pdf(run_root, stem, R_plot_nm)
+        pdf = _load_best_mixture_pdf(run_root, stem, R_plot_nm, best_by)
         if pdf is None:
             raise FileNotFoundError(f"No fitted mixture PDF for sample {stem}")
         pdf_matrix[i, :] = pdf
@@ -513,6 +581,7 @@ def _save_error_ridge_plots(
     data: list[tuple[datetime, float | None, str, float | None, float | None, dict[str, float]]],
     y_spacing: float = 0.08,
     curve_scale: float = 1.0,
+    best_by: str = "BIC_log",
 ) -> None:
     """Save two error ridge plots: (exp - fit) in I vs q and exp(log(I_exp)-log(I_fit)) = I_exp/I_fit in log I vs log q. Per-sample q grid, no A/C scaling. Raises if any sample has no .fit."""
     import matplotlib.pyplot as plt
@@ -526,7 +595,7 @@ def _save_error_ridge_plots(
     curves_log: list[tuple[Any, Any]] = []  # (q, ratio) per sample
     times: list[datetime] = []
     for _dt, _rg, stem, _q09, _q39, _ in data:
-        parsed = _load_best_fit_curve(run_root, stem)
+        parsed = _load_best_fit_curve(run_root, stem, best_by)
         if parsed is None:
             raise FileNotFoundError(f"No fitted mixture .fit for sample {stem}")
         q_nm, I_exp, I_fit = parsed
@@ -613,8 +682,8 @@ def _save_error_ridge_plots(
     print(f"Wrote {out_log} ({len(curves_log)} curves)")
 
 
-def _save_fit_quality_plot(run_root: Path, data: list[tuple[Any, ...]]) -> None:
-    """Plot chi2 (left), R2 and R2_log (two right y-axes) vs time for best BIC_log fits. Two right axes with same limits [-0.05, 1.05], distinct colors."""
+def _save_fit_quality_plot(run_root: Path, data: list[tuple[Any, ...]], best_by: str = "BIC_log") -> None:
+    """Plot chi2 (left), R2 and R2_log (two right y-axes) vs time for best (by best_by) fits. Two right axes with same limits [-0.05, 1.05], distinct colors."""
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
 
@@ -622,7 +691,7 @@ def _save_fit_quality_plot(run_root: Path, data: list[tuple[Any, ...]]) -> None:
     stems = [x[2] for x in data]
     points: list[tuple[datetime, float, float, float]] = []
     for t, stem in zip(times, stems):
-        m = _get_best_fit_metrics(run_root, stem)
+        m = _get_best_fit_metrics(run_root, stem, best_by)
         if m is None:
             continue
         chi2 = m["chi2"]
@@ -690,12 +759,116 @@ def _save_fit_quality_plot(run_root: Path, data: list[tuple[Any, ...]]) -> None:
     ax_left.legend(loc="upper left", framealpha=0.92, fontsize=9)
     ax_right1.legend(loc="upper right", framealpha=0.92, fontsize=9)
     ax_right2.legend(loc="upper right", bbox_to_anchor=(1.14, 1.0), framealpha=0.92, fontsize=9)
-    ax_left.set_title("Fit quality vs time (best BIC_log model)")
+    ax_left.set_title(f"Fit quality vs time (best {best_by} model)")
     fig.subplots_adjust(right=0.88)
     out_path = run_root / "mixture_fit_quality_vs_time.png"
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"Wrote {out_path} ({len(points)} points)")
+
+
+def _save_all_curves_plot(
+    run_root: Path,
+    data: list[tuple[datetime, float | None, str, float | None, float | None, dict[str, float]]],
+) -> None:
+    """Plot all integrated (averaged) curves in one scatter: log I vs q (linear q), points colored by measurement time. Saves saxs_all_datasets.png. Uses run_root/averaged/*.dat; x-axis limited to 6 nm⁻¹."""
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    from matplotlib.colors import Normalize
+
+    if np is None:
+        return
+    averaged_dir = run_root / "averaged"
+    if not averaged_dir.is_dir():
+        return
+    all_times: list[datetime] = []
+    all_data_points: list[Any] = []
+
+    for dt, _rg, stem, _q09, _q39, _ in data:
+        # Try stem as-is then descriptor base (averaged may use either)
+        base = _descriptor_stem(stem)
+        for candidate in (stem, base):
+            curve_path = averaged_dir / f"int_{candidate}.dat"
+            if not curve_path.is_file():
+                continue
+            q_arr, intensity_arr, _sigma, _metadata = read_saxs(str(curve_path))
+            q_a = np.asarray(q_arr, dtype=float)
+            I_a = np.asarray(intensity_arr, dtype=float)
+            points = np.column_stack([q_a, I_a])
+            all_data_points.append(points)
+            all_times.extend([dt] * len(points))
+            break
+
+    if not all_data_points:
+        return
+    combined_data = np.vstack(all_data_points)
+    times_num = mdates.date2num(all_times)
+    t_min, t_max = float(np.min(times_num)), float(np.max(times_num))
+    norm = Normalize(vmin=t_min, vmax=t_max)
+
+    # Limit data to q <= 6.0 before plotting
+    q_max = 6.0
+    mask_q = combined_data[:, 0] <= q_max
+
+    # First filter by q range, then by min(I) criterion
+
+    # mask_q is applied to combined_data and times_num: mask_q.shape == (N,)
+    q_filtered_data = combined_data[mask_q]
+    q_filtered_times_num = times_num[mask_q]
+
+    # Now, group the q-filtered points into spectra as in all_data_points, but filtered for q<=6.0
+    spectrum_lengths = [arr.shape[0] for arr in all_data_points]
+
+    # Reconstruct which spectrum (by index) each original point belonged to
+    spectrum_indices = np.concatenate([
+        np.full(length, idx) for idx, length in enumerate(spectrum_lengths)
+    ])
+    # Apply q mask to keep only spectrum indices of points with q <= 6.0
+    q_filtered_spectrum_indices = spectrum_indices[mask_q]
+
+    # Group filtered points by their spectrum and compute min(I) per spectrum in q-filtered data
+    import collections
+    spectrum_point_map = collections.defaultdict(list)
+    for i, spec_idx in enumerate(q_filtered_spectrum_indices):
+        spectrum_point_map[spec_idx].append(i)
+    # Compute min(I) for each spectrum in the filtered data
+    spectrum_min_intensities = {
+        spec_idx: np.min(q_filtered_data[indices, 1]) for spec_idx, indices in spectrum_point_map.items()
+    }
+    # Keep spectrum indices with min(I) >= 0.1
+    spectrum_keep = {idx for idx, min_I in spectrum_min_intensities.items() if min_I >= 0.1}
+    # Mask: keep only those points whose spectrum is in spectrum_keep
+    final_mask = np.array(
+        [spec_idx in spectrum_keep for spec_idx in q_filtered_spectrum_indices]
+    )
+
+    filtered_data = q_filtered_data[final_mask]
+    filtered_times_num = q_filtered_times_num[final_mask]
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    scatter = ax.scatter(
+        filtered_data[:, 0],
+        filtered_data[:, 1],
+        c=filtered_times_num,
+        s=1,
+        alpha=0.3,
+        cmap="viridis",
+        edgecolors="none",
+        norm=norm,
+    )
+    cbar = fig.colorbar(scatter, ax=ax)
+    cbar.set_label("Time")
+    cbar.ax.yaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    ax.set_xlabel(r"$q$ (nm$^{-1}$)")
+    ax.set_ylabel("Intensity")
+    ax.set_title("All integrated SAXS datasets (averaged)")
+    ax.set_yscale("log")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    out_path = run_root / "saxs_all_datasets.png"
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {out_path} ({len(all_data_points)} curves)")
 
 
 def main() -> int:
@@ -714,6 +887,13 @@ def main() -> int:
         default=I0_SCALE_CONSTANT_C,
         metavar="C",
         help="Constant C for PDF scaling: each ridge PDF is scaled by A/C (A = I(0) fit). Default: %(default)s",
+    )
+    parser.add_argument(
+        "--best-by",
+        type=str,
+        default="BIC_log",
+        metavar="COLUMN",
+        help="Column name in mixture_results.csv to select best model (lower is better except R2, R2_adj, R2_log, R2_adj_log). E.g. BIC_log, BIC_chi2, R2, chi2. Default: %(default)s",
     )
     args = parser.parse_args()
     run_root = args.directory.resolve()
@@ -741,6 +921,16 @@ def main() -> int:
             ])
     print(f"Wrote {csv_path} ({len(data)} points)")
 
+    # Debug: which mixture distribution was chosen (best by --best-by) per sample for plotting
+    best_fit_csv_path = run_root / "best_fit_per_sample.csv"
+    with open(best_fit_csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["time", "sample", "best_fit_label"])
+        for dt, _rg, stem, _q09, _q39, _ in data:
+            label = _get_best_mixture_label(run_root, stem, args.best_by)
+            w.writerow([dt.isoformat(), stem, label if label else ""])
+    print(f"Wrote {best_fit_csv_path} ({len(data)} samples)")
+
     try:
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
@@ -753,9 +943,9 @@ def main() -> int:
         times: list[datetime],
         all_guinier_rg_list: list[dict[str, float]],
     ) -> None:
-        """Plot all Rg approximations (first5, first10, autorg, manual, etc.) vs time as scatter series."""
+        """Plot all Rg approximations (first5, first10, autorg, adaptive, etc.) vs time as scatter series."""
         # Stable method order: known names first, then rest sorted
-        known_order = ("first5", "first10", "autorg", "manual")
+        known_order = ("first5", "first10", "autorg", "adaptive")
         all_methods = set()
         for d in all_guinier_rg_list:
             all_methods.update(d)
@@ -802,10 +992,12 @@ def main() -> int:
         left_vals: list[float | None],
         left_label: str,
         title: str,
+        right_vals: list[float | None] | None = None,
+        right_label: str = "Rg (nm)",
     ) -> None:
         fig, ax_left = plt.subplots(figsize=(9, 5))
         ax_right = ax_left.twinx()
-        # Left axis: all points with intensity (more points when Rg is missing for some curves)
+        # Left axis
         left_valid = [(t, lv) for t, lv in zip(times, left_vals) if lv is not None]
         if not left_valid:
             plt.close(fig)
@@ -816,21 +1008,22 @@ def main() -> int:
             c="tab:blue", marker="o", s=36, alpha=0.7, edgecolors="navy", linewidths=0.5,
             label=left_label, zorder=2,
         )
-        # Right axis: only points with valid Rg (fewer points than left when Rg not calculated for some)
-        rg_valid = [(t, r) for t, r in zip(times, rg_nm) if r is not None]
-        if rg_valid:
-            t_rg, y_rg = zip(*rg_valid)
+        # Right axis: use right_vals if provided, else Rg
+        right_series = right_vals if right_vals is not None else rg_nm
+        right_valid = [(t, r) for t, r in zip(times, right_series) if r is not None]
+        if right_valid:
+            t_right, y_right = zip(*right_valid)
             ax_right.scatter(
-                t_rg, y_rg,
+                t_right, y_right,
                 c="tab:red", marker="s", s=36, alpha=0.7, edgecolors="darkred", linewidths=0.5,
-                label="Rg (nm)", zorder=2,
+                label=right_label, zorder=2,
             )
         ax_left.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
         ax_left.xaxis.set_major_locator(mdates.AutoDateLocator())
         plt.setp(ax_left.xaxis.get_majorticklabels(), rotation=45, ha="right")
         ax_left.set_xlabel("Time")
         ax_left.set_ylabel(left_label, color="tab:blue")
-        ax_right.set_ylabel("Rg (nm)", color="tab:red")
+        ax_right.set_ylabel(right_label, color="tab:red")
         ax_left.tick_params(axis="y", labelcolor="tab:blue")
         ax_right.tick_params(axis="y", labelcolor="tab:red")
         ax_left.grid(True, alpha=0.35, linestyle="--")
@@ -859,24 +1052,38 @@ def main() -> int:
     )
     print(f"Wrote {run_root / 'Rg_vs_time_q39_41.png'}")
 
+    # Plot 2b: q_09_11 vs time (left), q_39_41 vs time (right), same twin style
+    _save_twin_plot(
+        run_root / "q09_11_q39_41_vs_time.png",
+        q_09_11,
+        r"$\langle I \rangle_{q \in [0.9,\,1.1]}$ (a.u.)",
+        r"Low‑q and high‑q intensity vs time",
+        right_vals=q_39_41,
+        right_label=r"$\langle I \rangle_{q \in [3.9,\,4.1]}$ (a.u.)",
+    )
+    print(f"Wrote {run_root / 'q09_11_q39_41_vs_time.png'}")
+
     # Plot 3: Rg_vs_time.png — all Guinier Rg approximations vs time (new-format results)
     _save_all_rg_vs_time(run_root / "Rg_vs_time.png", times, all_guinier_rg_list)
     print(f"Wrote {run_root / 'Rg_vs_time.png'}")
 
+    # Plot 4: All integrated curves, colored by measurement time
+    _save_all_curves_plot(run_root, data)
+
     # I(0) fit per sample (q in [0, 2] nm⁻¹); raises on failure
     A_list = compute_I0_per_sample(run_root, data, q_max=2.0)
 
-    # Plot 4: Ridge plot of mixture PDFs (all samples, scaled by A/C, color by time)
-    _save_mixture_ridge_plot(run_root, data, A_list, y_spacing=0.08, C=args.scale_constant)
+    # Plot 5: Ridge plot of mixture PDFs (all samples, scaled by A/C, color by time)
+    _save_mixture_ridge_plot(run_root, data, A_list, y_spacing=0.08, C=args.scale_constant, best_by=args.best_by)
 
     # Save PDF matrix to .txt: first row scale factors A, then R and (A/C)*P(R) per sample
-    _save_mixture_pdfs_txt(run_root, data, A_list)
+    _save_mixture_pdfs_txt(run_root, data, A_list, best_by=args.best_by)
 
     # Error ridge plots: (exp - fit) in I vs q and I_exp/I_fit in log I vs log q
-    _save_error_ridge_plots(run_root, data, y_spacing=1.0, curve_scale=1.0)
+    _save_error_ridge_plots(run_root, data, y_spacing=1.0, curve_scale=1.0, best_by=args.best_by)
 
     # Fit quality: chi2, R2, R2_log vs time (best BIC_log fit per sample)
-    _save_fit_quality_plot(run_root, data)
+    _save_fit_quality_plot(run_root, data, best_by=args.best_by)
 
     return 0
 

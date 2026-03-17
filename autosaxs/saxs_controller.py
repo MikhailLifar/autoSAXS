@@ -10,6 +10,7 @@ import warnings
 import yaml
 
 from .processor import *
+from .guinier import run_guinier_analysis
 from .cli_interface import PipelineInterrupt
 from .viewer import *
 from .context import Context
@@ -45,6 +46,54 @@ from . import skill
 
 PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prompts')
 DEBUG = True
+
+
+def _canon_path(p):
+    """Canonical path for deduplication (same file => same string)."""
+    if not isinstance(p, str) or not p:
+        return p
+    try:
+        return os.path.realpath(p) if os.path.exists(p) else os.path.normpath(os.path.abspath(p))
+    except OSError:
+        return os.path.normpath(os.path.abspath(p))
+
+
+def _dedupe_sort_paths(paths):
+    """Return path list deduplicated by canonical path and sorted by basename."""
+    seen = {}
+    for p in paths:
+        canon = _canon_path(p)
+        if canon not in seen:
+            seen[canon] = p
+    return sorted(seen.values(), key=lambda p: os.path.basename(p) if isinstance(p, str) else str(p))
+
+
+def _dedupe_sort_pairs(pairs):
+    """Return list of (sample_path, buffer_path) deduplicated by canonical paths and sorted by sample basename."""
+    seen = set()
+    unique = []
+    for s, b in pairs:
+        key = (_canon_path(s), _canon_path(b))
+        if key not in seen:
+            seen.add(key)
+            unique.append((s, b))
+    return sorted(unique, key=lambda sb: os.path.basename(sb[0]) if isinstance(sb[0], str) else str(sb[0]))
+
+
+def _path_debug(label, paths=None, pairs=None):
+    """Debug: print path counts (total, unique by string, unique by canonical path)."""
+    if pairs is not None:
+        n = len(pairs)
+        n_unique_str = len(set((s, b) for s, b in pairs))
+        n_unique_canon = len(set((_canon_path(s), _canon_path(b)) for s, b in pairs))
+        print(f"[path_debug] {label}: pairs total={n} unique_str={n_unique_str} unique_canon={n_unique_canon}", flush=True)
+    else:
+        paths = paths or []
+        n = len(paths)
+        n_unique_str = len(set(paths))
+        n_unique_canon = len(set(_canon_path(p) for p in paths if isinstance(p, str)))
+        print(f"[path_debug] {label}: total={n} unique_str={n_unique_str} unique_canon={n_unique_canon}", flush=True)
+
 
 BODIES_SHAPES = {
     # radius r, height h
@@ -365,9 +414,8 @@ class Controller:
                 f.write(f"Input file: {to_analyze_path}\n")
                 f.write(f"Analysis date: {time.ctime()}\n")
                 f.write("\n")
-                f.write("Guinier: two-phase selection. Phase 1: four methods (first5, first10, autorg, manual).\n")
-                f.write("Phase 2: validation R2 on [q_max/2, q_max] (q_max=1/Rg); best validation R2 wins.\n")
-                f.write("If validation not possible, fallback: first5->first10->autorg->manual. Classification in [0,q_max/2].\n")
+                f.write("Guinier: first5, first10, autorg, adaptive (sliding window, selected by validation R² on [q_max/2, q_max]).\n")
+                f.write("Chosen = adaptive when available. Classification in [0,q_max/2].\n")
                 f.write("\n")
                 f.write("Chosen Guinier result (used downstream):\n")
                 if guinier_region is not None:
@@ -408,7 +456,7 @@ class Controller:
                 f.write("\n")
                 f.write("All Guinier methods (Rg, n_points, fit_quality, guinier_interval, validation_r2):\n")
                 if guinier_results is not None:
-                    for method in ('first5', 'first10', 'autorg', 'manual'):
+                    for method in ('first5', 'first10', 'autorg', 'adaptive'):
                         r = guinier_results.get(method)
                         mark = " [CHOSEN]" if guinier_results.get('chosen') == method else ""
                         if r is not None:
@@ -699,14 +747,23 @@ class Controller:
                         skip_if_exists=True,
                         except_prev_paths=context['paths', 'sample_2d'],
                     )
-                    
+                    _path_debug("2D after _request_file buffer_paths", buffer_paths)
+                    _path_debug("2D after _request_file sample_paths", sample_paths)
+                    if buffer_paths:
+                        buffer_paths = _dedupe_sort_paths(buffer_paths)
+                    sample_paths = _dedupe_sort_paths(sample_paths)
+                    _path_debug("2D after _dedupe_sort_paths buffer_paths", buffer_paths)
+                    _path_debug("2D after _dedupe_sort_paths sample_paths", sample_paths)
+
                     run_load_cycle = False
                     if 'subtraction' in steps:
                         alignment_res = map_sample_files_to_buffer_files(sample_paths, buffer_paths)
+                        _path_debug("2D alignment_res aligned_pairs", pairs=alignment_res['aligned_pairs'])
+                        _path_debug("2D alignment_res overlapped", pairs=alignment_res['overlapped'])
                         run_load_cycle = alignment_res['overlapped'] or alignment_res['not_paired']
                         if alignment_res['overlapped']:
-                            overlap_str = '\n'.join(alignment_res['overlapped'])
-                            self._send_message(f"For some sample files more than one buffer files were found:\n{overlap_str}\n\nAre you following name conventions?")
+                            overlap_str = '\n'.join([', '.join(p) for p in alignment_res['overlapped']])
+                            self._send_message(f"For some sample files more than one buffer files were found:\n{overlap_str[:2000]}\n\nAre you following name conventions?")
                         if alignment_res['not_paired']:
                             not_paired_str = '\n'.join(alignment_res['not_paired'])
                             self._send_message(f"Not for all sample files buffer files were found:\n{not_paired_str}\n\nAre you following name conventions?")
@@ -714,8 +771,8 @@ class Controller:
                             self._send_message(f"Make sure that you follow the name convention and that for each sample image there is exactly one buffer image. This error can also disappear buy itself for the next iteration")
                             time.sleep(fallback_delay)
                         else:
-                            buffer_paths = [b_p for _, b_p in alignment_res['aligned_pairs']]
-                            buffer_paths = list(set(buffer_paths))
+                            aligned_pairs_clean = _dedupe_sort_pairs(alignment_res['aligned_pairs'])
+                            buffer_paths = [b_p for _, b_p in aligned_pairs_clean]
                 
                 if sample_paths:
                     basename_list = [
@@ -740,6 +797,7 @@ class Controller:
                     integrated_buf = out_buf['integrated_1d']
                     integrated_buf_list = integrated_buf if isinstance(integrated_buf, list) else [integrated_buf]
                     buffer_2d_to_1d = dict(zip(buffer_paths, integrated_buf_list))
+                    _path_debug("integrate output buffer_2d_to_1d values (1d paths)", list(buffer_2d_to_1d.values()))
                 if sample_paths:
                     list_inputs_sam = [
                         {'images': [p], 'integrator_dir': integrator_dir} for p in sample_paths
@@ -754,13 +812,17 @@ class Controller:
                     integrated_sam = out_sam['integrated_1d']
                     integrated_sam_list = integrated_sam if isinstance(integrated_sam, list) else [integrated_sam]
                     sample_2d_to_1d = dict(zip(sample_paths, integrated_sam_list))
+                    _path_debug("integrate output sample_2d_to_1d values (1d paths)", list(sample_2d_to_1d.values()))
                 if buffer_paths and sample_paths:
                     alignment_res = map_sample_files_to_buffer_files(sample_paths, buffer_paths)
-                    aligned_pairs_2d = alignment_res['aligned_pairs']
-                    sample_paths_1d = [sample_2d_to_1d[s] for s, _ in aligned_pairs_2d]
-                    buffer_paths_1d = [buffer_2d_to_1d[b] for _, b in aligned_pairs_2d]
+                    aligned_pairs_2d = _dedupe_sort_pairs(alignment_res['aligned_pairs'])
+                    _path_debug("after 2D alignment aligned_pairs_2d", pairs=aligned_pairs_2d)
+                    sample_paths_1d = _dedupe_sort_paths([sample_2d_to_1d[s] for s, _ in aligned_pairs_2d])
+                    buffer_paths_1d = _dedupe_sort_paths([buffer_2d_to_1d[b] for _, b in aligned_pairs_2d])
+                    _path_debug("after build from aligned_pairs_2d sample_paths_1d", sample_paths_1d)
+                    _path_debug("after build from aligned_pairs_2d buffer_paths_1d", buffer_paths_1d)
                 elif sample_paths:
-                    sample_paths_1d = list(sample_2d_to_1d.values())
+                    sample_paths_1d = _dedupe_sort_paths(list(sample_2d_to_1d.values()))
                     buffer_paths_1d = []
                 else:
                     sample_paths_1d = []
@@ -787,12 +849,18 @@ class Controller:
                         skip_if_exists=True,
                         except_prev_paths=context['paths', 'sample_1d'],
                     )
-                    
+                    _path_debug("1D-only after _request_file buffer_paths_1d", buffer_paths_1d)
+                    _path_debug("1D-only after _request_file sample_paths_1d", sample_paths_1d)
+                    buffer_paths_1d = _dedupe_sort_paths(buffer_paths_1d)
+                    sample_paths_1d = _dedupe_sort_paths(sample_paths_1d)
+                    _path_debug("1D-only after _dedupe_sort_paths buffer_paths_1d", buffer_paths_1d)
+                    _path_debug("1D-only after _dedupe_sort_paths sample_paths_1d", sample_paths_1d)
+
                     alignment_res = map_sample_files_to_buffer_files(sample_paths_1d, buffer_paths_1d)
                     run_load_cycle = alignment_res['overlapped'] or alignment_res['not_paired']
                     if alignment_res['overlapped']:
-                        overlap_str = '\n'.join(alignment_res['overlapped'])
-                        self._send_message(f"For some sample files more than one buffer files were found:\n{overlap_str}\n\nAre you following name conventions?")
+                        overlap_str = '\n'.join([', '.join(p) for p in alignment_res['overlapped']])
+                        self._send_message(f"For some sample files more than one buffer files were found:\n{overlap_str[:2000]}\n\nAre you following name conventions?")
                     if alignment_res['not_paired']:
                         not_paired_str = '\n'.join(alignment_res['not_paired'])
                         self._send_message(f"Not for all sample files buffer files were found:\n{not_paired_str}\n\nAre you following name conventions?")
@@ -800,8 +868,12 @@ class Controller:
                         self._send_message(f"Make sure that you follow the name convention and that for each sample image there is exactly one buffer image. This error can also disappear by itself for the next iteration")
                         time.sleep(fallback_delay)
                     else:
-                        buffer_paths_1d = [b_p for _, b_p in alignment_res['aligned_pairs']]
-                        buffer_paths_1d = list(set(buffer_paths_1d))
+                        aligned_pairs_clean = _dedupe_sort_pairs(alignment_res['aligned_pairs'])
+                        _path_debug("1D-only after aligned_pairs_clean", pairs=aligned_pairs_clean)
+                        buffer_paths_1d = [b_p for _, b_p in aligned_pairs_clean]
+                        sample_paths_1d = [s_p for s_p, _ in aligned_pairs_clean]
+                        _path_debug("1D-only rebuilt buffer_paths_1d", buffer_paths_1d)
+                        _path_debug("1D-only rebuilt sample_paths_1d", sample_paths_1d)
 
                 if sample_paths_1d:
                     basename_list = [
@@ -813,13 +885,17 @@ class Controller:
             profile_pic_paths = []
             diff_plot_paths = []  # from subtract skill (diff_*.png), same order as profile_pic_paths
             if 'subtraction' in steps:
+                _path_debug("subtraction alignment input sample_paths_1d", sample_paths_1d)
+                _path_debug("subtraction alignment input buffer_paths_1d", buffer_paths_1d)
                 alignment_res = map_sample_files_to_buffer_files(sample_paths_1d, buffer_paths_1d)
-                aligned_pairs = alignment_res['aligned_pairs']
+                _path_debug("subtraction alignment_res aligned_pairs", pairs=alignment_res['aligned_pairs'])
+                _path_debug("subtraction alignment_res overlapped", pairs=alignment_res['overlapped'])
+                aligned_pairs = _dedupe_sort_pairs(alignment_res['aligned_pairs'])
                 alignment_check = not (alignment_res['overlapped'] or alignment_res['not_paired'])
                 if not alignment_check:
-                    overlap_str = '\n'.join(alignment_res['overlapped'])
+                    overlap_str = '\n'.join([', '.join(p) for p in alignment_res['overlapped']])
                     not_paired_str = '\n'.join(alignment_res['not_paired'])
-                    raise RuntimeError(f"Buffer-sample alignment failed!\n\nOverlapped:\n{overlap_str}\n\nNot paired:\n{not_paired_str}")
+                    raise RuntimeError(f"Buffer-sample alignment failed!\n\nOverlapped:\n{overlap_str[:2000]}\n\nNot paired:\n{not_paired_str}")
 
                 subtracted_dir = os.path.join(directory, 'subtracted')
                 q_range_abs = context.config.get('sub', {}).get('q_range_abs') if context.config else None
@@ -1172,14 +1248,15 @@ class Controller:
             profile_paths = []
             profile_pic_paths = []
 
-            alignment_res = map_sample_files_to_buffer_files(
-                context['paths', 'sample_1d'], context['paths', 'buffer_1d'])
-            aligned_pairs = alignment_res['aligned_pairs']
+            sample_1d_list = _dedupe_sort_paths(context['paths', 'sample_1d'])
+            buffer_1d_list = _dedupe_sort_paths(context['paths', 'buffer_1d'])
+            alignment_res = map_sample_files_to_buffer_files(sample_1d_list, buffer_1d_list)
+            aligned_pairs = _dedupe_sort_pairs(alignment_res['aligned_pairs'])
             alignment_check = not(alignment_res['overlapped'] or alignment_res['not_paired'])
             if not alignment_check:
-                overlap_str = '\n'.join(alignment_res['overlapped'])
+                overlap_str = '\n'.join([', '.join(p) for p in alignment_res['overlapped']])
                 not_paired_str = '\n'.join(alignment_res['not_paired'])
-                raise RuntimeError(f"Buffer-sample alignment failed!\n\nOverlapped:\n{overlap_str}\n\nNot paired:\n{not_paired_str}")
+                raise RuntimeError(f"Buffer-sample alignment failed!\n\nOverlapped:\n{overlap_str[:2000]}\n\nNot paired:\n{not_paired_str}")
 
             for b_path, s_path in aligned_pairs:
                 sub_path, sub_pic_path = self.subtract(

@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from autosaxs.utils import gaussian_pdf, schultz_pdf
+from autosaxs.utils import calc_chi2, gaussian_pdf, schultz_pdf
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -451,6 +451,10 @@ def save_results_csv(results: list[dict], out_path: Path) -> None:
             "n_phases": r["n_phases"],
             "dist": r["dist"],
             "f_min": r["f_min"],
+            "chi2": r.get("chi2", np.nan),
+            "k": r.get("k", np.nan),
+            "n_fit": r.get("n_fit", np.nan),
+            "BIC_chi2": r.get("BIC_chi2", np.nan),
             "R2": r.get("R2", np.nan),
             "R2_adj": r.get("R2_adj", np.nan),
             "BIC": r.get("BIC", np.nan),
@@ -509,11 +513,24 @@ def main() -> int:
     # Quality on I and on log(I) (log clipped at LOG_I_CLIP)
     for r in results:
         k = r["n_phases"] * N_PARAMS_PER_PHASE
+        r["k"] = k
         I_exp, I_fit = r.get("I_exp"), r.get("I_fit")
+        q_fit = r.get("q_fit")
         R2, R2_adj = calc_R2_and_R2_adj(I_exp, I_fit, k)
         r["R2"] = R2
         r["R2_adj"] = R2_adj
         r["BIC"] = calc_BIC(I_exp, I_fit, k)
+        if I_exp is not None and I_fit is not None and q_fit is not None and len(I_exp) >= 2:
+            idx = np.argsort(q)
+            q_s, sigma_s = q[idx], sigma[idx]
+            sigma_fit = np.interp(np.asarray(q_fit), q_s, sigma_s)
+            r["chi2"] = float(calc_chi2(I_exp, I_fit, sigma_fit))
+            r["n_fit"] = len(I_exp)
+            r["BIC_chi2"] = float(r["chi2"]) * (len(I_exp) - 1) + k * np.log(len(I_exp))
+        else:
+            r["chi2"] = np.nan
+            r["n_fit"] = np.nan
+            r["BIC_chi2"] = np.nan
         if I_exp is not None and I_fit is not None:
             log_exp = _log_clip(I_exp)
             log_fit = _log_clip(I_fit)

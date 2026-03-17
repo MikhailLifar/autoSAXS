@@ -317,6 +317,7 @@ def _save_results_csv(results: list[dict], out_path: Path) -> None:
         base = {
             "label": r["label"], "n_phases": r["n_phases"], "dist": r["dist"],
             "f_min": r["f_min"], "chi2": r.get("chi2", np.nan),
+            "k": r.get("k", np.nan), "n_fit": r.get("n_fit", np.nan), "BIC_chi2": r.get("BIC_chi2", np.nan),
             "R2": r.get("R2", np.nan), "R2_adj": r.get("R2_adj", np.nan),
             "BIC": r.get("BIC", np.nan), "R2_log": r.get("R2_log", np.nan),
             "R2_adj_log": r.get("R2_adj_log", np.nan), "BIC_log": r.get("BIC_log", np.nan),
@@ -402,6 +403,7 @@ def fit_mixtures(
 
     for r in results:
         k = r["n_phases"] * N_PARAMS_PER_PHASE
+        r["k"] = k
         I_exp, I_fit = r.get("I_exp"), r.get("I_fit")
         q_fit = r.get("q_fit")
         r["R2"], r["R2_adj"] = _calc_R2_and_R2_adj(I_exp, I_fit, k)
@@ -411,8 +413,12 @@ def fit_mixtures(
             q_s, sigma_s = q[idx], sigma[idx]
             sigma_fit = np.interp(np.asarray(q_fit), q_s, sigma_s)
             r["chi2"] = float(calc_chi2(I_exp, I_fit, sigma_fit))
+            r["n_fit"] = len(I_exp)
+            r["BIC_chi2"] = float(r["chi2"]) * (len(I_exp) - 1) + k * np.log(len(I_exp))
         else:
             r["chi2"] = np.nan
+            r["n_fit"] = np.nan
+            r["BIC_chi2"] = np.nan
         if I_exp is not None and I_fit is not None:
             log_exp = _log_clip(I_exp)
             log_fit = _log_clip(I_fit)
