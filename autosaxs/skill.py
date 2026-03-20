@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 from typing import Any, Dict, List, Optional, Union
 
@@ -52,7 +53,30 @@ from .skill_wrap import (
 
 # ---------------------------------------------------------------------------
 # Skill: calibrate
+# Public entry point (CLI-compatible): calibrate(...)
+# Internal implementation: _calibrate_paths(...)
 # ---------------------------------------------------------------------------
+
+
+def calibrate(
+    calib_image: str,
+    config_path: str,
+    output_dir: str = ".",
+    *,
+    mask: Optional[str] = None,
+    use_cache: bool = True,
+) -> Dict[str, str]:
+    """
+    Calibrate detector geometry from a calibration image. Public entry point.
+
+    Positional args mirror CLI: calib_image, config_path.
+    """
+    bus = EventBus()
+    bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
+    input_paths: Dict[str, Union[str, List[str]]] = {"calib_image": calib_image, "config": config_path}
+    if mask is not None:
+        input_paths["mask"] = mask
+    return _calibrate_paths(input_paths=input_paths, output_dir=output_dir, event_bus=bus, use_cache=use_cache)
 
 
 @apply_batch(stem_from_keys="calib_image")
@@ -61,14 +85,13 @@ from .skill_wrap import (
     kwargs_for_hash=None,
     include_config_in_hash=False,
 )
-def calibrate(
+def _calibrate_paths(
     input_paths: Dict[str, Union[str, List[str]]],
     output_dir: str,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
     use_cache: bool = True,
     sample_index: int = 0,
-    **kwargs: Any,
 ) -> Dict[str, str]:
     """
     Calibrate detector geometry from a calibration image (center refinement, ring search,
@@ -133,7 +156,33 @@ def calibrate(
 
 # ---------------------------------------------------------------------------
 # Skill: integrate
+# Public entry point (CLI-compatible): integrate(...)
+# Internal implementation: _integrate_paths(...)
 # ---------------------------------------------------------------------------
+
+
+def integrate(
+    images: List[str],
+    integrator_dir: str,
+    output_dir: str = ".",
+    *,
+    npt: int = 1000,
+    use_cache: bool = True,
+) -> Dict[str, Union[str, List[str]]]:
+    """
+    Integrate 2D SAXS images to 1D curves. Public entry point.
+
+    Positional args mirror CLI: images (one or more), integrator_dir.
+    """
+    bus = EventBus()
+    bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
+    return _integrate_paths(
+        input_paths={"images": images, "integrator_dir": integrator_dir},
+        output_dir=output_dir,
+        event_bus=bus,
+        use_cache=use_cache,
+        npt=npt,
+    )
 
 
 @apply_batch(stem_from_keys="images", single_output_dir=True)
@@ -142,7 +191,7 @@ def calibrate(
     kwargs_for_hash_keys=["npt"],
     include_config_in_hash=False,
 )
-def integrate(
+def _integrate_paths(
     input_paths: Dict[str, Union[str, List[str]]],
     output_dir: str,
     config: Optional[Dict] = None,
@@ -150,7 +199,6 @@ def integrate(
     use_cache: bool = True,
     sample_index: int = 0,
     npt: int = 1000,
-    **kwargs: Any,
 ) -> Dict[str, Union[str, List[str]]]:
     """
     Integrate 2D SAXS images to 1D curves (q, I, σ) using a calibrated integrator.
@@ -186,7 +234,41 @@ def integrate(
 
 # ---------------------------------------------------------------------------
 # Skill: subtract
+# Public entry point (CLI-compatible): subtract(...)
+# Internal implementation: _subtract_paths(...)
 # ---------------------------------------------------------------------------
+
+
+def subtract(
+    sample_1d: str,
+    buffer_1d: str,
+    output_dir: str = ".",
+    *,
+    method: str = "match_tail",
+    q_min: Optional[float] = None,
+    q_max: Optional[float] = None,
+    use_cache: bool = True,
+) -> Dict[str, str]:
+    """
+    Subtract buffer from sample 1D profile. Public entry point.
+
+    Positional args mirror CLI: sample_1d, buffer_1d.
+    """
+    match_tail_ops: Optional[Dict] = None
+    if q_min is not None or q_max is not None:
+        if q_min is None:
+            raise ValueError("subtract: q_min must be set when q_max is set")
+        match_tail_ops = {"q_range_abs": (q_min, q_max)}
+    bus = EventBus()
+    bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
+    return _subtract_paths(
+        input_paths={"sample_1d": sample_1d, "buffer_1d": buffer_1d},
+        output_dir=output_dir,
+        event_bus=bus,
+        use_cache=use_cache,
+        method=method,
+        match_tail_ops=match_tail_ops,
+    )
 
 
 @apply_batch(stem_from_keys="sample_1d", single_output_dir=True)
@@ -195,7 +277,7 @@ def integrate(
     kwargs_for_hash_keys=["method", "match_tail_ops"],
     include_config_in_hash=False,
 )
-def subtract(
+def _subtract_paths(
     input_paths: Dict[str, Union[str, List[str]]],
     output_dir: str,
     config: Optional[Dict] = None,
@@ -204,7 +286,6 @@ def subtract(
     sample_index: int = 0,
     method: str = "match_tail",
     match_tail_ops: Optional[Dict] = None,
-    **kwargs: Any,
 ) -> Dict[str, str]:
     """
     Subtract buffer from sample 1D profile (e.g. match-tail scaling). Writes subtracted curve.
@@ -254,7 +335,38 @@ def subtract(
 
 # ---------------------------------------------------------------------------
 # Skill: plot
+# Public entry point (CLI-compatible): plot(...)
+# Internal implementation: _plot_paths(...)
 # ---------------------------------------------------------------------------
+
+
+def plot(
+    profile: str,
+    output_dir: str = ".",
+    *,
+    guinier_q_min: Optional[float] = None,
+    guinier_q_max: Optional[float] = None,
+    use_cache: bool = True,
+) -> Dict[str, str]:
+    """
+    Generate standard plots for a 1D profile. Public entry point.
+
+    Positional args mirror CLI: profile.
+    """
+    guinier_region: Optional[tuple] = None
+    if guinier_q_min is not None or guinier_q_max is not None:
+        if guinier_q_min is None:
+            raise ValueError("plot: guinier_q_min must be set when guinier_q_max is set")
+        guinier_region = (guinier_q_min, guinier_q_max)
+    bus = EventBus()
+    bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
+    return _plot_paths(
+        input_paths={"profile": profile},
+        output_dir=output_dir,
+        event_bus=bus,
+        use_cache=use_cache,
+        guinier_region=guinier_region,
+    )
 
 
 @apply_batch(stem_from_keys="profile", single_output_dir=True)
@@ -263,7 +375,7 @@ def subtract(
     kwargs_for_hash_keys=["guinier_region"],
     include_config_in_hash=False,
 )
-def plot(
+def _plot_paths(
     input_paths: Dict[str, Union[str, List[str]]],
     output_dir: str,
     config: Optional[Dict] = None,
@@ -271,7 +383,6 @@ def plot(
     use_cache: bool = True,
     sample_index: int = 0,
     guinier_region: Optional[tuple] = None,
-    **kwargs: Any,
 ) -> Dict[str, str]:
     """
     Generate standard plots for a 1D profile: Guinier, Kratky, log–log; optionally write Guinier-range .dat.
@@ -333,7 +444,30 @@ def plot(
 
 # ---------------------------------------------------------------------------
 # Skill: guinier_analysis
+# Public entry point (CLI-compatible): guinier_analysis(...)
+# Internal implementation: _guinier_analysis_paths(...)
 # ---------------------------------------------------------------------------
+
+
+def guinier_analysis(
+    profile: str,
+    output_dir: str = ".",
+    *,
+    use_cache: bool = True,
+) -> Dict[str, str]:
+    """
+    Run Guinier analysis on a 1D profile. Public entry point.
+
+    Positional args mirror CLI: profile.
+    """
+    bus = EventBus()
+    bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
+    return _guinier_analysis_paths(
+        input_paths={"profile": profile},
+        output_dir=output_dir,
+        event_bus=bus,
+        use_cache=use_cache,
+    )
 
 
 @apply_batch(stem_from_keys="profile")
@@ -342,14 +476,13 @@ def plot(
     kwargs_for_hash=None,
     include_config_in_hash=False,
 )
-def guinier_analysis(
+def _guinier_analysis_paths(
     input_paths: Dict[str, Union[str, List[str]]],
     output_dir: str,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
     use_cache: bool = True,
     sample_index: int = 0,
-    **kwargs: Any,
 ) -> Dict[str, str]:
     """
     Run Guinier analysis on a 1D profile (first5, first10, autorg, adaptive).
@@ -466,7 +599,38 @@ def guinier_analysis(
 
 # ---------------------------------------------------------------------------
 # Skill: fit_mixture
+# Public entry point (CLI-compatible): fit_mixture(...)
+# Internal implementation: _fit_mixture_paths(...)
 # ---------------------------------------------------------------------------
+
+
+def fit_mixture(
+    profile: str,
+    output_dir: str = ".",
+    *,
+    q_min_nm: Optional[float] = None,
+    q_max_nm: Optional[float] = None,
+    use_cache: bool = True,
+) -> Dict[str, str]:
+    """
+    Run MIXTURE fits and select best by BIC. Public entry point.
+
+    Positional args mirror CLI: profile.
+    """
+    q_range_nm: Optional[tuple] = None
+    if q_min_nm is not None or q_max_nm is not None:
+        if q_min_nm is None:
+            raise ValueError("fit_mixture: q_min_nm must be set when q_max_nm is set")
+        q_range_nm = (q_min_nm, q_max_nm)
+    bus = EventBus()
+    bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
+    return _fit_mixture_paths(
+        input_paths={"profile": profile},
+        output_dir=output_dir,
+        event_bus=bus,
+        use_cache=use_cache,
+        q_range_nm=q_range_nm,
+    )
 
 
 @apply_batch(stem_from_keys="profile")
@@ -475,7 +639,7 @@ def guinier_analysis(
     kwargs_for_hash_keys=["q_range_nm"],
     include_config_in_hash=False,
 )
-def fit_mixture(
+def _fit_mixture_paths(
     input_paths: Dict[str, Union[str, List[str]]],
     output_dir: str,
     config: Optional[Dict] = None,
@@ -483,7 +647,6 @@ def fit_mixture(
     use_cache: bool = True,
     sample_index: int = 0,
     q_range_nm: Optional[tuple] = None,
-    **kwargs: Any,
 ) -> Dict[str, str]:
     """
     Run MIXTURE fits (1-/2-/3-phase × Gaussian/Schultz–Zimm, sphere-only), select best by BIC,
@@ -518,7 +681,30 @@ def fit_mixture(
 
 # ---------------------------------------------------------------------------
 # Skill: fit_bodies
+# Public entry point (CLI-compatible): fit_bodies(...)
+# Internal implementation: _fit_bodies_paths(...)
 # ---------------------------------------------------------------------------
+
+
+def fit_bodies(
+    profile: str,
+    output_dir: str = ".",
+    *,
+    use_cache: bool = True,
+) -> Dict[str, str]:
+    """
+    Run ATSAS bodies and export fits. Public entry point.
+
+    Positional args mirror CLI: profile.
+    """
+    bus = EventBus()
+    bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
+    return _fit_bodies_paths(
+        input_paths={"profile": profile},
+        output_dir=output_dir,
+        event_bus=bus,
+        use_cache=use_cache,
+    )
 
 # BODIES shape names (must match ATSAS bodies; order from controller)
 BODIES_SHAPES_LIST = [
@@ -533,14 +719,13 @@ BODIES_SHAPES_LIST = [
     kwargs_for_hash=None,
     include_config_in_hash=False,
 )
-def fit_bodies(
+def _fit_bodies_paths(
     input_paths: Dict[str, Union[str, List[str]]],
     output_dir: str,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
     use_cache: bool = True,
     sample_index: int = 0,
-    **kwargs: Any,
 ) -> Dict[str, str]:
     """
     Run ATSAS bodies on a 1D profile for multiple shapes; export fits (fir, PNG, yml, csv).
@@ -623,7 +808,34 @@ def fit_bodies(
 
 # ---------------------------------------------------------------------------
 # Skill: fit_dammif
+# Public entry point (CLI-compatible): fit_dammif(...)
+# Internal implementation: _fit_dammif_paths(...)
 # ---------------------------------------------------------------------------
+
+
+def fit_dammif(
+    profile: str,
+    output_dir: str = ".",
+    *,
+    gnom_path: Optional[str] = None,
+    use_cache: bool = True,
+) -> Dict[str, str]:
+    """
+    Run ATSAS dammif and export results. Public entry point.
+
+    Positional args mirror CLI: profile.
+    """
+    bus = EventBus()
+    bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
+    input_paths: Dict[str, Union[str, List[str]]] = {"profile": profile}
+    if gnom_path is not None:
+        input_paths["gnom_path"] = gnom_path
+    return _fit_dammif_paths(
+        input_paths=input_paths,
+        output_dir=output_dir,
+        event_bus=bus,
+        use_cache=use_cache,
+    )
 
 DAMMIF_REPS_NUM = 2
 
@@ -634,14 +846,13 @@ DAMMIF_REPS_NUM = 2
     kwargs_for_hash=None,
     include_config_in_hash=False,
 )
-def fit_dammif(
+def _fit_dammif_paths(
     input_paths: Dict[str, Union[str, List[str]]],
     output_dir: str,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
     use_cache: bool = True,
     sample_index: int = 0,
-    **kwargs: Any,
 ) -> Dict[str, str]:
     """
     Run ATSAS dammif (ab initio shape reconstruction) on a 1D profile; produce shape models and descriptors.
@@ -722,8 +933,10 @@ def fit_dammif(
 def report_individual(
     directory: str,
     basename: str,
+    output_dir: str = ".",
+    *,
     output_path: Optional[str] = None,
-    **kwargs: Any,
+    use_cache: bool = True,
 ) -> Dict[str, Any]:
     """
     Build individual PDF report for one sample from existing pipeline directory.
@@ -731,14 +944,19 @@ def report_individual(
     Returns dict with 'report_pdf_path'.
     """
     from .report import write_individual_report_pdf
+    _ = use_cache  # report generation does not use caching; kept for CLI parity
+    if output_path is None:
+        output_path = os.path.join(output_dir, f"{basename}_report.pdf")
     path = write_individual_report_pdf(directory, basename, output_path=output_path)
     return {"report_pdf_path": path}
 
 
 def report_summary(
     directory: str,
+    output_dir: str = ".",
+    *,
     output_path: Optional[str] = None,
-    **kwargs: Any,
+    use_cache: bool = True,
 ) -> Dict[str, Any]:
     """
     Build summary PDF report from existing pipeline directory.
@@ -746,5 +964,8 @@ def report_summary(
     Returns dict with 'report_pdf_path'.
     """
     from .report import write_summary_report_pdf
+    _ = use_cache  # report generation does not use caching; kept for CLI parity
+    if output_path is None:
+        output_path = os.path.join(output_dir, "summary_report.pdf")
     path = write_summary_report_pdf(directory, output_path=output_path)
     return {"report_pdf_path": path}

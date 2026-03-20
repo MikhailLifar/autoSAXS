@@ -784,6 +784,202 @@ def calc_chi2(I0, I1, sigma_exp):
     return 1 / (I0.shape[0] - 1) * np.sum( ((I0 - I1) / sigma_exp) ** 2 )
 
 
+def fit_annulus_min_width(
+    x: np.ndarray,
+    y: np.ndarray,
+    W: int,
+    H: int,
+    *,
+    q_low: float = 0.05,
+    q_high: float = 0.95,
+    margin: int = 100,
+    grid_size: int = 4,
+) -> Tuple[float, float, float, float, float]:
+    """
+    Fit the narrowest concentric annulus enclosing (quantile-based) points.
+
+    Uses 0.05 and 0.95 quantiles of radial distances for r_in and r_out (robust to outliers).
+    Center (cx, cy) is constrained: margin <= cx <= W - margin, margin <= cy <= H - margin.
+    Uses L-BFGS-B with multiple starts on a grid_size x grid_size grid.
+
+    Returns (cx_opt, cy_opt, r_inner, r_outer, r_mean).
+    """
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    cx_lo = float(margin)
+    cx_hi = float(W - margin)
+    cy_lo = float(margin)
+    cy_hi = float(H - margin)
+    if cx_lo >= cx_hi or cy_lo >= cy_hi:
+        cx_mid = (cx_lo + cx_hi) / 2.0
+        cy_mid = (cy_lo + cy_hi) / 2.0
+        r = np.sqrt((x - cx_mid) ** 2 + (y - cy_mid) ** 2)
+        r_inner = float(np.percentile(r, q_low * 100.0))
+        r_outer = float(np.percentile(r, q_high * 100.0))
+        r_mean = (r_inner + r_outer) / 2.0
+        return cx_mid, cy_mid, r_inner, r_outer, r_mean
+
+    def objective(c: np.ndarray) -> float:
+        cx, cy = float(c[0]), float(c[1])
+        r = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+        r_in = np.percentile(r, q_low * 100.0)
+        r_out = np.percentile(r, q_high * 100.0)
+        return float(r_out - r_in)
+
+    from scipy.optimize import minimize  # type: ignore
+
+    bounds = [(cx_lo, cx_hi), (cy_lo, cy_hi)]
+    cx_vals = np.linspace(cx_lo, cx_hi, grid_size)
+    cy_vals = np.linspace(cy_lo, cy_hi, grid_size)
+    best_fun = np.inf
+    best_x: Optional[np.ndarray] = None
+    for cx0 in cx_vals:
+        for cy0 in cy_vals:
+            try:
+                res = minimize(
+                    objective,
+                    np.array([float(cx0), float(cy0)], dtype=np.float64),
+                    method="L-BFGS-B",
+                    bounds=bounds,
+                    options={"maxiter": 200},
+                )
+                if res.success and res.fun < best_fun:
+                    best_fun = float(res.fun)
+                    best_x = res.x
+            except Exception:
+                continue
+    if best_x is None:
+        cx_opt = (cx_lo + cx_hi) / 2.0
+        cy_opt = (cy_lo + cy_hi) / 2.0
+    else:
+        cx_opt, cy_opt = float(best_x[0]), float(best_x[1])
+    r_opt = np.sqrt((x - cx_opt) ** 2 + (y - cy_opt) ** 2)
+    r_inner = float(np.percentile(r_opt, q_low * 100.0))
+    r_outer = float(np.percentile(r_opt, q_high * 100.0))
+    r_mean = (r_inner + r_outer) / 2.0
+    return cx_opt, cy_opt, r_inner, r_outer, r_mean
+
+
+def fit_circle_xy_r2(
+    points_xy: np.ndarray,
+    image_shape: Optional[Tuple[int, int]] = None,
+) -> Dict[str, float]:
+    """
+    Fit a circle to 2D points (two-stage: algebraic init + geometric refinement, p=10).
+
+    Input convention:
+    - points_xy[:, 0] is X (column / detector X)
+    - points_xy[:, 1] is Y (row / detector Y)
+    - image_shape: ignored (kept for API compatibility; annulus path is off).
+
+    Returns a dict with:
+    - center_x, center_y, r_px, circle_r2
+    """
+    pts = np.asarray(points_xy, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 2:
+        raise ValueError("points_xy must have shape (N, 2)")
+    if pts.shape[0] < 3:
+        return {
+            "center_x": float("nan"),
+            "center_y": float("nan"),
+            "r_px": float("nan"),
+            "circle_r2": float("nan"),
+        }
+
+    x = pts[:, 0]
+    y = pts[:, 1]
+
+    # --- Min-width annulus: disabled, kept for comparison ---
+    if False:
+        center_x = float(np.mean(x))
+        center_y = float(np.mean(y))
+        r_px = float("nan")
+        if image_shape is not None:
+            H_img, W_img = int(image_shape[0]), int(image_shape[1])
+            try:
+                center_x, center_y, _r_in, _r_out, r_px = fit_annulus_min_width(
+                    x, y, W_img, H_img
+                )
+            except Exception:
+                pass
+        else:
+            W_infer = max(201, int(np.max(x)) + 200)
+            H_infer = max(201, int(np.max(y)) + 200)
+            try:
+                center_x, center_y, _r_in, _r_out, r_px = fit_annulus_min_width(
+                    x, y, W_infer, H_infer
+                )
+            except Exception:
+                pass
+
+    # Two-stage: algebraic init + geometric refinement (p=10)
+    A = np.column_stack([x, y, np.ones_like(x)])
+    b = -(x * x + y * y)
+    coeffs, *_ = np.linalg.lstsq(A, b, rcond=None)
+    D, E, F = (float(coeffs[0]), float(coeffs[1]), float(coeffs[2]))
+    center_x0 = -D / 2.0
+    center_y0 = -E / 2.0
+    center_x = float(center_x0)
+    center_y = float(center_y0)
+    r_px = float("nan")
+    try:
+        from scipy.optimize import least_squares  # type: ignore
+        p_loss = 10.0
+        def _residual_circle(params: np.ndarray) -> np.ndarray:
+            cx = float(params[0])
+            cy = float(params[1])
+            r = float(params[2])
+            d = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+            raw = d - r
+            if p_loss == 2.0:
+                return raw
+            return np.sign(raw) * (np.abs(raw) ** (p_loss / 2.0))
+        d0 = np.sqrt((x - center_x0) ** 2 + (y - center_y0) ** 2)
+        r0 = float(np.mean(d0))
+        p0 = np.asarray([center_x0, center_y0, r0], dtype=np.float64)
+        opt = least_squares(
+            _residual_circle,
+            p0,
+            method="trf",
+            bounds=(
+                np.asarray([-np.inf, -np.inf, 0.0], dtype=np.float64),
+                np.asarray([np.inf, np.inf, np.inf], dtype=np.float64),
+            ),
+            max_nfev=300,
+        )
+        if opt.success and opt.x.shape == (3,) and np.all(np.isfinite(opt.x)):
+            center_x = float(opt.x[0])
+            center_y = float(opt.x[1])
+            r_px = float(opt.x[2])
+    except Exception:
+        center_x = float(center_x0)
+        center_y = float(center_y0)
+
+    dist = np.sqrt((x - center_x) ** 2 + (y - center_y) ** 2)
+    if not np.isfinite(r_px):
+        r_px = float(np.mean(dist))
+    dev = np.abs(dist - r_px)
+
+    # Quality: 1 - 2 * mean(|dist - r|) / Dmax
+    p0_pt = pts[0]
+    d0 = np.sqrt((x - p0_pt[0]) ** 2 + (y - p0_pt[1]) ** 2)
+    i1 = int(np.argmax(d0))
+    p1 = pts[i1]
+    d1 = np.sqrt((x - p1[0]) ** 2 + (y - p1[1]) ** 2)
+    Dmax = float(np.max(d1))
+    if not np.isfinite(Dmax) or Dmax <= 0:
+        circle_r2 = 1.0
+    else:
+        circle_r2 = 1.0 - 2.0 * float(np.mean(dev)) / Dmax
+
+    return {
+        "center_x": float(center_x),
+        "center_y": float(center_y),
+        "r_px": r_px,
+        "circle_r2": float(circle_r2),
+    }
+
+
 # Volume per dummy atom (Å³) for DAM models; used in compute_dammif_descriptors.
 V_ATOM_DAM = 20.0
 

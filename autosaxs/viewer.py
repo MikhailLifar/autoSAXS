@@ -144,8 +144,26 @@ class PLTViewer(Viewer):
         # sigma_cal *= 10  # debug
 
         color = '#1f77b4'
-        cal_plot = axs[0].plot(q_cal, i_cal, label="Calibrated Curve")
-        axs[0].fill_between(q_cal, i_cal - sigma_cal, i_cal + sigma_cal, color=color, alpha=0.5)
+        # log(I) vs q (coordinates): plot log10(I) values directly on a linear axis.
+        # Filter out very small intensities: keep log10(I) >= -4 (i.e., I >= 1e-4).
+        eps = np.finfo(float).tiny
+        i_pos = np.where(i_cal > 0, i_cal, np.nan)
+        log_i = np.log10(i_pos)
+        keep = np.isfinite(log_i) & (log_i >= -4.0)
+        q_plot = q_cal[keep]
+        i_plot = i_pos[keep]
+        sigma_plot = sigma_cal[keep]
+
+        # Keep the uncertainty band within the same visibility threshold.
+        # Otherwise, (I - σ) can go to ~0 and produce huge negative logs.
+        lower_i = np.maximum(i_plot - sigma_plot, 1e-4)
+        upper_i = np.maximum(i_plot + sigma_plot, 1e-4)
+        log_i_plot = np.log10(i_plot)
+        lower_log = np.log10(lower_i)
+        upper_log = np.log10(upper_i)
+
+        cal_plot = axs[0].plot(q_plot, log_i_plot, label="Calibrated Curve")
+        axs[0].fill_between(q_plot, lower_log, upper_log, color=color, alpha=0.5)
         axs[0].grid(True, alpha=0.3)
 
         # Plot theoretical peak positions
@@ -154,8 +172,8 @@ class PLTViewer(Viewer):
 
         axs[0].set_xlim(0, np.max(q_cal))
         axs[0].set_xlabel("q (nm^-1)")
-        axs[0].set_ylabel("Intensity")
-        axs[0].set_title("Calibration Result")
+        axs[0].set_ylabel("log10(Intensity)")
+        axs[0].set_title("Calibration Result (log I vs q)")
         
         # Create a legend with unique labels
         handles, labels = axs[0].get_legend_handles_labels()

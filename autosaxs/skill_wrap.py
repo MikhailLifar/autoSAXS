@@ -7,7 +7,7 @@ import functools
 import hashlib
 import os
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union, overload
 
 import yaml
 
@@ -303,12 +303,30 @@ def _stem_from_keys(
     return None
 
 
+@overload
+def apply_batch(
+    skill_fn: Callable[..., Dict[str, Any]],
+    *,
+    single_output_dir: bool = False,
+    stem_from_keys: Optional[Union[str, List[str]]] = None,
+) -> Callable[..., Dict[str, Any]]: ...
+
+
+@overload
+def apply_batch(
+    skill_fn: None = None,
+    *,
+    single_output_dir: bool = False,
+    stem_from_keys: Optional[Union[str, List[str]]] = None,
+) -> Callable[[Callable[..., Dict[str, Any]]], Callable[..., Dict[str, Any]]]: ...
+
+
 def apply_batch(
     skill_fn: Optional[Callable[..., Dict[str, Any]]] = None,
     *,
     single_output_dir: bool = False,
     stem_from_keys: Optional[Union[str, List[str]]] = None,
-):
+) -> Union[Callable[..., Dict[str, Any]], Callable[[Callable[..., Dict[str, Any]]], Callable[..., Dict[str, Any]]]]:
     """
     Decorator for skills: returns a batch function that applies the skill to each input.
     Usage: batch_plot = apply_batch(plot) or batch_plot = apply_batch(stem_from_keys=\"profile\")(plot).
@@ -326,7 +344,7 @@ def apply_batch(
             single_output_dir_override: bool = single_output_dir,
             stem_from_keys_override: Optional[Union[str, List[str]]] = stem_from_keys,
             **kwargs: Any,
-        ) -> Dict[str, Union[str, List[str], List[List[str]]]]:
+        ) -> Dict[str, Any]:
             list_of_input_paths = input_paths if isinstance(input_paths, list) else [input_paths]
             single_call = isinstance(input_paths, dict)
             use_single_out = single_output_dir_override or single_call

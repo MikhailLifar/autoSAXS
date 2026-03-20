@@ -8,13 +8,13 @@ Specification of the **skills-based** processing model for the **autosaxs** pack
 
 **Purpose:** Shift the central concept of autosaxs from a fixed **pipeline** to **skills**. A skill is a single processing routine that takes paths to data and optional arguments and returns paths to results; it operates on the file system. Pipelines are no longer hardcoded—they are composed per project (e.g. by AI or by the user) in small scripts that call skills in sequence. EventBus and interfaces (CLI, GUI) remain; skills may send progress messages through the EventBus so the UI can react. Optional content-hash caching (via a hidden **`.cache`** file and output-integrity check) replaces naive “fast-forward” logic; caching is **per sample**, and `.cache` uses a **list of records** (one record per sample; see §2.1) so when multiple samples write to the same directory, the cache file can store the necessary info for all of them individually. Common wrappers for hashing and batch application live in **`autosaxs/skill_wrap.py`**; skill entry points live in **`autosaxs/skill.py`**. The new **`autosaxs/skill.py`** (and other new scripts as needed) replaces the old **processor** module; all processing functionality migrates into `skill.py` or dedicated heavy modules.
 
-**Scope:** Architecture, skill contract (inputs/outputs), UI/UX integration, main principles, and the list of skills with purpose/inputs/outputs. Not in scope: step-by-step migration plan. The `.cache` file format (YAML) is specified in §2 and §6.
+**Scope:** Architecture, skill contract (inputs/outputs), UI/UX integration, the **manual command interface** (`autosaxs <command> ...`) for applying skills directly, main principles, and the list of skills with purpose/inputs/outputs. Not in scope: step-by-step migration plan. The `.cache` file format (YAML) is specified in §2 and §6.
 
 ---
 
 ## 2. How it works
 
-- **Skills are pure functions**. Each skill has a single entry point: a function that accepts an input path dictionary, an output directory, optional config, optional EventBus, optional `use_cache` (default **True**), and keyword arguments. It reads only from the given paths and writes only under the output directory; it returns a dictionary of output path roles to paths (strings or lists of paths).
+- **Skills are pure functions**. Each skill has a single public entry point with an explicit signature suitable for both Python and CLI usage (§4.1.1). Internally, the skill MAY construct an input path dictionary and call a helper that follows the “path dict” convention (§4.1.2). In all cases, a skill reads only from the given input paths and writes only under the output directory; it returns a dictionary of output path roles to paths (strings or lists of paths).
 - **Orchestration lives outside the package.** There is no built-in “pipeline” or “runner” type. A project script (or an AI-generated script) obtains paths (e.g. via EventBus-driven prompts to the user, or from a fixed layout), then calls skills in the desired order, passing the result paths of one skill as inputs to the next. Example: calibrate → integrate → subtract → fit_mixture; each step is one function call.
 - **EventBus is the only side effect** allowed inside a skill. When the caller passes an EventBus, the skill may publish **MESSAGE** events (e.g. “Calibration: ring search…”, “Integration 3/10…”). Skills do not request files or choices; they do not subscribe to events. All interaction (directory choice, file upload, profile selection) is handled by the script and the interfaces that respond to EventBus requests.
 - **Caching is optional, local to the skill output, and per sample.** There is no separate cache directory. When caching is enabled (default), a common wrapper in **`autosaxs/skill_wrap.py`** (used by skills in `skill.py`) uses a single hidden file **`.cache`** under the skill’s output directory, in **YAML format**. The structure is a **list of records** (see §2.1). Before running for a given sample, the skill (1) computes the current input hash, (2) looks up a record in `.cache` whose `hash` equals that value, and (3) if found, **verifies output integrity** using that record’s `output_paths` and `finish_date`: all listed paths must exist and their modification times must be **not later than** `finish_date`. If the hash matches and outputs are intact, the skill skips computation and returns the cached `output_paths` (with `from_cache: true`); otherwise it runs, writes outputs, and appends a new record (or replaces the invalid one and appends) in `.cache`.
@@ -50,12 +50,48 @@ Each element of `records` is an object with:
 1. **Script** creates EventBus, optionally connects CLI or GUI (so the user can be prompted).
 2. **Script** obtains working directory, config path, and initial file paths (by publishing **DIRECTORY_REQUESTED** / **FILE_REQUESTED** etc. and consuming responses, or by reading a fixed layout).
 3. **Script** calls skill functions in sequence, e.g.  
-   `out_cal = calibrate(input_paths, output_dir, config=..., event_bus=bus)`  
-   `out_int = integrate({...}, output_dir, ..., integrator_dir=out_cal["integrator_dir"])`  
-   (Caching is on by default; pass `use_cache=False` to disable.)  
+   `out_cal = calibrate(calib_image, config_path, output_dir, mask=..., use_cache=True)`  
+   `out_int = integrate(images, out_cal["integrator_dir"], output_dir, npt=1000, use_cache=True)`  
+   (Caching is on by default; pass `use_cache=False` or set `--no-cache` in CLI.)  
    Each skill returns a dict of output path roles (e.g. `integrator_dir`, `integrated_1d`).
 4. **Skills** read from `input_paths` and optional `config`, write under `output_dir`, optionally publish **MESSAGE** on `event_bus`, and by default use the `.cache` file + output-integrity check (`use_cache=True`).
 5. **Interfaces** display messages and respond to requests; they do not call skills. Control flow is: script ↔ EventBus ↔ interface; script → skills.
+
+### 3.3 Manual commands for skills (`autosaxs <command> ...`)
+
+The package MUST provide a command-line interface so that users can apply skills manually, without writing a script:
+
+```bash
+autosaxs <command> <args> <keys=kwargs>
+```
+
+This command runner is **not** a “pipeline runner”: it is a thin dispatcher that maps each `<command>` to exactly one skill entry point and returns/writes the same outputs as calling the skill from Python.
+
+#### 3.3.1 Command ↔ skill mapping rule (hard requirement)
+
+- **Every skill MUST have a corresponding command** with the same name (or a stable, explicitly documented alias).
+- **Command arguments MUST coincide with the skill entry point arguments.**
+  - **Positional arguments**: the CLI positional arguments MUST be in the **same order** as the skill function’s positional parameters.
+  - **Keyword options**: CLI flags/keys MUST map 1:1 to the skill function’s keyword parameters (including names and default values, modulo CLI naming conventions like `--q-min` → `q_min`).
+  - No “extra” CLI-only parameters are allowed (except standard global flags like `--help` and `--version`), because they would break the guarantee that “CLI mirrors the skill”.
+
+This rule exists so the CLI can be treated as “manual skill invocation”, and so documentation/tests can validate parity between Python and CLI.
+
+#### 3.3.2 Standard CLI conventions
+
+- **Output directory**: every command MUST support `--output-dir <path>` (default: current working directory). This maps to the skill argument `output_dir`.
+- **Caching**: every command MUST support `--no-cache` (default caching on). This maps to the skill argument `use_cache` (CLI uses `--no-cache` to set `use_cache=False`).
+- **EventBus**: CLI commands do not accept `event_bus`; they run without a bus by default. (Progress may be printed to stderr; this is an implementation detail.)
+
+#### 3.3.3 Examples (required to work as shown)
+
+```bash
+# Detector calibration from a TIFF calibrant image and config
+autosaxs calibrate AgBh.tif config.conf
+
+# Buffer subtraction from 1D curves with method and q-window kwargs
+autosaxs subtract sample.dat buffer.dat --method match_tail --q-min 4.0 --q-max 6.0
+```
 
 ---
 
@@ -63,7 +99,42 @@ Each element of `records` is an object with:
 
 ### 4.1 Skill function signature (convention)
 
-Every skill follows the same shape:
+To satisfy the **command ↔ skill mapping rule** (§3.3.1), every skill MUST expose a **CLI-compatible public entry point** with an explicit, stable Python signature. The entry point MAY internally construct an `input_paths` dictionary and delegate to a private implementation, but the public signature is normative.
+
+#### 4.1.1 Public skill entry point (CLI-compatible)
+
+Every skill entry point MUST:
+
+- Accept its **primary path inputs as positional arguments** (e.g. `calib_image`, `config_path`, `sample_1d`, `buffer_1d`).
+- Accept `output_dir` as a parameter (exposed in CLI as `--output-dir`).
+- Accept `use_cache: bool = True` as a parameter (exposed in CLI as `--no-cache`).
+- Expose skill-specific options as explicit keyword parameters (so CLI flags map 1:1).
+- Return only paths: `dict[str, str | list[str]]`.
+
+Conventions to ensure CLI parity:
+
+- **No aliasing of option values**: when a skill parameter is an enum-like string (e.g. `method`), the CLI MUST accept the exact same string values as the skill (project convention), without introducing hyphenated aliases like `tail-match` unless the skill itself uses that exact value.
+- **Required positional inputs stay required**: if a skill requires a path input (e.g. `config_path` for calibration), the corresponding CLI command MUST require it as a positional argument as well.
+
+Example shape (illustrative):
+
+```python
+def subtract(
+    sample_1d: str,
+    buffer_1d: str,
+    output_dir: str = ".",
+    *,
+    method: str = "match_tail",
+    q_min: float | None = None,
+    q_max: float | None = None,
+    use_cache: bool = True,
+) -> dict[str, str]:
+    ...
+```
+
+#### 4.1.2 Internal implementation helper (optional)
+
+Skills MAY additionally use an internal helper that follows the “path dict” convention for composability in scripts:
 
 - **`input_paths`** — `dict[str, str | list[str]]`. Keys are semantic roles (e.g. `calib_image`, `config`, `integrator_dir`, `images`, `profile`, `buffer_1d`, `sample_1d`). Values are a single path or a list of paths. The skill reads only from these paths (and from options below); it does not read from global state.
 - **`output_dir`** — `str`. Directory under which the skill writes all outputs (possibly in subdirectories). The skill does not write outside this tree.
