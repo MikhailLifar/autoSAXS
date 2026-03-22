@@ -126,10 +126,6 @@ def main() -> int:
         raise FileNotFoundError(f"No matching .tif files found in: {data_dir}")
 
     cfg = load_config(args.config_path)
-    # Provide ring-analysis defaults via config under `ring_analysis` key.
-    # This benchmark can override `make_plots` without changing the YAML file.
-    ring_cfg = cfg.setdefault("ring_analysis", {})
-    ring_cfg["make_plots"] = True  # always produce plots for the benchmark outputs
     mask_path = args.mask_path.strip() if args.mask_path else None
     out_dir_legacy = Path(args.out_dir_legacy)
     out_dir_ring = Path(args.out_dir_ring)
@@ -215,6 +211,8 @@ def main() -> int:
             rings_arr = res2.get("rings")
             row["ring_rings_count"] = int(rings_arr.shape[0]) if rings_arr is not None else None
             row["ring_rings_nonzero"] = bool(rings_arr is not None and getattr(rings_arr, "size", 0) > 0)
+            row["ring_initial_dist_guess_m"] = _safe_float(res2.get("initial_dist_guess_m"))
+            row["ring_initial_k_m_per_px"] = _safe_float(res2.get("initial_dist_guess_k_m_per_px"))
 
             ring_refined_path = out_dir_ring / f"{stem}_ring_refined.yml"
             with ring_refined_path.open("w", encoding="utf-8") as f:

@@ -708,6 +708,10 @@ def subtract_buffer(
         if match_tail_ops is None:
             match_tail_ops = dict()
         algo_ops.update(match_tail_ops)
+        # Defaults include both keys; update() may only set q_range_abs, leaving the
+        # default q_range_rel in place — clear the relative range when absolute is set.
+        if algo_ops['q_range_abs'] is not None:
+            algo_ops['q_range_rel'] = None
 
         assert algo_ops['q_range_abs'] is None or algo_ops['q_range_rel'] is None, 'cant set both q_range_abs and q_range_rel'
 

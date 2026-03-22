@@ -60,7 +60,7 @@ def main() -> int:
 
     for tif_path in tif_paths:
         img = read_from_tiff(tif_path)
-        (center_y, center_x), rings_pixels = ring_analysis(
+        (center_y, center_x), rings_pixels, ring_radii = ring_analysis(
             img,
             gauss_sigma=args.gauss_sigma,
             div_gmm_components=args.gmm_components,
@@ -75,11 +75,14 @@ def main() -> int:
             final_skip_first_ring=True,
             final_keep_smallest_k=3,
             final_interval_overlap_tol_px=0.0,
+            plots_out_dir=WORKSPACE_ROOT / "debug" / "ring_sources_gmm_cli",
+            plot_stem=tif_path.stem,
         )
 
         n_rings = 0 if rings_pixels.size == 0 else int(np.unique(rings_pixels[:, 2].astype(int)).size)
         print(
-            f"{tif_path.name}: rings={n_rings} refined_center_yx=({center_y:.2f},{center_x:.2f})",
+            f"{tif_path.name}: rings={n_rings} refined_center_yx=({center_y:.2f},{center_x:.2f}) "
+            f"final_ring_radii[r_out,r_in]_px={ring_radii!r}",
             flush=True,
         )
 

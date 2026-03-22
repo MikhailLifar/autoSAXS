@@ -7,17 +7,18 @@ from __future__ import annotations
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
 import yaml
 
+from .autocalib import autocalib_ring_analysis
 from .event_bus import EventBus, EventType
 from .viewer import PLTViewer
 from .processor import (
     IntegratorExtended,
-    autocalib,
     integrate_2d_to_1d,
     subtract_buffer,
 )
@@ -67,9 +68,14 @@ def calibrate(
     use_cache: bool = True,
 ) -> Dict[str, str]:
     """
-    Calibrate detector geometry from a calibration image. Public entry point.
+    Calibrate detector geometry from a calibration image (ring-analysis pipeline). Public entry point.
 
+    Inputs: calib image path, config path, optional mask; outputs are written under ``output_dir``.
     Positional args mirror CLI: calib_image, config_path.
+
+    Returns paths including ``integrator_dir``, ``refined_path``, ``calibration_plots_dir``
+    (ring-analysis debug PNGs, q/I curve, and mask plot), ``calibration_curve_plot_path``,
+    and ``calibration_mask_path``.
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
@@ -94,13 +100,14 @@ def _calibrate_paths(
     sample_index: int = 0,
 ) -> Dict[str, str]:
     """
-    Calibrate detector geometry from a calibration image (center refinement, ring search,
-    geometry refinement). Produces an integrator and refined parameters for 2D→1D integration.
+    Calibrate detector geometry via ``autocalib_ring_analysis`` (Laplacian/GMM rings + ``refine``).
 
     Inputs: input_paths['calib_image'], input_paths.get('config') (path to config file),
-    optional input_paths.get('mask'). config can also be passed in-memory. Notable kwargs: none.
+    optional input_paths.get('mask'). config can also be passed in-memory. Requires ``ring_analysis``
+    and ``detector_geometry`` in config (see ``repos/tests/config_autocalib_ring_analysis_defaults.yaml``).
 
-    Outputs: integrator_dir, refined_path, calibration_plot_path, calibration_mask_path.
+    Outputs: integrator_dir, refined_path, calibration_plots_dir, calibration_curve_plot_path,
+    calibration_mask_path.
     """
     calib_image = input_paths.get("calib_image")
     if isinstance(calib_image, list):
@@ -117,28 +124,29 @@ def _calibrate_paths(
     if isinstance(mask_path, list):
         mask_path = mask_path[0] if mask_path else None
     if event_bus:
-        event_bus.publish(EventType.MESSAGE, {"text": "Calibration: ring search…"})
-    result = autocalib(calib_image, cfg, mask_path=mask_path)
+        event_bus.publish(
+            EventType.MESSAGE,
+            {"text": "Calibration: ring analysis and geometry refinement…"},
+        )
     os.makedirs(output_dir, exist_ok=True)
+    calibration_plots_dir = os.path.join(output_dir, "calibration_plots")
+    os.makedirs(calibration_plots_dir, exist_ok=True)
+    stem = os.path.splitext(os.path.basename(calib_image))[0]
+    calibration_curve_plot_path = os.path.join(calibration_plots_dir, "calibration_curve.png")
+    result = autocalib_ring_analysis(
+        calib_image,
+        cfg,
+        mask_path=mask_path,
+        plots_out_dir=Path(calibration_plots_dir),
+        plot_stem=stem,
+        calibration_curve_plot_path=Path(calibration_curve_plot_path),
+    )
     integrator_dir = os.path.join(output_dir, "integrator")
     result["integrator"].to_disk(integrator_dir)
     refined_path = os.path.join(output_dir, "refined.yml")
     with open(refined_path, "w") as f:
         yaml.dump(result["refined"], f, default_flow_style=False)
-    calibration_plot_path = os.path.join(output_dir, "calibration.png")
-    calibration_mask_path = os.path.join(output_dir, "calibration_mask.png")
-    PLTViewer.view_calibration(
-        img_data=result["calib_data"],
-        tiff_path=calib_image,
-        center_y_px=result["center_y_px"],
-        center_x_px=result["center_x_px"],
-        clusters=result["clusters"],
-        rings=result["rings"],
-        curve_calibrated=result["curve_calibrated"],
-        theoretical_peaks=result["theoretical_peaks"],
-        show_duration=None,
-        plotFilePath=calibration_plot_path,
-    )
+    calibration_mask_path = os.path.join(calibration_plots_dir, "calibration_mask.png")
     PLTViewer.view_mask(
         result["calib_data"],
         result["integrator"].mask,
@@ -149,7 +157,8 @@ def _calibrate_paths(
     return {
         "integrator_dir": integrator_dir,
         "refined_path": refined_path,
-        "calibration_plot_path": calibration_plot_path,
+        "calibration_plots_dir": calibration_plots_dir,
+        "calibration_curve_plot_path": calibration_curve_plot_path,
         "calibration_mask_path": calibration_mask_path,
     }
 

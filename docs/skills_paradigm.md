@@ -217,7 +217,7 @@ Each skill is a single processing routine with the standard signature (§4.1), a
 
 | Skill | Purpose | Main inputs | Main outputs |
 |-------|---------|-------------|--------------|
-| **calibrate** | Calibrate detector geometry from a calibration image (center refinement, ring search, geometry refinement). Produces an integrator and refined parameters for 2D→1D integration. | `calib_image`, `config`, optional `mask` | `integrator_dir`, `refined_path`, `calibration_plot_path`, `calibration_mask_path` |
+| **calibrate** | Calibrate detector geometry via ring analysis (Laplacian/GMM, DBSCAN, ``refine``). All calibration plots (ring pipeline, q/I curve, mask) under ``calibration_plots_dir``. | `calib_image`, `config` (with ``ring_analysis`` + ``detector_geometry``), optional `mask` | `integrator_dir`, `refined_path`, `calibration_plots_dir`, `calibration_curve_plot_path`, `calibration_mask_path` |
 | **integrate** | Integrate 2D SAXS images to 1D curves (q, I, σ) using a calibrated integrator. | `images` (2D), `integrator_dir` | `integrated_1d` (list of paths) |
 | **subtract** | Subtract buffer from sample 1D profile (e.g. match-tail scaling), write subtracted curve. | `sample_1d`, `buffer_1d` (paired or by convention) | `subtracted_1d`, `diff_plot_path`, `sub_plot_path` |
 | **plot** | Generate standard plots for a 1D profile: Guinier, Kratky, log–log; optionally write a Guinier-range .dat. | `profile` (1D), optional guinier region | `guinier_plot_path`, `kratky_plot_path`, `loglog_plot_path`, optional `guinier_dat_path` |

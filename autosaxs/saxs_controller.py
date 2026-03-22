@@ -680,10 +680,10 @@ class Controller:
                     context.append_path('calib_mask', mask_path)
             if calibrant_path:
                 out_cal = skill.calibrate(
-                    input_paths={'calib_image': calibrant_path, 'config': config_path, 'mask': mask_path},
-                    output_dir=directory,
-                    config=config,
-                    event_bus=self._event_bus,
+                    calibrant_path,
+                    config_path,
+                    directory,
+                    mask=mask_path,
                     use_cache=fast_forward,
                 )
                 integrator_dir = out_cal['integrator_dir']
@@ -784,14 +784,10 @@ class Controller:
                 buffer_2d_to_1d = {}
                 sample_2d_to_1d = {}
                 if buffer_paths:
-                    list_inputs_buf = [
-                        {'images': [p], 'integrator_dir': integrator_dir} for p in buffer_paths
-                    ]
                     out_buf = skill.integrate(
-                        input_paths=list_inputs_buf,
-                        output_dir=averaged_dir,
-                        config=config,
-                        event_bus=self._event_bus,
+                        buffer_paths,
+                        integrator_dir,
+                        averaged_dir,
                         use_cache=fast_forward,
                     )
                     integrated_buf = out_buf['integrated_1d']
@@ -799,14 +795,10 @@ class Controller:
                     buffer_2d_to_1d = dict(zip(buffer_paths, integrated_buf_list))
                     _path_debug("integrate output buffer_2d_to_1d values (1d paths)", list(buffer_2d_to_1d.values()))
                 if sample_paths:
-                    list_inputs_sam = [
-                        {'images': [p], 'integrator_dir': integrator_dir} for p in sample_paths
-                    ]
                     out_sam = skill.integrate(
-                        input_paths=list_inputs_sam,
-                        output_dir=averaged_dir,
-                        config=config,
-                        event_bus=self._event_bus,
+                        sample_paths,
+                        integrator_dir,
+                        averaged_dir,
                         use_cache=fast_forward,
                     )
                     integrated_sam = out_sam['integrated_1d']
@@ -899,30 +891,24 @@ class Controller:
 
                 subtracted_dir = os.path.join(directory, 'subtracted')
                 q_range_abs = context.config.get('sub', {}).get('q_range_abs') if context.config else None
-                match_tail_ops = {'q_range_rel': None, 'q_range_abs': q_range_abs}
-                list_inputs_subtract = [
-                    {'sample_1d': s_p, 'buffer_1d': b_p} for (s_p, b_p) in aligned_pairs
-                ]
-                out_sub = skill.subtract(
-                    input_paths=list_inputs_subtract,
-                    output_dir=subtracted_dir,
-                    config=config,
-                    event_bus=self._event_bus,
-                    use_cache=fast_forward,
-                    match_tail_ops=match_tail_ops,
-                )
-                subtracted_1d = out_sub['subtracted_1d']
-                profile_paths = subtracted_1d if isinstance(subtracted_1d, list) else [subtracted_1d]
-                sub_plot_paths = out_sub.get('sub_plot_path')
-                if sub_plot_paths is not None:
-                    profile_pic_paths.extend(
-                        sub_plot_paths if isinstance(sub_plot_paths, list) else [sub_plot_paths]
+                q_sub_min = q_range_abs[0] if q_range_abs else None
+                q_sub_max = q_range_abs[1] if q_range_abs else None
+                for s_p, b_p in aligned_pairs:
+                    out_sub = skill.subtract(
+                        s_p,
+                        b_p,
+                        subtracted_dir,
+                        q_min=q_sub_min,
+                        q_max=q_sub_max,
+                        use_cache=fast_forward,
                     )
-                diff_plot_paths_raw = out_sub.get('diff_plot_path')
-                if diff_plot_paths_raw is not None:
-                    diff_plot_paths.extend(
-                        diff_plot_paths_raw if isinstance(diff_plot_paths_raw, list) else [diff_plot_paths_raw]
-                    )
+                    profile_paths.append(out_sub['subtracted_1d'])
+                    sp = out_sub.get('sub_plot_path')
+                    if sp:
+                        profile_pic_paths.append(sp)
+                    dp = out_sub.get('diff_plot_path')
+                    if dp:
+                        diff_plot_paths.append(dp)
 
                 context.extend_paths('buffer_1d', buffer_paths_1d)
                 context.extend_paths('sample_1d', sample_paths_1d)
@@ -981,20 +967,14 @@ class Controller:
             if 'plots' in steps and basename_list and profile_paths:
                 plots_dir = os.path.join(directory, 'plots')
                 try:
-                    list_inputs_plot = [{'profile': p} for p in profile_paths]
-                    out_plot = skill.plot(
-                        input_paths=list_inputs_plot,
-                        output_dir=plots_dir,
-                        config=config,
-                        event_bus=self._event_bus,
-                        use_cache=fast_forward,
-                    )
-                    guinier = out_plot.get('guinier_plot_path')
-                    kratky = out_plot.get('kratky_plot_path')
-                    loglog = out_plot.get('loglog_plot_path')
-                    guinier_list = guinier if isinstance(guinier, list) else [guinier] if guinier else []
-                    kratky_list = kratky if isinstance(kratky, list) else [kratky] if kratky else []
-                    loglog_list = loglog if isinstance(loglog, list) else [loglog] if loglog else []
+                    guinier_list = []
+                    kratky_list = []
+                    loglog_list = []
+                    for p in profile_paths:
+                        out_plot = skill.plot(p, plots_dir, use_cache=fast_forward)
+                        guinier_list.append(out_plot.get('guinier_plot_path'))
+                        kratky_list.append(out_plot.get('kratky_plot_path'))
+                        loglog_list.append(out_plot.get('loglog_plot_path'))
                     for idx, basename in enumerate(basename_list):
                         if idx < len(guinier_list) and idx < len(kratky_list) and idx < len(loglog_list):
                             plots_by_basename[basename] = [
@@ -1047,7 +1027,7 @@ class Controller:
             else:
                 selected_profiles = {}
 
-            # Batch run mixture, bodies, dammif so apply_batch creates per-sample subdirs
+            # Run mixture, bodies, dammif per selected profile (public skill entry points)
             selected_order = sorted(selected_profiles)
             mixture_results_by_idx = {}
             bodies_dirs_list = []
@@ -1056,67 +1036,57 @@ class Controller:
                 if 'mixture' in steps:
                     try:
                         q_range_nm = context.config.get('mixture', {}).get('q_range_nm') if context.config else None
-                        list_mixture = [{'profile': selected_profiles[b]['path']} for b in selected_order]
-                        out_mixture = skill.fit_mixture(
-                            input_paths=list_mixture,
-                            output_dir=os.path.join(directory, 'mixture'),
-                            config=config,
-                            event_bus=self._event_bus,
-                            use_cache=fast_forward,
-                            q_range_nm=q_range_nm,
-                        )
-                        os_list = out_mixture.get('output_subdir')
-                        comp_list = out_mixture.get('comparison_path')
-                        dist_list = out_mixture.get('distributions_path')
-                        csv_list = out_mixture.get('results_csv_path')
-                        os_list = os_list if isinstance(os_list, list) else [os_list] if os_list else []
-                        comp_list = comp_list if isinstance(comp_list, list) else [comp_list] if comp_list else []
-                        dist_list = dist_list if isinstance(dist_list, list) else [dist_list] if dist_list else []
-                        csv_list = csv_list if isinstance(csv_list, list) else [csv_list] if csv_list else []
-                        for i in range(len(selected_order)):
-                            context.append_path('mixture', os_list[i] if i < len(os_list) else '')
+                        q_min_nm = q_range_nm[0] if q_range_nm and len(q_range_nm) >= 2 else None
+                        q_max_nm = q_range_nm[1] if q_range_nm and len(q_range_nm) >= 2 else None
+                        mixture_root = os.path.join(directory, 'mixture')
+                        for i, b in enumerate(selected_order):
+                            out_mixture = skill.fit_mixture(
+                                selected_profiles[b]['path'],
+                                os.path.join(mixture_root, b),
+                                q_min_nm=q_min_nm,
+                                q_max_nm=q_max_nm,
+                                use_cache=fast_forward,
+                            )
+                            os_sub = out_mixture.get('output_subdir', '')
+                            context.append_path('mixture', os_sub)
                             mixture_results_by_idx[i] = {
-                                'output_subdir': os_list[i] if i < len(os_list) else '',
-                                'comparison_path': comp_list[i] if i < len(comp_list) else None,
-                                'distributions_path': dist_list[i] if i < len(dist_list) else None,
-                                'results_csv_path': csv_list[i] if i < len(csv_list) else None,
+                                'output_subdir': os_sub,
+                                'comparison_path': out_mixture.get('comparison_path'),
+                                'distributions_path': out_mixture.get('distributions_path'),
+                                'results_csv_path': out_mixture.get('results_csv_path'),
                             }
                     except Exception as e:
                         self._send_message(f"mixture failed: {e}")
                 if 'bodies' in steps:
                     try:
-                        list_bodies = [{'profile': selected_profiles[b]['path']} for b in selected_order]
-                        out_bodies = skill.fit_bodies(
-                            input_paths=list_bodies,
-                            output_dir=os.path.join(directory, 'bodies'),
-                            config=config,
-                            event_bus=self._event_bus,
-                            use_cache=fast_forward,
-                        )
-                        os_list = out_bodies.get('output_subdir')
-                        os_list = os_list if isinstance(os_list, list) else [os_list] if os_list else []
-                        bodies_dirs_list = os_list
-                        for d in bodies_dirs_list:
+                        bodies_root = os.path.join(directory, 'bodies')
+                        bodies_dirs_list = []
+                        for b in selected_order:
+                            out_bodies = skill.fit_bodies(
+                                selected_profiles[b]['path'],
+                                os.path.join(bodies_root, b),
+                                use_cache=fast_forward,
+                            )
+                            d = out_bodies.get('output_subdir', '')
+                            bodies_dirs_list.append(d)
                             context.append_path('bodies', d)
                     except Exception as e:
                         self._send_message(f"bodies failed: {e}")
                 if 'dammif' in steps:
                     try:
-                        list_dammif = [
-                            {'profile': selected_profiles[b]['path'], 'gnom_path': descriptors_by_basename.get(b, (None, None))[1] or selected_profiles[b]['path']}
-                            for b in selected_order
-                        ]
-                        out_dammif = skill.fit_dammif(
-                            input_paths=list_dammif,
-                            output_dir=os.path.join(directory, 'dammif'),
-                            config=config,
-                            event_bus=self._event_bus,
-                            use_cache=fast_forward,
-                        )
-                        os_list = out_dammif.get('output_subdir')
-                        os_list = os_list if isinstance(os_list, list) else [os_list] if os_list else []
-                        dammif_dirs_list = os_list
-                        for d in dammif_dirs_list:
+                        dammif_root = os.path.join(directory, 'dammif')
+                        dammif_dirs_list = []
+                        for b in selected_order:
+                            gnom_p = descriptors_by_basename.get(b, (None, None))[1]
+                            prof_p = selected_profiles[b]['path']
+                            out_dammif = skill.fit_dammif(
+                                prof_p,
+                                os.path.join(dammif_root, b),
+                                gnom_path=gnom_p or prof_p,
+                                use_cache=fast_forward,
+                            )
+                            d = out_dammif.get('output_subdir', '')
+                            dammif_dirs_list.append(d)
                             context.append_path('dammif', d)
                     except Exception as e:
                         self._send_message(f"dammif failed: {e}")
