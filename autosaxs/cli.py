@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import inspect
 import sys
-from typing import Any, Callable, Dict, List, Optional, Tuple, get_args, get_origin
+from typing import Any, Callable, Dict, List, Optional, Tuple, get_args, get_origin, get_type_hints
 
 
 def _to_kebab(s: str) -> str:
@@ -33,6 +33,20 @@ def _is_optional_tuple2_annotation(ann: Any) -> bool:
     return False
 
 
+def _is_optional_scalar_annotation(ann: Any, scalar_type: Any) -> bool:
+    """
+    True for `scalar_type` and `Optional[scalar_type]` (including Union[scalar_type, NoneType]).
+    """
+    if ann is scalar_type:
+        return True
+    origin = get_origin(ann)
+    if origin is getattr(__import__("typing"), "Union", None) and get_args(ann):
+        args = get_args(ann)
+        non_none = [a for a in args if a is not type(None)]  # noqa: E721
+        return len(non_none) == 1 and non_none[0] is scalar_type
+    return False
+
+
 def _skill_functions() -> Dict[str, Callable[..., Any]]:
     from . import skill as skill_mod
 
@@ -51,6 +65,13 @@ def _add_skill_subparser(subparsers: argparse._SubParsersAction, name: str, fn: 
     p = subparsers.add_parser(name, help=(inspect.getdoc(fn) or "").splitlines()[0] if inspect.getdoc(fn) else None)
     p.set_defaults(_autosaxs_fn=fn)
 
+    # Resolve postponed annotations ("from __future__ import annotations"), so
+    # `Optional[float]` etc. are real types and not strings.
+    try:
+        type_hints = get_type_hints(fn)
+    except Exception:
+        type_hints = {}
+
     # Positional args: parameters without defaults, excluding keyword-only.
     for param in sig.parameters.values():
         if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
@@ -64,7 +85,8 @@ def _add_skill_subparser(subparsers: argparse._SubParsersAction, name: str, fn: 
 
         arg_name = param.name
         kwargs: Dict[str, Any] = {}
-        if _is_list_annotation(param.annotation) or arg_name in ("images",):
+        ann = type_hints.get(param.name, param.annotation)
+        if _is_list_annotation(ann) or arg_name in ("images",):
             kwargs["nargs"] = "+"
         p.add_argument(arg_name, **kwargs)
 
@@ -83,7 +105,9 @@ def _add_skill_subparser(subparsers: argparse._SubParsersAction, name: str, fn: 
                 p.add_argument("--output-dir", dest="output_dir", default=param.default, help="Output directory")
                 continue
 
-            if _is_optional_tuple2_annotation(param.annotation) or param.name.endswith("_range_nm"):
+            ann = type_hints.get(param.name, param.annotation)
+
+            if _is_optional_tuple2_annotation(ann) or param.name.endswith("_range_nm"):
                 p.add_argument(opt_name, dest=param.name, nargs=2, type=float)
                 continue
 
@@ -94,10 +118,10 @@ def _add_skill_subparser(subparsers: argparse._SubParsersAction, name: str, fn: 
                     p.add_argument(opt_name, dest=param.name, action="store_false")
                 continue
 
-            if param.annotation in (int, Optional[int]):
+            if _is_optional_scalar_annotation(ann, int):
                 p.add_argument(opt_name, dest=param.name, type=int, default=param.default)
                 continue
-            if param.annotation in (float, Optional[float]):
+            if _is_optional_scalar_annotation(ann, float):
                 p.add_argument(opt_name, dest=param.name, type=float, default=param.default)
                 continue
 
