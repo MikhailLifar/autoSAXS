@@ -879,6 +879,11 @@ class Controller:
             if 'subtraction' in steps:
                 _path_debug("subtraction alignment input sample_paths_1d", sample_paths_1d)
                 _path_debug("subtraction alignment input buffer_paths_1d", buffer_paths_1d)
+                # map_sample_files_to_buffer_files() assumes each buffer path appears once.
+                # If buffer_paths_1d was rebuilt from aligned pairs, a single buffer can be repeated
+                # across multiple sample basenames; clean duplicates before matching.
+                buffer_paths_1d = _dedupe_sort_paths(buffer_paths_1d) if buffer_paths_1d else []
+                sample_paths_1d = _dedupe_sort_paths(sample_paths_1d) if sample_paths_1d else []
                 alignment_res = map_sample_files_to_buffer_files(sample_paths_1d, buffer_paths_1d)
                 _path_debug("subtraction alignment_res aligned_pairs", pairs=alignment_res['aligned_pairs'])
                 _path_debug("subtraction alignment_res overlapped", pairs=alignment_res['overlapped'])

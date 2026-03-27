@@ -247,19 +247,23 @@ class PLTViewer(Viewer):
         axs[0, 0].set_xlabel("Pixel X")
         axs[0, 0].set_ylabel("Pixel Y")
 
-        axs[0, 1].imshow(mask, cmap='grey', origin='lower')
-        axs[0, 1].set_title(f"Mask")
+        # pyFAI convention: True means masked.
+        mask_vis_masked = np.asarray(mask, dtype=bool)
+        # Display panel now follows pyFAI convention too: 1=masked, 0=unmasked.
+        mask_pyfai_convention = mask_vis_masked.astype(np.uint8)
+        axs[0, 1].imshow(mask_pyfai_convention, cmap='grey', origin='lower', vmin=0, vmax=1)
+        axs[0, 1].set_title("Mask (pyFAI convention: 1=masked, 0=unmasked)")
         axs[0, 1].set_xlabel("Pixel X")
         axs[0, 1].set_ylabel("Pixel Y")
 
         img_data_masked = np.copy(img_data)
-        img_data_masked[mask] = 0.0
+        img_data_masked[mask_vis_masked] = 0.0
         axs[1, 0].imshow(np.log1p(img_data_masked), cmap='viridis', origin='lower')
         axs[1, 0].set_title(f"Masked 2D SAXS Data, masked as zeros")
         axs[1, 0].set_xlabel("Pixel X")
         axs[1, 0].set_ylabel("Pixel Y")
 
-        img_data_masked[mask] = np.nan
+        img_data_masked[mask_vis_masked] = np.nan
         axs[1, 1].imshow(np.log1p(img_data_masked), cmap='viridis', origin='lower')
         axs[1, 1].set_title(f"Masked 2D SAXS Data, masked as missing")
         axs[1, 1].set_xlabel("Pixel X")

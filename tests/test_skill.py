@@ -31,13 +31,15 @@ from autosaxs.skill import (
     fit_mixture,
     guinier_analysis,
     integrate,
+    integrate_proxy,
     plot,
+    plot_2d,
     read_cache,
     run_with_cache,
     subtract,
     write_cache,
 )
-from autosaxs.utils import write_saxs, write_data
+from autosaxs.utils import read_saxs, write_saxs, write_data
 
 
 # ---------------------------------------------------------------------------
@@ -102,8 +104,10 @@ def test_check_output_integrity_ok():
 @pytest.mark.parametrize("skill_name,skill_fn", [
     ("calibrate", calibrate),
     ("integrate", integrate),
+    ("integrate_proxy", integrate_proxy),
     ("subtract", subtract),
     ("plot", plot),
+    ("plot_2d", plot_2d),
     ("guinier_analysis", guinier_analysis),
     ("fit_mixture", fit_mixture),
     ("fit_bodies", fit_bodies),
@@ -188,6 +192,189 @@ def test_plot_cache_hit_on_second_run():
 
 
 # ---------------------------------------------------------------------------
+# plot_2d: contract test with minimal data
+# ---------------------------------------------------------------------------
+def test_plot_2d_contract(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        img_a = np.zeros((16, 16), dtype=np.float32)
+        img_a[4:12, 4:12] = 10.0
+        img_b = np.zeros((16, 16), dtype=np.float32)
+        img_b[2:10, 2:10] = 5.0
+        img_dir = os.path.join(tmp, "raw")
+        os.makedirs(img_dir, exist_ok=True)
+        img_path_a = os.path.join(img_dir, "a.tif")
+        img_path_b = os.path.join(img_dir, "b.tif")
+        Path(img_path_a).write_bytes(b"dummy")
+        Path(img_path_b).write_bytes(b"dummy")
+
+        def _fake_read(path):
+            return img_a if path.endswith("a.tif") else img_b
+
+        monkeypatch.setattr("autosaxs.skill.read_from_tiff", _fake_read)
+        out_dir = os.path.join(tmp, "plots2d")
+        result = plot_2d(img_dir, output_dir=out_dir, use_cache=False)
+        assert "plot_2d_png" in result
+        assert isinstance(result["plot_2d_png"], list)
+        assert len(result["plot_2d_png"]) == 2
+        for p in result["plot_2d_png"]:
+            assert os.path.isfile(p)
+
+
+def test_plot_2d_cache_hit_on_second_run(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        img = np.zeros((12, 12), dtype=np.float32)
+        img[3:9, 3:9] = 7.0
+        img_dir = os.path.join(tmp, "raw")
+        os.makedirs(img_dir, exist_ok=True)
+        img_path = os.path.join(img_dir, "image.tif")
+        Path(img_path).write_bytes(b"dummy")
+        monkeypatch.setattr("autosaxs.skill.read_from_tiff", lambda _: img)
+        out_dir = os.path.join(tmp, "plot2d_out")
+        r1 = plot_2d(img_dir, output_dir=out_dir, use_cache=True)
+        assert "from_cache" not in r1 or r1.get("from_cache") is False
+        r2 = plot_2d(img_dir, output_dir=out_dir, use_cache=True)
+        fc = r2.get("from_cache")
+        assert fc is True or fc == [True], "second run should be served from cache"
+        v1, v2 = r1.get("plot_2d_png"), r2.get("plot_2d_png")
+        assert v2 == v1, "plot_2d_png should match between runs"
+
+
+def test_plot_2d_single_file_contract(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        img = np.zeros((10, 10), dtype=np.float32)
+        img[2:8, 2:8] = 3.0
+        img_path = os.path.join(tmp, "single.tif")
+        Path(img_path).write_bytes(b"dummy")
+        monkeypatch.setattr("autosaxs.skill.read_from_tiff", lambda _: img)
+        out_dir = os.path.join(tmp, "plots2d_single")
+        result = plot_2d(img_path, output_dir=out_dir, use_cache=False)
+        assert "plot_2d_png" in result
+        assert isinstance(result["plot_2d_png"], str)
+        assert os.path.isfile(result["plot_2d_png"])
+
+
+# ---------------------------------------------------------------------------
+# integrate_proxy: contract tests
+# ---------------------------------------------------------------------------
+def test_integrate_proxy_single_file_contract(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        img = np.zeros((18, 18), dtype=np.float32)
+        img[6:12, 7:11] = 9.0
+        img_path = os.path.join(tmp, "single.tif")
+        Path(img_path).write_bytes(b"dummy")
+        monkeypatch.setattr("autosaxs.skill.read_from_tiff", lambda _: img)
+        out_dir = os.path.join(tmp, "int_proxy")
+        result = integrate_proxy(
+            img_path,
+            output_dir=out_dir,
+            cy=8.5,
+            cx=8.5,
+            use_cache=False,
+        )
+        assert "integrated_1d" in result
+        assert isinstance(result["integrated_1d"], str)
+        assert os.path.isfile(result["integrated_1d"])
+        assert os.path.isfile(os.path.join(out_dir, "single_center.png"))
+        _q, _I, _sigma, meta = read_saxs(result["integrated_1d"])
+        assert meta.get("x_axis") == "r_px"
+        assert meta.get("x_axis_unit") == "pixel"
+
+
+def test_integrate_proxy_directory_contract(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        img_a = np.zeros((16, 16), dtype=np.float32)
+        img_a[4:10, 5:11] = 5.0
+        img_b = np.zeros((16, 16), dtype=np.float32)
+        img_b[5:12, 4:9] = 8.0
+        img_dir = os.path.join(tmp, "raw")
+        os.makedirs(img_dir, exist_ok=True)
+        img_path_a = os.path.join(img_dir, "a.tif")
+        img_path_b = os.path.join(img_dir, "b.tif")
+        Path(img_path_a).write_bytes(b"dummy")
+        Path(img_path_b).write_bytes(b"dummy")
+        monkeypatch.setattr("autosaxs.skill.read_from_tiff", lambda p: img_a if p.endswith("a.tif") else img_b)
+        out_dir = os.path.join(tmp, "int_proxy_out")
+        result = integrate_proxy(
+            img_dir,
+            output_dir=out_dir,
+            cy=8.0,
+            cx=8.0,
+            use_cache=False,
+        )
+        assert "integrated_1d" in result
+        assert isinstance(result["integrated_1d"], list)
+        assert len(result["integrated_1d"]) == 2
+        for p in result["integrated_1d"]:
+            assert os.path.isfile(p)
+
+
+def test_integrate_proxy_raises_for_half_defined_center(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        img = np.zeros((8, 8), dtype=np.float32)
+        img_path = os.path.join(tmp, "single.tif")
+        Path(img_path).write_bytes(b"dummy")
+        monkeypatch.setattr("autosaxs.skill.read_from_tiff", lambda _: img)
+        with pytest.raises(ValueError):
+            integrate_proxy(
+                img_path,
+                output_dir=os.path.join(tmp, "out"),
+                cy=4.0,
+                cx=None,
+                use_cache=False,
+            )
+
+
+def test_integrate_proxy_center_estimation_failure_returns_empty(monkeypatch, capsys):
+    with tempfile.TemporaryDirectory() as tmp:
+        img = np.zeros((10, 10), dtype=np.float32)
+        img[3:8, 3:8] = 2.0
+        img_path = os.path.join(tmp, "single.tif")
+        Path(img_path).write_bytes(b"dummy")
+        monkeypatch.setattr("autosaxs.skill.read_from_tiff", lambda _: img)
+        monkeypatch.setattr(
+            "autosaxs.skill._estimate_center_radial_symmetry",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("fail")),
+        )
+        out_dir = os.path.join(tmp, "int_proxy_empty")
+        result = integrate_proxy(
+            img_path,
+            output_dir=out_dir,
+            cy=None,
+            cx=None,
+            use_cache=False,
+        )
+        assert result.get("integrated_1d") == []
+        assert not any(p.endswith(".dat") for p in os.listdir(out_dir))
+        err = capsys.readouterr().err
+        assert "Warning: integrate_proxy could not estimate center" in err
+
+
+def test_integrate_proxy_with_mask(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        img = np.ones((20, 20), dtype=np.float32)
+        img[9:12, 9:12] = 20.0
+        mask = np.zeros((20, 20), dtype=np.float32)
+        mask[:, :10] = 1.0
+        img_path = os.path.join(tmp, "single.tif")
+        mask_path = os.path.join(tmp, "mask.npy")
+        Path(img_path).write_bytes(b"dummy")
+        np.save(mask_path, mask.astype(bool))
+
+        monkeypatch.setattr("autosaxs.skill.read_from_tiff", lambda _: img)
+        out_dir = os.path.join(tmp, "int_proxy_mask")
+        result = integrate_proxy(
+            img_path,
+            output_dir=out_dir,
+            mask=mask_path,
+            cy=10.0,
+            cx=10.0,
+            use_cache=False,
+        )
+        assert "integrated_1d" in result
+        assert os.path.isfile(result["integrated_1d"])
+
+
+# ---------------------------------------------------------------------------
 # calibrate: contract (requires config and calib image; skip if no data)
 # ---------------------------------------------------------------------------
 def test_calibrate_raises_without_calib_image():
@@ -198,6 +385,118 @@ def test_calibrate_raises_without_calib_image():
             output_dir=tempfile.mkdtemp(),
             use_cache=False,
         )
+
+
+def test_calibrate_rejects_unknown_calibrant():
+    with pytest.raises(ValueError, match="Unknown calibrant"):
+        calibrate(
+            calib_image="",
+            config_path="",
+            output_dir=tempfile.mkdtemp(),
+            calibrant="not_a_real_calibrant",
+            use_cache=False,
+        )
+
+
+def test_calibrate_requires_mask_for_default_from_file_mode():
+    with tempfile.TemporaryDirectory() as tmp:
+        calib_path = os.path.join(tmp, "calib.tif")
+        cfg_path = os.path.join(tmp, "config.yml")
+        Path(calib_path).write_bytes(b"dummy")
+        Path(cfg_path).write_text("dummy: true")
+
+        with pytest.raises(ValueError, match="mask path is required"):
+            calibrate(
+                calib_image=calib_path,
+                config_path=cfg_path,
+                output_dir=os.path.join(tmp, "out"),
+                use_cache=False,
+            )
+
+
+def test_calibrate_default_mask_mode_is_from_file(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        calib_path = os.path.join(tmp, "calib.tif")
+        cfg_path = os.path.join(tmp, "config.yml")
+        mask_path = os.path.join(tmp, "mask.npy")
+        Path(calib_path).write_bytes(b"dummy")
+        Path(cfg_path).write_text("dummy: true")
+        np.save(mask_path, np.zeros((4, 4), dtype=bool))
+
+        monkeypatch.setattr("autosaxs.skill.load_config", lambda _: {"calibrant_name": "AgBh"})
+
+        class _DummyIntegrator:
+            mask = None
+
+            def to_disk(self, path):
+                os.makedirs(path, exist_ok=True)
+                Path(os.path.join(path, "ai_params.json")).write_text("{}")
+                Path(os.path.join(path, "detector_params.json")).write_text("{}")
+
+        def _fake_autocalib_ring_analysis(_calib_image, cfg, **_kwargs):
+            assert cfg["mask_config"]["mode"] == "from_file"
+            return {
+                "integrator": _DummyIntegrator(),
+                "refined": {"dist": 0.7},
+                "calib_data": np.zeros((8, 8), dtype=np.float32),
+            }
+
+        monkeypatch.setattr("autosaxs.skill.autocalib_ring_analysis", _fake_autocalib_ring_analysis)
+        monkeypatch.setattr("autosaxs.skill.PLTViewer.view_mask", lambda *args, **kwargs: None)
+
+        out = calibrate(
+            calib_image=calib_path,
+            config_path=cfg_path,
+            output_dir=os.path.join(tmp, "out"),
+            mask=mask_path,
+            use_cache=False,
+        )
+        assert os.path.isdir(out["integrator_dir"])
+
+
+def test_calibrate_always_overrides_config_calibrant(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        calib_path = os.path.join(tmp, "calib.tif")
+        cfg_path = os.path.join(tmp, "config.yml")
+        mask_path = os.path.join(tmp, "mask.npy")
+        Path(calib_path).write_bytes(b"dummy")
+        Path(cfg_path).write_text("dummy: true")
+        np.save(mask_path, np.zeros((4, 4), dtype=bool))
+
+        # Use two distinct known names to ensure override is visible.
+        requested_calibrant = "AgBh"
+
+        monkeypatch.setattr("autosaxs.skill.load_config", lambda _: {"calibrant_name": "Si"})
+
+        class _DummyIntegrator:
+            mask = None
+
+            def to_disk(self, path):
+                os.makedirs(path, exist_ok=True)
+                Path(os.path.join(path, "ai_params.json")).write_text("{}")
+                Path(os.path.join(path, "detector_params.json")).write_text("{}")
+
+        def _fake_autocalib_ring_analysis(calib_image, cfg, **_kwargs):
+            assert calib_image == calib_path
+            assert cfg["calibrant_name"] == requested_calibrant
+            return {
+                "integrator": _DummyIntegrator(),
+                "refined": {"dist": 0.7},
+                "calib_data": np.zeros((8, 8), dtype=np.float32),
+            }
+
+        monkeypatch.setattr("autosaxs.skill.autocalib_ring_analysis", _fake_autocalib_ring_analysis)
+        monkeypatch.setattr("autosaxs.skill.PLTViewer.view_mask", lambda *args, **kwargs: None)
+
+        out = calibrate(
+            calib_image=calib_path,
+            config_path=cfg_path,
+            output_dir=os.path.join(tmp, "out"),
+            mask=mask_path,
+            calibrant=requested_calibrant,
+            use_cache=False,
+        )
+        assert os.path.isdir(out["integrator_dir"])
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +553,8 @@ def test_fit_dammif_raises_without_profile():
             output_dir=tempfile.mkdtemp(),
             use_cache=False,
         )
+
+
 
 
 # ---------------------------------------------------------------------------

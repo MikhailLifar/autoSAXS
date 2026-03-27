@@ -36,13 +36,13 @@ def fast_first_processing(directory: str, steps=None, mask_choice=None):
     """Run pipeline with configurable steps (§3.2.1).
     directory: working directory; required files must exist there.
     steps: list of step names (e.g. ["calibration", "integration"]). Default: calibration, integration, subtraction, simple_analysis, plots.
-    mask_choice: when calibration asks for mask, use this choice: 'a' (automask), 'f' (from file), 'c' (combine). Default: 'c'.
+    mask_choice: when calibration asks for mask, use this choice: 'a' (automask), 'f' (from file), 'c' (combine). Default: 'f'.
     Raises if a required file is missing or on alignment failure.
     """
     if steps is None:
         steps = ["calibration", "integration", "subtraction", "simple_analysis", "plots"]
     if mask_choice is None:
-        mask_choice = "c"
+        mask_choice = "f"
     pipeline_choice = "protein_v0"
 
     def on_pipeline_steps_requested(_data):

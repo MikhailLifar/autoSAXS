@@ -155,7 +155,9 @@ Roles are stable and documented so that scripts (and AI) can wire skills. Exampl
 
 - **calibrate:** `calib_image`, `config`, optional `mask` → `integrator_dir`, `refined_path`.
 - **integrate:** `images` (2D), `integrator_dir` → `integrated_1d` (list).
+- **integrate_proxy:** `image` (single `.tif` path or directory of `.tif`), `config`, optional center args `cy`, `cx` → `integrated_1d` (same output contract as integrate, x-axis in pixels). If `cy` and `cx` are both `None`, center is estimated via `ring_analysis` and its debug plots are written to `output_dir`; if center estimation fails, skill prints a warning, writes no `.dat`, and returns empty output.
 - **subtract:** `sample_1d`, `buffer_1d` (paired or paired by convention) → `subtracted_1d`.
+- **plot_2d:** `image` (2D) → `plot_2d`.
 - **fit_mixture:** `profile` (one 1D curve) → `output_subdir`, `comparison_path`, `distributions_path`, `results_csv_path`.
 
 Exact keys and multiplicity (single path vs list) are defined per skill in code and docstrings; this spec only establishes that inputs and outputs are path dictionaries with semantic role names.
@@ -186,7 +188,7 @@ No UI component calls a skill. The **script** (or a thin orchestrator in the scr
 
 ## 6. Main principles and features
 
-- **Functional style:** Skills are functions, not classes. No `Skill` base class or OOP hierarchy. **Skill names are verbs** (e.g. calibrate, integrate, subtract, plot, fit_mixture, fit_polydisp); the entry points are `calibrate`, `integrate`, etc.
+- **Functional style:** Skills are functions, not classes. No `Skill` base class or OOP hierarchy. **Skill names are verbs** (e.g. calibrate, integrate, subtract, plot, plot_2d, fit_mixtur); the entry points are `calibrate`, `integrate`, etc.
 - **File-system contract:** Inputs and outputs are paths. Internal use of in-memory objects (e.g. integrator) is an implementation detail; the contract is path-in, path-out.
 - **Single side effect:** The only impurity is optional EventBus messaging. Skills do not request files or choices; they only publish **MESSAGE** when given an EventBus.
 - **No built-in pipeline or runner:** Pipelines are not a library abstraction. They are sequences of skill calls in project scripts.
@@ -219,8 +221,10 @@ Each skill is a single processing routine with the standard signature (§4.1), a
 |-------|---------|-------------|--------------|
 | **calibrate** | Calibrate detector geometry via ring analysis (Laplacian/GMM, DBSCAN, ``refine``). All calibration plots (ring pipeline, q/I curve, mask) under ``calibration_plots_dir``. | `calib_image`, `config` (with ``ring_analysis`` + ``detector_geometry``), optional `mask` | `integrator_dir`, `refined_path`, `calibration_plots_dir`, `calibration_curve_plot_path`, `calibration_mask_path` |
 | **integrate** | Integrate 2D SAXS images to 1D curves (q, I, σ) using a calibrated integrator. | `images` (2D), `integrator_dir` | `integrated_1d` (list of paths) |
+| **integrate_proxy** | Integrate 2D `.tif` image input(s) to 1D curves without detector calibration. Public entry point is `integrate_proxy(image, output_dir=".", *, cy=..., cx=..., config=..., npt=..., use_cache=True)`. `image` accepts either a single `.tif` path or a directory of `.tif` files. `cy` and `cx` must be both `None` or both floats. If both are `None`, center is estimated with `ring_analysis` using `config`, and all ring-analysis debug plots are written to `output_dir`. If center estimation fails, the skill prints a warning, writes no `.dat`, and returns empty output. The resulting `.dat` keeps the standard format but uses pixel radius (`r_px`) as x-axis and records this in meta. | `image` (single `.tif` file path or directory of `.tif`), `config`, optional `cy`, `cx` | `integrated_1d` (single path or list; empty when center estimation fails) |
 | **subtract** | Subtract buffer from sample 1D profile (e.g. match-tail scaling), write subtracted curve. | `sample_1d`, `buffer_1d` (paired or by convention) | `subtracted_1d`, `diff_plot_path`, `sub_plot_path` |
 | **plot** | Generate standard plots for a 1D profile: Guinier, Kratky, log–log; optionally write a Guinier-range .dat. | `profile` (1D), optional guinier region | `guinier_plot_path`, `kratky_plot_path`, `loglog_plot_path`, optional `guinier_dat_path` |
+| **plot_2d** | Render 2D SAXS TIFF input(s) to PNG using logarithmic intensity and viewer-consistent defaults. Public entry point is `plot_2d(image: str, output_dir=".", *, use_cache=True, ...)`, where `image` accepts either a single `.tif` file path or a directory containing `.tif` files. The transform is `log1p(I)` (`ln(1+I)`). | `image` (single `.tif` file path or directory of `.tif`) | `plot_2d_png` (single path for single-file input; list for directory input) |
 | **guinier_analysis** | Run Guinier analysis on a 1D profile (first5, first10, autorg, adaptive; chosen = adaptive). Writes results file and ATSAS-format .dat for downstream (e.g. DATGNOM). Uses `autosaxs.guinier`. | `profile` (1D) | `results_path`, `atsas_dat_path`, `guinier_region_path` (yml) |
 | **fit_mixture** | Run MIXTURE fits (1-/2-/3-phase × Gaussian/Schultz–Zimm, sphere-only), select best by BIC, write comparison plot, distribution plot, results CSV. | `profile` (1D subtracted) | `output_subdir`, `comparison_path`, `distributions_path`, `results_csv_path` |
 | **fit_bodies** | Run ATSAS **bodies** on a 1D profile for multiple shapes; export fits (fir, PNG, yml, csv). | `profile` (1D) | `output_subdir`, bodies fit files (fir, png, yml, csv) |
@@ -228,4 +232,5 @@ Each skill is a single processing routine with the standard signature (§4.1), a
 | **report_individual** | Build individual PDF report for one sample from an existing pipeline directory. Scans directory for paths matching basename, assembles report data, writes PDF. Main logic in `report.py`. | `directory`, `basename` (convention: not in `input_paths`; passed as arguments) | `report_pdf_path` |
 | **report_summary** | Build summary PDF report from an existing pipeline directory. Discovers samples from subtracted/ and related dirs, writes summary PDF. Main logic in `report.py`. | `directory` (convention: passed as argument) | `report_pdf_path` |
 
-**Wrapper features (`skill_wrap.apply_batch`):** Batch application supports **`single_output_dir`** (default False): when True, all samples in a batch write to the same output directory; when False, one subdirectory per sample (stem from **`stem_from_keys`**). **`stem_from_keys`** specifies which input key(s) to use to derive the per-sample subdir name (e.g. `"profile"`, `"images"`). Output file stems are normalized: if an input stem starts with `sub_` or `int_`, that prefix is stripped before saving new data (see `_strip_sub_int_prefix` in `skill_wrap.py`).
+**Wrapper features (`skill_wrap.apply_batch`):** Batch application supports **`single_output_dir`** (default False): when True, all samples in a batch write to the same output directory; when False, one subdirectory per sample (stem from **`stem_from_keys`**). **`stem_from_keys`** specifies which input key(s) to use to derive the per-sample subdir name (e.g. `"profile"`, `"images"`, `"image"`). Output file stems are normalized: if an input stem starts with `sub_` or `int_`, that prefix is stripped before saving new data (see `_strip_sub_int_prefix` in `skill_wrap.py`).
+
