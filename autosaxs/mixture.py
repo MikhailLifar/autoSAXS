@@ -22,10 +22,7 @@ from .utils import calc_chi2, gaussian_pdf, schultz_pdf
 # -----------------------------------------------------------------------------
 MIXTURE_EXE = "mixture"
 Q_SCALE = 2  # 2 = 1/nm
-MAXIT = 80
-SYSTEM_CONCENTRATION = 0.15
-R_MIN, R_MAX = 15.0, 120.0
-POLY_MIN, POLY_MAX = 0.5, 25.0
+SYSTEM_CONCENTRATION = 0.1
 RHS_MARGIN = 5.0
 N_PARAMS_PER_PHASE = 8
 LOG_I_CLIP = -7.0
@@ -65,10 +62,21 @@ def _sphere_block(vol, vol_lo, vol_hi, rout, rout_lo, rout_hi, poly, poly_lo, po
     return lines
 
 
-def _build_mixture_cmd(n_phases: int, dist_type: int, dat_basename: str, work_dir: Path) -> str:
+def _build_mixture_cmd(
+    n_phases: int,
+    dist_type: int,
+    dat_basename: str,
+    work_dir: Path,
+    *,
+    maxit: int,
+    r_min: float,
+    r_max: float,
+    poly_min: float,
+    poly_max: float,
+) -> str:
     dist_name = "Gauss" if dist_type == 1 else "Schultz"
     vols = np.ones(n_phases) / n_phases
-    r_centers = np.linspace(R_MIN + 10, R_MAX - 20, n_phases)
+    r_centers = np.linspace(r_min + 10.0, r_max - 20.0, n_phases)
     poly_init = 5.0
     lines = [
         "i                        !! init",
@@ -82,16 +90,31 @@ def _build_mixture_cmd(n_phases: int, dist_type: int, dat_basename: str, work_di
     ]
     for k in range(n_phases):
         v, r = vols[k], r_centers[k]
-        r_lo, r_hi = max(R_MIN, r - 25), min(R_MAX, r + 25)
+        r_lo, r_hi = max(r_min, r - 25.0), min(r_max, r + 25.0)
         rhs_lo, rhs_hi = r_lo + RHS_MARGIN, r_hi + 30
-        lines.extend(_sphere_block(v, 0.0, 1.0, r, r_lo, r_hi, poly_init, POLY_MIN, POLY_MAX, dist_type, rhs_lo, rhs_hi))
+        lines.extend(
+            _sphere_block(
+                v,
+                0.0,
+                1.0,
+                r,
+                r_lo,
+                r_hi,
+                poly_init,
+                poly_min,
+                poly_max,
+                dist_type,
+                rhs_lo,
+                rhs_hi,
+            )
+        )
     lines.extend([
         "2                        !! data format (2=ASCII)",
         f"{dat_basename}                !! data file",
         f"{Q_SCALE}                        !! q scale (2=1/nm)",
         "1.0                      !! fraction of curve",
         "meth sb                  !! method",
-        f"loa maxit {MAXIT}             !! max iterations",
+        f"loa maxit {maxit}             !! max iterations",
         "run                      !! run", "y                        !! confirm", "y                        !! confirm",
         "mes 14                   !! save", "eva                      !! write", "mes 1                    !! next",
         "ex                       !! exit", "y                        !! confirm exit", "y                        !! confirm exit",
@@ -192,9 +215,16 @@ def _calc_BIC(I_exp: np.ndarray, I_fit: np.ndarray, n_params: int) -> float:
 def _run_all_fits(
     q: np.ndarray, I: np.ndarray, sigma: np.ndarray,
     work_base: Path, dat_basename: str,
+    *,
+    max_nph: int,
+    maxit: int,
+    r_min: float,
+    r_max: float,
+    poly_min: float,
+    poly_max: float,
 ) -> list[dict]:
     results = []
-    for n_phases in (1, 2, 3):
+    for n_phases in range(1, max_nph + 1):
         for dist_type in (1, 2):
             dist_name = "Gauss" if dist_type == 1 else "Schultz"
             label = f"nph{n_phases}_{dist_name}"
@@ -202,7 +232,17 @@ def _run_all_fits(
             work_dir.mkdir(parents=True, exist_ok=True)
             dat_path = work_dir / dat_basename
             _write_atsas_dat(dat_path, q, I, sigma)
-            cmd_content = _build_mixture_cmd(n_phases, dist_type, dat_basename, work_dir)
+            cmd_content = _build_mixture_cmd(
+                n_phases,
+                dist_type,
+                dat_basename,
+                work_dir,
+                maxit=maxit,
+                r_min=r_min,
+                r_max=r_max,
+                poly_min=poly_min,
+                poly_max=poly_max,
+            )
             proc = _run_mixture(work_dir, dat_basename, cmd_content)
             fit_path = work_dir / dat_basename.replace(".dat", ".fit")
             q_fit, I_exp, I_fit = None, None, None
@@ -225,12 +265,9 @@ def _run_all_fits(
     return results
 
 
-def _fit_label(r: dict, *, use_bic_log: bool = True) -> str:
-    key = "BIC_log" if use_bic_log else "BIC"
+def _fit_label(r: dict, *, key: str) -> str:
     val = r.get(key)
-    if val is not None and np.isfinite(val):
-        return f"{r['label']} ({key}={val:.3f})"
-    return r["label"]
+    return f"{r['label']} ({key}={val:.3f})"
 
 
 def _plot_comparison(
@@ -251,7 +288,15 @@ def _plot_comparison(
     for i, r in enumerate(results):
         if r["q_fit"] is None or r["I_fit"] is None:
             continue
-        ax.plot(r["q_fit"], r["I_fit"], "-", color=colors[i % len(colors)], lw=fit_lw, alpha=fit_alpha, label=_fit_label(r, use_bic_log=False))
+        ax.plot(
+            r["q_fit"],
+            r["I_fit"],
+            "-",
+            color=colors[i % len(colors)],
+            lw=fit_lw,
+            alpha=fit_alpha,
+            label=_fit_label(r, key="BIC"),
+        )
     ax.set_xscale("linear")
     ax.set_yscale("linear")
     ax.set_xlabel(r"$q$ (nm$^{-1}$)")
@@ -269,7 +314,15 @@ def _plot_comparison(
     for i, r in enumerate(results):
         if r["q_fit"] is None or r["I_fit"] is None:
             continue
-        ax.plot(r["q_fit"], r["I_fit"], "-", color=colors[i % len(colors)], lw=fit_lw, alpha=fit_alpha, label=_fit_label(r, use_bic_log=True))
+        ax.plot(
+            r["q_fit"],
+            r["I_fit"],
+            "-",
+            color=colors[i % len(colors)],
+            lw=fit_lw,
+            alpha=fit_alpha,
+            label=_fit_label(r, key="BIC_log"),
+        )
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel(r"$q$ (nm$^{-1}$)")
@@ -297,7 +350,7 @@ def _plot_distributions(results: list[dict], out_path: Path) -> None:
             y = gaussian_pdf(R_plot_Ang, R0, dR) if dist_name == "Gauss" else schultz_pdf(R_plot_Ang, R0, dR)
             y = y / (np.trapezoid(y, R_plot_Ang) + 1e-20) * vol
             total += y
-        lab = _fit_label(r)
+        lab = _fit_label(r, key="BIC_chi2")
         ax.plot(R_plot_nm, total, "-", color=colors[idx % len(colors)], lw=1.8, label=lab)
     ax.set_xlabel(r"$R$ (nm)")
     ax.set_ylabel("P(R) (arb.)")
@@ -305,7 +358,7 @@ def _plot_distributions(results: list[dict], out_path: Path) -> None:
     ax.set_ylim(0, None)
     ax.legend(loc="best")
     ax.grid(True, alpha=0.3)
-    ax.set_title("Fitted size distributions (spheres) — R in nm, labels: BIC on log(I)")
+    ax.set_title("Fitted size distributions (spheres) — R in nm, labels: BIC_chi2")
     fig.tight_layout()
     fig.savefig(out_path, dpi=400, bbox_inches="tight")
     plt.close(fig)
@@ -336,6 +389,13 @@ def fit_mixtures(
     output_dir: str | Path,
     fast_forward: bool = False,
     q_range_nm: tuple[float, float] | None = None,
+    *,
+    max_nph: int = 3,
+    maxit: int = 100,
+    r_min: float = 5.0,
+    r_max: float = 120.0,
+    poly_min: float = 0.5,
+    poly_max: float = 60.0,
 ) -> dict[str, Any] | None:
     """
     Run 6 MIXTURE fits (1-, 2-, 3-phase × Gaussian, Schultz–Zimm; SPHERE-only),
@@ -391,7 +451,19 @@ def fit_mixtures(
         q, I, sigma = q_full, I_full, sigma_full
         fit_range_title = "full q range"
     dat_basename = "exp.dat"
-    results = _run_all_fits(q, I, sigma, work_base, dat_basename)
+    results = _run_all_fits(
+        q,
+        I,
+        sigma,
+        work_base,
+        dat_basename,
+        max_nph=max_nph,
+        maxit=maxit,
+        r_min=r_min,
+        r_max=r_max,
+        poly_min=poly_min,
+        poly_max=poly_max,
+    )
 
     for r in results:
         if np.isnan(r.get("f_min")) and r.get("work_dir"):

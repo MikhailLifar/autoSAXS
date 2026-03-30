@@ -57,8 +57,8 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
-from autosaxs.processor import autocalib, IntegratorExtended
-from autosaxs.utils import read_from_tiff
+from autosaxs.skill import calibrate
+from autosaxs.utils import load_config
 
 # Status file for progress updates
 STATUS_FILE = None
@@ -106,34 +106,46 @@ def main():
     
     calibrant_path = config_data.get('calibrant_path')
     mask_path = config_data.get('mask_path')
-    config = config_data.get('config')
+    config_path = config_data.get('config_path')
     
-    if not calibrant_path or not config:
-        write_status("Missing required parameters: calibrant_path or config", "error")
+    if not calibrant_path or not config_path:
+        write_status("Missing required parameters: calibrant_path or config_path", "error")
         print("Error: Missing required parameters", file=sys.stderr)
         sys.exit(1)
     
     # Run calibration
     try:
-        write_status("Loading image", "progress")
-        
-        write_status("Finding center (this may take a while)", "progress")
-        
-        # Run autocalib - this is the computationally intensive part
-        autocalib_result = autocalib(str(calibrant_path), config, mask_path=mask_path)
-        calibrated_params = autocalib_result['refined']
-        integrator = autocalib_result['integrator']
-        
-        write_status("Saving integrator", "progress")
-        
-        # Save integrator to disk
-        integrator_subd = os.path.join(OUTPUT_DIR, 'integrator_params')
-        integrator.to_disk(integrator_subd)
-        
-        # Save calibrated parameters
+        write_status("Calibration: starting", "progress")
+
+        # Load config to pick calibrant default if not explicitly present.
+        cfg = load_config(str(config_path))
+        calibrant_name = cfg.get("calibrant_name", "AgBh")
+
+        write_status("Calibration: ring analysis and geometry refinement (this may take a while)", "progress")
+
+        out = calibrate(
+            calib_image=str(calibrant_path),
+            config_path=str(config_path),
+            output_dir=str(OUTPUT_DIR),
+            mask=str(mask_path) if mask_path else None,
+            mask_mode="f" if mask_path else "a",
+            calibrant=str(calibrant_name),
+            use_cache=True,
+        )
+
+        refined_path = out.get("refined_path")
+        integrator_dir = out.get("integrator_dir")
+        calibrated_params = {}
+        if refined_path and os.path.exists(str(refined_path)):
+            with open(str(refined_path), "r") as f:
+                calibrated_params = yaml.safe_load(f) or {}
+
+        # Save calibrated parameters + key output paths for GUI
         result_file = os.path.join(OUTPUT_DIR, 'calibration_result.json')
         result_data = {
             'calibrated_params': calibrated_params,
+            'integrator_dir': integrator_dir,
+            'refined_path': refined_path,
             'status': 'success'
         }
         with open(result_file, 'w') as f:

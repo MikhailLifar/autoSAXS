@@ -42,8 +42,8 @@ class ICalibrationManager(ABC):
         pass
     
     @abstractmethod
-    def get_integrator(self):
-        """Get the current integrator if calibrated."""
+    def get_integrator_dir(self) -> Optional[str]:
+        """Get the path to the calibrated integrator directory, if available."""
         pass
     
     @abstractmethod

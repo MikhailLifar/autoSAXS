@@ -8,8 +8,8 @@ from typing import Optional, Callable
 from ..models.calibration_manager import CalibrationManager
 from ..models.data_manager import DataManager
 from ..core.event_bus import EventBus, EventType
-from autosaxs.processor import IntegratorExtended
 import shutil
+import yaml
 
 
 class CalibrationService:
@@ -114,14 +114,23 @@ class CalibrationService:
         service_config_file = os.path.join(self.temp_dir, 'calibration_config.json')
         status_file = os.path.join(self.temp_dir, 'calibration_status.json')
         output_dir = os.path.join(self.temp_dir, 'calibration_output')
+        calib_config_yaml = os.path.join(self.temp_dir, "calibration_config.yml")
         
         os.makedirs(output_dir, exist_ok=True)
         
-        # Prepare config data (no current_hash; spec: calibrant_path, mask_path, config)
+        # Write calibration config YAML for autosaxs skill (Option A).
+        # `autosaxs.skill.calibrate` expects a config_path, not an in-memory dict.
+        try:
+            with open(calib_config_yaml, "w") as f:
+                yaml.safe_dump(config, f, default_flow_style=False)
+        except Exception as e:
+            raise RuntimeError(f"Failed to write calibration YAML config: {e}")
+
+        # Prepare config data for subprocess (paths only)
         config_data = {
             'calibrant_path': str(self.data_manager.calibrant_path),
             'mask_path': str(self.data_manager.mask_path) if self.data_manager.mask_path else None,
-            'config': config,
+            'config_path': calib_config_yaml,
         }
         
         # Write config file
@@ -172,27 +181,26 @@ class CalibrationService:
                 self.stop_status_monitoring()
                 self._handle_calibration_error(error_msg, status_callback)
                 return
-            
-            # Load integrator from disk
-            integrator_subd = os.path.join(output_dir, 'integrator_params')
-            if not os.path.exists(integrator_subd):
-                error_msg = "Integrator parameters not found"
+
+            integrator_dir = result_data.get("integrator_dir")
+            refined_path = result_data.get("refined_path")
+            calibrated_params = result_data.get("calibrated_params", {})
+
+            if not integrator_dir or not os.path.isdir(str(integrator_dir)):
+                error_msg = "Calibrated integrator directory not found"
                 self.stop_status_monitoring()
                 self._handle_calibration_error(error_msg, status_callback)
                 return
-            
-            integrator = IntegratorExtended.from_disk(integrator_subd)
-            calibrated_params = result_data.get('calibrated_params', {})
-            
-            # Copy integrator to main temp directory
-            main_integrator_subd = os.path.join(self.temp_dir, 'integrator_params')
-            if os.path.exists(main_integrator_subd):
-                shutil.rmtree(main_integrator_subd)
-            shutil.copytree(integrator_subd, main_integrator_subd)
+
+            # Copy integrator to stable location in working dir for downstream integration.
+            main_integrator_dir = os.path.join(self.temp_dir, "integrator")
+            if os.path.exists(main_integrator_dir):
+                shutil.rmtree(main_integrator_dir)
+            shutil.copytree(str(integrator_dir), main_integrator_dir)
             
             # Complete calibration
             self.stop_status_monitoring()
-            self._handle_calibration_complete(calibrated_params, integrator, status_callback)
+            self._handle_calibration_complete(calibrated_params, main_integrator_dir, status_callback)
             
         except Exception as e:
             error_msg = f"Error running calibration service: {str(e)}"
@@ -211,10 +219,10 @@ class CalibrationService:
         """Stop monitoring calibration service status."""
         self.status_monitor_running = False
     
-    def _handle_calibration_complete(self, calibrated_params: dict, integrator: IntegratorExtended,
+    def _handle_calibration_complete(self, calibrated_params: dict, integrator_dir: str,
                                      status_callback: Optional[Callable[[str, str], None]]):
         """Handle calibration completion."""
-        self.calibration_manager.set_calibration_result(integrator, calibrated_params)
+        self.calibration_manager.set_calibration_result(integrator_dir, calibrated_params)
         self.calibration_running = False
         
         success_text = f"✓ Calibration complete: {os.path.basename(str(self.data_manager.calibrant_path))}"

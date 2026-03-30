@@ -30,7 +30,9 @@ Calibrate detector geometry using a calibration image and a config (ring-analysi
 - `calib_image` (str): Path to the calibration image (e.g. TIFF) used for ring analysis.
 - `config_path` (str): Path to the autosaxs calibration config file. The config must include data required by the ring analysis and detector geometry refinement.
 - `output_dir` (str, default `.`): Directory where results are written.
-- `mask` (str | None, default `None`): Optional path to a mask used during ring analysis.
+- `mask` (str | None, default `None`): Optional path to a mask used during ring analysis. Supports .txt (NuPy format), .msk (Fit2d)
+- `mask_mode` (str, default `"f"`): Mask mode selector. One of `f/from_file`, `a/auto`, `c/combined`.
+- `calibrant` (str, default `"AgBh"`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`).
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
 ### Returns
@@ -52,7 +54,9 @@ out = calibrate(
     calib_image="AgBh.tif",
     config_path="config_autocalib.yml",
     output_dir="calibration",
-    mask="mask.png",
+    mask="mask.msk",
+    mask_mode="f",
+    calibrant="AgBh",
     use_cache=True,
 )
 
@@ -63,7 +67,7 @@ print(out["refined_path"])
 ### CLI usage
 
 ```bash
-autosaxs calibrate AgBh.tif config_autocalib.yml --output-dir calibration --mask mask.png
+autosaxs calibrate AgBh.tif config_autocalib.yml --output-dir calibration --mask mask.msk
 ```
 
 ---
@@ -106,6 +110,52 @@ print(out["integrated_1d"])
 
 ```bash
 autosaxs integrate /data/sample_01.tif /data/sample_02.tif calibration/integrator --output-dir integration --npt 1000
+```
+
+---
+
+## `integrate_proxy`
+
+Integrate 2D TIFF image(s) to a 1D curve **without detector calibration**, using radial averaging in pixel-radius space.
+
+This is intended for quick-look / debugging when you don’t have a calibrated integrator yet. The output `.dat` stores metadata indicating the x-axis is `r_px` (pixels), not physical q.
+
+### Arguments
+
+- `image` (str): Path to a `.tif` file **or** a directory containing `.tif` files.
+- `output_dir` (str, default `.`): Directory where integrated curves are written.
+- `mask` (str | None, default `None`): Optional mask path; same shape as the image. (`pyFAI` convention: masked pixels are excluded.)
+- `cy` (float | None, default `None`): Optional beam center y in pixels. Must be set together with `cx`.
+- `cx` (float | None, default `None`): Optional beam center x in pixels. Must be set together with `cy`.
+- `npt` (int, default `1000`): Number of points in the output x grid.
+- `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict[str, str | list[str]]` with:
+
+- `integrated_1d`: Path (or list of paths, if `image` is a directory) to integrated 1D `.dat` curves.
+
+### Python usage
+
+```python
+from autosaxs.skill import integrate_proxy
+
+out = integrate_proxy(
+    image="raw/sample_01.tif",
+    output_dir="integration_proxy",
+    mask="mask.msk",
+    npt=1000,
+    use_cache=True,
+)
+
+print(out["integrated_1d"])
+```
+
+### CLI usage
+
+```bash
+autosaxs integrate_proxy raw/sample_01.tif --output-dir integration_proxy --mask mask.msk --npt 1000
 ```
 
 ---
@@ -171,7 +221,7 @@ Generate standard plots for a 1D curve:
 - Kratky plot (I*q^2 vs q)
 - log-log plot (log(I) vs log(q))
 
-Optionally also writes a Guinier-range `.dat` file used downstream.
+Also writes a Guinier `.dat` file (ln(I) vs q²) used downstream.
 
 ### Arguments
 
@@ -192,7 +242,7 @@ Important constraint:
 - `guinier_plot_path`: Path to the Guinier PNG.
 - `kratky_plot_path`: Path to the Kratky PNG.
 - `loglog_plot_path`: Path to the log-log PNG.
-- `guinier_dat_path`: Path to the Guinier-range `.dat` written by the skill.
+- `guinier_dat_path`: Path to the Guinier `.dat` (q², ln(I)) written by the skill.
 
 ### Python usage
 
@@ -214,6 +264,44 @@ print(out["guinier_dat_path"])
 
 ```bash
 autosaxs plot subtracted/sub_sample_01.dat --output-dir plots --guinier-q-min 0.01 --guinier-q-max 0.05
+```
+
+---
+
+## `plot_2d`
+
+Render one 2D SAXS TIFF image (or all `.tif` images in a directory) to PNG using log-intensity scaling.
+
+### Arguments
+
+- `image` (str): Path to a `.tif` file **or** a directory containing `.tif` files.
+- `output_dir` (str, default `.`): Directory where PNG(s) are written.
+- `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict[str, str | list[str]]` with:
+
+- `plot_2d_png`: Path (or list of paths, if `image` is a directory) to generated PNG(s).
+
+### Python usage
+
+```python
+from autosaxs.skill import plot_2d
+
+out = plot_2d(
+    image="raw/sample_01.tif",
+    output_dir="plots_2d",
+    use_cache=True,
+)
+
+print(out["plot_2d_png"])
+```
+
+### CLI usage
+
+```bash
+autosaxs plot_2d raw/sample_01.tif --output-dir plots_2d
 ```
 
 ---
@@ -270,6 +358,7 @@ Run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and wri
 
 - `profile` (str): Path to the 1D subtracted `.dat` curve.
 - `output_dir` (str, default `.`): Directory where the MIXTURE outputs are written.
+- `config` (dict): Loaded autosaxs config dict (must include a `mixture` section). This is required in Python usage.
 - `q_min_nm` (float | None, default `None`): Optional q minimum bound (nm^-1) for the fitting range.
 - `q_max_nm` (float | None, default `None`): Optional q maximum bound (nm^-1) for the fitting range.
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
@@ -291,10 +380,12 @@ Important constraint:
 
 ```python
 from autosaxs.skill import fit_mixture
+from autosaxs.utils import load_config
 
 out = fit_mixture(
     profile="subtracted/sub_sample_01.dat",
     output_dir="mixture",
+    config=load_config("config_autosaxs.yml"),
     q_min_nm=0.8,
     q_max_nm=2.5,
     use_cache=True,

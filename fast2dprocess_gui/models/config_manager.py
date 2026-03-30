@@ -29,16 +29,26 @@ class ConfigManager(IConfigManager):
             "detector_name": "Pilatus1M",
         }
         self.advanced_params = {
-            "center_refinement": {
-                "q_start": 0.95,
-                "q_stop": 0.995,
-                "min_segment_len": 50,
+            "ring_analysis": {
+                "gauss_sigma": 5.0,
+                "div_gmm_components": 5,
+                "div_gmm_prob_main_lt": 0.01,
+                "div_gmm_max_samples": 100000,
+                "div_gmm_seed": 0,
+                "dbscan_eps": 5.0,
+                "dbscan_min_samples": 10,
+                "circle_r2_min": 0.5,
+                "global_refine_bounds_half_width_px": 50.0,
+                "final_max_radius_px": 500.0,
+                "final_skip_first_ring": True,
+                "final_keep_first_ring_if_rout_gap_le_px": 50.0,
+                "final_ring_radial_dr": 0.5,
+                "final_ring_target_width_px": 2.0,
+                "final_keep_smallest_k": 3,
+                "final_interval_overlap_tol_px": 0.0,
             },
-            "ring_search": {
-                "q_stop": 0.995,
-                "ring_I_threshold": 80.0,
-                "r_max_px": 1000,
-                "r_step_px": 3,
+            "sub": {
+                "q_range_abs": [4.0, 6.0],
             },
             "mask_config": {
                 "mode": "auto",

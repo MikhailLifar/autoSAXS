@@ -3,7 +3,6 @@ import os
 from typing import Optional, Dict, Any
 from ..core.interfaces import ICalibrationManager
 from .config_manager import ConfigManager
-from autosaxs.processor import IntegratorExtended
 
 
 class CalibrationManager(ICalibrationManager):
@@ -19,7 +18,7 @@ class CalibrationManager(ICalibrationManager):
         """
         self.config_manager = config_manager
         self.temp_dir = working_dir
-        self.integrator: Optional[IntegratorExtended] = None
+        self.integrator_dir: Optional[str] = None
         self.calibrated_params: Dict[str, Any] = {}
         
         # Try to load integrator from disk if it exists
@@ -28,23 +27,23 @@ class CalibrationManager(ICalibrationManager):
     @property
     def is_calibrated(self) -> bool:
         """Check if calibration is available."""
-        return self.integrator is not None and bool(self.calibrated_params)
+        return self.integrator_dir is not None and os.path.isdir(self.integrator_dir) and bool(self.calibrated_params)
     
-    def get_integrator(self) -> Optional[IntegratorExtended]:
-        """Get the current integrator if calibrated."""
-        return self.integrator
+    def get_integrator_dir(self) -> Optional[str]:
+        """Get path to calibrated integrator directory if available."""
+        return self.integrator_dir
     
     def get_calibrated_params(self) -> Dict[str, Any]:
         """Get calibrated parameters."""
         return self.calibrated_params.copy()
     
     def _try_load_integrator(self):
-        """Try to load integrator from disk if it exists."""
-        integrator_subd = os.path.join(self.temp_dir, 'integrator_params')
-        if os.path.exists(integrator_subd):
+        """Try to load integrator directory and calibrated params from disk if they exist."""
+        integrator_dir = os.path.join(self.temp_dir, "integrator")
+        if os.path.isdir(integrator_dir):
             try:
-                self.integrator = IntegratorExtended.from_disk(integrator_subd)
-                # Try to load calibrated params from config
+                self.integrator_dir = integrator_dir
+                # Try to load calibrated params from config.yml saved by GUI.
                 config = self.config_manager.load()
                 if 'calibrated_params' in config:
                     self.calibrated_params = config.get('calibrated_params', {})
@@ -53,7 +52,7 @@ class CalibrationManager(ICalibrationManager):
     
     def build_calibration_config(self, mask_path: Optional[str] = None) -> Dict[str, Any]:
         """
-        Build the config dictionary required by autocalib.
+        Build the config dictionary required by the autosaxs `calibrate` skill.
         
         Args:
             mask_path: Optional path to mask file
@@ -89,6 +88,10 @@ class CalibrationManager(ICalibrationManager):
             # If no mask file, use "auto" mode
             mask_config['mode'] = 'auto'
         
+        ring_analysis = self.config_manager.advanced_params.get("ring_analysis", {})
+        if not isinstance(ring_analysis, dict):
+            ring_analysis = {}
+
         config = {
             'detector_geometry': {
                 'dist': required['detector_distance'],
@@ -98,8 +101,8 @@ class CalibrationManager(ICalibrationManager):
                 'rot2': self.config_manager.get_param('tilt_plane_rotation', 0.0),
                 'rot3': 0.0,
             },
-            'center_refinement': self.config_manager.advanced_params['center_refinement'],
-            'ring_search': self.config_manager.advanced_params['ring_search'],
+            # Skills-based autocalibration uses ring-analysis settings under `ring_analysis`.
+            'ring_analysis': ring_analysis,
             'r_beam_px': self.config_manager.get_param('r_beam_px', 35),
             'calibrant_name': self.config_manager.get_param('calibrant_name', 'AgBh'),
             'mask_config': mask_config,
@@ -107,21 +110,16 @@ class CalibrationManager(ICalibrationManager):
         
         return config
     
-    def set_calibration_result(self, integrator: IntegratorExtended, 
-                               calibrated_params: Dict[str, Any]):
+    def set_calibration_result(self, integrator_dir: str, calibrated_params: Dict[str, Any]):
         """
         Set the calibration result.
         
         Args:
-            integrator: Calibrated integrator
+            integrator_dir: Directory containing the calibrated integrator (autosaxs skill output)
             calibrated_params: Calibrated parameters
         """
-        self.integrator = integrator
+        self.integrator_dir = integrator_dir
         self.calibrated_params = calibrated_params
-        
-        # Save integrator to disk
-        integrator_subd = os.path.join(self.temp_dir, 'integrator_params')
-        integrator.to_disk(integrator_subd)
         
         # Update config with calibrated params
         config = self.config_manager.get_all_config()

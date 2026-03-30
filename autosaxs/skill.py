@@ -817,8 +817,8 @@ def _plot_paths(
         metadata={"type": "guinier", "parent": profile},
     )
     PLTViewer.view_curves(
-        q * q, np.log(I), "log(I) vs q^2",
-        xlabel="q^2 (nm-2)", ylabel="log(I) (a.u.)",
+        q * q, np.log(I), "ln(I) vs q^2",
+        xlabel="q^2 (nm-2)", ylabel="ln(I) (a.u.)",
         legend=True, plotFilePath=guinier_plot_path,
     )
     write_data(
@@ -837,8 +837,8 @@ def _plot_paths(
         metadata={"type": "loglog", "parent": profile},
     )
     PLTViewer.view_curves(
-        np.log(q), np.log(I), "log(I) vs log(q)",
-        xlabel="log(q)", ylabel="log(I)",
+        np.log(q), np.log(I), "ln(I) vs ln(q)",
+        xlabel="ln(q)", ylabel="ln(I)",
         legend=True, plotFilePath=loglog_plot_path,
     )
     return {
@@ -1117,6 +1117,7 @@ def fit_mixture(
     profile: str,
     output_dir: str = ".",
     *,
+    config: Optional[Dict] = None,
     q_min_nm: Optional[float] = None,
     q_max_nm: Optional[float] = None,
     use_cache: bool = True,
@@ -1136,6 +1137,7 @@ def fit_mixture(
     return _fit_mixture_paths(
         input_paths={"profile": profile},
         output_dir=output_dir,
+        config=config,
         event_bus=bus,
         use_cache=use_cache,
         q_range_nm=q_range_nm,
@@ -1173,10 +1175,29 @@ def _fit_mixture_paths(
         profile = profile[0] if profile else None
     if not profile or not os.path.isfile(profile):
         raise FileNotFoundError("fit_mixture requires input_paths['profile']")
+
+    cfg = config
+    if not cfg:
+        raise ValueError("fit_mixture requires config (pass `config=` from loaded config file)")
+    mixture_cfg = dict((cfg or {}).get("mixture") or {})
+    required = ("maxit", "r_min", "r_max", "poly_min", "poly_max", "max_nph")
+    missing = [k for k in required if k not in mixture_cfg]
+    if missing:
+        raise ValueError(f"fit_mixture requires config['mixture'] keys: {missing}")
+
     if event_bus:
         event_bus.publish(EventType.MESSAGE, {"text": "MIXTURE fit…"})
     result = _fit_mixtures(
-        profile, output_dir=output_dir, fast_forward=False, q_range_nm=q_range_nm
+        profile,
+        output_dir=output_dir,
+        fast_forward=False,
+        q_range_nm=q_range_nm,
+        max_nph=mixture_cfg["max_nph"],
+        maxit=mixture_cfg["maxit"],
+        r_min=mixture_cfg["r_min"],
+        r_max=mixture_cfg["r_max"],
+        poly_min=mixture_cfg["poly_min"],
+        poly_max=mixture_cfg["poly_max"],
     )
     if result is None:
         raise RuntimeError("fit_mixture failed")

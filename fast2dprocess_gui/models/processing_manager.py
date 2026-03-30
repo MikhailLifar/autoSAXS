@@ -2,9 +2,7 @@
 import os
 from typing import Optional
 from ..models.calibration_manager import CalibrationManager
-from ..utils.filename_utils import generate_filename
-from autosaxs.processor import integrate_2d_to_1d
-from autosaxs.utils import read_from_tiff
+from autosaxs.skill import integrate, subtract
 
 
 class ProcessingManager:
@@ -42,26 +40,25 @@ class ProcessingManager:
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Image file not found: {image_path}")
         
-        integrator = self.calibration_manager.get_integrator()
-        if integrator is None:
-            raise ValueError("Integrator is not available")
-        
-        # Read image data
-        data = read_from_tiff(image_path)
-        
-        # Create output filename with descriptive naming
-        output_path = generate_filename(
-            image_path,
-            "int",
-            ".dat",
-            base_dir=self.temp_dir
+        integrator_dir = self.calibration_manager.get_integrator_dir()
+        if not integrator_dir:
+            raise ValueError("Integrator directory is not available")
+
+        # Use autosaxs skill (loads integrator + reads TIFF internally)
+        out = integrate(
+            images=[image_path],
+            integrator_dir=integrator_dir,
+            output_dir=self.temp_dir,
+            npt=1000,
+            use_cache=True,
         )
-        
-        # Perform integration
-        metadata = {'type': image_type, 'source_path': image_path}
-        integrate_2d_to_1d(integrator, data, npt=1000, destpath=output_path, metadata=metadata)
-        
-        return output_path
+        paths = out.get("integrated_1d") if isinstance(out, dict) else None
+        # Skills batching wrapper returns single-sample outputs as scalar strings (not list-of-one).
+        if isinstance(paths, str) and paths:
+            return paths
+        if isinstance(paths, list) and paths and isinstance(paths[0], str):
+            return str(paths[0])
+        raise RuntimeError("Integration failed: no output curve produced")
     
     def create_subtracted_curve(self, buffer_path: str, sample_path: str, 
                                  output_path: Optional[str] = None) -> str:
@@ -76,21 +73,33 @@ class ProcessingManager:
         Returns:
             Path to subtracted curve file
         """
-        from autosaxs.processor import subtract_buffer
-        
-        if output_path is None:
-            # Generate descriptive filename from both buffer and sample names
-            buffer_basename = os.path.splitext(os.path.basename(buffer_path))[0]
-            sample_basename = os.path.splitext(os.path.basename(sample_path))[0]
-            # Use generate_filename with additional_info for the sample name
-            output_path = generate_filename(
-                buffer_path,
-                "subtracted",
-                ".dat",
-                additional_info=sample_basename,
-                base_dir=self.temp_dir
-            )
-        
-        subtract_buffer(buffer_path, sample_path, output_path, method='match_tail')
-        return output_path
+        # Keep optional output_path argument for API compatibility; skill decides filename under output_dir.
+        output_dir = self.temp_dir if output_path is None else os.path.dirname(os.path.abspath(output_path))
+
+        q_min = None
+        q_max = None
+        cfg_sub = getattr(self.calibration_manager.config_manager, "advanced_params", {}).get("sub", {})
+        if isinstance(cfg_sub, dict):
+            q_range = cfg_sub.get("q_range_abs")
+            if isinstance(q_range, (list, tuple)) and len(q_range) == 2:
+                try:
+                    q_min = float(q_range[0]) if q_range[0] is not None else None
+                    q_max = float(q_range[1]) if q_range[1] is not None else None
+                except (TypeError, ValueError):
+                    q_min = None
+                    q_max = None
+
+        out = subtract(
+            sample_1d=sample_path,
+            buffer_1d=buffer_path,
+            output_dir=output_dir,
+            method="match_tail",
+            q_min=q_min,
+            q_max=q_max,
+            use_cache=True,
+        )
+        sub_path = out.get("subtracted_1d") if isinstance(out, dict) else None
+        if not isinstance(sub_path, str) or not sub_path:
+            raise RuntimeError("Subtraction failed: no output curve produced")
+        return sub_path
 

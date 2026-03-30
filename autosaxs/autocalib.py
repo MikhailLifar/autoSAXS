@@ -4,8 +4,7 @@ from __future__ import annotations
 Autocalibration helpers for the ring-based (center-agnostic) pipeline.
 
 Public API:
-  - `ring_analysis(img_raw, ...)` -> (center_y_px, center_x_px), rings_pixels [y,x,ring_id],
-    final_ring_radii_px (n,2) with columns [r_out, r_in] per ring after filtering + shrinkage
+  - `ring_analysis(img_raw, ...)` -> dict with detected ring groups + "original rings" plot data
   - `autocalib_ring_analysis(calibration_image_path, config, ...)` -> refine calibration
 """
 
@@ -527,24 +526,27 @@ def ring_analysis(
     final_interval_overlap_tol_px: float = 0.0,
     plots_out_dir: Optional[Path] = None,
     plot_stem: str = "ring_analysis",
-) -> Tuple[Tuple[float, float], np.ndarray, np.ndarray]:
+) -> Dict[str, Any]:
     """
-    Center + ring pixel extraction (center-agnostic) followed by final ring filtering.
+    Detection-only center + ring pixel extraction (center-agnostic).
+
+    This function produces the "original rings" plot for all detected/merged rings, but
+    does not apply the final filtering/shrinkage logic. That latter step lives in
+    `autocalib_ring_analysis()`.
 
     Returns:
-        ((center_y_px, center_x_px), rings, final_ring_radii_px)
-
-    rings format:
-      (N, 3) array with columns [y_px, x_px, ring_id]
-
-    final_ring_radii_px:
-      (n_rings, 2) float array, one row per ring in ring_id order, columns [r_out, r_in] in px,
-      after all filtering and brightest-sub-annulus shrinkage.
+        dict with keys:
+          - center_y_px, center_x_px
+          - rings_original_pixels: (N, 3) array with columns [y_px, x_px, ring_id]
+          - ring_radii_original_px: (n_rings, 2) float array, columns [r_out, r_in] per ring
+          - ring_groups_sorted: list of ring-group dicts (unfiltered; r_in/r_out from clustering)
+          - points_xy, labels: DBSCAN outputs used for pixel selection later
+          - J_bg: log1p background image used for ring plots
     """
     out_dir_overlay = plots_out_dir or (WORKSPACE_ROOT / "debug" / "debug_ring_sources_divergence")
     stem = plot_stem.strip() if plot_stem else "ring_analysis"
     prefix = f"{stem}_"
-    out_path_rings = out_dir_overlay / f"{prefix}rings_filtered.png"
+    out_path_rings = out_dir_overlay / f"{prefix}rings_original.png"
     out_path_smoothed = out_dir_overlay / f"{prefix}smoothed.png"
     out_path_laplacian = out_dir_overlay / f"{prefix}laplacian.png"
     out_path_selected = out_dir_overlay / f"{prefix}selected.png"
@@ -612,7 +614,16 @@ def ring_analysis(
             center_yx=(center_y_refined, center_x_refined),
             out_path=out_path_rings,
         )
-        return (center_y_refined, center_x_refined), rings_out, np.zeros((0, 2), dtype=float)
+        return {
+            "center_y_px": float(center_y_refined),
+            "center_x_px": float(center_x_refined),
+            "rings_original_pixels": rings_out,
+            "ring_radii_original_px": np.zeros((0, 2), dtype=float),
+            "ring_groups_sorted": [],
+            "points_xy": points_xy,
+            "labels": labels,
+            "J_bg": J_bg,
+        }
 
     # Compute per-cluster radial intervals [r_in, r_out] relative to refined center.
     cluster_intervals = _compute_cluster_radial_intervals(
@@ -629,7 +640,16 @@ def ring_analysis(
             center_yx=(center_y_refined, center_x_refined),
             out_path=out_path_rings,
         )
-        return (center_y_refined, center_x_refined), rings_out, np.zeros((0, 2), dtype=float)
+        return {
+            "center_y_px": float(center_y_refined),
+            "center_x_px": float(center_x_refined),
+            "rings_original_pixels": rings_out,
+            "ring_radii_original_px": np.zeros((0, 2), dtype=float),
+            "ring_groups_sorted": [],
+            "points_xy": points_xy,
+            "labels": labels,
+            "J_bg": J_bg,
+        }
 
     # Merge intervals into ring groups using overlap: next.r_in <= cur.r_out (+ tolerance).
     cluster_intervals_sorted = sorted(cluster_intervals, key=lambda d: float(d["r_in"]))
@@ -669,74 +689,9 @@ def ring_analysis(
         }
     )
 
-    # Final ring filtering rules:
-    # 1) Usually drop the innermost ring (smallest r_mean), except when >=3 rings are detected
-    #    and r_out(third) - r_out(second) <= final_keep_first_ring_if_rout_gap_le_px (keep first ring).
-    # 2) Filter out rings with r_mean >= final_max_radius_px
-    # 3) Keep at most final_keep_smallest_k smallest rings after the above
-    # 4) Then: one azimuthal radial profile; shrink each ring toward width final_ring_target_width_px
-    #    (brightest sub-annulus) if current width > target; if width <= target, leave unchanged.
-
+    # Original rings plot: show all detected/merged rings with their original width.
     ring_groups_sorted = sorted(ring_groups, key=lambda g: g["r_mean"])  # type: ignore[arg-type]
-    skip_first = final_skip_first_ring
-    if skip_first and len(ring_groups_sorted) >= 3:
-        r_out_second = ring_groups_sorted[1]["r_out"]
-        r_out_third = ring_groups_sorted[2]["r_out"]
-        gap = r_out_third - r_out_second
-        if gap <= final_keep_first_ring_if_rout_gap_le_px:
-            skip_first = False
-    if skip_first and len(ring_groups_sorted) > 0:
-        ring_groups_sorted = ring_groups_sorted[1:]
 
-    ring_groups_sorted = [
-        g for g in ring_groups_sorted if g["r_mean"] < final_max_radius_px
-    ]
-
-    if final_keep_smallest_k is not None and final_keep_smallest_k > 0:
-        ring_groups_sorted = ring_groups_sorted[: final_keep_smallest_k]
-
-    if not ring_groups_sorted:
-        rings_out = np.zeros((0, 3), dtype=int)
-        save_rings_from_pixels_plot(
-            J_bg,
-            rings_out,
-            center_yx=(center_y_refined, center_x_refined),
-            out_path=out_path_rings,
-        )
-        return (center_y_refined, center_x_refined), rings_out, np.zeros((0, 2), dtype=float)
-
-    # Brightest sub-annulus shrink to fixed width (shared azimuthal profile, then all rings).
-    tw = float(final_ring_target_width_px)
-    dr_r = float(final_ring_radial_dr)
-    r_max_all = max(g["r_out"] for g in ring_groups_sorted)
-    r_lim_prof = r_max_all + 2.0 * dr_r
-    centers, mean_bin, cnt_bin = _compute_azimuthal_radial_profile(
-        img_raw,
-        (center_y_refined, center_x_refined),
-        r_lim_prof,
-        dr_r,
-    )
-    for g in ring_groups_sorted:
-        r_in = g["r_in"]
-        r_out = g["r_out"]
-        if r_out - r_in <= tw:
-            continue
-        new_in, new_out = _shrink_annulus_to_brightest(
-            centers, mean_bin, cnt_bin, r_in, r_out, tw, dr_r,
-        )
-        g["r_in"] = new_in
-        g["r_out"] = new_out
-        g["r_mean"] = 0.5 * (new_in + new_out)
-        g["clip_ring_radially"] = True
-
-    final_ring_radii_px = np.array(
-        [[float(g["r_out"]), float(g["r_in"])] for g in ring_groups_sorted],
-        dtype=float,
-    )
-
-    # Build rings pixel array: [y_px, x_px, ring_id]
-    cx_pts = center_x_refined
-    cy_pts = center_y_refined
     rings_rows: List[np.ndarray] = []
     for ring_id, g in enumerate(ring_groups_sorted):
         cluster_labels = g["cluster_labels"]
@@ -746,13 +701,6 @@ def ring_analysis(
         ring_pts_xy = points_xy[keep_mask]
         if ring_pts_xy.shape[0] == 0:
             continue
-        if g.get("clip_ring_radially", False):
-            rp = np.hypot(ring_pts_xy[:, 0] - cx_pts, ring_pts_xy[:, 1] - cy_pts)
-            r_in_g = g["r_in"]
-            r_out_g = g["r_out"]
-            ring_pts_xy = ring_pts_xy[(rp >= r_in_g) & (rp <= r_out_g)]
-            if ring_pts_xy.shape[0] == 0:
-                continue
         ring_yx = np.column_stack(
             [ring_pts_xy[:, 1].astype(int, copy=False), ring_pts_xy[:, 0].astype(int, copy=False)]
         )
@@ -771,7 +719,38 @@ def ring_analysis(
         out_path=out_path_rings,
     )
 
-    return (center_y_refined, center_x_refined), rings_out, final_ring_radii_px
+    # Compute radii from the plotted pixels so the returned radii match the plot.
+    if rings_out.size == 0:
+        ring_radii_original_px = np.zeros((0, 2), dtype=float)
+    else:
+        cx = float(center_x_refined)
+        cy = float(center_y_refined)
+        ring_ids = np.unique(rings_out[:, 2].astype(int))
+        ring_ids_sorted = sorted(int(x) for x in ring_ids)
+        radii_rows: List[List[float]] = []
+        for rid in ring_ids_sorted:
+            mask = rings_out[:, 2].astype(int) == int(rid)
+            pts_yx = rings_out[mask][:, :2].astype(np.float64, copy=False)
+            ys = pts_yx[:, 0]
+            xs = pts_yx[:, 1]
+            r = np.hypot(xs - cx, ys - cy)
+            if r.size == 0:
+                continue
+            r_in = float(np.min(r))
+            r_out = float(np.max(r))
+            radii_rows.append([r_out, r_in])
+        ring_radii_original_px = np.asarray(radii_rows, dtype=float)
+
+    return {
+        "center_y_px": float(center_y_refined),
+        "center_x_px": float(center_x_refined),
+        "rings_original_pixels": rings_out,
+        "ring_radii_original_px": ring_radii_original_px,
+        "ring_groups_sorted": ring_groups_sorted,
+        "points_xy": points_xy,
+        "labels": labels,
+        "J_bg": J_bg,
+    }
 
 
 def autocalib_ring_analysis(
@@ -804,15 +783,30 @@ def autocalib_ring_analysis(
     ra_kwargs.pop("make_plots", None)  # removed; plots are always written
     if "final_ring_radial_dr" not in ra_kwargs and "final_first_ring_refine_dr" in ra_kwargs:
         ra_kwargs["final_ring_radial_dr"] = ra_kwargs.pop("final_first_ring_refine_dr")
-    (center_y_px, center_x_px), rings_pixels, final_ring_radii_px = ring_analysis(
+
+    # Ring detection (center + unfiltered/unshrunk ring groups, plus plot background).
+    ra_res = ring_analysis(
         calib_data,
         plots_out_dir=plots_out_dir,
         plot_stem=plot_stem if plot_stem is not None else "ring_analysis",
         **ra_kwargs,
     )
 
-    if rings_pixels.size == 0 or not (np.isfinite(center_y_px) and np.isfinite(center_x_px)):
+    center_y_px = float(ra_res["center_y_px"])
+    center_x_px = float(ra_res["center_x_px"])
+    points_xy = ra_res["points_xy"]
+    labels = ra_res["labels"]
+    ring_groups_sorted_all = ra_res["ring_groups_sorted"]
+    J_bg = ra_res["J_bg"]
+
+    if len(ring_groups_sorted_all) == 0 or not (np.isfinite(center_y_px) and np.isfinite(center_x_px)):
         raise RuntimeError("ring_analysis produced empty rings or invalid center")
+
+    # Plot naming: keep consistent with ring_analysis so plots align visually.
+    out_dir_overlay = plots_out_dir or (WORKSPACE_ROOT / "debug" / "debug_ring_sources_divergence")
+    stem = (plot_stem if plot_stem is not None else "ring_analysis").strip()
+    prefix = f"{stem}_"
+    out_path_rings_filtered = out_dir_overlay / f"{prefix}rings_filtered.png"
 
     r_beam_px = get_r_beam_px(calib_data, center_y_px, center_x_px)
     if r_beam_px is None:
@@ -820,6 +814,132 @@ def autocalib_ring_analysis(
 
     d_geom = config["detector_geometry"]
     geometry_params = {k: d_geom[k] for k in ["dist", "wavelength", "pixel_size", "rot1", "rot2", "rot3"]}
+
+    # -------------------------
+    # Final ring filtering rules + brightest-sub-annulus shrinkage
+    # (moved from ring_analysis into this function).
+    # -------------------------
+    ring_groups_sorted = [dict(g) for g in ring_groups_sorted_all]
+
+    calibrant_name = str(config.get("calibrant_name", ""))
+
+    final_max_radius_px = float(ra_kwargs.get("final_max_radius_px", 500.0))
+    final_skip_first_ring = bool(ra_kwargs.get("final_skip_first_ring", True))
+    final_keep_first_ring_if_rout_gap_le_px = float(ra_kwargs.get("final_keep_first_ring_if_rout_gap_le_px", 50.0))
+    final_ring_radial_dr = float(ra_kwargs.get("final_ring_radial_dr", 0.5))
+    final_ring_target_width_px = float(ra_kwargs.get("final_ring_target_width_px", 4.0))
+    final_keep_smallest_k = int(ra_kwargs.get("final_keep_smallest_k", 3))
+
+    # 1) Usually drop the innermost ring (smallest r_mean), except when >=3 rings are detected
+    #    and r_out(third) - r_out(second) <= final_keep_first_ring_if_rout_gap_le_px (keep first ring).
+    #    Additionally: keep the first ring if its INNER radius r_in_first > 50 px.
+    skip_first = final_skip_first_ring
+    if calibrant_name == "LaB6":
+        # Special-case ring exclusion rules for LaB6:
+        # - first ring is never removed
+        # - omit the r_mean < 500px filter
+        # - cap number of rings at 10 (instead of default 3)
+        skip_first = False
+        final_max_radius_px = float("inf")
+        final_keep_smallest_k = 10
+    if skip_first and len(ring_groups_sorted) > 0:
+        r_in_first = float(ring_groups_sorted[0]["r_in"])
+        if r_in_first > 50.0:
+            skip_first = False
+        elif len(ring_groups_sorted) >= 3:
+            r_out_second = float(ring_groups_sorted[1]["r_out"])
+            r_out_third = float(ring_groups_sorted[2]["r_out"])
+            gap = r_out_third - r_out_second
+            if gap <= final_keep_first_ring_if_rout_gap_le_px:
+                skip_first = False
+    if skip_first and len(ring_groups_sorted) > 0:
+        ring_groups_sorted = ring_groups_sorted[1:]
+
+    ring_groups_sorted = [g for g in ring_groups_sorted if float(g["r_mean"]) < final_max_radius_px]
+
+    if final_keep_smallest_k is not None and final_keep_smallest_k > 0:
+        ring_groups_sorted = ring_groups_sorted[:final_keep_smallest_k]
+
+    if not ring_groups_sorted:
+        rings_pixels = np.zeros((0, 3), dtype=int)
+        save_rings_from_pixels_plot(
+            J_bg,
+            rings_pixels,
+            center_yx=(center_y_px, center_x_px),
+            out_path=out_path_rings_filtered,
+        )
+        raise RuntimeError("ring filtering produced empty rings")
+
+    # Brightest sub-annulus shrink to fixed width (shared azimuthal profile, then all rings).
+    tw = float(final_ring_target_width_px)
+    dr_r = float(final_ring_radial_dr)
+    r_max_all = max(float(g["r_out"]) for g in ring_groups_sorted)
+    r_lim_prof = r_max_all + 2.0 * dr_r
+    centers, mean_bin, cnt_bin = _compute_azimuthal_radial_profile(
+        calib_data,
+        (center_y_px, center_x_px),
+        r_lim_prof,
+        dr_r,
+    )
+    for g in ring_groups_sorted:
+        r_in = float(g["r_in"])
+        r_out = float(g["r_out"])
+        if r_out - r_in <= tw:
+            continue
+        new_in, new_out = _shrink_annulus_to_brightest(
+            centers, mean_bin, cnt_bin, r_in, r_out, tw, dr_r,
+        )
+        g["r_in"] = new_in
+        g["r_out"] = new_out
+        g["r_mean"] = 0.5 * (new_in + new_out)
+        g["clip_ring_radially"] = True
+
+    final_ring_radii_px = np.array(
+        [[float(g["r_out"]), float(g["r_in"])] for g in ring_groups_sorted],
+        dtype=float,
+    )
+
+    # Build rings pixel array: [y_px, x_px, ring_id]
+    cx_pts = center_x_px
+    cy_pts = center_y_px
+    rings_rows: List[np.ndarray] = []
+    for ring_id, g in enumerate(ring_groups_sorted):
+        cluster_labels = g["cluster_labels"]
+        if not isinstance(cluster_labels, list) or len(cluster_labels) == 0:
+            continue
+        keep_mask = np.isin(labels, np.asarray(cluster_labels, dtype=int))
+        ring_pts_xy = points_xy[keep_mask]
+        if ring_pts_xy.shape[0] == 0:
+            continue
+        if g.get("clip_ring_radially", False):
+            # points_xy is [x_px, y_px]; rp must use (x-cx, y-cy).
+            rp = np.hypot(ring_pts_xy[:, 0] - cx_pts, ring_pts_xy[:, 1] - cy_pts)
+            r_in_g = float(g["r_in"])
+            r_out_g = float(g["r_out"])
+            ring_pts_xy = ring_pts_xy[(rp >= r_in_g) & (rp <= r_out_g)]
+            if ring_pts_xy.shape[0] == 0:
+                continue
+        ring_yx = np.column_stack(
+            [ring_pts_xy[:, 1].astype(int, copy=False), ring_pts_xy[:, 0].astype(int, copy=False)]
+        )
+        ring_id_col = np.full((ring_yx.shape[0], 1), ring_id, dtype=int)
+        rings_rows.append(np.hstack([ring_yx, ring_id_col]))
+
+    if not rings_rows:
+        rings_pixels = np.zeros((0, 3), dtype=int)
+    else:
+        rings_pixels = np.vstack(rings_rows).astype(int, copy=False)
+
+    save_rings_from_pixels_plot(
+        J_bg,
+        rings_pixels,
+        center_yx=(center_y_px, center_x_px),
+        out_path=out_path_rings_filtered,
+    )
+    if rings_pixels.size == 0:
+        raise RuntimeError("autocalib_ring_analysis produced empty filtered rings pixels")
+
+    # Initialize distance from innermost ring's r_out
     r_out0_px = float(final_ring_radii_px[0, 0])
     dist_init_m, k_m_per_px = initial_sample_distance_m_from_innermost_ring_rout_px(
         r_out0_px,

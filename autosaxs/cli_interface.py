@@ -282,6 +282,46 @@ DEFAULT_PIPELINES = {
 }
 
 
+def _parse_index_spec(spec: str, upper_bound_exclusive: int) -> list[int]:
+    """
+    Parse index spec like "0,2-7,10" into a list of unique indices (order preserved).
+    Invalid/out-of-range tokens are ignored.
+    """
+    if not spec:
+        return []
+    spec = spec.strip()
+    if not spec:
+        return []
+
+    indices: list[int] = []
+    for token in spec.split(","):
+        t = token.strip()
+        if not t:
+            continue
+        if "-" in t:
+            parts = [p.strip() for p in t.split("-", 1)]
+            if len(parts) != 2 or not parts[0] or not parts[1]:
+                continue
+            if not parts[0].isdigit() or not parts[1].isdigit():
+                continue
+            a = int(parts[0])
+            b = int(parts[1])
+            lo, hi = (a, b) if a <= b else (b, a)
+            for i in range(lo, hi + 1):
+                if 0 <= i < upper_bound_exclusive:
+                    indices.append(i)
+        else:
+            if not t.isdigit():
+                continue
+            i = int(t)
+            if 0 <= i < upper_bound_exclusive:
+                indices.append(i)
+
+    # Remove duplicates, then sort indices explicitly in ascending order
+    out = sorted(set(indices))
+    return out
+
+
 def _load_latest_steps():
     if os.path.exists(LATEST_STEPS_PATH):
         with open(LATEST_STEPS_PATH, "r") as f:
@@ -388,20 +428,8 @@ def connect(bus: EventBus) -> None:
                 steps = list(DEFAULT_STEPS)
             else:
                 pipeline_choice = "protein_v0"
-                indices = []
-                for s in line.split(","):
-                    s = s.strip()
-                    if s.isdigit():
-                        idx = int(s)
-                        if 0 <= idx < len(ALL_STEPS):
-                            indices.append(idx)
-                # Preserve order and avoid duplicates
-                seen = set()
-                steps = []
-                for i in indices:
-                    if i not in seen:
-                        seen.add(i)
-                        steps.append(ALL_STEPS[i])
+                indices = _parse_index_spec(line, upper_bound_exclusive=len(ALL_STEPS))
+                steps = [ALL_STEPS[i] for i in indices]
                 if not steps:
                     steps = list(DEFAULT_STEPS)
             bus.publish(
@@ -419,7 +447,7 @@ def connect(bus: EventBus) -> None:
             return
         for i, p in enumerate(profiles_data):
             CLIInterface.send_message(f"  {i}: {p.get('basename', '')}")
-        CLIInterface.send_message("Enter comma-separated indices to select, or 'all' (empty = none):")
+        CLIInterface.send_message("Enter indices like '0,2-7,10' to select, or 'all' (empty = none):")
         try:
             line = input().strip().lower()
             if line == "all":
@@ -427,13 +455,7 @@ def connect(bus: EventBus) -> None:
             elif not line:
                 selected = {}
             else:
-                indices = []
-                for s in line.split(","):
-                    s = s.strip()
-                    if s.isdigit():
-                        idx = int(s)
-                        if 0 <= idx < len(profiles_data):
-                            indices.append(idx)
+                indices = _parse_index_spec(line, upper_bound_exclusive=len(profiles_data))
                 selected = {
                     profiles_data[i]["basename"]: profiles_data[i]
                     for i in indices

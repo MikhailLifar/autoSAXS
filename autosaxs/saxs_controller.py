@@ -1048,6 +1048,7 @@ class Controller:
                             out_mixture = skill.fit_mixture(
                                 selected_profiles[b]['path'],
                                 os.path.join(mixture_root, b),
+                                    config=context.config,
                                 q_min_nm=q_min_nm,
                                 q_max_nm=q_max_nm,
                                 use_cache=fast_forward,

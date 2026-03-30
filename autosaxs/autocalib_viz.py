@@ -194,8 +194,9 @@ def save_rings_from_pixels_plot(
     *,
     center_yx: Tuple[float, float],
     out_path: Path,
+    plot_title: str = "Filtered rings + refined center",
 ) -> None:
-    """Plot filtered rings from rings pixels array [y, x, ring_id]."""
+    """Plot rings from a pixels array [y, x, ring_id]."""
     center_y, center_x = center_yx
     cx = float(center_x)
     cy = float(center_y)
@@ -264,7 +265,7 @@ def save_rings_from_pixels_plot(
         )
 
     ax.scatter([cx], [cy], marker="+", s=240, c="cyan", linewidths=4, alpha=0.95)
-    ax.set_title("Filtered rings + refined center")
+    ax.set_title(plot_title)
     ax.set_xlabel("Pixel X")
     ax.set_ylabel("Pixel Y")
     fig.tight_layout()

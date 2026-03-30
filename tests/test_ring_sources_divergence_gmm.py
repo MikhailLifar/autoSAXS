@@ -60,7 +60,7 @@ def main() -> int:
 
     for tif_path in tif_paths:
         img = read_from_tiff(tif_path)
-        (center_y, center_x), rings_pixels, ring_radii = ring_analysis(
+        ra_res = ring_analysis(
             img,
             gauss_sigma=args.gauss_sigma,
             div_gmm_components=args.gmm_components,
@@ -78,6 +78,11 @@ def main() -> int:
             plots_out_dir=WORKSPACE_ROOT / "debug" / "ring_sources_gmm_cli",
             plot_stem=tif_path.stem,
         )
+
+        center_y = float(ra_res["center_y_px"])
+        center_x = float(ra_res["center_x_px"])
+        rings_pixels = ra_res["rings_original_pixels"]
+        ring_radii = ra_res["ring_radii_original_px"]
 
         n_rings = 0 if rings_pixels.size == 0 else int(np.unique(rings_pixels[:, 2].astype(int)).size)
         print(
