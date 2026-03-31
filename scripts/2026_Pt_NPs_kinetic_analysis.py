@@ -19,15 +19,9 @@ from typing import Any
 
 from autosaxs.utils import calc_chi2, read_saxs, gaussian_pdf, schultz_pdf
 
-try:
-    from autosaxs.mixture import _parse_fit_file as _mixture_parse_fit_file
-except ImportError:
-    _mixture_parse_fit_file = None
+from autosaxs.mixture import _parse_fit_file as _mixture_parse_fit_file
 
-try:
-    import numpy as np
-except ImportError:
-    np = None
+import numpy as np
 
 # Same as autosaxs.mixture for BIC_chi2 fallback (k = n_phases * N_PARAMS_PER_PHASE)
 N_PARAMS_PER_PHASE = 8
@@ -39,7 +33,6 @@ def parse_rg_from_results(results_path: Path) -> float | None:
     """Extract Rg (nm) from the 'Descriptors (used downstream)' block. Returns None if N/A or missing."""
     if not results_path.is_file():
         return None
-    rg_val = None
     in_descriptors = False
     with open(results_path, "r") as f:
         for line in f:
@@ -59,7 +52,7 @@ def parse_rg_from_results(results_path: Path) -> float | None:
                 # End of descriptor block (next section)
                 if line.strip().startswith(("GNOM", "Porod", "Molecular", "I(0)", "Quality")):
                     break
-    return rg_val
+    return None
 
 
 def parse_all_guinier_rg(results_path: Path) -> dict[str, float]:
@@ -94,8 +87,6 @@ def mean_intensity_in_q_range(
     q: list[float], intensity: list[float], q_min: float, q_max: float
 ) -> float | None:
     """Average intensity for points with q in [q_min, q_max]. Returns None if no points."""
-    if np is None:
-        return None
     q_a = np.asarray(q, dtype=float)
     I_a = np.asarray(intensity, dtype=float)
     mask = (q_a >= q_min) & (q_a <= q_max)
@@ -113,33 +104,32 @@ def fit_I0(
     """Fit I(q) ≈ A * exp(-alpha * q²) (Guinier) on q in [0, q_max] nm⁻¹. Returns A (I(0) approximation); if fitted A < 0, returns 0. Raises only if no points in q range.
     Alpha is bounded above by 1/(3*q_min²) with q_min = min(q) in the fit range. If sigma is provided, fitting is weighted with w_i = 1/sigma_i."""
     from scipy.optimize import curve_fit
-    import numpy as _np
-    q_a = _np.asarray(q, dtype=float)
-    I_a = _np.asarray(intensity, dtype=float)
+    q_a = np.asarray(q, dtype=float)
+    I_a = np.asarray(intensity, dtype=float)
     mask = (q_a >= 0) & (q_a <= q_max)
-    if not _np.any(mask):
+    if not np.any(mask):
         raise ValueError(f"No points in q range [0, {q_max}]")
     q_fit = q_a[mask]
     I_fit = I_a[mask]
-    I0_guess = float(_np.max(_np.abs(I_fit))) if _np.any(_np.isfinite(I_fit)) else 1.0
+    I0_guess = float(np.max(np.abs(I_fit))) if np.any(np.isfinite(I_fit)) else 1.0
     # Guinier: I(q) = I(0)*exp(-Rg²q²/3), so alpha = Rg²/3; use modest initial guess
     alpha_guess = 0.1
-    q_min = float(_np.maximum(_np.min(q_fit), 1e-10))  # avoid zero
+    q_min = float(np.maximum(np.min(q_fit), 1e-10))  # avoid zero
     alpha_max = 1.0 / (3.0 * q_min * q_min)
 
     def model(q: Any, A: float, alpha: float) -> Any:
-        return A * _np.exp(-alpha * q * q)
+        return A * np.exp(-alpha * q * q)
 
     kwargs: dict[str, Any] = {
         "p0": [I0_guess, alpha_guess],
-        "bounds": ([-_np.inf, 0], [_np.inf, alpha_max]),
+        "bounds": ([-np.inf, 0], [np.inf, alpha_max]),
         "maxfev": 5000,
     }
     if sigma is not None:
-        sigma_a = _np.asarray(sigma, dtype=float)
+        sigma_a = np.asarray(sigma, dtype=float)
         sigma_fit = sigma_a[mask]
         # Avoid zero or negative sigma (infinite weight)
-        sigma_fit = _np.maximum(_np.asarray(sigma_fit, dtype=float), 1e-10)
+        sigma_fit = np.maximum(np.asarray(sigma_fit, dtype=float), 1e-10)
         kwargs["sigma"] = sigma_fit
         kwargs["absolute_sigma"] = True
 
@@ -222,21 +212,21 @@ def collect_rg_and_time(run_root: Path) -> list[tuple[datetime, float | None, st
         base = _descriptor_stem(stem)
         q_09_11: float | None = None
         q_39_41: float | None = None
-        if sub_path.is_file():
-            try:
-                q_arr, intensity_arr, _sigma, _metadata = read_saxs(str(sub_path))
-                q_list = q_arr.tolist()
-                I_list = intensity_arr.tolist()
-                q_09_11 = mean_intensity_in_q_range(q_list, I_list, 0.9, 1.1)
-                q_39_41 = mean_intensity_in_q_range(q_list, I_list, 3.9, 4.1)
-            except Exception:
-                pass
+        try:
+            q_arr, intensity_arr, _sigma, _metadata = read_saxs(str(sub_path))
+            q_list = q_arr.tolist()
+            I_list = intensity_arr.tolist()
+            q_09_11 = mean_intensity_in_q_range(q_list, I_list, 0.9, 1.1)
+            q_39_41 = mean_intensity_in_q_range(q_list, I_list, 3.9, 4.1)
+        except (OSError, ValueError, TypeError):
+            # Keep q-range intensities as None if the curve can't be parsed.
+            pass
         # Time: always from TIFF header (raises if missing)
         tif_path = raw_dir / f"{base}.tif"
         res_path = descriptors_dir / f"{stem}_results.txt"
         dt = get_tiff_datetime(tif_path)
-        rg: float | None = parse_rg_from_results(res_path) if res_path.is_file() else None
-        all_guinier_rg = parse_all_guinier_rg(res_path) if res_path.is_file() else {}
+        rg: float | None = parse_rg_from_results(res_path)
+        all_guinier_rg = parse_all_guinier_rg(res_path)
         out.append((dt, rg, stem, q_09_11, q_39_41, all_guinier_rg))
     return sorted(out, key=lambda x: x[0])
 
@@ -342,7 +332,7 @@ def _best_mixture_row(run_root: Path, stem: str, best_by: str) -> dict | None:
         if key_fn(best) == float("inf"):
             return None
         return best
-    except Exception:
+    except (OSError, csv.Error, ValueError, TypeError, KeyError):
         return None
 
 
@@ -371,8 +361,6 @@ def _load_best_fit_curve(
 
 def _get_best_fit_metrics(run_root: Path, stem: str, best_by: str = "BIC_log") -> dict[str, float] | None:
     """Get chi2, R2, R2_log for the best (by best_by metric) fit from mixture_results.csv. If chi2 is absent, recalc from exp.fit and subtracted sigma. Returns None if no results."""
-    if np is None:
-        return None
     best = _best_mixture_row(run_root, stem, best_by)
     if not best:
         return None
@@ -405,7 +393,7 @@ def _get_best_fit_metrics(run_root: Path, stem: str, best_by: str = "BIC_log") -
             sigma_fit = np.interp(np.asarray(q_fit), q_s, sigma_s)
             chi2_val = float(calc_chi2(np.asarray(I_exp), np.asarray(I_fit), sigma_fit))
         return {"chi2": chi2_val, "R2": R2 or float("nan"), "R2_log": R2_log or float("nan")}
-    except Exception:
+    except (OSError, ValueError, TypeError):
         return None
 
 
@@ -413,8 +401,6 @@ def _load_best_mixture_pdf(
     run_root: Path, stem: str, r_nm: Any, best_by: str = "BIC_log",
 ) -> Any:
     """Load mixture_results.csv for sample stem, pick row with lowest metric (best_by), compute PDF on r_nm (R in nm). Returns P(R) array or None."""
-    if np is None:
-        return None
     best = _best_mixture_row(run_root, stem, best_by)
     if not best:
         return None
@@ -445,7 +431,7 @@ def _load_best_mixture_pdf(
         if np.max(total) <= 0:
             return None
         return total
-    except Exception:
+    except (ValueError, TypeError, FloatingPointError, ZeroDivisionError):
         return None
 
 
@@ -458,7 +444,7 @@ def plot_ridge_curves(
     colors: list[Any] | None = None,
 ) -> None:
     """Draw ridge-plot style curves on ax: same axes, constant y-offset between curves, fill_between + line. R_nm and each curve are 1d arrays. colors: optional list of color (one per curve); if None, use viridis by index."""
-    if np is None or not curves:
+    if not curves:
         return
     from matplotlib import cm
     n = len(curves)
@@ -502,8 +488,6 @@ def _save_mixture_ridge_plot(
     from matplotlib import cm
     from matplotlib.colors import Normalize
 
-    if np is None:
-        return
     if len(A_list) != len(data):
         raise ValueError("A_list length must match data length")
     R_plot_nm = np.linspace(0.1, 13.0, 400)
@@ -552,8 +536,6 @@ def _save_mixture_pdfs_txt(
     best_by: str = "BIC_log",
 ) -> None:
     """Save PDF matrix to NumPy-readable .txt: first row R=np.nan and scale factors A per sample; then one row per R value, column 0 = R (nm), columns 1..n = P(R). Raises if any sample has no fitted PDF."""
-    if np is None:
-        return
     if len(A_list) != len(data):
         raise ValueError("A_list length must match data length")
     R_plot_nm = np.linspace(0.1, 13.0, 400)
@@ -589,8 +571,6 @@ def _save_error_ridge_plots(
     from matplotlib import cm
     from matplotlib.colors import Normalize
 
-    if np is None:
-        return
     curves_lin: list[tuple[Any, Any]] = []  # (q, residual) per sample
     curves_log: list[tuple[Any, Any]] = []  # (q, ratio) per sample
     times: list[datetime] = []
@@ -776,8 +756,6 @@ def _save_all_curves_plot(
     import matplotlib.dates as mdates
     from matplotlib.colors import Normalize
 
-    if np is None:
-        return
     averaged_dir = run_root / "averaged"
     if not averaged_dir.is_dir():
         return

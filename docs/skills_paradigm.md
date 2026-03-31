@@ -111,6 +111,24 @@ Every skill entry point MUST:
 - Expose skill-specific options as explicit keyword parameters (so CLI flags map 1:1).
 - Return only paths: `dict[str, str | list[str]]`.
 
+**Main input path rule (a requirement for skills in `autosaxs/skill.py`):**
+
+- For most of skills whose primary input is a dataset path (2D image(s) or 1D profile(s)), the **main positional path argument** SHOULD accept a **single string** that can be:
+  - a **single file path**
+  - a **directory path**
+  - an **arbitrary glob expression**
+- The function name and parameter names are part of the public API.
+This rule is applied if appropriate (for instance, it makes sense to integrate many images at once, but it does make sense to calibrate on many images at once).
+
+**Expansion semantics (when the main positional arg is a directory or glob):**
+
+- **Sorting:** expanded file lists MUST be sorted lexicographically for determinism.
+- **Empty match:** if a glob or directory expansion yields **zero files**, the skill MUST raise `FileNotFoundError` (not return an empty result).
+- **Directory expansion is non-recursive:**
+  - For 2D TIFF skills, a directory expands to `*.tif` in that directory (non-recursive).
+  - For 1D skills, a directory expands to `*.dat` in that directory (non-recursive).
+- **Batch execution and return shape:** for skills that can run per-file (`plot`, `plot_2d`, `guinier_analysis`, `fit_*`, etc.), directory/glob inputs MUST execute **one-per-file** and return lists of outputs (consistent with the internal `apply_batch` convention).
+
 Conventions to ensure CLI parity:
 
 - **No aliasing of option values**: when a skill parameter is an enum-like string (e.g. `method`), the CLI MUST accept the exact same string values as the skill (project convention), without introducing hyphenated aliases like `tail-match` unless the skill itself uses that exact value.
@@ -155,7 +173,7 @@ Roles are stable and documented so that scripts (and AI) can wire skills. Exampl
 
 - **calibrate:** `calib_image`, `config`, optional `mask` → `integrator_dir`, `refined_path`.
 - **integrate:** `images` (2D), `integrator_dir` → `integrated_1d` (list).
-- **integrate_proxy:** `image` (single `.tif` path or directory of `.tif`), `config`, optional center args `cy`, `cx` → `integrated_1d` (same output contract as integrate, x-axis in pixels). If `cy` and `cx` are both `None`, center is estimated via `ring_analysis` and its debug plots are written to `output_dir`; if center estimation fails, skill prints a warning, writes no `.dat`, and returns empty output.
+- **integrate_proxy:** `image` (file/dir/glob of `.tif`), `config`, optional center args `cy`, `cx` → `integrated_1d` (list for multi-input). If `cy` and `cx` are both `None`, center is estimated via `ring_analysis` and its debug plots are written to `output_dir`; if center estimation fails for a given image, that item yields no `.dat` for that image, but empty **input** expansions are still an error (see §4.1.1).
 - **subtract:** `sample_1d`, `buffer_1d` (paired or paired by convention) → `subtracted_1d`.
 - **plot_2d:** `image` (2D) → `plot_2d`.
 - **fit_mixture:** `profile` (one 1D curve) → `output_subdir`, `comparison_path`, `distributions_path`, `results_csv_path`.
@@ -220,15 +238,15 @@ Each skill is a single processing routine with the standard signature (§4.1), a
 | Skill | Purpose | Main inputs | Main outputs |
 |-------|---------|-------------|--------------|
 | **calibrate** | Calibrate detector geometry via ring analysis (Laplacian/GMM, DBSCAN, ``refine``). All calibration plots (ring pipeline, q/I curve, mask) under ``calibration_plots_dir``. | `calib_image`, `config` (with ``ring_analysis`` + ``detector_geometry``), optional `mask` | `integrator_dir`, `refined_path`, `calibration_plots_dir`, `calibration_curve_plot_path`, `calibration_mask_path` |
-| **integrate** | Integrate 2D SAXS images to 1D curves (q, I, σ) using a calibrated integrator. | `images` (2D), `integrator_dir` | `integrated_1d` (list of paths) |
-| **integrate_proxy** | Integrate 2D `.tif` image input(s) to 1D curves without detector calibration. Public entry point is `integrate_proxy(image, output_dir=".", *, cy=..., cx=..., config=..., npt=..., use_cache=True)`. `image` accepts either a single `.tif` path or a directory of `.tif` files. `cy` and `cx` must be both `None` or both floats. If both are `None`, center is estimated with `ring_analysis` using `config`, and all ring-analysis debug plots are written to `output_dir`. If center estimation fails, the skill prints a warning, writes no `.dat`, and returns empty output. The resulting `.dat` keeps the standard format but uses pixel radius (`r_px`) as x-axis and records this in meta. | `image` (single `.tif` file path or directory of `.tif`), `config`, optional `cy`, `cx` | `integrated_1d` (single path or list; empty when center estimation fails) |
+| **integrate** | Integrate 2D SAXS images to 1D curves (q, I, σ) using a calibrated integrator. The main arg `images` is a single string: file / directory / glob. Directory expands to `*.tif` (non-recursive). Glob/dir expansion is sorted and empty expansion is an error. | `images` (file/dir/glob of 2D `.tif`), `integrator_dir` | `integrated_1d` (list of paths) |
+| **integrate_proxy** | Integrate 2D `.tif` image input(s) to 1D curves without detector calibration. Public entry point is `integrate_proxy(image, output_dir=".", *, cy=..., cx=..., config=..., npt=..., use_cache=True)`. `image` accepts file / directory / glob; directory expands to `*.tif` (non-recursive). `cy` and `cx` must be both `None` or both floats. If both are `None`, center is estimated with radial-symmetry logic and a debug center plot is written to `output_dir`. | `image` (file/dir/glob of `.tif`), optional `mask`, optional `cy`, `cx` | `integrated_1d` (list of paths) |
 | **subtract** | Subtract buffer from sample 1D profile (e.g. match-tail scaling), write subtracted curve. | `sample_1d`, `buffer_1d` (paired or by convention) | `subtracted_1d`, `diff_plot_path`, `sub_plot_path` |
-| **plot** | Generate standard plots for a 1D profile: Guinier, Kratky, log–log; optionally write a Guinier-range .dat. | `profile` (1D), optional guinier region | `guinier_plot_path`, `kratky_plot_path`, `loglog_plot_path`, optional `guinier_dat_path` |
-| **plot_2d** | Render 2D SAXS TIFF input(s) to PNG using logarithmic intensity and viewer-consistent defaults. Public entry point is `plot_2d(image: str, output_dir=".", *, use_cache=True, ...)`, where `image` accepts either a single `.tif` file path or a directory containing `.tif` files. The transform is `log1p(I)` (`ln(1+I)`). | `image` (single `.tif` file path or directory of `.tif`) | `plot_2d_png` (single path for single-file input; list for directory input) |
-| **guinier_analysis** | Run Guinier analysis on a 1D profile (first5, first10, autorg, adaptive; chosen = adaptive). Writes results file and ATSAS-format .dat for downstream (e.g. DATGNOM). Uses `autosaxs.guinier`. | `profile` (1D) | `results_path`, `atsas_dat_path`, `guinier_region_path` (yml) |
-| **fit_mixture** | Run MIXTURE fits (1-/2-/3-phase × Gaussian/Schultz–Zimm, sphere-only), select best by BIC, write comparison plot, distribution plot, results CSV. | `profile` (1D subtracted) | `output_subdir`, `comparison_path`, `distributions_path`, `results_csv_path` |
-| **fit_bodies** | Run ATSAS **bodies** on a 1D profile for multiple shapes; export fits (fir, PNG, yml, csv). | `profile` (1D) | `output_subdir`, bodies fit files (fir, png, yml, csv) |
-| **fit_dammif** | Run ATSAS **dammif** (ab initio shape reconstruction) on a 1D profile; produce shape models and descriptors. | `profile` (1D), optional `gnom_path` | `output_subdir`, dammif output files |
+| **plot** | Generate standard plots for one or many 1D profiles: Guinier, Kratky, log–log; optionally write a Guinier-range .dat. Main arg `profile` accepts file / directory / glob; directory expands to `*.dat` (non-recursive); expansion is sorted; empty expansion is an error. | `profile` (file/dir/glob of 1D `.dat`), optional guinier region | per-input lists of: `guinier_plot_path`, `kratky_plot_path`, `loglog_plot_path`, optional `guinier_dat_path` |
+| **plot_2d** | Render one or many 2D SAXS TIFF images to PNG using logarithmic intensity (`log1p(I)`). Main arg `image` accepts file / directory / glob; directory expands to `*.tif` (non-recursive); expansion is sorted; empty expansion is an error. | `image` (file/dir/glob of `.tif`) | `plot_2d_png` (list of paths for multi-input) |
+| **guinier_analysis** | Run Guinier analysis on one or many 1D profiles (first5, first10, autorg, adaptive; chosen = adaptive). Writes results file and ATSAS-format .dat for downstream. Main arg `profile` accepts file / directory / glob; directory expands to `*.dat` (non-recursive); expansion is sorted; empty expansion is an error. | `profile` (file/dir/glob of 1D `.dat`) | per-input lists of: `results_path`, `atsas_dat_path`, `guinier_region_path` |
+| **fit_mixture** | Run MIXTURE fits and select best by BIC. Main arg `profile` accepts file / directory / glob; directory expands to `*.dat` (non-recursive); expansion is sorted; empty expansion is an error. | `profile` (file/dir/glob of 1D `.dat`) | per-input lists of: `output_subdir`, `comparison_path`, `distributions_path`, `results_csv_path` |
+| **fit_bodies** | Run ATSAS **bodies** fits. Main arg `profile` accepts file / directory / glob; directory expands to `*.dat` (non-recursive); expansion is sorted; empty expansion is an error. | `profile` (file/dir/glob of 1D `.dat`) | per-input lists of: `output_subdir` (and related bodies outputs under it) |
+| **fit_dammif** | Run ATSAS **dammif**. Main arg `profile` accepts file / directory / glob; directory expands to `*.dat` (non-recursive); expansion is sorted; empty expansion is an error. | `profile` (file/dir/glob of 1D `.dat`), optional `gnom_path` | per-input lists of: `output_subdir` (and related dammif outputs under it) |
 | **report_individual** | Build individual PDF report for one sample from an existing pipeline directory. Scans directory for paths matching basename, assembles report data, writes PDF. Main logic in `report.py`. | `directory`, `basename` (convention: not in `input_paths`; passed as arguments) | `report_pdf_path` |
 | **report_summary** | Build summary PDF report from an existing pipeline directory. Discovers samples from subtracted/ and related dirs, writes summary PDF. Main logic in `report.py`. | `directory` (convention: passed as argument) | `report_pdf_path` |
 

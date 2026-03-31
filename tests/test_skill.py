@@ -506,7 +506,7 @@ def test_integrate_raises_without_images():
     with tempfile.TemporaryDirectory() as tmp:
         with pytest.raises(ValueError):
             integrate(
-                images=[],
+                images="",
                 integrator_dir=tmp,
                 output_dir=os.path.join(tmp, "out"),
                 use_cache=False,

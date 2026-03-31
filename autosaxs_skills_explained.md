@@ -14,10 +14,23 @@ The `autosaxs` command dispatches subcommands to the corresponding skill functio
 - Positional arguments in the CLI match the skill signature order.
 - Keyword options use `--kebab-case` names (underscores become `-`).
 
+### Path expansion (important API behavior)
+
+Most skills take a **path expression** rather than a strict “single file”:
+
+- A file path is used as-is.
+- A directory expands to matching files (non-recursive):
+  - 2D inputs: `*.tif`
+  - 1D inputs: `*.dat`
+- A glob expression is allowed (including `**`); results are sorted, and **empty expansion is an error**.
+
+Note: `autosaxs integrate` accepts either a single path expression **or** multiple image paths on the CLI (the CLI passes a list; the skill normalizes it).
+
 Caching details (enabled by default):
 
 - When `use_cache=True`, the skill may write/read a hidden `.cache` YAML file inside its output directory.
 - Re-running with the same inputs and relevant options can reuse previously generated output paths if the files still exist and are recent enough (output-integrity check).
+- On cache hits, the returned dict includes `from_cache=True` in addition to the usual output path keys.
 
 ---
 
@@ -34,6 +47,10 @@ Calibrate detector geometry using a calibration image and a config (ring-analysi
 - `mask_mode` (str, default `"f"`): Mask mode selector. One of `f/from_file`, `a/auto`, `c/combined`.
 - `calibrant` (str, default `"AgBh"`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`).
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+
+Important constraints:
+
+- If `mask_mode` is `f/from_file` or `c/combined`, `mask` **must** be provided (the skill raises `ValueError` otherwise).
 
 ### Returns
 
@@ -78,7 +95,11 @@ Integrate 2D SAXS images to 1D curves (q, I, sigma) using a calibrated integrato
 
 ### Arguments
 
-- `images` (list[str]): One or more paths to 2D SAXS images (e.g. TIFFs).
+- `images` (str): Image path expression. Can be:
+  - a single `.tif` file path
+  - a directory (expands to `*.tif`, non-recursive)
+  - a glob expression
+  - (CLI only) multiple `.tif` paths passed as separate positional args
 - `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`).
 - `output_dir` (str, default `.`): Directory where integrated curves are written.
 - `npt` (int, default `1000`): Number of points in the output q grid.
@@ -96,7 +117,7 @@ Integrate 2D SAXS images to 1D curves (q, I, sigma) using a calibrated integrato
 from autosaxs.skill import integrate
 
 out = integrate(
-    images=["/data/sample_01.tif", "/data/sample_02.tif"],
+    images="/data/sample_*.tif",
     integrator_dir="calibration/integrator",
     output_dir="integration",
     npt=1000,
@@ -109,7 +130,8 @@ print(out["integrated_1d"])
 ### CLI usage
 
 ```bash
-autosaxs integrate /data/sample_01.tif /data/sample_02.tif calibration/integrator --output-dir integration --npt 1000
+autosaxs integrate /data/sample_01.tif /data/sample_02.tif calibration/integrator \
+  --output-dir integration --npt 1000
 ```
 
 ---
@@ -129,6 +151,11 @@ This is intended for quick-look / debugging when you don’t have a calibrated i
 - `cx` (float | None, default `None`): Optional beam center x in pixels. Must be set together with `cy`.
 - `npt` (int, default `1000`): Number of points in the output x grid.
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+
+Notes:
+
+- If `cy/cx` are not provided, the skill **estimates** the center by radial-symmetry optimization and also writes a center diagnostic plot `*_center.png` into `output_dir`.
+- If center estimation fails for an input, that item is skipped and the skill may return an empty list for `integrated_1d`.
 
 ### Returns
 
@@ -166,8 +193,8 @@ Subtract a buffer curve from a sample 1D profile. The current public interface s
 
 ### Arguments
 
-- `sample_1d` (str): Path to the sample 1D `.dat` curve.
-- `buffer_1d` (str): Path to the buffer 1D `.dat` curve (paired by convention with the sample).
+- `sample_1d` (str): Sample path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
+- `buffer_1d` (str): Path to the buffer 1D `.dat` curve (must be an existing file).
 - `output_dir` (str, default `.`): Directory where subtraction outputs are written.
 - `method` (str, default `"match_tail"`): Buffer subtraction/scaling method.
 - `q_min` (float | None, default `None`): Lower bound of q-range for scaling (only used if q_min/q_max logic is enabled).
@@ -225,7 +252,7 @@ Also writes a Guinier `.dat` file (ln(I) vs q²) used downstream.
 
 ### Arguments
 
-- `profile` (str): Path to the 1D `.dat` curve.
+- `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where plot files are written.
 - `guinier_q_min` (float | None, default `None`): Lower q bound for selecting Guinier range (enables `guinier_dat_path`).
 - `guinier_q_max` (float | None, default `None`): Upper q bound for selecting Guinier range.
@@ -242,7 +269,7 @@ Important constraint:
 - `guinier_plot_path`: Path to the Guinier PNG.
 - `kratky_plot_path`: Path to the Kratky PNG.
 - `loglog_plot_path`: Path to the log-log PNG.
-- `guinier_dat_path`: Path to the Guinier `.dat` (q², ln(I)) written by the skill.
+- `guinier_dat_path`: Path to the Guinier `.dat` (q², ln(I)) written by the skill (always written; independent of `guinier_q_min/max`).
 
 ### Python usage
 
@@ -274,7 +301,7 @@ Render one 2D SAXS TIFF image (or all `.tif` images in a directory) to PNG using
 
 ### Arguments
 
-- `image` (str): Path to a `.tif` file **or** a directory containing `.tif` files.
+- `image` (str): 2D path expression (file/dir/glob). Directories expand to `*.tif` (non-recursive).
 - `output_dir` (str, default `.`): Directory where PNG(s) are written.
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
@@ -316,7 +343,7 @@ Run Guinier analysis on a 1D profile (including multiple strategies such as firs
 
 ### Arguments
 
-- `profile` (str): Path to the 1D `.dat` curve.
+- `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where analysis outputs are written.
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
@@ -356,9 +383,9 @@ Run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and wri
 
 ### Arguments
 
-- `profile` (str): Path to the 1D subtracted `.dat` curve.
+- `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where the MIXTURE outputs are written.
-- `config` (dict): Loaded autosaxs config dict (must include a `mixture` section). This is required in Python usage.
+- `config_path` (str | None, default `None`): Path to the autosaxs YAML config (must include a `mixture` section). Required for this skill.
 - `q_min_nm` (float | None, default `None`): Optional q minimum bound (nm^-1) for the fitting range.
 - `q_max_nm` (float | None, default `None`): Optional q maximum bound (nm^-1) for the fitting range.
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
@@ -380,12 +407,11 @@ Important constraint:
 
 ```python
 from autosaxs.skill import fit_mixture
-from autosaxs.utils import load_config
 
 out = fit_mixture(
     profile="subtracted/sub_sample_01.dat",
     output_dir="mixture",
-    config=load_config("config_autosaxs.yml"),
+    config_path="config_autosaxs.yml",
     q_min_nm=0.8,
     q_max_nm=2.5,
     use_cache=True,
@@ -397,7 +423,8 @@ print(out["results_csv_path"])
 ### CLI usage
 
 ```bash
-autosaxs fit_mixture subtracted/sub_sample_01.dat --output-dir mixture --q-min-nm 0.8 --q-max-nm 2.5
+autosaxs fit_mixture subtracted/sub_sample_01.dat --output-dir mixture --config-path config_autosaxs.yml \
+  --q-min-nm 0.8 --q-max-nm 2.5
 ```
 
 ---
@@ -408,7 +435,7 @@ Run ATSAS `bodies` fits for multiple candidate shapes on a 1D profile, exporting
 
 ### Arguments
 
-- `profile` (str): Path to the 1D `.dat` curve.
+- `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where `bodies` outputs are written.
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
@@ -448,7 +475,7 @@ Run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile. If a GNOM o
 
 ### Arguments
 
-- `profile` (str): Path to the 1D `.dat` curve.
+- `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where `dammif` outputs are written.
 - `gnom_path` (str | None, default `None`): Optional path to a GNOM `.out` file. If provided, `dammif` uses it.
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.

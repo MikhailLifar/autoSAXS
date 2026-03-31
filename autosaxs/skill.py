@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+import glob
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -53,6 +54,48 @@ from .skill_wrap import (
     write_cache,
     _strip_sub_int_prefix,
 )
+
+
+def _expand_main_path_arg(path_expr: Union[str, List[str]], *, kind: str) -> List[str]:
+    """
+    Expand a single main path argument into a sorted list of file paths.
+
+    kind:
+      - "2d_tif": directory expands to '*.tif' (non-recursive)
+      - "1d_dat": directory expands to '*.dat' (non-recursive)
+      - "any": no directory default pattern; treat as file/dir/glob as-is
+    """
+    if not path_expr:
+        raise FileNotFoundError("Empty path expression")
+
+    # CLI may pass a list for positional args (e.g. old nargs="+"). Normalize here.
+    if isinstance(path_expr, list):
+        expanded: List[str] = []
+        for item in path_expr:
+            expanded.extend(_expand_main_path_arg(item, kind=kind))
+        expanded = sorted(set(expanded))
+        if not expanded:
+            raise FileNotFoundError("Empty path expression")
+        return expanded
+
+    if os.path.isdir(path_expr):
+        if kind == "2d_tif":
+            paths = [str(p) for p in sorted(Path(path_expr).iterdir()) if p.is_file() and p.suffix.lower() == ".tif"]
+        elif kind == "1d_dat":
+            paths = [str(p) for p in sorted(Path(path_expr).iterdir()) if p.is_file() and p.suffix.lower() == ".dat"]
+        else:
+            paths = [str(p) for p in sorted(Path(path_expr).iterdir()) if p.is_file()]
+    elif os.path.isfile(path_expr):
+        paths = [path_expr]
+    else:
+        # Arbitrary glob expression (may include **). Use recursive so ** works.
+        paths = sorted(glob.glob(path_expr, recursive=True))
+
+    # Keep only files; glob may return directories.
+    paths = [p for p in paths if os.path.isfile(p)]
+    if not paths:
+        raise FileNotFoundError(f"No files matched: {path_expr!r}")
+    return paths
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +161,7 @@ def _calibrate_paths(
     sample_index: int = 0,
     mask_mode: str = "f",
     calibrant: str = "AgBh",
-) -> Dict[str, str]:
+) -> Dict[str, Union[str, List[str]]]:
     """
     Calibrate detector geometry via ``autocalib_ring_analysis`` (Laplacian/GMM rings + ``refine``).
 
@@ -215,7 +258,7 @@ def _calibrate_paths(
 
 
 def integrate(
-    images: List[str],
+    images: str,
     integrator_dir: str,
     output_dir: str = ".",
     *,
@@ -225,12 +268,16 @@ def integrate(
     """
     Integrate 2D SAXS images to 1D curves. Public entry point.
 
-    Positional args mirror CLI: images (one or more), integrator_dir.
+    Positional args mirror CLI: images, integrator_dir.
+
+    The `images` argument accepts a single file path, a directory (expanded to `*.tif`, non-recursive),
+    or an arbitrary glob expression. Expansion is lexicographically sorted and empty expansion is an error.
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
+    expanded_images = _expand_main_path_arg(images, kind="2d_tif")
     return _integrate_paths(
-        input_paths={"images": images, "integrator_dir": integrator_dir},
+        input_paths={"images": expanded_images, "integrator_dir": integrator_dir},
         output_dir=output_dir,
         event_bus=bus,
         use_cache=use_cache,
@@ -306,22 +353,29 @@ def integrate_proxy(
     Integrate 2D .tif image input(s) to 1D curves without detector calibration. Public entry point.
 
     Positional args mirror CLI: image.
-    The `image` argument accepts either a single `.tif` file path or a directory containing `.tif` files.
+    The `image` argument accepts a single file path, a directory (expanded to `*.tif`, non-recursive),
+    or an arbitrary glob expression. Expansion is lexicographically sorted and empty expansion is an error.
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
-    if not image:
-        raise FileNotFoundError("integrate_proxy requires an existing .tif file or directory")
+    expanded_images = _expand_main_path_arg(image, kind="2d_tif")
     if mask is not None and not os.path.isfile(mask):
         raise FileNotFoundError("integrate_proxy mask must be an existing file path")
     if (cy is None) != (cx is None):
         raise ValueError("integrate_proxy requires cy and cx to be both None or both float values")
 
-    if os.path.isfile(image):
-        if Path(image).suffix.lower() != ".tif":
-            raise ValueError("integrate_proxy file input must have .tif extension")
+    # Validate extension after expansion (glob/dir may include non-tif if user passes explicit pattern).
+    for p in expanded_images:
+        if Path(p).suffix.lower() != ".tif":
+            raise ValueError("integrate_proxy input files must have .tif extension")
+
+    input_batch = [
+        {"image": im_path, "mask": mask} if mask is not None else {"image": im_path}
+        for im_path in expanded_images
+    ]
+    if len(input_batch) == 1:
         return _integrate_proxy_paths(
-            input_paths={"image": image, "mask": mask} if mask is not None else {"image": image},
+            input_paths=input_batch[0],
             output_dir=output_dir,
             event_bus=bus,
             use_cache=use_cache,
@@ -329,30 +383,15 @@ def integrate_proxy(
             cx=cx,
             npt=npt,
         )
-
-    if os.path.isdir(image):
-        images = [
-            str(p)
-            for p in sorted(Path(image).iterdir())
-            if p.is_file() and p.suffix.lower() == ".tif"
-        ]
-        if not images:
-            raise FileNotFoundError("integrate_proxy found no .tif files in directory")
-        input_batch = [
-            {"image": im_path, "mask": mask} if mask is not None else {"image": im_path}
-            for im_path in images
-        ]
-        return _integrate_proxy_paths(
-            input_paths=input_batch,
-            output_dir=output_dir,
-            event_bus=bus,
-            use_cache=use_cache,
-            cy=cy,
-            cx=cx,
-            npt=npt,
-        )
-
-    raise FileNotFoundError("integrate_proxy requires an existing .tif file or directory")
+    return _integrate_proxy_paths(
+        input_paths=input_batch,
+        output_dir=output_dir,
+        event_bus=bus,
+        use_cache=use_cache,
+        cy=cy,
+        cx=cx,
+        npt=npt,
+    )
 
 
 def _radial_integrate_pixels(
@@ -547,7 +586,7 @@ def _integrate_proxy_paths(
     cy: Optional[float] = None,
     cx: Optional[float] = None,
     npt: int = 1000,
-) -> Dict[str, str]:
+) -> Dict[str, Union[str, List[str]]]:
     """
     Integrate one 2D TIFF image to 1D in pixel-radius space without detector calibration.
 
@@ -655,11 +694,15 @@ def subtract(
     q_min: Optional[float] = None,
     q_max: Optional[float] = None,
     use_cache: bool = True,
-) -> Dict[str, str]:
+) -> Dict[str, Union[str, List[str]]]:
     """
     Subtract buffer from sample 1D profile. Public entry point.
 
     Positional args mirror CLI: sample_1d, buffer_1d.
+
+    The `sample_1d` argument accepts a single file path, a directory (expanded to `*.dat`, non-recursive),
+    or an arbitrary glob expression. Expansion is lexicographically sorted and empty expansion is an error.
+    `buffer_1d` must be a single existing file path.
     """
     match_tail_ops: Optional[Dict] = None
     if q_min is not None or q_max is not None:
@@ -668,8 +711,15 @@ def subtract(
         match_tail_ops = {"q_range_abs": (q_min, q_max)}
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
+    if not buffer_1d or not os.path.isfile(buffer_1d):
+        raise FileNotFoundError("subtract requires buffer_1d to be an existing file")
+    expanded_samples = _expand_main_path_arg(sample_1d, kind="1d_dat")
+    for p in expanded_samples:
+        if Path(p).suffix.lower() != ".dat":
+            raise ValueError("subtract input sample_1d files must have .dat extension")
+    input_batch = [{"sample_1d": p, "buffer_1d": buffer_1d} for p in expanded_samples]
     return _subtract_paths(
-        input_paths={"sample_1d": sample_1d, "buffer_1d": buffer_1d},
+        input_paths=input_batch[0] if len(input_batch) == 1 else input_batch,
         output_dir=output_dir,
         event_bus=bus,
         use_cache=use_cache,
@@ -693,7 +743,7 @@ def _subtract_paths(
     sample_index: int = 0,
     method: str = "match_tail",
     match_tail_ops: Optional[Dict] = None,
-) -> Dict[str, str]:
+) -> Dict[str, Union[str, List[str]]]:
     """
     Subtract buffer from sample 1D profile (e.g. match-tail scaling). Writes subtracted curve.
 
@@ -754,11 +804,14 @@ def plot(
     guinier_q_min: Optional[float] = None,
     guinier_q_max: Optional[float] = None,
     use_cache: bool = True,
-) -> Dict[str, str]:
+) -> Dict[str, Union[str, List[str]]]:
     """
     Generate standard plots for a 1D profile. Public entry point.
 
     Positional args mirror CLI: profile.
+
+    The `profile` argument accepts a single file path, a directory (expanded to `*.dat`, non-recursive),
+    or an arbitrary glob expression. Expansion is lexicographically sorted and empty expansion is an error.
     """
     guinier_region: Optional[tuple] = None
     if guinier_q_min is not None or guinier_q_max is not None:
@@ -767,8 +820,13 @@ def plot(
         guinier_region = (guinier_q_min, guinier_q_max)
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
+    expanded_profiles = _expand_main_path_arg(profile, kind="1d_dat")
+    for p in expanded_profiles:
+        if Path(p).suffix.lower() != ".dat":
+            raise ValueError("plot input files must have .dat extension")
+    input_batch = [{"profile": p} for p in expanded_profiles]
     return _plot_paths(
-        input_paths={"profile": profile},
+        input_paths=input_batch[0] if len(input_batch) == 1 else input_batch,
         output_dir=output_dir,
         event_bus=bus,
         use_cache=use_cache,
@@ -790,7 +848,7 @@ def _plot_paths(
     use_cache: bool = True,
     sample_index: int = 0,
     guinier_region: Optional[tuple] = None,
-) -> Dict[str, str]:
+) -> Dict[str, Union[str, List[str]]]:
     """
     Generate standard plots for a 1D profile: Guinier, Kratky, log–log; optionally write Guinier-range .dat.
 
@@ -813,7 +871,7 @@ def _plot_paths(
 
     write_data(
         guinier_dat_path,
-        pd.DataFrame(np.stack([q * q, np.log(I)], axis=-1), columns=["q^2", "log(I)"]),
+        pd.DataFrame({"q^2": q * q, "log(I)": np.log(I)}),
         metadata={"type": "guinier", "parent": profile},
     )
     PLTViewer.view_curves(
@@ -823,7 +881,7 @@ def _plot_paths(
     )
     write_data(
         os.path.join(output_dir, f"kratky_{base}.dat"),
-        pd.DataFrame(np.stack([q, q * q * I], axis=-1), columns=["q", "I * q^2"]),
+        pd.DataFrame({"q": q, "I * q^2": q * q * I}),
         metadata={"type": "kratky", "parent": profile},
     )
     PLTViewer.view_curves(
@@ -833,7 +891,7 @@ def _plot_paths(
     )
     write_data(
         os.path.join(output_dir, f"loglog_{base}.dat"),
-        pd.DataFrame(np.stack([np.log(q), np.log(I)], axis=-1), columns=["log(q)", "log(I)"]),
+        pd.DataFrame({"log(q)": np.log(q), "log(I)": np.log(I)}),
         metadata={"type": "loglog", "parent": profile},
     )
     PLTViewer.view_curves(
@@ -863,44 +921,25 @@ def plot_2d(
     use_cache: bool = True,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Render one 2D SAXS TIFF image (or all .tif images from a directory) to PNG. Public entry point.
+    Render one or many 2D SAXS TIFF images to PNG. Public entry point.
 
     Positional args mirror CLI: image.
-    The `image` argument accepts either a single `.tif` file path or a directory
-    containing `.tif` files.
+    The `image` argument accepts a single file path, a directory (expanded to `*.tif`, non-recursive),
+    or an arbitrary glob expression. Expansion is lexicographically sorted and empty expansion is an error.
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
-    if not image:
-        raise FileNotFoundError("plot_2d requires an existing .tif file or directory")
-
-    if os.path.isfile(image):
-        if Path(image).suffix.lower() != ".tif":
-            raise ValueError("plot_2d file input must have .tif extension")
-        return _plot_2d_paths(
-            input_paths={"image": image},
-            output_dir=output_dir,
-            event_bus=bus,
-            use_cache=use_cache,
-        )
-
-    if os.path.isdir(image):
-        images = [
-            str(p)
-            for p in sorted(Path(image).iterdir())
-            if p.is_file() and p.suffix.lower() == ".tif"
-        ]
-        if not images:
-            raise FileNotFoundError("plot_2d found no .tif files in directory")
-        input_batch = [{"image": im_path} for im_path in images]
-        return _plot_2d_paths(
-            input_paths=input_batch,
-            output_dir=output_dir,
-            event_bus=bus,
-            use_cache=use_cache,
-        )
-
-    raise FileNotFoundError("plot_2d requires an existing .tif file or directory")
+    expanded_images = _expand_main_path_arg(image, kind="2d_tif")
+    for p in expanded_images:
+        if Path(p).suffix.lower() != ".tif":
+            raise ValueError("plot_2d input files must have .tif extension")
+    input_batch = [{"image": p} for p in expanded_images]
+    return _plot_2d_paths(
+        input_paths=input_batch[0] if len(input_batch) == 1 else input_batch,
+        output_dir=output_dir,
+        event_bus=bus,
+        use_cache=use_cache,
+    )
 
 
 @apply_batch(stem_from_keys="image", single_output_dir=True)
@@ -916,7 +955,7 @@ def _plot_2d_paths(
     event_bus: Optional[EventBus] = None,
     use_cache: bool = True,
     sample_index: int = 0,
-) -> Dict[str, str]:
+) -> Dict[str, Union[str, List[str]]]:
     """
     Render one 2D SAXS TIFF image to PNG using logarithmic intensity.
 
@@ -963,16 +1002,24 @@ def guinier_analysis(
     output_dir: str = ".",
     *,
     use_cache: bool = True,
-) -> Dict[str, str]:
+) -> Dict[str, Union[str, List[str]]]:
     """
     Run Guinier analysis on a 1D profile. Public entry point.
 
     Positional args mirror CLI: profile.
+
+    The `profile` argument accepts a single file path, a directory (expanded to `*.dat`, non-recursive),
+    or an arbitrary glob expression. Expansion is lexicographically sorted and empty expansion is an error.
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
+    expanded_profiles = _expand_main_path_arg(profile, kind="1d_dat")
+    for p in expanded_profiles:
+        if Path(p).suffix.lower() != ".dat":
+            raise ValueError("guinier_analysis input files must have .dat extension")
+    input_batch = [{"profile": p} for p in expanded_profiles]
     return _guinier_analysis_paths(
-        input_paths={"profile": profile},
+        input_paths=input_batch[0] if len(input_batch) == 1 else input_batch,
         output_dir=output_dir,
         event_bus=bus,
         use_cache=use_cache,
@@ -992,7 +1039,7 @@ def _guinier_analysis_paths(
     event_bus: Optional[EventBus] = None,
     use_cache: bool = True,
     sample_index: int = 0,
-) -> Dict[str, str]:
+) -> Dict[str, Union[str, List[str]]]:
     """
     Run Guinier analysis on a 1D profile (first5, first10, autorg, adaptive).
     Chosen result is always adaptive when available. Writes results file and ATSAS-format .dat for downstream.
@@ -1117,15 +1164,18 @@ def fit_mixture(
     profile: str,
     output_dir: str = ".",
     *,
-    config: Optional[Dict] = None,
+    config_path: Optional[str] = None,
     q_min_nm: Optional[float] = None,
     q_max_nm: Optional[float] = None,
     use_cache: bool = True,
-) -> Dict[str, str]:
+) -> Dict[str, Union[str, List[str]]]:
     """
     Run MIXTURE fits and select best by BIC. Public entry point.
 
     Positional args mirror CLI: profile.
+
+    The `profile` argument accepts a single file path, a directory (expanded to `*.dat`, non-recursive),
+    or an arbitrary glob expression. Expansion is lexicographically sorted and empty expansion is an error.
     """
     q_range_nm: Optional[tuple] = None
     if q_min_nm is not None or q_max_nm is not None:
@@ -1134,10 +1184,18 @@ def fit_mixture(
         q_range_nm = (q_min_nm, q_max_nm)
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
+    expanded_profiles = _expand_main_path_arg(profile, kind="1d_dat")
+    for p in expanded_profiles:
+        if Path(p).suffix.lower() != ".dat":
+            raise ValueError("fit_mixture input files must have .dat extension")
+    if config_path is None:
+        raise ValueError("fit_mixture requires config_path (path to YAML config containing a 'mixture' section)")
+    if not os.path.isfile(config_path):
+        raise FileNotFoundError(f"fit_mixture config_path not found: {config_path!r}")
+    input_batch = [{"profile": p, "config_path": config_path} for p in expanded_profiles]
     return _fit_mixture_paths(
-        input_paths={"profile": profile},
+        input_paths=input_batch[0] if len(input_batch) == 1 else input_batch,
         output_dir=output_dir,
-        config=config,
         event_bus=bus,
         use_cache=use_cache,
         q_range_nm=q_range_nm,
@@ -1146,7 +1204,7 @@ def fit_mixture(
 
 @apply_batch(stem_from_keys="profile")
 @run_with_cache(
-    path_keys_for_hash=["profile"],
+    path_keys_for_hash=["profile", "config_path"],
     kwargs_for_hash_keys=["q_range_nm"],
     include_config_in_hash=False,
 )
@@ -1158,7 +1216,7 @@ def _fit_mixture_paths(
     use_cache: bool = True,
     sample_index: int = 0,
     q_range_nm: Optional[tuple] = None,
-) -> Dict[str, str]:
+) -> Dict[str, Union[str, List[str]]]:
     """
     Run MIXTURE fits (1-/2-/3-phase × Gaussian/Schultz–Zimm, sphere-only), select best by BIC,
     write comparison plot, distribution plot, results CSV.
@@ -1178,7 +1236,14 @@ def _fit_mixture_paths(
 
     cfg = config
     if not cfg:
-        raise ValueError("fit_mixture requires config (pass `config=` from loaded config file)")
+        cfg_path = input_paths.get("config_path")
+        if isinstance(cfg_path, list):
+            cfg_path = cfg_path[0] if cfg_path else None
+        if not cfg_path or not isinstance(cfg_path, str):
+            raise ValueError("fit_mixture requires config_path (or an explicit in-memory config)")
+        if not os.path.isfile(cfg_path):
+            raise FileNotFoundError(f"fit_mixture requires an existing config_path, got: {cfg_path!r}")
+        cfg = load_config(cfg_path)
     mixture_cfg = dict((cfg or {}).get("mixture") or {})
     required = ("maxit", "r_min", "r_max", "poly_min", "poly_max", "max_nph")
     missing = [k for k in required if k not in mixture_cfg]
@@ -1221,16 +1286,24 @@ def fit_bodies(
     output_dir: str = ".",
     *,
     use_cache: bool = True,
-) -> Dict[str, str]:
+) -> Dict[str, Union[str, List[str]]]:
     """
     Run ATSAS bodies and export fits. Public entry point.
 
     Positional args mirror CLI: profile.
+
+    The `profile` argument accepts a single file path, a directory (expanded to `*.dat`, non-recursive),
+    or an arbitrary glob expression. Expansion is lexicographically sorted and empty expansion is an error.
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
+    expanded_profiles = _expand_main_path_arg(profile, kind="1d_dat")
+    for p in expanded_profiles:
+        if Path(p).suffix.lower() != ".dat":
+            raise ValueError("fit_bodies input files must have .dat extension")
+    input_batch = [{"profile": p} for p in expanded_profiles]
     return _fit_bodies_paths(
-        input_paths={"profile": profile},
+        input_paths=input_batch[0] if len(input_batch) == 1 else input_batch,
         output_dir=output_dir,
         event_bus=bus,
         use_cache=use_cache,
@@ -1256,7 +1329,7 @@ def _fit_bodies_paths(
     event_bus: Optional[EventBus] = None,
     use_cache: bool = True,
     sample_index: int = 0,
-) -> Dict[str, str]:
+) -> Dict[str, Union[str, List[str]]]:
     """
     Run ATSAS bodies on a 1D profile for multiple shapes; export fits (fir, PNG, yml, csv).
 
@@ -1326,11 +1399,18 @@ def _fit_bodies_paths(
         ]
         pd.DataFrame(dict(zip(csv_cols, csv_arrays))).to_csv(bodies_fits_csv, index=False)
         to_plot = [q[idx], I[idx], {"label": "exp", "lw": 4}] + to_plot
-        PLTViewer.view_curves(
-            *to_plot, sigmas=(sigma[idx],),
-            title=f"Fits comparison for\n{base}", xlabel="q (nm-1)", ylabel="I", legend=True,
-            plotFilePath=bodies_fits_png,
-        )
+        if sigma is None:
+            PLTViewer.view_curves(
+                *to_plot,
+                title=f"Fits comparison for\n{base}", xlabel="q (nm-1)", ylabel="I", legend=True,
+                plotFilePath=bodies_fits_png,
+            )
+        else:
+            PLTViewer.view_curves(
+                *to_plot, sigmas=(sigma[idx],),
+                title=f"Fits comparison for\n{base}", xlabel="q (nm-1)", ylabel="I", legend=True,
+                plotFilePath=bodies_fits_png,
+            )
     return {
         "output_subdir": output_dir,
     }
@@ -1349,19 +1429,27 @@ def fit_dammif(
     *,
     gnom_path: Optional[str] = None,
     use_cache: bool = True,
-) -> Dict[str, str]:
+) -> Dict[str, Union[str, List[str]]]:
     """
     Run ATSAS dammif and export results. Public entry point.
 
     Positional args mirror CLI: profile.
+
+    The `profile` argument accepts a single file path, a directory (expanded to `*.dat`, non-recursive),
+    or an arbitrary glob expression. Expansion is lexicographically sorted and empty expansion is an error.
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
-    input_paths: Dict[str, Union[str, List[str]]] = {"profile": profile}
+    expanded_profiles = _expand_main_path_arg(profile, kind="1d_dat")
+    for p in expanded_profiles:
+        if Path(p).suffix.lower() != ".dat":
+            raise ValueError("fit_dammif input files must have .dat extension")
+    input_batch: List[Dict[str, Union[str, List[str]]]] = [{"profile": p} for p in expanded_profiles]
     if gnom_path is not None:
-        input_paths["gnom_path"] = gnom_path
+        for inp in input_batch:
+            inp["gnom_path"] = gnom_path
     return _fit_dammif_paths(
-        input_paths=input_paths,
+        input_paths=input_batch[0] if len(input_batch) == 1 else input_batch,
         output_dir=output_dir,
         event_bus=bus,
         use_cache=use_cache,
@@ -1383,7 +1471,7 @@ def _fit_dammif_paths(
     event_bus: Optional[EventBus] = None,
     use_cache: bool = True,
     sample_index: int = 0,
-) -> Dict[str, str]:
+) -> Dict[str, Union[str, List[str]]]:
     """
     Run ATSAS dammif (ab initio shape reconstruction) on a 1D profile; produce shape models and descriptors.
 
@@ -1447,11 +1535,18 @@ def _fit_dammif_paths(
         csv_arrays = [q[idx], I[idx]] + [np.interp(q[idx], _q, _i) for _k, _d, _q, _i in fits_data]
         pd.DataFrame(dict(zip(csv_cols, csv_arrays))).to_csv(dammif_fits_csv, index=False)
         to_plot = [q[idx], I[idx], {"label": "exp", "lw": 4}] + to_plot
-        PLTViewer.view_curves(
-            *to_plot, sigmas=(sigma[idx],),
-            title=f"Fits comparison for\n{base}", xlabel="q (nm-1)", ylabel="I", legend=True,
-            plotFilePath=dammif_fits_png,
-        )
+        if sigma is None:
+            PLTViewer.view_curves(
+                *to_plot,
+                title=f"Fits comparison for\n{base}", xlabel="q (nm-1)", ylabel="I", legend=True,
+                plotFilePath=dammif_fits_png,
+            )
+        else:
+            PLTViewer.view_curves(
+                *to_plot, sigmas=(sigma[idx],),
+                title=f"Fits comparison for\n{base}", xlabel="q (nm-1)", ylabel="I", legend=True,
+                plotFilePath=dammif_fits_png,
+            )
     return {"output_subdir": output_dir}
 
 

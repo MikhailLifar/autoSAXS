@@ -248,3 +248,4 @@ if __name__ == "__main__":
     print(f"Subtracted: compared {len(results_sub)} curves. Plots in {OUTPUT_DIR_SUBTRACTED}")
     for base, ref_name, metric, *_ in results_sub:
         print(f"  {base} vs {ref_name}  metric = {metric:.6f}")
+
