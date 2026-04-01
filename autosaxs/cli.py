@@ -62,7 +62,13 @@ def _skill_functions() -> Dict[str, Callable[..., Any]]:
 
 def _add_skill_subparser(subparsers: argparse._SubParsersAction, name: str, fn: Callable[..., Any]) -> None:
     sig = inspect.signature(fn)
-    p = subparsers.add_parser(name, help=(inspect.getdoc(fn) or "").splitlines()[0] if inspect.getdoc(fn) else None)
+    doc = inspect.getdoc(fn) or ""
+    p = subparsers.add_parser(
+        name,
+        help=doc.splitlines()[0] if doc else None,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(f"Description:\n\n{doc}\n" if doc else None),
+    )
     p.set_defaults(_autosaxs_fn=fn)
 
     # Resolve postponed annotations ("from __future__ import annotations"), so

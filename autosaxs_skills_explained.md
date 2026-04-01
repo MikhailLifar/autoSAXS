@@ -130,8 +130,7 @@ print(out["integrated_1d"])
 ### CLI usage
 
 ```bash
-autosaxs integrate /data/sample_01.tif /data/sample_02.tif calibration/integrator \
-  --output-dir integration --npt 1000
+autosaxs integrate /data/sample_01.tif /data/sample_02.tif calibration/integrator       --output-dir integration --npt 1000
 ```
 
 ---
@@ -144,7 +143,10 @@ This is intended for quick-look / debugging when you don’t have a calibrated i
 
 ### Arguments
 
-- `image` (str): Path to a `.tif` file **or** a directory containing `.tif` files.
+- `image` (str): 2D image path expression. Can be:
+  - a single `.tif` file path
+  - a directory (expands to `*.tif`, non-recursive)
+  - a glob expression (including `**`)
 - `output_dir` (str, default `.`): Directory where integrated curves are written.
 - `mask` (str | None, default `None`): Optional mask path; same shape as the image. (`pyFAI` convention: masked pixels are excluded.)
 - `cy` (float | None, default `None`): Optional beam center y in pixels. Must be set together with `cx`.
@@ -234,8 +236,7 @@ print(out["subtracted_1d"])
 ### CLI usage
 
 ```bash
-autosaxs subtract integration/int_sample_01.dat integration/int_buffer.dat \
-  --output-dir subtracted --method match_tail --q-min 4.0 --q-max 6.0
+autosaxs subtract integration/int_sample_01.dat integration/int_buffer.dat       --output-dir subtracted --method match_tail --q-min 4.0 --q-max 6.0
 ```
 
 ---
@@ -423,8 +424,7 @@ print(out["results_csv_path"])
 ### CLI usage
 
 ```bash
-autosaxs fit_mixture subtracted/sub_sample_01.dat --output-dir mixture --config-path config_autosaxs.yml \
-  --q-min-nm 0.8 --q-max-nm 2.5
+autosaxs fit_mixture subtracted/sub_sample_01.dat --output-dir mixture --config-path config_autosaxs.yml       --q-min-nm 0.8 --q-max-nm 2.5
 ```
 
 ---
@@ -585,3 +585,4 @@ print(out["report_pdf_path"])
 autosaxs report_summary pipeline_out --output-dir reports
 ```
 
+---
