@@ -32,11 +32,12 @@ def _wrap_handler(bus: EventBus, callback):
     return handler
 
 
-def fast_first_processing(directory: str, steps=None, mask_choice=None):
+def fast_first_processing(directory: str, steps=None, mask_choice=None, fast_forward: bool = True):
     """Run pipeline with configurable steps (§3.2.1).
     directory: working directory; required files must exist there.
     steps: list of step names (e.g. ["calibration", "integration"]). Default: calibration, integration, subtraction, simple_analysis, plots.
     mask_choice: when calibration asks for mask, use this choice: 'a' (automask), 'f' (from file), 'c' (combine). Default: 'f'.
+    fast_forward: if True, enable fast-forward mode (reuse cached skill outputs when possible).
     Raises if a required file is missing or on alignment failure.
     """
     if steps is None:
@@ -88,7 +89,7 @@ def fast_first_processing(directory: str, steps=None, mask_choice=None):
     event_bus = EventBus()
     _connect(event_bus)
     controller = Controller(event_bus, viewer.PLTViewer())
-    return controller.pipeline_interactive(fast_forward=True)
+    return controller.pipeline_interactive(fast_forward=fast_forward)
 
 
 def slow_second_processing(directory: str, selected_profiles: list):
