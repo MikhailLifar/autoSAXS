@@ -200,18 +200,28 @@ def run_with_cache(
             use_cache: bool = True,
             **kwargs: Any,
         ) -> Dict[str, Union[str, List[str]]]:
+            # When caching is disabled, do not pay the cost of hashing inputs (may read large files)
+            # and do not read/write any cache state.
+            if not use_cache:
+                return skill_impl(
+                    input_paths,
+                    output_dir,
+                    config=config,
+                    event_bus=event_bus,
+                    use_cache=False,
+                    **kwargs,
+                )
+
             kwh = dict(kwargs_for_hash or {})
             for k in kwargs_for_hash_keys or []:
                 kwh[k] = kwargs.get(k)
             config_for_hash = config if include_config_in_hash else None
-            current_hash = compute_input_hash(
-                input_paths, path_keys_for_hash, config_for_hash, kwh
-            )
+            current_hash = compute_input_hash(input_paths, path_keys_for_hash, config_for_hash, kwh)
+
             records: List[Dict[str, Any]] = []
-            if use_cache:
-                cache = read_cache(output_dir)
-                if cache and "records" in cache:
-                    records = list(cache["records"])
+            cache = read_cache(output_dir)
+            if cache and "records" in cache:
+                records = list(cache["records"])
 
             def find_record_by_hash() -> Optional[int]:
                 for idx, rec in enumerate(records):
@@ -220,30 +230,32 @@ def run_with_cache(
                 return None
 
             _debug = os.environ.get("AUTOSAXS_CACHE_DEBUG", "").strip().lower() in ("1", "true", "yes")
-            if use_cache:
-                idx = find_record_by_hash()
+            idx = find_record_by_hash()
+            if _debug:
+                print(
+                    f"[cache] hash={current_hash[:16]}... records={len(records)} found_idx={idx} output_dir={output_dir!r}"
+                )
+            if idx is not None:
+                rec = records[idx]
+                paths_to_check = _flatten_output_paths(rec.get("output_paths") or {})
+                finish = rec.get("finish_date") or ""
+                ok = bool(paths_to_check and finish and check_output_integrity(paths_to_check, finish))
                 if _debug:
-                    print(
-                        f"[cache] hash={current_hash[:16]}... records={len(records)} found_idx={idx} output_dir={output_dir!r}"
-                    )
-                if idx is not None:
-                    rec = records[idx]
-                    paths_to_check = _flatten_output_paths(rec.get("output_paths") or {})
-                    finish = rec.get("finish_date") or ""
-                    ok = bool(paths_to_check and finish and check_output_integrity(paths_to_check, finish))
-                    if _debug:
-                        print(f"[cache] integrity={ok} paths={paths_to_check!r} finish={finish}")
-                    if ok:
-                        if event_bus:
-                            event_bus.publish(EventType.MESSAGE, {"text": f"{skill_impl.__name__}: cache hit, reusing previous results."})
-                        out_cached = dict(rec["output_paths"])
-                        out_cached["from_cache"] = True
-                        return out_cached
-                    records.pop(idx)
-                elif _debug and idx is None:
-                    print(f"[cache] miss (no matching record), running skill")
-                if event_bus:
-                    event_bus.publish(EventType.MESSAGE, {"text": f"{skill_impl.__name__}: cache miss, running skill."})
+                    print(f"[cache] integrity={ok} paths={paths_to_check!r} finish={finish}")
+                if ok:
+                    if event_bus:
+                        event_bus.publish(
+                            EventType.MESSAGE,
+                            {"text": f"{skill_impl.__name__}: cache hit, reusing previous results."},
+                        )
+                    out_cached = dict(rec["output_paths"])
+                    out_cached["from_cache"] = True
+                    return out_cached
+                records.pop(idx)
+            elif _debug and idx is None:
+                print(f"[cache] miss (no matching record), running skill")
+            if event_bus:
+                event_bus.publish(EventType.MESSAGE, {"text": f"{skill_impl.__name__}: cache miss, running skill."})
 
             out = skill_impl(
                 input_paths, output_dir, config=config, event_bus=event_bus, use_cache=False, **kwargs

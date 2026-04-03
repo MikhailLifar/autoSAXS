@@ -1,4 +1,4 @@
-"""Core infrastructure for fast2dprocess_gui."""
+"""Core infrastructure for guisaxs."""
 from .interfaces import IConfigManager, ICalibrationManager, IStatusReporter
 from .event_bus import EventBus, EventType
 from .constants import (

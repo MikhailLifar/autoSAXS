@@ -8,4 +8,4 @@ build/
 dist/
 *.egg
 autosaxs/temp/
-fast2dprocess_gui_temp/
+guisaxs_temp/

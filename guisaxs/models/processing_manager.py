@@ -1,8 +1,21 @@
 """Processing management for the application."""
 import os
+import threading
+import time
 from typing import Optional
 from ..models.calibration_manager import CalibrationManager
 from autosaxs.skill import integrate, subtract
+
+
+def _debug_processing_pm(msg: str) -> None:
+    if os.environ.get("GUISAXS_DEBUG_PROCESSING", "").strip().lower() not in ("1", "true", "yes"):
+        return
+    thr = threading.current_thread()
+    print(
+        f"[GUISAXS_DEBUG_PROCESSING t={time.monotonic():.3f} "
+        f"ident={threading.get_ident()} name={thr.name!r}] PM.{msg}",
+        flush=True,
+    )
 
 
 class ProcessingManager:
@@ -44,6 +57,9 @@ class ProcessingManager:
         if not integrator_dir:
             raise ValueError("Integrator directory is not available")
 
+        _debug_processing_pm(
+            f"before autosaxs.integrate image={os.path.basename(str(image_path))!r}"
+        )
         # Use autosaxs skill (loads integrator + reads TIFF internally)
         out = integrate(
             images=[image_path],
@@ -52,6 +68,7 @@ class ProcessingManager:
             npt=1000,
             use_cache=True,
         )
+        _debug_processing_pm("after autosaxs.integrate")
         paths = out.get("integrated_1d") if isinstance(out, dict) else None
         # Skills batching wrapper returns single-sample outputs as scalar strings (not list-of-one).
         if isinstance(paths, str) and paths:

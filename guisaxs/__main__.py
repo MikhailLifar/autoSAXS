@@ -43,7 +43,7 @@ def _ask_working_directory(root):
 
 
 def main():
-    """Main entry point for the SAXS Data Processor GUI."""
+    """Main entry point for guisaxs (SAXS data processor GUI)."""
     # Create root window with DND support
     root = TkinterDnD.Tk()
     root.withdraw()  # Hide until we have working directory

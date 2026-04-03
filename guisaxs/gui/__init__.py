@@ -1,4 +1,4 @@
-"""GUI components for fast2dprocess_gui."""
+"""GUI components for guisaxs."""
 from .main_window import SAXSProcessorGUI
 from .control_panel import ControlPanel
 from .image_tab_2d import ImageTab2D

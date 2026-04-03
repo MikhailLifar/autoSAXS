@@ -1,4 +1,4 @@
-"""Services for fast2dprocess_gui."""
+"""Services for guisaxs."""
 from .calibration_service import CalibrationService
 from .processing_service import ProcessingService
 

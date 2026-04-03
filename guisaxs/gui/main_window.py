@@ -1,9 +1,11 @@
 """Main GUI window for SAXS Data Processor."""
 import os
+import queue
 import threading
+import time
 import customtkinter as ctk
 import tkinter as tk
-from typing import Optional, Union, List
+from typing import Callable, List, Optional, Union
 from ..core.constants import CONVERSIONS_TO_INTERNAL, CONVERSIONS_TO_DISPLAY
 from ..core.style import STATUS_COLORS, FONTS
 from ..core.event_bus import EventBus, EventType
@@ -15,6 +17,18 @@ from .image_tab_2d import ImageTab2D
 from .curves_tab_1d import CurvesTab1D
 from .widgets import center_window, enable_text_copying_recursive
 from autosaxs.utils import read_from_tiff
+
+
+def _debug_processing(msg: str) -> None:
+    """Opt-in tracing: set GUISAXS_DEBUG_PROCESSING=1 to log ordering across threads."""
+    if os.environ.get("GUISAXS_DEBUG_PROCESSING", "").strip().lower() not in ("1", "true", "yes"):
+        return
+    thr = threading.current_thread()
+    print(
+        f"[GUISAXS_DEBUG_PROCESSING t={time.monotonic():.3f} "
+        f"ident={threading.get_ident()} name={thr.name!r}] {msg}",
+        flush=True,
+    )
 
 
 class SAXSProcessorGUI:
@@ -30,8 +44,11 @@ class SAXSProcessorGUI:
         """
         self.root = root
         self.working_dir = working_dir
-        self.root.title("SAXS Data Processor")
+        self.root.title("guisaxs")
         self.root.geometry("1400x900")
+
+        # Marshals callables to the Tk thread; worker threads must not call root.after/after_idle.
+        self._gui_queue: queue.Queue = queue.Queue()
         
         # Initialize event bus
         self.event_bus = EventBus()
@@ -75,11 +92,52 @@ class SAXSProcessorGUI:
         
         # Enable text copying globally for all widgets (after all widgets are created)
         enable_text_copying_recursive(self.root)
+
+        self._start_gui_queue_pump()
+    
+    def schedule_gui(self, fn: Callable[[], None]) -> None:
+        """Run ``fn`` on the Tk main thread. Safe from calibration/processing worker threads."""
+        if threading.current_thread() is threading.main_thread():
+            try:
+                self.root.after(0, fn)
+            except tk.TclError:
+                fn()
+        else:
+            self._gui_queue.put(fn)
+
+    def _start_gui_queue_pump(self) -> None:
+        """Drain cross-thread GUI tasks periodically (tests use update(), not mainloop())."""
+
+        def pump() -> None:
+            try:
+                while True:
+                    task = self._gui_queue.get_nowait()
+                    try:
+                        task()
+                    except Exception as e:
+                        print(f"GUI queue task failed: {e}")
+            except queue.Empty:
+                pass
+            try:
+                if self.root.winfo_exists():
+                    self.root.after(50, pump)
+            except tk.TclError:
+                pass
+
+        self.root.after(50, pump)
     
     def _subscribe_to_events(self):
         """Subscribe to events from managers/services."""
-        self.event_bus.subscribe(EventType.CALIBRATION_COMPLETE, self._on_calibration_complete)
-        self.event_bus.subscribe(EventType.CALIBRATION_ERROR, self._on_calibration_error)
+        # Calibration finishes on a worker thread; EventBus.publish is synchronous, so marshal
+        # GUI work to the Tk main loop (same as status_callback in apply_calibration).
+        self.event_bus.subscribe(
+            EventType.CALIBRATION_COMPLETE,
+            lambda data: self.schedule_gui(lambda d=data: self._on_calibration_complete(d)),
+        )
+        self.event_bus.subscribe(
+            EventType.CALIBRATION_ERROR,
+            lambda data: self.schedule_gui(lambda d=data: self._on_calibration_error(d)),
+        )
         self.event_bus.subscribe(EventType.PROCESSING_COMPLETE, self._on_processing_complete)
     
     def _on_calibration_complete(self, data: dict):
@@ -327,7 +385,11 @@ class SAXSProcessorGUI:
             return
         
         self.config_manager.save()
-        self.calibration_service.run_calibration(status_callback=self._update_status)
+        self.calibration_service.run_calibration(
+            status_callback=lambda msg, typ: self.schedule_gui(
+                lambda m=msg, t=typ: self._update_status(m, t)
+            ),
+        )
         # Status monitoring is started by the service, but we also need GUI-level monitoring
         self._start_status_monitoring()
     
@@ -412,21 +474,35 @@ class SAXSProcessorGUI:
     
     def _process_image_worker(self, image_path: str, image_type: str, title: str):
         """Worker function for processing images in a thread."""
-        # Update GUI on main thread
-        self.root.after_idle(lambda: self.display_2d_image(image_path, title))
-        
-        # Process image using service
+        _debug_processing(
+            f"worker _process_image_worker enter image_type={image_type!r} title={title!r}"
+        )
+
+        def idle_display_2d():
+            _debug_processing("MAIN: display_2d_image (start)")
+            self.display_2d_image(image_path, title)
+            _debug_processing("MAIN: display_2d_image (end)")
+
+        self.schedule_gui(idle_display_2d)
+        _debug_processing("worker scheduled display_2d via schedule_gui; calling process_image next")
+
+        def status_on_main(msg: str, typ: str):
+            _debug_processing(f"MAIN: _update_status msg={msg!r} typ={typ!r}")
+            self._update_status(msg, typ)
+
         output_path = self.processing_service.process_image(
             image_path,
             image_type,
-            status_callback=lambda msg, typ: self.root.after_idle(lambda: self._update_status(msg, typ))
+            status_callback=lambda m, t: self.schedule_gui(
+                lambda m=m, t=t: status_on_main(m, t)
+            ),
         )
-        
+
+        _debug_processing(f"worker process_image returned output_path={output_path!r}")
+
         if output_path:
-            # Copy source image to working directory with descriptive naming (delegated to DataManager)
             self.data_manager.copy_image_to_temp(image_path, image_type, self.working_dir)
-            
-            # Register curve in GUI and save plots (delegated to view component)
+
             if self.curves_tab_1d:
                 out_path = output_path
                 img_type = image_type
@@ -456,18 +532,25 @@ class SAXSProcessorGUI:
                             self.curves_tab_1d.save_all_curve_plots(subtracted_path)
 
                 def add_curve_then_maybe_subtract():
+                    _debug_processing("MAIN: add_curve_then_maybe_subtract (start)")
                     self.curves_tab_1d.add_curve(out_path, img_type)
                     if img_type == "sample":
-                        # Schedule subtraction only after this sample's curve is in the list (avoids race with buffer)
                         self.root.after(100, create_subtracted_curves)
                     self.root.after(200, save_all_curve_plots)
+                    _debug_processing("MAIN: add_curve_then_maybe_subtract (end)")
 
-                self.root.after_idle(add_curve_then_maybe_subtract)
-            
-            # Update display and save 2D image plot (delegated to view component)
-            self.root.after_idle(lambda: self.display_1d_curves())
+                self.schedule_gui(add_curve_then_maybe_subtract)
+
+            def idle_display_1d():
+                _debug_processing("MAIN: display_1d_curves (start)")
+                self.display_1d_curves()
+                _debug_processing("MAIN: display_1d_curves (end)")
+
+            self.schedule_gui(idle_display_1d)
             if self.image_tab_2d:
-                self.root.after_idle(lambda: self.image_tab_2d.save_image_plot(image_path, image_type))
+                self.schedule_gui(
+                    lambda: self.image_tab_2d.save_image_plot(image_path, image_type)
+                )
     
     def display_2d_image(self, image_path: str, title: str):
         """Display a 2D image in the 2D tab."""

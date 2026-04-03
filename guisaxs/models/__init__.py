@@ -1,4 +1,4 @@
-"""Data models and managers for fast2dprocess_gui."""
+"""Data models and managers for guisaxs."""
 from .config_manager import ConfigManager
 from .data_manager import DataManager
 from .calibration_manager import CalibrationManager

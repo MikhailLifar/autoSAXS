@@ -16,6 +16,7 @@ import re
 import csv
 import shutil
 from typing import Any, cast
+import pytest
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -47,6 +48,17 @@ SUCCESS_TXT = os.path.join(VALIDATION_DIR, "success.txt")
 SIGNIFICANT_INCREASE_REL = 0.01  # >1%
 
 SUB_DAT_PATTERN = re.compile(r"^sub_\d+\.dat$")
+
+_VALIDATION_MISSING_MSG = (
+    f"Validation directory not found: {VALIDATION_DIR}. "
+    "Run: python repos/scripts/setup_validation_data.py"
+)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _require_validation_dir_fixture():
+    if not os.path.isdir(VALIDATION_DIR):
+        raise FileNotFoundError(_VALIDATION_MISSING_MSG)
 
 def _reset_validation_plots_dir():
     """Remove validation_plots/ before regenerating plots."""
@@ -291,11 +303,6 @@ def compare_and_plot_subtracted():
 
 def test_calib_integration_validation():
     """Pytest entry: run pipeline (calib+integration) and compare to reference .chi."""
-    if not os.path.isdir(VALIDATION_DIR):
-        raise FileNotFoundError(
-            f"Validation directory not found: {VALIDATION_DIR}. "
-            "Run: python repos/scripts/setup_validation_data.py"
-        )
     _reset_validation_plots_dir()
     old_int = _read_metrics_csv(METRICS_INTEGRATED_CSV)
     run_calibration_integration_subtraction()
@@ -311,11 +318,6 @@ def test_calib_integration_validation():
 
 def test_calib_integration_subtraction_validation():
     """Pytest entry: run pipeline (calib+integration+subtraction) and compare to reference sub_*.dat."""
-    if not os.path.isdir(VALIDATION_DIR):
-        raise FileNotFoundError(
-            f"Validation directory not found: {VALIDATION_DIR}. "
-            "Run: python repos/scripts/setup_validation_data.py"
-        )
     _reset_validation_plots_dir()
     old_sub = _read_metrics_csv(METRICS_SUBTRACTED_CSV)
     run_calibration_integration_subtraction()
@@ -331,10 +333,7 @@ def test_calib_integration_subtraction_validation():
 
 if __name__ == "__main__":
     if not os.path.isdir(VALIDATION_DIR):
-        print("Running setup_validation_data.py first...")
-        sys.path.insert(0, _REPOS)
-        from scripts.setup_validation_data import main as setup_main
-        setup_main()
+        raise FileNotFoundError(_VALIDATION_MISSING_MSG)
     _reset_validation_plots_dir()
 
     old_int = _read_metrics_csv(METRICS_INTEGRATED_CSV)

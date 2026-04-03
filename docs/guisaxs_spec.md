@@ -1,4 +1,4 @@
-# fast2dprocess_gui — Technical Specification
+# guisaxs — Technical Specification
 
 This document is derived solely from the code in this repository. It describes behavior, constraints, and edge cases precisely enough for a new developer or agent to implement or refactor the application without missing requirements.
 
@@ -6,7 +6,7 @@ This document is derived solely from the code in this repository. It describes b
 
 ## 1. Purpose and scope
 
-**One-sentence summary:** The application is a desktop GUI for SAXS (Small-Angle X-Ray Scattering) that performs 2D → 1D azimuthal integration with calibrant-based geometry calibration, optional mask and buffer subtraction, with all results automatically saved to a user-selected working directory.
+**One-sentence summary:** **guisaxs** is a desktop GUI for SAXS (Small-Angle X-Ray Scattering) that performs 2D → 1D azimuthal integration with calibrant-based geometry calibration, optional mask and buffer subtraction, with all results automatically saved to a user-selected working directory.
 
 **Main user goal:** Choose an empty working directory at launch, then run calibration and process buffer/samples; all outputs are written automatically to that directory.
 
@@ -30,11 +30,11 @@ This document is derived solely from the code in this repository. It describes b
 - **Application kind:** Single-window desktop GUI (Tk/CustomTkinter) with drag-and-drop, event-driven updates, and background work (calibration subprocess, processing threads).
 
 - **Layers:**
-  - **GUI:** `fast2dprocess_gui/gui/` — main window, control panel, 2D tab, 1D tab, widgets. Owns user input, display, and calling into services/managers; schedules UI updates on the main thread. All visual styling (fonts, colors, spacing) must be taken from the style module; no hardcoded style values in GUI code.
-  - **Services:** `fast2dprocess_gui/services/` — `CalibrationService`, `ProcessingService`. Orchestrate calibration (subprocess + status monitoring) and processing (process_image, create_subtracted_curve); publish events and call status callbacks.
-  - **Managers / models:** `fast2dprocess_gui/models/` — `ConfigManager`, `DataManager`, `CalibrationManager`, `ProcessingManager`. Own state and business rules.
-  - **Core:** `fast2dprocess_gui/core/` — event bus (`EventBus`, `EventType`), constants (paths, units), interfaces (`IConfigManager`, `ICalibrationManager`, `IStatusReporter`).
-  - **Style:** The module `fast2dprocess_gui/core/style.py` is the single source of truth for all visual style: the CustomTkinter color theme (e.g. `COLOR_THEME`: "blue", "green", "dark-blue"), fonts, colors (including status bar colors), spacing, and any other theme-related variables. This module is the only place where such values are defined; all GUI code and any code that sets widget appearance or theme must import from it (e.g. `from fast2dprocess_gui.core.style import FONTS, COLORS, STATUS_COLORS, COLOR_THEME`) and must not hardcode theme, fonts, colors, or other style constants elsewhere. Status bar colors are defined here.
+  - **GUI:** `guisaxs/gui/` — main window, control panel, 2D tab, 1D tab, widgets. Owns user input, display, and calling into services/managers; schedules UI updates on the main thread. All visual styling (fonts, colors, spacing) must be taken from the style module; no hardcoded style values in GUI code.
+  - **Services:** `guisaxs/services/` — `CalibrationService`, `ProcessingService`. Orchestrate calibration (subprocess + status monitoring) and processing (process_image, create_subtracted_curve); publish events and call status callbacks.
+  - **Managers / models:** `guisaxs/models/` — `ConfigManager`, `DataManager`, `CalibrationManager`, `ProcessingManager`. Own state and business rules.
+  - **Core:** `guisaxs/core/` — event bus (`EventBus`, `EventType`), constants (paths, units), interfaces (`IConfigManager`, `ICalibrationManager`, `IStatusReporter`).
+  - **Style:** The module `guisaxs/core/style.py` is the single source of truth for all visual style: the CustomTkinter color theme (e.g. `COLOR_THEME`: "blue", "green", "dark-blue"), fonts, colors (including status bar colors), spacing, and any other theme-related variables. This module is the only place where such values are defined; all GUI code and any code that sets widget appearance or theme must import from it (e.g. `from guisaxs.core.style import FONTS, COLORS, STATUS_COLORS, COLOR_THEME`) and must not hardcode theme, fonts, colors, or other style constants elsewhere. Status bar colors are defined here.
 
 - **Ownership:**
   - **DataManager:** Single path per file type for calibrant, buffer, and mask; **sample** holds a **list of paths** (zero or more). Validation: image extension `.tif`/`.tiff`; mask extension `.npy`/`.txt`/`.msk` and 0/1 or boolean-like values. Copy images to working directory; all outputs are written to the working directory (selected at launch, must be empty). Only the sample field accepts and stores multiple files.
@@ -155,7 +155,7 @@ This document is derived solely from the code in this repository. It describes b
 
 - **Right: Tabs.** “2D Images”: left = scrollable thumbnails (Images); right = main 2D view. “1D Curves”: left = scrollable curve list (checkboxes); top-right = plot type selector; below = 1D plot canvas. Selection: 2D main image chosen by clicking a thumbnail (then that thumbnail highlighted). 1D: only checked curves are plotted.
 
-- **Status bar:** Single line below the tabbed area; text from `status_var`; background color from `STATUS_COLORS` in `fast2dprocess_gui/core/style.py`: default (gray), progress (lightblue/darkblue), success (green), error (red). Reset to default color after 5 seconds following an error (calibration error, working-directory validation error, or invalid file).
+- **Status bar:** Single line below the tabbed area; text from `status_var`; background color from `STATUS_COLORS` in `guisaxs/core/style.py`: default (gray), progress (lightblue/darkblue), success (green), error (red). Reset to default color after 5 seconds following an error (calibration error, working-directory validation error, or invalid file).
 
 - **Text copying:** Right-click (Button-3 / Button-2) on labels and entries opens a “Copy” context menu; recursive attach from root via `enable_text_copying_recursive(root)` after widgets are created. Copy uses widget text or entry selection/content.
 
@@ -163,7 +163,7 @@ This document is derived solely from the code in this repository. It describes b
 
 ## 11. Style and theming
 
-- **Location:** All visual style and the application color theme are defined in **`fast2dprocess_gui/core/style.py`**. No color theme, fonts, colors, or other style values are hardcoded in GUI or other code; they are always imported from this module (e.g. `from fast2dprocess_gui.core.style import FONTS, COLORS, STATUS_COLORS, COLOR_THEME`). Status bar colors live in this module, not in `core/constants.py`.
+- **Location:** All visual style and the application color theme are defined in **`guisaxs/core/style.py`**. No color theme, fonts, colors, or other style values are hardcoded in GUI or other code; they are always imported from this module (e.g. `from guisaxs.core.style import FONTS, COLORS, STATUS_COLORS, COLOR_THEME`). Status bar colors live in this module, not in `core/constants.py`.
 
 - **Contents of the style module:** The module exposes at least the following, matching the current app appearance:
   - **`COLOR_THEME`** — the CustomTkinter default color theme; current value `"blue"`. Applied at startup (e.g. `ctk.set_default_color_theme(COLOR_THEME)`) from the entry point; not set elsewhere.
@@ -173,7 +173,7 @@ This document is derived solely from the code in this repository. It describes b
   - **Plot-related constants** — 1D curve colormap name `"tab10"`; default single-curve scatter color `"#1f77b4"`; legend font size 9.
   Every style value used anywhere in the app must be defined in this module.
 
-- **Usage rule:** Every place that sets or applies theme or appearance (CustomTkinter color theme, widgets, status bar, plot defaults) must import and use symbols from `fast2dprocess_gui.core.style`. The color theme is applied at startup from the style module (e.g. `ctk.set_default_color_theme(COLOR_THEME)` in the entry point); it must not be set from a hardcoded value elsewhere. Adding a new style dimension requires adding it to the style module first, then using the new symbol where needed.
+- **Usage rule:** Every place that sets or applies theme or appearance (CustomTkinter color theme, widgets, status bar, plot defaults) must import and use symbols from `guisaxs.core.style`. The color theme is applied at startup from the style module (e.g. `ctk.set_default_color_theme(COLOR_THEME)` in the entry point); it must not be set from a hardcoded value elsewhere. Adding a new style dimension requires adding it to the style module first, then using the new symbol where needed.
 
 ---
 
@@ -193,7 +193,7 @@ This document is derived solely from the code in this repository. It describes b
 
 - **Thumbnails:** Keyed by `unique_id = os.path.abspath(str(image_path))`. Value: (image_path, thumb_widget, image_type, filename). If the same path is added again, only selection is updated (no second thumbnail).
 
-- **Main image:** Chosen by clicking a thumbnail; `_select_image(unique_id, image_path, image_type)` updates `selected_image` and calls `display_image(image_path, display_title)`; thumbnail highlight (fg_color) uses colors from `fast2dprocess_gui/core/style.py` (e.g. `COLORS["thumbnail_selected"]`, `COLORS["thumbnail_unselected"]`).
+- **Main image:** Chosen by clicking a thumbnail; `_select_image(unique_id, image_path, image_type)` updates `selected_image` and calls `display_image(image_path, display_title)`; thumbnail highlight (fg_color) uses colors from `guisaxs/core/style.py` (e.g. `COLORS["thumbnail_selected"]`, `COLORS["thumbnail_unselected"]`).
 
 - **Image reading fallbacks:** For both thumbnail and main display: (1) `read_from_tiff(image_path)`; on exception (2) `fabio.open(image_path).data`; on exception (3) `IntegratorExtended.read_mask(image_path)` (mask converted to float for display). If all fail, error is printed and no display/thumbnail update.
 
@@ -203,7 +203,7 @@ This document is derived solely from the code in this repository. It describes b
 
 ## 14. Threading and environment
 
-- **Threading env (`threading_env`):** In `fast2dprocess_gui/utils/threading_env.py`. Variables: OMP_NUM_THREADS, MKL_NUM_THREADS, NUMEXPR_NUM_THREADS, OPENBLAS_NUM_THREADS, VECLIB_MAXIMUM_THREADS, BLIS_NUM_THREADS, TBB_NUM_THREADS, NUMBA_NUM_THREADS. Set to `'1'` in `setup_threading_env()` to avoid deadlocks in worker threads. Must be set before importing NumPy/SciPy/pyFAI. Set at import time of the module and explicitly in `fast2dprocess_gui.py` before other imports. Restored in `restore_threading_env()` on window close (`WM_DELETE_WINDOW`) and registered with `atexit`. Original values are stored at import and restored so closing the app restores the environment.
+- **Threading env (`threading_env`):** In `guisaxs/utils/threading_env.py`. Variables: OMP_NUM_THREADS, MKL_NUM_THREADS, NUMEXPR_NUM_THREADS, OPENBLAS_NUM_THREADS, VECLIB_MAXIMUM_THREADS, BLIS_NUM_THREADS, TBB_NUM_THREADS, NUMBA_NUM_THREADS. Set to `'1'` in `setup_threading_env()` to avoid deadlocks in worker threads. Must be set before importing NumPy/SciPy/pyFAI. Set at import time of the module and explicitly in `guisaxs.py` before other imports. Restored in `restore_threading_env()` on window close (`WM_DELETE_WINDOW`) and registered with `atexit`. Original values are stored at import and restored so closing the app restores the environment.
 
 - **Calibration:** Runs in a separate process (calibration_service.py), not only a thread. The GUI starts a thread that runs the subprocess and waits for it; status is polled on the main thread via `root.after(500, check_status)`.
 

@@ -504,7 +504,7 @@ def test_calibrate_always_overrides_config_calibrant(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_integrate_raises_without_images():
     with tempfile.TemporaryDirectory() as tmp:
-        with pytest.raises(ValueError):
+        with pytest.raises(FileNotFoundError):
             integrate(
                 images="",
                 integrator_dir=tmp,
