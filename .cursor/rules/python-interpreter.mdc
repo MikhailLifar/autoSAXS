@@ -1,0 +1,6 @@
+---
+alwaysApply: true
+---
+
+When running any Python code or installing packages, use the absolute path to the executable (python or pip) in this env:
+/home/mikl/.conda/envs/LLMAssistant
