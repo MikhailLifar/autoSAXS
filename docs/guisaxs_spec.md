@@ -114,7 +114,7 @@ This document is derived solely from the code in this repository. It describes b
 
 - **Inputs:** Calibrant image path (required), optional mask path, and config built from `CalibrationManager.build_calibration_config` (includes detector_geometry, center_refinement, ring_search, r_beam_px, calibrant_name, mask_config).
 
-- **Subprocess:** Calibration runs in a separate process to avoid NumPy/pyFAI threading issues with the GUI. Invocation: `sys.executable calibration_service.py <config_json> <output_dir> --status-file <status_file>`. Config JSON: calibrant_path, mask_path, config (full calibration dict). Output dir: `WORKING_DIR/calibration_output`. Status file: `WORKING_DIR/calibration_status.json`. The GUI starts a worker thread that launches this subprocess, waits for it, then reads results from `calibration_output/calibration_result.json` and copies `integrator_params` into `WORKING_DIR/integrator_params`.
+- **Subprocess:** Calibration runs in a separate process to avoid NumPy/pyFAI threading issues with the GUI. Invocation: `sys.executable -m guisaxs.calibration_subprocess <config_json> <output_dir> --status-file <status_file>`. Config JSON: calibrant_path, mask_path, config_path (YAML). Output dir: `WORKING_DIR/calibration_output`. Status file: `WORKING_DIR/calibration_status.json`. The GUI starts a worker thread that launches this subprocess, waits for it, then reads results from `calibration_output/calibration_result.json` and copies the calibrated integrator into `WORKING_DIR/integrator`.
 
 - **Status reporting:** Status file path: `WORKING_DIR/calibration_status.json`. JSON keys: `message`, `type` (e.g. "progress", "success", "error"), `timestamp`. The GUI polls this file on a 500 ms timer while `status_monitor_running` is True and updates the status bar text and color from `message` and `type`; on "success" or "error" monitoring stops.
 
@@ -205,7 +205,7 @@ This document is derived solely from the code in this repository. It describes b
 
 - **Threading env (`threading_env`):** In `guisaxs/utils/threading_env.py`. Variables: OMP_NUM_THREADS, MKL_NUM_THREADS, NUMEXPR_NUM_THREADS, OPENBLAS_NUM_THREADS, VECLIB_MAXIMUM_THREADS, BLIS_NUM_THREADS, TBB_NUM_THREADS, NUMBA_NUM_THREADS. Set to `'1'` in `setup_threading_env()` to avoid deadlocks in worker threads. Must be set before importing NumPy/SciPy/pyFAI. Set at import time of the module and explicitly in `guisaxs.__main__` before other imports. Restored in `restore_threading_env()` on window close (`WM_DELETE_WINDOW`) and registered with `atexit`. Original values are stored at import and restored so closing the app restores the environment.
 
-- **Calibration:** Runs in a separate process (calibration_service.py), not only a thread. The GUI starts a thread that runs the subprocess and waits for it; status is polled on the main thread via `root.after(500, check_status)`.
+- **Calibration:** Runs in a separate process (`python -m guisaxs.calibration_subprocess`), not only a thread. The GUI starts a thread that runs the subprocess and waits for it; status is polled on the main thread via `root.after(500, check_status)`.
 
 - **Other background work:** Processing (integrate, subtract) runs in daemon threads; status callbacks and GUI updates are marshalled to the main thread with `root.after_idle` or `root.after`.
 

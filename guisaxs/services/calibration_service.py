@@ -140,17 +140,18 @@ class CalibrationService:
         except Exception as e:
             raise RuntimeError(f"Failed to write calibration config: {e}")
         
-        # Get path to calibration service script
-        script_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        service_script = os.path.join(script_dir, 'calibration_service.py')
-        
-        if not os.path.exists(service_script):
-            raise RuntimeError(f"Calibration service script not found: {service_script}")
-        
-        # Launch calibration service as subprocess
+        # Launch calibration as subprocess via an installed module (works in pip installs)
         try:
             self.calibration_process = subprocess.Popen(
-                [sys.executable, service_script, service_config_file, output_dir, '--status-file', status_file],
+                [
+                    sys.executable,
+                    "-m",
+                    "guisaxs.calibration_subprocess",
+                    service_config_file,
+                    output_dir,
+                    "--status-file",
+                    status_file,
+                ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
