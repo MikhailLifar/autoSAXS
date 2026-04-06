@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autosaxs"
-version = "1.0.3"
+version = "1.0.4"
 description = "Interactive SAXS pipeline core: calibration, integration, subtraction, ATSAS descriptors, plots, shape fitting, reports"
 requires-python = ">=3.9"
 license = "MIT"
@@ -34,8 +34,6 @@ dependencies = [
     "scikit-learn",
     "seaborn",
     "squarify",
-    "customtkinter",
-    "tkinterdnd2",
     "openai",
     "requests",
     "httpx",
@@ -43,13 +41,15 @@ dependencies = [
 
 [project.scripts]
 autosaxs = "autosaxs.cli:main"
+guisaxs = "guisaxs.__main__:main"
 
 [project.optional-dependencies]
+gui = ["customtkinter", "tkinterdnd2"]
 dev = ["build", "pip"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["autosaxs*"]
+include = ["autosaxs*", "guisaxs*"]
 
 [tool.setuptools.package-data]
 autosaxs = [

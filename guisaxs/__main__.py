@@ -7,11 +7,10 @@ setup_threading_env()
 
 import os
 import sys
-import customtkinter as ctk
 from tkinter import filedialog, messagebox
-from tkinterdnd2 import TkinterDnD
-from .core.style import COLOR_THEME
-from .gui import SAXSProcessorGUI
+
+
+_GUI_DEPS_HELP = 'GUI dependencies are not installed. Install with: pip install "autosaxs[gui]"'
 
 
 def _ask_working_directory(root):
@@ -44,6 +43,16 @@ def _ask_working_directory(root):
 
 def main():
     """Main entry point for guisaxs (SAXS data processor GUI)."""
+    try:
+        import customtkinter as ctk
+        from tkinterdnd2 import TkinterDnD
+
+        from .core.style import COLOR_THEME
+        from .gui import SAXSProcessorGUI
+    except ImportError:
+        print(_GUI_DEPS_HELP, file=sys.stderr)
+        raise SystemExit(1)
+
     # Create root window with DND support
     root = TkinterDnD.Tk()
     root.withdraw()  # Hide until we have working directory

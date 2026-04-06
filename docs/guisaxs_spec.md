@@ -203,7 +203,7 @@ This document is derived solely from the code in this repository. It describes b
 
 ## 14. Threading and environment
 
-- **Threading env (`threading_env`):** In `guisaxs/utils/threading_env.py`. Variables: OMP_NUM_THREADS, MKL_NUM_THREADS, NUMEXPR_NUM_THREADS, OPENBLAS_NUM_THREADS, VECLIB_MAXIMUM_THREADS, BLIS_NUM_THREADS, TBB_NUM_THREADS, NUMBA_NUM_THREADS. Set to `'1'` in `setup_threading_env()` to avoid deadlocks in worker threads. Must be set before importing NumPy/SciPy/pyFAI. Set at import time of the module and explicitly in `guisaxs.py` before other imports. Restored in `restore_threading_env()` on window close (`WM_DELETE_WINDOW`) and registered with `atexit`. Original values are stored at import and restored so closing the app restores the environment.
+- **Threading env (`threading_env`):** In `guisaxs/utils/threading_env.py`. Variables: OMP_NUM_THREADS, MKL_NUM_THREADS, NUMEXPR_NUM_THREADS, OPENBLAS_NUM_THREADS, VECLIB_MAXIMUM_THREADS, BLIS_NUM_THREADS, TBB_NUM_THREADS, NUMBA_NUM_THREADS. Set to `'1'` in `setup_threading_env()` to avoid deadlocks in worker threads. Must be set before importing NumPy/SciPy/pyFAI. Set at import time of the module and explicitly in `guisaxs.__main__` before other imports. Restored in `restore_threading_env()` on window close (`WM_DELETE_WINDOW`) and registered with `atexit`. Original values are stored at import and restored so closing the app restores the environment.
 
 - **Calibration:** Runs in a separate process (calibration_service.py), not only a thread. The GUI starts a thread that runs the subprocess and waits for it; status is polled on the main thread via `root.after(500, check_status)`.
 
