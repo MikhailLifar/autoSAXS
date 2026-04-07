@@ -2,12 +2,36 @@
 
 The command argument is a commit message.
 When the command is invoked, you should follow these steps:
-Run:
+
+Run `git status`:
 ```bash
 cd /home/mikl/KurchatovCoop/repos
-bash commit.sh "message from the command argument (use verbatim; do not transform or substitute)"
+git status
 ```
 
 Then:
-- If the script fails (non-zero exit code), read the output (and `repos/commit.log`) and report on the errors, potential causes, and possible fixes. DON'T TRY TO FIX THE CODE.
-- If the script succeeds (exit code 0), do nothing further.
+- If there are any untracked files, you MUST STOP the workflow and ask the user which untracked files should be added with `git add`.
+- After receiving the user response:
+  - If the user wants to add some files, run `git add <paths...>` exactly for those files.
+  - If the user wants to add none of them, do not run `git add`. 
+  - Continue the workflow.
+
+Run tests (required):
+```bash
+cd /home/mikl/KurchatovCoop/repos
+bash helpers/run_tests.sh
+```
+
+Then:
+- If the tests script fails (non-zero exit code), read the output (and `repos/commit.log`) and produce a report describing the failures, likely root causes, and possible fixes. DON'T TRY TO FIX THE CODE.
+- IF AND ONLY IF ALL TESTS PASS, run the pre-commit updates:
+```bash
+cd /home/mikl/KurchatovCoop/repos
+bash helpers/run_precommit_updates.sh
+```
+- IF AND ONLY IF the pre-commit updates succeed (exit code 0), run git commit and git push (do NOT run git add here):
+```bash
+cd /home/mikl/KurchatovCoop/repos
+git commit -a -m "message from the command argument (use verbatim; do not transform or substitute)"
+git push
+```

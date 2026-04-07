@@ -66,10 +66,10 @@ def _add_skill_subparser(subparsers: argparse._SubParsersAction, name: str, fn: 
     p = subparsers.add_parser(
         name,
         help=doc.splitlines()[0] if doc else None,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(f"Description:\n\n{doc}\n" if doc else None),
     )
     p.set_defaults(_autosaxs_fn=fn)
+    # A separate flag prints the full docstring and exits (handled before argparse enforces required positionals).
+    p.add_argument("--description", action="store_true", help="Print full command description and exit")
 
     # Resolve postponed annotations ("from __future__ import annotations"), so
     # `Optional[float]` etc. are real types and not strings.
@@ -142,8 +142,29 @@ def main(argv: Optional[List[str]] = None) -> int:
     for name in sorted(skills):
         _add_skill_subparser(subparsers, name, skills[name])
 
+    # Support: `autosaxs <subcommand> --description` without requiring positional args.
+    # Argparse enforces required positionals before we can inspect flags, so handle this early.
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv:
+        cmd = argv[0]
+        if cmd in skills and "--description" in argv[1:]:
+            raw = getattr(skills[cmd], "__doc__", None) or ""
+            sys.stdout.write(raw)
+            if raw and not raw.endswith("\n"):
+                sys.stdout.write("\n")
+            return 0
+
     args = parser.parse_args(argv)
     fn: Callable[..., Any] = getattr(args, "_autosaxs_fn")
+
+    # If user provided all required args, allow `--description` too (consistent behavior).
+    if getattr(args, "description", False):
+        raw = getattr(fn, "__doc__", None) or ""
+        sys.stdout.write(raw)
+        if raw and not raw.endswith("\n"):
+            sys.stdout.write("\n")
+        return 0
 
     sig = inspect.signature(fn)
     kwargs: Dict[str, Any] = {}
