@@ -1,4 +1,4 @@
-# `autosaxs` package + `guisaxs` app
+# `autosaxs` package + `guisaxs` app + `guisaxs-skills` app
 
 This project contains:
 
@@ -155,6 +155,15 @@ The GUI tests require a display; on CI you can run them under Xvfb:
 ```bash
 xvfb-run -a python -m pytest repos/tests/test_guisaxs.py
 ```
+
+---
+
+## `guisaxs-skills` (app)
+
+`guisaxs-skills` is a newer GUI concept: a single-window **skill console** that runs `autosaxs` skills (calibrate/integrate/subtract/analysis/…) via the `autosaxs` CLI in an **isolated process**, streams logs live, and then shows the returned artifact paths with basic previews.
+
+- **Docs**: see `repos/guisaxs_skills/README.md`
+- **Launch (dev)**: `python -m guisaxs_skills`
 
 ---
 
