@@ -109,6 +109,20 @@ class SkillRunner(QObject):
             return
 
         result = parse_key_value_stdout(self._stdout_buf)
+        # Enrich artifacts for certain skills (GUI-side only; does not affect computation).
+        if self._skill_name == "calibrate":
+            plots_dir = result.get("calibration_plots_dir")
+            if isinstance(plots_dir, str) and plots_dir:
+                try:
+                    p = Path(plots_dir)
+                    if p.exists() and p.is_dir():
+                        pngs = sorted(str(x) for x in p.rglob("*.png") if x.is_file())
+                        if pngs:
+                            # Include all generated PNGs (ring analysis plots, curve, mask, etc.)
+                            result.setdefault("calibration_pngs", pngs)
+                except Exception:
+                    pass
+
         latest_result_path(self._workdir).write_text(yaml.safe_dump(result, sort_keys=True), encoding="utf-8")
         outcome = RunOutcome(success=(status == QProcess.NormalExit and exit_code == 0), exit_code=exit_code, result=result)
         self.finished.emit(outcome)

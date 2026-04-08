@@ -8,9 +8,10 @@ from PyQt5.QtWidgets import QTreeView
 
 
 class PathField(QWidget):
-    def __init__(self, *, mode: str = "any") -> None:
+    def __init__(self, *, mode: str = "any", allow_multiple: bool = False) -> None:
         super().__init__()
         self._mode = mode  # any|file|dir
+        self._allow_multiple = bool(allow_multiple)
         self._dropped_paths: list[str] = []
         self._edit = QLineEdit()
         self._browse = QPushButton("Browse")
@@ -109,13 +110,8 @@ class PathField(QWidget):
         if not paths:
             return
 
-        # Store exact dropped files.
-        self._dropped_paths = paths
-        if len(paths) == 1:
-            self._edit.setText(paths[0])
-        else:
-            first = Path(paths[0]).name
-            self._edit.setText(f"{first} + {len(paths) - 1} more")
+        self._dropped_paths = list(paths)
+        self._sync_display_from_dropped()
 
     def _on_browse(self) -> None:
         start = self.text() or os.getcwd()
@@ -123,7 +119,7 @@ class PathField(QWidget):
             path = QFileDialog.getExistingDirectory(self, "Select directory", start)
         else:
             dlg = QFileDialog(self, "Select file", start)
-            dlg.setFileMode(QFileDialog.ExistingFile)
+            dlg.setFileMode(QFileDialog.ExistingFiles if self._allow_multiple else QFileDialog.ExistingFile)
             dlg.setOption(QFileDialog.DontUseNativeDialog, True)
             # Force details view so the header exists
             dlg.setViewMode(QFileDialog.Detail)
@@ -141,6 +137,10 @@ class PathField(QWidget):
             path = ""
             if dlg.exec_():
                 selected = dlg.selectedFiles()
+                if self._allow_multiple and len(selected) > 1:
+                    self._dropped_paths = list(selected)
+                    self._sync_display_from_dropped()
+                    return
                 path = selected[0] if selected else ""
         if path:
             self._dropped_paths = []
@@ -151,3 +151,11 @@ class PathField(QWidget):
         if self._dropped_paths:
             self._dropped_paths = []
 
+    def _sync_display_from_dropped(self) -> None:
+        if not self._dropped_paths:
+            return
+        if len(self._dropped_paths) == 1:
+            self._edit.setText(self._dropped_paths[0])
+            return
+        first = Path(self._dropped_paths[0]).name
+        self._edit.setText(f"{first} + {len(self._dropped_paths) - 1} more")

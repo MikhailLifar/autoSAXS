@@ -268,7 +268,7 @@ Integrate 2D SAXS images to 1D curves (q, I, sigma) using a calibrated integrato
   - a single `.tif` file path
   - a directory (expands to `*.tif`, non-recursive)
   - a glob expression
-  - (CLI only) multiple `.tif` paths passed as separate positional args
+  - a comma-separated list of file paths (e.g. from multi-file drag & drop)
 - `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`).
 - `output_dir` (str, default `.`): Directory where integrated curves are written.
 - `npt` (int, default `1000`): Number of points in the output q grid.
@@ -299,7 +299,7 @@ print(out["integrated_1d"])
 ### CLI usage
 
 ```bash
-autosaxs integrate /data/sample_01.tif /data/sample_02.tif calibration/integrator       --output-dir integration --npt 1000
+autosaxs integrate "/data/sample_01.tif, /data/sample_02.tif" calibration/integrator       --output-dir integration --npt 1000
 ```
 
 ---
@@ -382,6 +382,7 @@ Important constraint:
 
 - `subtracted_1d`: Path to the subtracted curve `.dat`.
 - `diff_plot_path`: Path to a diff plot PNG.
+- `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
 - `sub_plot_path`: Path to a subtracted curve plot PNG.
 
 ### Python usage

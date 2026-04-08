@@ -5,6 +5,8 @@ import inspect
 import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple, get_args, get_origin, get_type_hints
 
+from .path_expression import PathExpression, SingletonPathExpression
+
 
 def _to_kebab(s: str) -> str:
     return s.replace("_", "-")
@@ -45,6 +47,36 @@ def _is_optional_scalar_annotation(ann: Any, scalar_type: Any) -> bool:
         non_none = [a for a in args if a is not type(None)]  # noqa: E721
         return len(non_none) == 1 and non_none[0] is scalar_type
     return False
+
+
+def _wrap_path_expression_value(value: Any, ann: Any) -> Any:
+    """
+    Wrap raw CLI strings into PathExpression / SingletonPathExpression instances based on annotation.
+    """
+    if value is None:
+        return None
+
+    origin = get_origin(ann)
+    args = get_args(ann)
+    if origin is Optional and args:
+        return _wrap_path_expression_value(value, args[0])
+    if origin is getattr(__import__("typing"), "Union", None) and args:
+        # Support annotations like `PathExpression | str` and `SingletonPathExpression | str`,
+        # as well as Optional[...] forms represented as Union[..., NoneType].
+        non_none = [a for a in args if a is not type(None)]  # noqa: E721
+        if len(non_none) == 1:
+            return _wrap_path_expression_value(value, non_none[0])
+        if PathExpression in non_none:
+            return PathExpression(str(value))
+        if SingletonPathExpression in non_none:
+            return SingletonPathExpression(str(value))
+        return value
+
+    if ann is PathExpression:
+        return PathExpression(str(value))
+    if ann is SingletonPathExpression:
+        return SingletonPathExpression(str(value))
+    return value
 
 
 def _skill_functions() -> Dict[str, Callable[..., Any]]:
@@ -92,7 +124,7 @@ def _add_skill_subparser(subparsers: argparse._SubParsersAction, name: str, fn: 
         arg_name = param.name
         kwargs: Dict[str, Any] = {}
         ann = type_hints.get(param.name, param.annotation)
-        if _is_list_annotation(ann) or arg_name in ("images",):
+        if _is_list_annotation(ann):
             kwargs["nargs"] = "+"
         p.add_argument(arg_name, **kwargs)
 
@@ -167,18 +199,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     sig = inspect.signature(fn)
+    try:
+        type_hints = get_type_hints(fn)
+    except Exception:
+        type_hints = {}
     kwargs: Dict[str, Any] = {}
     positional: List[Any] = []
 
     for param in sig.parameters.values():
+        ann = type_hints.get(param.name, param.annotation)
         if param.kind == inspect.Parameter.KEYWORD_ONLY:
             if hasattr(args, param.name):
-                kwargs[param.name] = getattr(args, param.name)
+                kwargs[param.name] = _wrap_path_expression_value(getattr(args, param.name), ann)
         elif param.default is inspect._empty:
-            positional.append(getattr(args, param.name))
+            positional.append(_wrap_path_expression_value(getattr(args, param.name), ann))
         else:
             if hasattr(args, param.name):
-                kwargs[param.name] = getattr(args, param.name)
+                kwargs[param.name] = _wrap_path_expression_value(getattr(args, param.name), ann)
 
     out = fn(*positional, **kwargs)
     if isinstance(out, dict):

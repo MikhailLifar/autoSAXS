@@ -61,12 +61,32 @@ def _require_validation_dir_fixture():
         raise FileNotFoundError(_VALIDATION_MISSING_MSG)
 
 def _reset_validation_plots_dir():
-    """Remove validation_plots/ before regenerating plots."""
-    if os.path.isdir(OUTPUT_DIR):
-        shutil.rmtree(OUTPUT_DIR)
-    os.makedirs(OUTPUT_DIR_INTEGRATED_LOG, exist_ok=True)
-    os.makedirs(OUTPUT_DIR_INTEGRATED_LINEAR, exist_ok=True)
-    os.makedirs(OUTPUT_DIR_SUBTRACTED, exist_ok=True)
+    """
+    Reset validation_plots/ before regenerating plots.
+
+    IMPORTANT: Do not wipe unrelated plot types. The integrated and subtracted validation
+    tests run independently; deleting the whole OUTPUT_DIR in each test would erase plots
+    produced by the other test earlier in the same pytest run.
+    """
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+def _reset_validation_plots_subdir(which: str) -> None:
+    """
+    Remove only a specific plots subdir under validation_plots/.
+
+    which: "integrated" or "subtracted"
+    """
+    if which not in ("integrated", "subtracted"):
+        raise ValueError("which must be 'integrated' or 'subtracted'")
+    root = OUTPUT_DIR_INTEGRATED if which == "integrated" else OUTPUT_DIR_SUBTRACTED
+    if os.path.isdir(root):
+        shutil.rmtree(root)
+    if which == "integrated":
+        os.makedirs(OUTPUT_DIR_INTEGRATED_LOG, exist_ok=True)
+        os.makedirs(OUTPUT_DIR_INTEGRATED_LINEAR, exist_ok=True)
+    else:
+        os.makedirs(OUTPUT_DIR_SUBTRACTED, exist_ok=True)
 
 
 def _read_metrics_csv(path: str):
@@ -192,6 +212,7 @@ def run_calibration_integration_subtraction(mask_choice="f"):
 
 def _plot_comparison(q_ref, I_ref, q_pipe, I_pipe, metric, base, ref_label, pipe_label, out_dir, log_scale=True):
     """Draw comparison plot and save to out_dir with metric in title and filename. log_scale=False for subtracted (can be negative)."""
+    os.makedirs(out_dir, exist_ok=True)
     fig, ax = plt.subplots()
     ax.plot(q_ref, I_ref, label=ref_label, alpha=0.8)
     ax.plot(q_pipe, I_pipe, label=pipe_label, alpha=0.8)
@@ -304,6 +325,7 @@ def compare_and_plot_subtracted():
 def test_calib_integration_validation():
     """Pytest entry: run pipeline (calib+integration) and compare to reference .chi."""
     _reset_validation_plots_dir()
+    _reset_validation_plots_subdir("integrated")
     old_int = _read_metrics_csv(METRICS_INTEGRATED_CSV)
     run_calibration_integration_subtraction()
     results_int, metrics_rows = compare_and_plot_integrated()
@@ -319,6 +341,7 @@ def test_calib_integration_validation():
 def test_calib_integration_subtraction_validation():
     """Pytest entry: run pipeline (calib+integration+subtraction) and compare to reference sub_*.dat."""
     _reset_validation_plots_dir()
+    _reset_validation_plots_subdir("subtracted")
     old_sub = _read_metrics_csv(METRICS_SUBTRACTED_CSV)
     run_calibration_integration_subtraction()
     results_sub, metrics_rows = compare_and_plot_subtracted()

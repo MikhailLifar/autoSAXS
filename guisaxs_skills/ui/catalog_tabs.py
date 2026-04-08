@@ -28,7 +28,10 @@ class CatalogTabs(QWidget):
 
         self._list.currentRowChanged.connect(self._on_changed)
         if skills:
-            self._list.setCurrentRow(0)
+            # Default skill on launch.
+            default_skill = "calibrate"
+            idx = next((i for i, m in enumerate(skills) if m.name == default_skill), 0)
+            self._list.setCurrentRow(idx)
 
     def _on_changed(self, idx: int) -> None:
         if 0 <= idx < len(self._skills):

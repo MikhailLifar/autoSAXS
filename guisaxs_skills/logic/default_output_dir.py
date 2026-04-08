@@ -8,7 +8,8 @@ def default_output_dir_for_skill(*, workdir: Path, skill_name: str) -> Path:
     Default output subdir naming follows autosaxs `saxs_controller.py` conventions where applicable.
     """
     mapping = {
-        "calibrate": "calibration",
+        # calibrate is special: by default it writes directly into workdir (no subdir)
+        "calibrate": "",
         "integrate": "averaged",
         "integrate_proxy": "averaged",
         "subtract": "subtracted",
@@ -19,5 +20,5 @@ def default_output_dir_for_skill(*, workdir: Path, skill_name: str) -> Path:
         "fit_dammif": "dammif",
     }
     sub = mapping.get(skill_name, skill_name)
-    return workdir / sub
+    return workdir if not sub else (workdir / sub)
 

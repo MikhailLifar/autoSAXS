@@ -41,7 +41,7 @@
   - The GUI launches a separate process: `python -m autosaxs.cli <skill> ...`.
   - `stdout`/`stderr` are streamed live into the log view.
 - Press **Cancel** to terminate the running process (best-effort termination via `QProcess.terminate()`).
-- **Batch convenience:** if you drop multiple files into exactly one positional input field, the GUI will execute the skill **sequentially** for each file, appending `--- next item ---` between runs in the log.
+- **Multi-file inputs:** if you drop multiple files into an input field, the GUI encodes them into a single comma-separated path expression and invokes the skill **once**. The skill entry point expands the expression and performs any per-file iteration/batching internally.
 
 ### Inspect artifacts and previews
 

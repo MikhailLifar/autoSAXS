@@ -1,6 +1,12 @@
 # commit
 
-The command argument is a commit message.
+The command arguments are:
+a commit message;
+(optional) a specific version to update the autosaxs package to;
+Inocation examples:
+/commit "commit message"
+/commit "commit message" version=new.version.update.to
+
 When the command is invoked, you should follow these steps:
 
 Run `git status`:
@@ -27,7 +33,7 @@ Then:
 - IF AND ONLY IF ALL TESTS PASS, run the pre-commit updates:
 ```bash
 cd /home/mikl/KurchatovCoop/repos
-bash helpers/run_precommit_updates.sh
+bash helpers/run_precommit_updates.sh [<new_version_if_provided_in_command_arguments>]
 ```
 - IF AND ONLY IF the pre-commit updates succeed (exit code 0), run git commit and git push (do NOT run git add here):
 ```bash

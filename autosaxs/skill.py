@@ -18,6 +18,7 @@ from scipy.optimize import minimize
 import yaml
 from pyFAI.calibrant import ALL_CALIBRANTS
 
+from .path_expression import PathExpression, SingletonPathExpression
 from .autocalib import autocalib_ring_analysis
 from .event_bus import EventBus, EventType
 from .viewer import PLTViewer
@@ -55,47 +56,81 @@ from .skill_wrap import (
     _strip_sub_int_prefix,
 )
 
+PathExpressionArg = Union[str, Path, PathExpression, List[str], List[Path], tuple]
+SingletonPathExpressionArg = Union[str, Path, SingletonPathExpression]
 
-def _expand_main_path_arg(path_expr: Union[str, List[str]], *, kind: str) -> List[str]:
+
+def _coerce_path_expression(value: PathExpressionArg) -> PathExpression:
+    if isinstance(value, PathExpression):
+        return value
+    if isinstance(value, Path):
+        return PathExpression(str(value))
+    if isinstance(value, (list, tuple)):
+        parts: List[str] = []
+        for x in value:
+            if isinstance(x, Path):
+                parts.append(str(x))
+            else:
+                parts.append(str(x))
+        return PathExpression(", ".join(parts))
+    return PathExpression(str(value))
+
+
+def _coerce_singleton_path_expression(value: SingletonPathExpressionArg) -> SingletonPathExpression:
+    if isinstance(value, SingletonPathExpression):
+        return value
+    if isinstance(value, Path):
+        return SingletonPathExpression(str(value))
+    return SingletonPathExpression(str(value))
+
+
+def _coerce_optional_singleton_path_expression(
+    value: Optional[SingletonPathExpressionArg],
+) -> Optional[SingletonPathExpression]:
+    if value is None:
+        return None
+    return _coerce_singleton_path_expression(value)
+
+
+def _expand_files_from_unwrapped(items: List[str], *, kind: str) -> List[str]:
     """
-    Expand a single main path argument into a sorted list of file paths.
+    Expand an already-unwrapped PathExpression list into concrete file paths.
 
     kind:
-      - "2d_tif": directory expands to '*.tif' (non-recursive)
-      - "1d_dat": directory expands to '*.dat' (non-recursive)
-      - "any": no directory default pattern; treat as file/dir/glob as-is
+      - "2d_tif": directories expand to '*.tif' (non-recursive)
+      - "1d_dat": directories expand to '*.dat' (non-recursive)
     """
-    if not path_expr:
-        raise FileNotFoundError("Empty path expression")
-
-    # CLI may pass a list for positional args (e.g. old nargs="+"). Normalize here.
-    if isinstance(path_expr, list):
-        expanded: List[str] = []
-        for item in path_expr:
-            expanded.extend(_expand_main_path_arg(item, kind=kind))
-        expanded = sorted(set(expanded))
-        if not expanded:
-            raise FileNotFoundError("Empty path expression")
-        return expanded
-
-    if os.path.isdir(path_expr):
-        if kind == "2d_tif":
-            paths = [str(p) for p in sorted(Path(path_expr).iterdir()) if p.is_file() and p.suffix.lower() == ".tif"]
-        elif kind == "1d_dat":
-            paths = [str(p) for p in sorted(Path(path_expr).iterdir()) if p.is_file() and p.suffix.lower() == ".dat"]
+    out: List[str] = []
+    for p in items:
+        if os.path.isdir(p):
+            if kind == "2d_tif":
+                out.extend(
+                    str(x)
+                    for x in sorted(Path(p).iterdir())
+                    if x.is_file() and x.suffix.lower() == ".tif"
+                )
+            elif kind == "1d_dat":
+                out.extend(
+                    str(x)
+                    for x in sorted(Path(p).iterdir())
+                    if x.is_file() and x.suffix.lower() == ".dat"
+                )
+            else:
+                raise ValueError(f"Unknown kind: {kind!r}")
         else:
-            paths = [str(p) for p in sorted(Path(path_expr).iterdir()) if p.is_file()]
-    elif os.path.isfile(path_expr):
-        paths = [path_expr]
-    else:
-        # Arbitrary glob expression (may include **). Use recursive so ** works.
-        paths = sorted(glob.glob(path_expr, recursive=True))
-
-    # Keep only files; glob may return directories.
-    paths = [p for p in paths if os.path.isfile(p)]
-    if not paths:
-        raise FileNotFoundError(f"No files matched: {path_expr!r}")
-    return paths
+            if os.path.isfile(p):
+                out.append(p)
+    # Stable de-dupe while preserving order
+    seen = set()
+    deduped: List[str] = []
+    for x in out:
+        if x in seen:
+            continue
+        seen.add(x)
+        deduped.append(x)
+    if not deduped:
+        raise FileNotFoundError("No input files found after expansion")
+    return deduped
 
 
 # ---------------------------------------------------------------------------
@@ -106,11 +141,11 @@ def _expand_main_path_arg(path_expr: Union[str, List[str]], *, kind: str) -> Lis
 
 
 def calibrate(
-    calib_image: str,
-    config_path: str,
+    calib_image: SingletonPathExpressionArg,
+    config_path: SingletonPathExpressionArg,
     output_dir: str = ".",
     *,
-    mask: Optional[str] = None,
+    mask: Optional[SingletonPathExpressionArg] = None,
     mask_mode: str = "f",
     calibrant: str = "AgBh",
     use_cache: bool = True,
@@ -175,9 +210,20 @@ def calibrate(
         )
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
-    input_paths: Dict[str, Union[str, List[str]]] = {"calib_image": calib_image, "config": config_path}
-    if mask is not None:
-        input_paths["mask"] = mask
+    calib_image = _coerce_singleton_path_expression(calib_image)
+    config_path = _coerce_singleton_path_expression(config_path)
+    mask_expr = _coerce_optional_singleton_path_expression(mask)
+    imgs = calib_image.unwrap()
+    cfg = config_path.unwrap()[0]
+    mask_path = mask_expr.unwrap()[0] if mask_expr is not None else None
+    input_batch: List[Dict[str, Union[str, List[str]]]] = []
+    for im in imgs:
+        inp: Dict[str, Union[str, List[str]]] = {"calib_image": im, "config": cfg}
+        if mask_path is not None:
+            inp["mask"] = mask_path
+        input_batch.append(inp)
+    input_paths: Union[Dict[str, Union[str, List[str]]], List[Dict[str, Union[str, List[str]]]]]
+    input_paths = input_batch[0] if len(input_batch) == 1 else input_batch
     return _calibrate_paths(
         input_paths=input_paths,
         output_dir=output_dir,
@@ -300,8 +346,8 @@ def _calibrate_paths(
 
 
 def integrate(
-    images: str,
-    integrator_dir: str,
+    images: PathExpressionArg,
+    integrator_dir: SingletonPathExpressionArg,
     output_dir: str = ".",
     *,
     npt: int = 1000,
@@ -316,7 +362,7 @@ def integrate(
       - a single `.tif` file path
       - a directory (expands to `*.tif`, non-recursive)
       - a glob expression
-      - (CLI only) multiple `.tif` paths passed as separate positional args
+      - a comma-separated list of file paths (e.g. from multi-file drag & drop)
     - `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`).
     - `output_dir` (str, default `.`): Directory where integrated curves are written.
     - `npt` (int, default `1000`): Number of points in the output q grid.
@@ -347,16 +393,19 @@ def integrate(
     ### CLI usage
 
     ```bash
-    autosaxs integrate /data/sample_01.tif /data/sample_02.tif calibration/integrator \
+    autosaxs integrate "/data/sample_01.tif, /data/sample_02.tif" calibration/integrator \
       --output-dir integration --npt 1000
     ```
 
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
-    expanded_images = _expand_main_path_arg(images, kind="2d_tif")
+    images = _coerce_path_expression(images)
+    integrator_dir = _coerce_singleton_path_expression(integrator_dir)
+    expanded_images = _expand_files_from_unwrapped(images.unwrap(), kind="2d_tif")
+    int_dir = integrator_dir.unwrap()[0]
     return _integrate_paths(
-        input_paths={"images": expanded_images, "integrator_dir": integrator_dir},
+        input_paths={"images": expanded_images, "integrator_dir": int_dir},
         output_dir=output_dir,
         event_bus=bus,
         use_cache=use_cache,
@@ -419,10 +468,10 @@ def _integrate_paths(
 
 
 def integrate_proxy(
-    image: str,
+    image: PathExpressionArg,
     output_dir: str = ".",
     *,
-    mask: Optional[str] = None,
+    mask: Optional[SingletonPathExpressionArg] = None,
     cy: Optional[float] = None,
     cx: Optional[float] = None,
     npt: int = 1000,
@@ -481,8 +530,11 @@ def integrate_proxy(
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
-    expanded_images = _expand_main_path_arg(image, kind="2d_tif")
-    if mask is not None and not os.path.isfile(mask):
+    image = _coerce_path_expression(image)
+    mask_expr = _coerce_optional_singleton_path_expression(mask)
+    expanded_images = _expand_files_from_unwrapped(image.unwrap(), kind="2d_tif")
+    mask_path = mask_expr.unwrap()[0] if mask_expr is not None else None
+    if mask_path is not None and not os.path.isfile(mask_path):
         raise FileNotFoundError("integrate_proxy mask must be an existing file path")
     if (cy is None) != (cx is None):
         raise ValueError("integrate_proxy requires cy and cx to be both None or both float values")
@@ -492,10 +544,7 @@ def integrate_proxy(
         if Path(p).suffix.lower() != ".tif":
             raise ValueError("integrate_proxy input files must have .tif extension")
 
-    input_batch = [
-        {"image": im_path, "mask": mask} if mask is not None else {"image": im_path}
-        for im_path in expanded_images
-    ]
+    input_batch = [{"image": im_path, **({"mask": mask_path} if mask_path is not None else {})} for im_path in expanded_images]
     if len(input_batch) == 1:
         return _integrate_proxy_paths(
             input_paths=input_batch[0],
@@ -809,8 +858,8 @@ def _integrate_proxy_paths(
 
 
 def subtract(
-    sample_1d: str,
-    buffer_1d: str,
+    sample_1d: PathExpressionArg,
+    buffer_1d: SingletonPathExpressionArg,
     output_dir: str = ".",
     *,
     method: str = "match_tail",
@@ -841,6 +890,7 @@ def subtract(
 
     - `subtracted_1d`: Path to the subtracted curve `.dat`.
     - `diff_plot_path`: Path to a diff plot PNG.
+    - `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
     - `sub_plot_path`: Path to a subtracted curve plot PNG.
 
     ### Python usage
@@ -875,13 +925,16 @@ def subtract(
         match_tail_ops = {"q_range_abs": (q_min, q_max)}
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
-    if not buffer_1d or not os.path.isfile(buffer_1d):
+    sample_1d = _coerce_path_expression(sample_1d)
+    buffer_1d = _coerce_singleton_path_expression(buffer_1d)
+    buff = buffer_1d.unwrap()[0]
+    if not buff or not os.path.isfile(buff):
         raise FileNotFoundError("subtract requires buffer_1d to be an existing file")
-    expanded_samples = _expand_main_path_arg(sample_1d, kind="1d_dat")
+    expanded_samples = _expand_files_from_unwrapped(sample_1d.unwrap(), kind="1d_dat")
     for p in expanded_samples:
         if Path(p).suffix.lower() != ".dat":
             raise ValueError("subtract input sample_1d files must have .dat extension")
-    input_batch = [{"sample_1d": p, "buffer_1d": buffer_1d} for p in expanded_samples]
+    input_batch = [{"sample_1d": p, "buffer_1d": buff} for p in expanded_samples]
     return _subtract_paths(
         input_paths=input_batch[0] if len(input_batch) == 1 else input_batch,
         output_dir=output_dir,
@@ -935,12 +988,22 @@ def _subtract_paths(
     )
     q_sample, I_sample, sigma_sample, _ = read_saxs(sample_1d)
     diff_plot_path = os.path.join(output_dir, f"diff_{base}.png")
+    diff_log_plot_path = os.path.join(output_dir, f"diff_log_{base}.png")
     sub_plot_path = os.path.join(output_dir, f"sub_{base}.png")
     PLTViewer.view_curves(
         q_sample, I_sample, "sample",
         q, I_buff_scaled, "buffer scaled",
         sigmas=(sigma_sample, sigma_buff_scaled),
         legend=True, plotFilePath=diff_plot_path, save=False,
+    )
+    # Log-intensity diff view. Use nan for nonpositive values to avoid -inf/invalid logs.
+    I_sample_log = np.where(np.asarray(I_sample, dtype=float) > 0.0, np.log(np.asarray(I_sample, dtype=float)), np.nan)
+    I_buff_log = np.where(np.asarray(I_buff_scaled, dtype=float) > 0.0, np.log(np.asarray(I_buff_scaled, dtype=float)), np.nan)
+    PLTViewer.view_curves(
+        q_sample, I_sample_log, "sample (log)",
+        q, I_buff_log, "buffer scaled (log)",
+        xlabel="q (nm-1)", ylabel="ln(I) (a.u.)",
+        legend=True, plotFilePath=diff_log_plot_path, save=False,
     )
     PLTViewer.view_curves(
         q, I_sub, "sample",
@@ -950,6 +1013,7 @@ def _subtract_paths(
     return {
         "subtracted_1d": dest,
         "diff_plot_path": diff_plot_path,
+        "diff_log_plot_path": diff_log_plot_path,
         "sub_plot_path": sub_plot_path,
     }
 
@@ -962,7 +1026,7 @@ def _subtract_paths(
 
 
 def plot(
-    profile: str,
+    profile: PathExpressionArg,
     output_dir: str = ".",
     *,
     guinier_q_min: Optional[float] = None,
@@ -1028,7 +1092,8 @@ def plot(
         guinier_region = (guinier_q_min, guinier_q_max)
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
-    expanded_profiles = _expand_main_path_arg(profile, kind="1d_dat")
+    profile = _coerce_path_expression(profile)
+    expanded_profiles = _expand_files_from_unwrapped(profile.unwrap(), kind="1d_dat")
     for p in expanded_profiles:
         if Path(p).suffix.lower() != ".dat":
             raise ValueError("plot input files must have .dat extension")
@@ -1123,7 +1188,7 @@ def _plot_paths(
 
 
 def plot_2d(
-    image: str,
+    image: PathExpressionArg,
     output_dir: str = ".",
     *,
     use_cache: bool = True,
@@ -1165,7 +1230,8 @@ def plot_2d(
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
-    expanded_images = _expand_main_path_arg(image, kind="2d_tif")
+    image = _coerce_path_expression(image)
+    expanded_images = _expand_files_from_unwrapped(image.unwrap(), kind="2d_tif")
     for p in expanded_images:
         if Path(p).suffix.lower() != ".tif":
             raise ValueError("plot_2d input files must have .tif extension")
@@ -1234,7 +1300,7 @@ def _plot_2d_paths(
 
 
 def guinier_analysis(
-    profile: str,
+    profile: PathExpressionArg,
     output_dir: str = ".",
     *,
     use_cache: bool = True,
@@ -1282,7 +1348,8 @@ def guinier_analysis(
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
-    expanded_profiles = _expand_main_path_arg(profile, kind="1d_dat")
+    profile = _coerce_path_expression(profile)
+    expanded_profiles = _expand_files_from_unwrapped(profile.unwrap(), kind="1d_dat")
     for p in expanded_profiles:
         if Path(p).suffix.lower() != ".dat":
             raise ValueError("guinier_analysis input files must have .dat extension")
@@ -1430,10 +1497,10 @@ def _guinier_analysis_paths(
 
 
 def fit_mixture(
-    profile: str,
+    profile: PathExpressionArg,
     output_dir: str = ".",
     *,
-    config_path: Optional[str] = None,
+    config_path: Optional[SingletonPathExpressionArg] = None,
     q_min_nm: Optional[float] = None,
     q_max_nm: Optional[float] = None,
     use_cache: bool = True,
@@ -1494,15 +1561,18 @@ def fit_mixture(
         q_range_nm = (q_min_nm, q_max_nm)
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
-    expanded_profiles = _expand_main_path_arg(profile, kind="1d_dat")
+    profile = _coerce_path_expression(profile)
+    expanded_profiles = _expand_files_from_unwrapped(profile.unwrap(), kind="1d_dat")
     for p in expanded_profiles:
         if Path(p).suffix.lower() != ".dat":
             raise ValueError("fit_mixture input files must have .dat extension")
     if config_path is None:
         raise ValueError("fit_mixture requires config_path (path to YAML config containing a 'mixture' section)")
-    if not os.path.isfile(config_path):
-        raise FileNotFoundError(f"fit_mixture config_path not found: {config_path!r}")
-    input_batch = [{"profile": p, "config_path": config_path} for p in expanded_profiles]
+    config_path = _coerce_singleton_path_expression(config_path)
+    cfg_path = config_path.unwrap()[0]
+    if not os.path.isfile(cfg_path):
+        raise FileNotFoundError(f"fit_mixture config_path not found: {cfg_path!r}")
+    input_batch = [{"profile": p, "config_path": cfg_path} for p in expanded_profiles]
     return _fit_mixture_paths(
         input_paths=input_batch[0] if len(input_batch) == 1 else input_batch,
         output_dir=output_dir,
@@ -1592,7 +1662,7 @@ def _fit_mixture_paths(
 
 
 def fit_bodies(
-    profile: str,
+    profile: PathExpressionArg,
     output_dir: str = ".",
     *,
     use_cache: bool = True,
@@ -1636,7 +1706,8 @@ def fit_bodies(
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
-    expanded_profiles = _expand_main_path_arg(profile, kind="1d_dat")
+    profile = _coerce_path_expression(profile)
+    expanded_profiles = _expand_files_from_unwrapped(profile.unwrap(), kind="1d_dat")
     for p in expanded_profiles:
         if Path(p).suffix.lower() != ".dat":
             raise ValueError("fit_bodies input files must have .dat extension")
@@ -1763,10 +1834,10 @@ def _fit_bodies_paths(
 
 
 def fit_dammif(
-    profile: str,
+    profile: PathExpressionArg,
     output_dir: str = ".",
     *,
-    gnom_path: Optional[str] = None,
+    gnom_path: Optional[SingletonPathExpressionArg] = None,
     use_cache: bool = True,
 ) -> Dict[str, Union[str, List[str]]]:
     """
@@ -1808,14 +1879,17 @@ def fit_dammif(
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stderr))
-    expanded_profiles = _expand_main_path_arg(profile, kind="1d_dat")
+    profile = _coerce_path_expression(profile)
+    expanded_profiles = _expand_files_from_unwrapped(profile.unwrap(), kind="1d_dat")
     for p in expanded_profiles:
         if Path(p).suffix.lower() != ".dat":
             raise ValueError("fit_dammif input files must have .dat extension")
     input_batch: List[Dict[str, Union[str, List[str]]]] = [{"profile": p} for p in expanded_profiles]
     if gnom_path is not None:
+        gnom_expr = _coerce_singleton_path_expression(gnom_path)
+        gnom_single = gnom_expr.unwrap()[0]
         for inp in input_batch:
-            inp["gnom_path"] = gnom_path
+            inp["gnom_path"] = gnom_single
     return _fit_dammif_paths(
         input_paths=input_batch[0] if len(input_batch) == 1 else input_batch,
         output_dir=output_dir,
@@ -1924,7 +1998,7 @@ def _fit_dammif_paths(
 
 
 def report_individual(
-    directory: str,
+    directory: SingletonPathExpressionArg,
     basename: str,
     output_dir: str = ".",
     *,
@@ -1970,14 +2044,16 @@ def report_individual(
     """
     from .report import write_individual_report_pdf
     _ = use_cache  # report generation does not use caching; kept for CLI parity
+    directory = _coerce_singleton_path_expression(directory)
+    directory_path = directory.unwrap()[0]
     if output_path is None:
         output_path = os.path.join(output_dir, f"{basename}_report.pdf")
-    path = write_individual_report_pdf(directory, basename, output_path=output_path)
+    path = write_individual_report_pdf(directory_path, basename, output_path=output_path)
     return {"report_pdf_path": path}
 
 
 def report_summary(
-    directory: str,
+    directory: SingletonPathExpressionArg,
     output_dir: str = ".",
     *,
     output_path: Optional[str] = None,
@@ -2020,7 +2096,9 @@ def report_summary(
     """
     from .report import write_summary_report_pdf
     _ = use_cache  # report generation does not use caching; kept for CLI parity
+    directory = _coerce_singleton_path_expression(directory)
+    directory_path = directory.unwrap()[0]
     if output_path is None:
         output_path = os.path.join(output_dir, "summary_report.pdf")
-    path = write_summary_report_pdf(directory, output_path=output_path)
+    path = write_summary_report_pdf(directory_path, output_path=output_path)
     return {"report_pdf_path": path}

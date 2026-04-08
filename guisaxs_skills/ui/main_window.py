@@ -4,6 +4,7 @@ from pathlib import Path
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
+    QApplication,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -29,6 +30,7 @@ from .preview_panel import PreviewPanel
 from .run_controls import RunControls
 from .skill_form import SkillForm
 from .skill_header import SkillHeader
+from .toast import Toast
 
 
 class MainWindow(QMainWindow):
@@ -37,7 +39,6 @@ class MainWindow(QMainWindow):
         self._bus = bus
         self._state = SessionState(workdir=workdir)
         self._runner = SkillRunner(workdir=workdir)
-        self._pending_requests = []
 
         self.setWindowTitle("guisaxs-skills")
 
@@ -86,10 +87,31 @@ class MainWindow(QMainWindow):
 
         self._wire()
         self._restore_state()
+        # Catch Enter/Return presses anywhere within this window.
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._save_state()
         super().closeEvent(event)
+
+    def eventFilter(self, obj, event) -> bool:  # type: ignore[override]
+        try:
+            if (
+                self.isActiveWindow()
+                and isinstance(obj, QWidget)
+                and obj.window() is self
+                and event.type() == event.KeyPress
+                and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+                and event.modifiers() == Qt.NoModifier
+            ):
+                self._on_enter_submit()
+                return True
+        except Exception:
+            # If the filter fails for any reason, don't break normal event processing.
+            return False
+        return super().eventFilter(obj, event)
 
     def _restore_state(self) -> None:
         s = settings()
@@ -115,6 +137,7 @@ class MainWindow(QMainWindow):
         self._controls.run_button.clicked.connect(self._on_run)
         self._controls.cancel_button.clicked.connect(self._on_cancel)
         self._controls.copy_cli_button.clicked.connect(self._on_copy_cli)
+        self._form.submit_requested.connect(self._on_enter_submit)
 
         self._runner.started.connect(lambda _: self._controls.set_running(True))
         self._runner.stdout.connect(self._logs.append_stdout)
@@ -160,25 +183,24 @@ class MainWindow(QMainWindow):
     def _on_run(self) -> None:
         self._logs.clear()
         try:
-            reqs = self._form.build_requests()
+            req = self._form.build_request()
         except Exception as e:
             QMessageBox.critical(self, "Invalid input", str(e))
             return
-        self._pending_requests = [
-            maybe_copy_inputs(request=r, workdir=self._state.workdir, enabled=self._form.copy_inputs_enabled())
-            for r in reqs
-        ]
-        self._start_next_request()
+        req = maybe_copy_inputs(request=req, workdir=self._state.workdir, enabled=self._form.copy_inputs_enabled())
+        self._runner.start(req)
+
+    def _on_enter_submit(self) -> None:
+        # Enter runs only when input is valid; otherwise show a non-blocking warning.
+        try:
+            _ = self._form.build_request()
+        except Exception as e:
+            Toast(text=f"Cannot run: {e}", parent=self).show_near_bottom()
+            return
+        self._on_run()
 
     def _on_cancel(self) -> None:
-        self._pending_requests = []
         self._runner.cancel()
-
-    def _start_next_request(self) -> None:
-        if not self._pending_requests:
-            return
-        nxt = self._pending_requests.pop(0)
-        self._runner.start(nxt)
 
     def _on_finished(self, outcome) -> None:
         self._controls.set_running(False)
@@ -186,8 +208,5 @@ class MainWindow(QMainWindow):
         self._state.artifacts = flatten_artifacts(outcome.result)
         self._artifacts.set_result(outcome.result)
         # Per-skill panel disabled (kept for future use)
-        # Continue batch if any
-        if self._pending_requests:
-            self._logs.append_stderr("\n--- next item ---\n")
-            self._start_next_request()
+        # Single invocation per Run press; no GUI-side batching.
 

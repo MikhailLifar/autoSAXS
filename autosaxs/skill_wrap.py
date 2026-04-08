@@ -359,9 +359,9 @@ def apply_batch(
         ) -> Dict[str, Any]:
             list_of_input_paths = input_paths if isinstance(input_paths, list) else [input_paths]
             single_call = isinstance(input_paths, dict)
-            # Design choice: per-sample subdirs are used even for single-call runs,
-            # unless the skill explicitly requests a single shared output dir.
-            use_single_out = single_output_dir_override
+            # Original policy: only create per-sample stem subdirs for true batch calls (list input),
+            # unless the caller forces a single shared output dir.
+            use_single_out = bool(single_output_dir_override) or single_call
             merged: Dict[str, Any] = {}
             for i, inp in enumerate(list_of_input_paths):
                 if use_single_out:

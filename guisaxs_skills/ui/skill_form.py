@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QCheckBox, QFormLayout, QGroupBox, QLineEdit, QWidget, QVBoxLayout
 
 from ..core.models import RunRequest, SkillMeta
@@ -10,10 +11,12 @@ from .path_field import PathField
 
 
 class SkillForm(QWidget):
+    submit_requested = pyqtSignal()
+
     def __init__(self) -> None:
         super().__init__()
         self._meta: Optional[SkillMeta] = None
-        self._pos_fields: List[PathField] = []
+        self._pos_widgets: List[QWidget] = []
         self._opt_fields: Dict[str, QWidget] = {}
 
         self._copy_inputs = QCheckBox("Copy inputs into working directory")
@@ -37,19 +40,32 @@ class SkillForm(QWidget):
         self._meta = meta
         self._clear_layout(self._pos_layout)
         self._clear_layout(self._opt_layout)
-        self._pos_fields = []
+        self._pos_widgets = []
         self._opt_fields = {}
 
         for p in meta.positional_params:
-            f = PathField(mode="any")
-            self._pos_fields.append(f)
-            self._pos_layout.addRow(p.name, f)
+            if self._is_path_expression_annotation(p.annotation):
+                f = PathField(
+                    mode="any",
+                    allow_multiple=not self._is_singleton_path_expression_annotation(p.annotation),
+                )
+                self._pos_widgets.append(f)
+                self._pos_layout.addRow(p.name, f)
+            else:
+                le = QLineEdit()
+                if p.default is not None:
+                    le.setText(str(p.default))
+                self._pos_widgets.append(le)
+                self._pos_layout.addRow(p.name, le)
+                le.returnPressed.connect(self.submit_requested.emit)
 
         # Options: always include output_dir + use_cache in UI (even if skill has them as optional/kwonly)
         output = PathField(mode="dir")
         output.set_text(default_output_dir)
         self._opt_fields["output_dir"] = output
         self._opt_layout.addRow("output_dir", output)
+        for le in output.findChildren(QLineEdit):
+            le.returnPressed.connect(self.submit_requested.emit)
 
         use_cache = QCheckBox("")
         # Default: caching disabled (user can opt-in).
@@ -59,6 +75,18 @@ class SkillForm(QWidget):
 
         for opt in meta.option_params:
             if opt.name in ("output_dir", "use_cache"):
+                continue
+            if self._is_path_expression_annotation(opt.annotation):
+                f = PathField(
+                    mode="any",
+                    allow_multiple=not self._is_singleton_path_expression_annotation(opt.annotation),
+                )
+                if opt.default is not None:
+                    f.set_text(str(opt.default))
+                self._opt_fields[opt.name] = f
+                self._opt_layout.addRow(opt.name, f)
+                for le in f.findChildren(QLineEdit):
+                    le.returnPressed.connect(self.submit_requested.emit)
                 continue
             # Minimal typing: strings/numbers as line edits, booleans as checkboxes when default is bool.
             if isinstance(opt.default, bool):
@@ -72,12 +100,13 @@ class SkillForm(QWidget):
                     le.setText(str(opt.default))
                 self._opt_fields[opt.name] = le
                 self._opt_layout.addRow(opt.name, le)
+                le.returnPressed.connect(self.submit_requested.emit)
 
     def state(self) -> dict:
         return {
             "skill_name": self._meta.name if self._meta else None,
             "copy_inputs": self._copy_inputs.isChecked(),
-            "positional": [f.state() for f in self._pos_fields],
+            "positional": [self._widget_state(w) for w in self._pos_widgets],
             "options": {k: self._widget_state(v) for k, v in self._opt_fields.items()},
         }
 
@@ -86,9 +115,8 @@ class SkillForm(QWidget):
             return
         self._copy_inputs.setChecked(bool(state.get("copy_inputs", False)))
         pos_states = state.get("positional") or []
-        for f, s in zip(self._pos_fields, pos_states):
-            if isinstance(s, dict):
-                f.set_state(s)
+        for w, s in zip(self._pos_widgets, pos_states):
+            self._set_widget_state(w, s)
         opt_states = state.get("options") or {}
         if isinstance(opt_states, dict):
             for k, v in opt_states.items():
@@ -106,19 +134,8 @@ class SkillForm(QWidget):
         if not self._meta:
             raise ValueError("No skill selected")
 
-        # Support: multi-file DnD in exactly one positional field => run skill in a loop.
-        pos_lists: List[List[str]] = []
-        for f in self._pos_fields:
-            items = [normalize_pathish(p) for p in f.paths() if normalize_pathish(p)]
-            pos_lists.append(items)
-
-        if any(len(items) == 0 for items in pos_lists):
-            raise ValueError("All positional inputs must be provided")
-
-        multi_fields = [i for i, items in enumerate(pos_lists) if len(items) > 1]
-        if len(multi_fields) > 1:
-            raise ValueError("Multiple multi-file inputs are not supported yet. Use one multi-file drop at a time.")
-
+        # Always build exactly one request. Multi-file inputs are encoded into a single
+        # comma-separated expression string and expanded by the skill entry point.
         options: Dict[str, Any] = {}
         for k, w in self._opt_fields.items():
             if isinstance(w, PathField):
@@ -131,17 +148,32 @@ class SkillForm(QWidget):
                     continue
                 options[k] = raw
 
-        if not multi_fields:
-            positional = [items[0] for items in pos_lists]
-            return [RunRequest(skill_name=self._meta.name, positional=positional, options=options)]
+        positional: List[str] = []
+        for w in self._pos_widgets:
+            if isinstance(w, PathField):
+                parts = [normalize_pathish(p) for p in w.paths() if normalize_pathish(p)]
+                if not parts:
+                    raise ValueError("All positional inputs must be provided")
+                positional.append(", ".join(parts))
+            elif isinstance(w, QLineEdit):
+                raw = w.text().strip()
+                if raw == "":
+                    raise ValueError("All positional inputs must be provided")
+                positional.append(raw)
+            else:
+                raise TypeError(f"Unsupported positional widget: {type(w)}")
 
-        idx = multi_fields[0]
-        reqs: List[RunRequest] = []
-        for p in pos_lists[idx]:
-            positional = [items[0] for items in pos_lists]
-            positional[idx] = p
-            reqs.append(RunRequest(skill_name=self._meta.name, positional=positional, options=dict(options)))
-        return reqs
+        return [RunRequest(skill_name=self._meta.name, positional=positional, options=options)]
+
+    @staticmethod
+    def _is_path_expression_annotation(annotation: Optional[str]) -> bool:
+        a = (annotation or "").strip()
+        return "PathExpression" in a
+
+    @staticmethod
+    def _is_singleton_path_expression_annotation(annotation: Optional[str]) -> bool:
+        a = (annotation or "").strip()
+        return "SingletonPathExpression" in a
 
     @staticmethod
     def _clear_layout(layout: QFormLayout) -> None:
@@ -171,4 +203,3 @@ class SkillForm(QWidget):
             w.setChecked(bool(value))
         elif isinstance(w, QLineEdit):
             w.setText("" if value is None else str(value))
-
