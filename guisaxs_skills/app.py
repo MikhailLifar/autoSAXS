@@ -6,7 +6,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import QApplication
 
 from .core.event_bus import EventBus
-from .logic.workdir import select_workdir
+from .logic.workdir import load_last_workdir, save_last_workdir, select_workdir
 from .ui.main_window import MainWindow
 from .ui.style import apply_style
 
@@ -17,9 +17,10 @@ def run_app() -> None:
 
     bus = EventBus()
 
-    workdir = select_workdir(parent=None)
+    workdir = load_last_workdir() or select_workdir(parent=None)
     if workdir is None:
         return
+    save_last_workdir(workdir)
 
     window = MainWindow(bus=bus, workdir=Path(workdir))
     window.show()

@@ -9,3 +9,5 @@ dist/
 *.egg
 autosaxs/temp/
 guisaxs_temp/
+# local GUI state
+guisaxs_skills/.last_workdir.txt

@@ -47,7 +47,7 @@
 
 - After a run finishes, the right column shows:
   - **Artifact list**: key/value pairs parsed from the CLI output lines `key=value`. Values can be a single path or a list of paths.
-  - **Preview panel**: selecting an artifact path shows a preview for common image formats (`.png`, `.jpg`, …). Clicking the preview opens a larger viewer dialog.
+  - **Preview panel**: selecting an artifact path shows a preview for common image formats (`.png`, `.jpg`, …) and also generates previews for `.dat`, `.tif/.tiff`, and `.csv` by rendering them into a temporary `.png`. Clicking the preview opens a larger viewer dialog.
 
 ### Where run records are stored
 

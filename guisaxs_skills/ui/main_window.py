@@ -4,6 +4,7 @@ from pathlib import Path
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
+    QAction,
     QApplication,
     QLabel,
     QMainWindow,
@@ -20,7 +21,9 @@ from ..logic.inputs_copy import maybe_copy_inputs
 from ..logic.default_output_dir import default_output_dir_for_skill
 from ..logic.runner_qprocess import SkillRunner
 from ..logic.session_state import SessionState
+from ..logic.smart_defaults import update_session_hints_from_success
 from ..logic.skill_catalog import discover_skills
+from ..logic.workdir import save_last_workdir, select_workdir
 from .artifacts_panel import ArtifactsPanel
 from .catalog_tabs import CatalogTabs
 from .data_panel import DataPanel
@@ -85,6 +88,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._splitter, 1)
         self.setCentralWidget(container)
 
+        self._init_menu()
         self._wire()
         self._restore_state()
         # Catch Enter/Return presses anywhere within this window.
@@ -131,6 +135,19 @@ class MainWindow(QMainWindow):
         s.setValue(KEY_MAIN_STATE, self.saveState())
         s.setValue(KEY_SPLITTER, self._splitter.saveState())
 
+    def _init_menu(self) -> None:
+        mb = self.menuBar()
+        file_menu = mb.addMenu("File")
+
+        act_open = QAction("Open working directory…", self)
+        act_open.triggered.connect(self._on_open_workdir)
+        file_menu.addAction(act_open)
+
+        file_menu.addSeparator()
+        act_exit = QAction("Exit", self)
+        act_exit.triggered.connect(self.close)
+        file_menu.addAction(act_exit)
+
     def _wire(self) -> None:
         self._catalog.skill_selected.connect(self._on_skill_selected)
         self._header.help_button.clicked.connect(self._on_help)
@@ -139,13 +156,55 @@ class MainWindow(QMainWindow):
         self._controls.copy_cli_button.clicked.connect(self._on_copy_cli)
         self._form.submit_requested.connect(self._on_enter_submit)
 
+        self._wire_runner()
+        self._artifacts.artifact_selected.connect(self._preview.show_path)
+
+        # Catalog widget handles default selection itself, but the initial selection
+        # may happen before the MainWindow connects signals. Sync once on startup.
+        meta = self._catalog.current_skill()
+        if meta is not None:
+            self._on_skill_selected(meta)
+
+    def _wire_runner(self) -> None:
         self._runner.started.connect(lambda _: self._controls.set_running(True))
         self._runner.stdout.connect(self._logs.append_stdout)
         self._runner.stderr.connect(self._logs.append_stderr)
         self._runner.finished.connect(self._on_finished)
-        self._artifacts.artifact_selected.connect(self._preview.show_path)
 
-        # Catalog widget handles default selection itself.
+    def _reset_for_workdir(self, workdir: Path) -> None:
+        # Cancel any running job and swap runner.
+        old_runner = self._runner
+        try:
+            old_runner.cancel()
+        except Exception:
+            pass
+        self._runner = SkillRunner(workdir=workdir)
+        self._wire_runner()
+        try:
+            old_runner.deleteLater()
+        except Exception:
+            pass
+
+        # Reset state + UI to match a fresh launch.
+        self._state = SessionState(workdir=workdir)
+        self._workdir_label.setText(f"Workdir: {workdir}")
+        self._controls.set_running(False)
+        self._logs.clear()
+        self._artifacts.set_result({})
+        self._preview.show_path("")
+
+        # Reset selection and reinitialize the middle column.
+        self._catalog.select_skill("calibrate")
+        meta = self._catalog.current_skill()
+        if meta is not None:
+            self._on_skill_selected(meta)
+
+    def _on_open_workdir(self) -> None:
+        path = select_workdir(parent=self)
+        if path is None:
+            return
+        save_last_workdir(path)
+        self._reset_for_workdir(Path(path))
 
     def _on_skill_selected(self, meta) -> None:
         # Save previous skill form state before switching.
@@ -157,10 +216,14 @@ class MainWindow(QMainWindow):
         self._header.set_skill_name(meta.name)
         # Restore remembered fields if available; otherwise use default output dir.
         out = default_output_dir_for_skill(workdir=self._state.workdir, skill_name=meta.name)
-        self._form.set_skill(meta, default_output_dir=str(out))
         saved = self._state.form_state_by_skill.get(meta.name)
-        if saved:
-            self._form.set_state(saved)
+        self._form.set_skill(
+            meta,
+            workdir=self._state.workdir,
+            default_output_dir=str(out),
+            hints=self._state.path_hints,
+            saved_state=saved,
+        )
         # Per-skill panel disabled (kept for future use)
 
     def _on_help(self) -> None:
@@ -207,6 +270,12 @@ class MainWindow(QMainWindow):
         self._state.result = outcome.result
         self._state.artifacts = flatten_artifacts(outcome.result)
         self._artifacts.set_result(outcome.result)
-        # Per-skill panel disabled (kept for future use)
-        # Single invocation per Run press; no GUI-side batching.
+        if outcome.success and outcome.request is not None:
+            update_session_hints_from_success(
+                self._state.path_hints,
+                workdir=self._state.workdir,
+                skill_name=outcome.request.skill_name,
+                result=outcome.result,
+                request=outcome.request,
+            )
 

@@ -2,16 +2,27 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Optional
 
+from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QLineEdit, QPushButton, QWidget
 from PyQt5.QtWidgets import QTreeView
 
+from ..logic.path_normalize import normalize_pathish
+from ..logic.smart_defaults import browse_start_dir_for_resolved_paths
+
 
 class PathField(QWidget):
+    """Emitted when the path text or dropped paths change (not during programmatic set_text / set_state)."""
+
+    path_changed = pyqtSignal()
+
     def __init__(self, *, mode: str = "any", allow_multiple: bool = False) -> None:
         super().__init__()
         self._mode = mode  # any|file|dir
         self._allow_multiple = bool(allow_multiple)
+        self._browse_start_dir: Optional[str] = None
+        self._workdir: Optional[Path] = None
         self._dropped_paths: list[str] = []
         self._edit = QLineEdit()
         self._browse = QPushButton("Browse")
@@ -24,6 +35,7 @@ class PathField(QWidget):
         self.setAcceptDrops(True)
         self._browse.clicked.connect(self._on_browse)
         self._edit.textEdited.connect(self._on_text_edited)
+        self._edit.textChanged.connect(lambda _t: self.path_changed.emit())
 
     def text(self) -> str:
         return self._edit.text().strip()
@@ -83,20 +95,46 @@ class PathField(QWidget):
         return {"text": self.text(), "dropped_paths": list(self._dropped_paths), "mode": self._mode}
 
     def set_state(self, state: dict) -> None:
-        self._dropped_paths = list(state.get("dropped_paths") or [])
-        t = (state.get("text") or "").strip()
-        if self._dropped_paths:
-            if len(self._dropped_paths) == 1:
-                self._edit.setText(self._dropped_paths[0])
+        self._edit.blockSignals(True)
+        try:
+            self._dropped_paths = list(state.get("dropped_paths") or [])
+            t = (state.get("text") or "").strip()
+            if self._dropped_paths:
+                if len(self._dropped_paths) == 1:
+                    self._edit.setText(self._dropped_paths[0])
+                else:
+                    first = Path(self._dropped_paths[0]).name
+                    self._edit.setText(f"{first} + {len(self._dropped_paths) - 1} more")
             else:
-                first = Path(self._dropped_paths[0]).name
-                self._edit.setText(f"{first} + {len(self._dropped_paths) - 1} more")
-        else:
-            self._edit.setText(t)
+                self._edit.setText(t)
+        finally:
+            self._edit.blockSignals(False)
 
     def set_text(self, value: str) -> None:
         self._dropped_paths = []
-        self._edit.setText(value)
+        self._edit.blockSignals(True)
+        try:
+            self._edit.setText(value)
+        finally:
+            self._edit.blockSignals(False)
+
+    def set_browse_start_dir(self, path: Optional[str]) -> None:
+        """Fallback directory for the file dialog when the field has no resolved paths (e.g. session hints)."""
+        self._browse_start_dir = path.strip() if path else None
+
+    def set_workdir(self, workdir: Optional[Path]) -> None:
+        """Used to resolve relative paths when choosing the dialog start directory."""
+        self._workdir = workdir
+
+    def _dialog_start_directory(self) -> str:
+        if self._workdir is not None:
+            paths = [normalize_pathish(p) for p in self.paths() if normalize_pathish(p)]
+            derived = browse_start_dir_for_resolved_paths(paths, self._workdir)
+            if derived:
+                return derived
+        if self._browse_start_dir:
+            return self._browse_start_dir
+        return os.getcwd()
 
     def dragEnterEvent(self, event) -> None:  # type: ignore[override]
         if event.mimeData().hasUrls():
@@ -114,7 +152,7 @@ class PathField(QWidget):
         self._sync_display_from_dropped()
 
     def _on_browse(self) -> None:
-        start = self.text() or os.getcwd()
+        start = self._dialog_start_directory()
         if self._mode == "dir":
             path = QFileDialog.getExistingDirectory(self, "Select directory", start)
         else:

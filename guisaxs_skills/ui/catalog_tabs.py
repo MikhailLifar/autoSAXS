@@ -33,6 +33,19 @@ class CatalogTabs(QWidget):
             idx = next((i for i, m in enumerate(skills) if m.name == default_skill), 0)
             self._list.setCurrentRow(idx)
 
+    def select_skill(self, name: str) -> None:
+        idx = next((i for i, m in enumerate(self._skills) if m.name == name), None)
+        if idx is None:
+            idx = 0 if self._skills else -1
+        if idx >= 0:
+            self._list.setCurrentRow(idx)
+
+    def current_skill(self) -> SkillMeta | None:
+        idx = self._list.currentRow()
+        if 0 <= idx < len(self._skills):
+            return self._skills[idx]
+        return None
+
     def _on_changed(self, idx: int) -> None:
         if 0 <= idx < len(self._skills):
             self.skill_selected.emit(self._skills[idx])

@@ -25,6 +25,7 @@ class RunOutcome:
     success: bool
     exit_code: int
     result: dict
+    request: Optional[RunRequest] = None
 
 
 class SkillRunner(QObject):
@@ -41,6 +42,7 @@ class SkillRunner(QObject):
         self._stdout_buf = ""
         self._stderr_buf = ""
         self._skill_name: Optional[str] = None
+        self._last_request: Optional[RunRequest] = None
 
     def is_running(self) -> bool:
         return self._proc is not None and self._proc.state() != QProcess.NotRunning
@@ -49,6 +51,7 @@ class SkillRunner(QObject):
         if self.is_running():
             return
         self._skill_name = request.skill_name
+        self._last_request = request
         self._stdout_buf = ""
         self._stderr_buf = ""
 
@@ -124,6 +127,11 @@ class SkillRunner(QObject):
                     pass
 
         latest_result_path(self._workdir).write_text(yaml.safe_dump(result, sort_keys=True), encoding="utf-8")
-        outcome = RunOutcome(success=(status == QProcess.NormalExit and exit_code == 0), exit_code=exit_code, result=result)
+        outcome = RunOutcome(
+            success=(status == QProcess.NormalExit and exit_code == 0),
+            exit_code=exit_code,
+            result=result,
+            request=self._last_request,
+        )
         self.finished.emit(outcome)
 

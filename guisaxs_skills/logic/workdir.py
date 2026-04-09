@@ -1,10 +1,47 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Optional
 
 from PyQt5.QtWidgets import QFileDialog, QMessageBox, QWidget
 from PyQt5.QtWidgets import QTreeView
+
+
+ENABLE_NONEMPTY_WORKDIR_WARNING = False
+
+
+def _last_workdir_path() -> Path:
+    # Store state straight inside the installed package directory.
+    # This is intentionally "local temp state" rather than user config.
+    return Path(__file__).resolve().parents[1] / ".last_workdir.txt"
+
+
+def load_last_workdir() -> Optional[str]:
+    try:
+        p = _last_workdir_path()
+        if not p.exists():
+            return None
+        text = p.read_text(encoding="utf-8", errors="replace").strip()
+        if not text:
+            return None
+        path = os.path.abspath(text)
+        if not os.path.isdir(path):
+            return None
+        if not os.access(path, os.W_OK):
+            return None
+        return path
+    except Exception:
+        return None
+
+
+def save_last_workdir(path: str) -> None:
+    try:
+        p = _last_workdir_path()
+        p.write_text(str(path).strip() + "\n", encoding="utf-8")
+    except Exception:
+        # Best-effort persistence; never fail app flow.
+        return
 
 
 def select_workdir(parent: Optional[QWidget]) -> Optional[str]:
@@ -39,7 +76,7 @@ def select_workdir(parent: Optional[QWidget]) -> Optional[str]:
         QMessageBox.critical(parent, "Not writable", f"Directory is not writable:\n{path}")
         return None
 
-    if os.listdir(path):
+    if ENABLE_NONEMPTY_WORKDIR_WARNING and os.listdir(path):
         QMessageBox.warning(
             parent,
             "Non-empty working directory",

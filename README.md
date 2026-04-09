@@ -550,15 +550,17 @@ autosaxs guinier_analysis subtracted/sub_sample_01.dat --output-dir guinier
 
 ## `fit_distances`
 
-Run ATSAS GNOM to obtain a pair distance distribution function p(r) for a **monodisperse** system from a 1D SAXS curve.
+Run ATSAS DATGNOM to obtain a pair distance distribution function p(r) for a **monodisperse** system from a 1D SAXS curve.
 
-The skill invokes `gnom` from `PATH` in command-line mode, explicitly enforcing `--system=0` and scanning candidate
-`--rmax` values to choose a robust solution. Input curves are typically in nm^-1 and are converted internally to Å^-1
-before calling GNOM. GNOM produces one `.out` file per run; the `.out` contains, among other things, the p(r) section.
+The skill invokes `gnom` from `PATH` in command-line mode, explicitly enforcing `--system=0` and running
+an automated GNOM-based transform via `datgnom` with a user-provided `Rg` (in nm). Input curves are expected
+in nm^-1 and are passed through in ATSAS `.dat` format. DATGNOM produces a single `.out` file; the `.out` contains,
+among other things, the p(r) section.
 
 ### Arguments
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where the GNOM outputs are written (one subdirectory per input profile).
+- `rg_nm` (float): Expected radius of gyration (Rg) in nm (typically from Guinier analysis).
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
 ### Returns

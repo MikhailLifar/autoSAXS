@@ -559,7 +559,7 @@ def test_fit_dammif_raises_without_profile():
 
 def test_fit_distances_contract(monkeypatch):
     """
-    Contract test without requiring GNOM to be installed: monkeypatch subprocess.run to emulate `gnom`.
+    Contract test without requiring DATGNOM to be installed: monkeypatch subprocess.run to emulate `datgnom`.
     """
     import subprocess as _sp
 
@@ -570,17 +570,19 @@ def test_fit_distances_contract(monkeypatch):
         profile_path = os.path.join(tmp, "profile.dat")
         write_saxs(profile_path, q, I, sigma, {})
 
-        def _fake_run(args, cwd=None, capture_output=None, text=None):
-            # Expect: ["gnom", "--system=0", "--rmax=..", "--output", out_path, atsas_dat_path]
-            assert args[0] == "gnom"
-            assert "--system=0" in args
-            out_idx = args.index("--output")
-            out_path = args[out_idx + 1]
-            # Produce a minimal .out containing Total Estimate and a p(r) table block.
+        def _fake_run(cmd, cwd=None, capture_output=None, text=None):
+            # Expect: ["datgnom", "--rg=...", "--first=..", "--last=..", ...] "-o", out_path, atsas_dat_path
+            assert cmd[0] == "datgnom"
+            assert any(str(a).startswith("--rg=") for a in cmd)
+            out_idx = cmd.index("-o")
+            out_path = cmd[out_idx + 1]
+            # Minimal .out: header line for rmax, Total Estimate, and an 8+ row p(r) table (monotonic R).
+            # p(r) parser requires a block of >= 8 monotonic (R, P, Err) rows.
             Path(out_path).write_text(
                 "\n".join(
                     [
-                        "GNOM OUTPUT",
+                        "DATGNOM OUTPUT (fake)",
+                        "Real space range: 0.0000 to 35.0000",
                         "Total Estimate = 0.85",
                         "",
                         "R      P(R)    Error",
@@ -591,21 +593,25 @@ def test_fit_distances_contract(monkeypatch):
                         "20.0   0.8     0.1",
                         "25.0   0.2     0.1",
                         "30.0   0.0     0.1",
+                        "35.0   0.0     0.1",
                         "",
                     ]
                 )
             )
-            return _sp.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+            return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
         monkeypatch.setattr("autosaxs.skill.fit_distances.subprocess.run", _fake_run)
 
         out_dir = os.path.join(tmp, "distances")
-        result = fit_distances(profile_path, output_dir=out_dir, use_cache=False)
+        result = fit_distances(profile_path, output_dir=out_dir, rg_nm=2.5, use_cache=False)
         for key in ("output_subdir", "gnom_out_paths", "best_gnom_out_path", "best_summary_path"):
             assert key in result
         assert os.path.isdir(str(result["output_subdir"]))
-        assert isinstance(result["gnom_out_paths"], list)
-        assert len(result["gnom_out_paths"]) > 0
+        gnom_paths = result["gnom_out_paths"]
+        if isinstance(gnom_paths, str):
+            gnom_paths = [gnom_paths]
+        assert isinstance(gnom_paths, list) and len(gnom_paths) > 0
+        assert all(os.path.isfile(p) for p in gnom_paths)
         assert os.path.isfile(str(result["best_gnom_out_path"]))
         assert os.path.isfile(str(result["best_summary_path"]))
 
