@@ -12,14 +12,7 @@ from autosaxs.path_expression import PathExpression, SingletonPathExpression
 def _public_skill_functions() -> Dict[str, Callable]:
     from autosaxs import skill as skill_mod
 
-    funcs: Dict[str, Callable] = {}
-    for name, obj in inspect.getmembers(skill_mod, inspect.isfunction):
-        if name.startswith("_"):
-            continue
-        if getattr(obj, "__module__", None) != skill_mod.__name__:
-            continue
-        funcs[name] = obj
-    return funcs
+    return dict(skill_mod.list_skills(include_reports=True))
 
 
 def _summary(doc: str) -> str:
@@ -103,11 +96,14 @@ def _annotation_label(fn: Callable, param: inspect.Parameter, type_hints: Dict[s
 def discover_skills() -> List[SkillMeta]:
     metas: List[SkillMeta] = []
     public = _public_skill_functions()
-    # Preferred ordering: the order in autosaxs/skill.py.
+    # Preferred ordering: a curated order list if available, otherwise autosaxs/skill.py source order.
     order: List[str] = []
     try:
-        module_file = Path(next(iter(public.values())).__code__.co_filename)
-        order = _skill_order_from_source(module_file=module_file)
+        from autosaxs import skill as skill_mod
+        if hasattr(skill_mod, "SKILL_ORDER"):
+            order = list(getattr(skill_mod, "SKILL_ORDER") or [])
+        if not order:
+            order = _skill_order_from_source(module_file=Path(skill_mod.__file__))
     except Exception:
         order = []
     order_index = {name: i for i, name in enumerate(order)}

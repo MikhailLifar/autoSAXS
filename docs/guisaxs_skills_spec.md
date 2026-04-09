@@ -207,7 +207,9 @@ Alternative approach (allowed if still isolated): a dedicated runner module (e.g
 - The GUI must show:
   - a run state (Idle / Running / Cancelling / Done / Failed)
   - a streaming log view (stderr + stdout tabs or merged with coloring)
-- Since current skills typically print EventBus `MESSAGE` texts to **stderr** (see `autosaxs.skill.calibrate` pattern), the GUI must treat stderr as **primary progress**.
+- Progress/status “MESSAGE” texts emitted by skills may appear on **stdout or stderr** depending on the current autosaxs implementation.
+  - The GUI must treat **both** streams as potentially containing progress.
+  - Only actual errors/debug output should be assumed to belong on **stderr**.
 - Optional: detect “from_cache” if the skill includes it in outputs; otherwise show cache as “unknown” unless explicitly indicated.
 
 ### 6.4 Output parsing

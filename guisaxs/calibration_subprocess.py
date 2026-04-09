@@ -50,7 +50,7 @@ for _var in _THREADING_ENV_VARS:
 
 print(f"Calibration subprocess: Using {_OPTIMAL_THREADS} threads for computation", file=sys.stderr)
 
-from autosaxs.skill import calibrate  # noqa: E402
+from autosaxs.skill.calibrate import calibrate  # noqa: E402
 from autosaxs.utils import load_config  # noqa: E402
 
 

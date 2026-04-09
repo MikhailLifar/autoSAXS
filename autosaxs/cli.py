@@ -82,14 +82,7 @@ def _wrap_path_expression_value(value: Any, ann: Any) -> Any:
 def _skill_functions() -> Dict[str, Callable[..., Any]]:
     from . import skill as skill_mod
 
-    funcs: Dict[str, Callable[..., Any]] = {}
-    for name, obj in inspect.getmembers(skill_mod, inspect.isfunction):
-        if name.startswith("_"):
-            continue
-        if getattr(obj, "__module__", None) != skill_mod.__name__:
-            continue
-        funcs[name] = obj
-    return funcs
+    return dict(skill_mod.list_skills(include_reports=True))
 
 
 def _add_skill_subparser(subparsers: argparse._SubParsersAction, name: str, fn: Callable[..., Any]) -> None:

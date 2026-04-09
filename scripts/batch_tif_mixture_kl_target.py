@@ -29,7 +29,9 @@ from typing import Any
 import numpy as np
 
 from autosaxs.mixture import N_PARAMS_PER_PHASE, _parse_fit_file
-from autosaxs.skill import fit_mixture, integrate, subtract
+from autosaxs.skill.fit_mixture import fit_mixture
+from autosaxs.skill.integrate import integrate
+from autosaxs.skill.subtract import subtract
 from autosaxs.utils import gaussian_pdf, load_config, schultz_pdf
 
 # Best row selection: same semantics as scripts/2026_Pt_NPs_kinetic_analysis.py

@@ -4,7 +4,8 @@ import threading
 import time
 from typing import Optional
 from ..models.calibration_manager import CalibrationManager
-from autosaxs.skill import integrate, subtract
+from autosaxs.skill.integrate import integrate
+from autosaxs.skill.subtract import subtract
 
 
 def _debug_processing_pm(msg: str) -> None:

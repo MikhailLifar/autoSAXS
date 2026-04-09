@@ -70,7 +70,7 @@ def main() -> int:
     if mask_path and not os.path.isfile(mask_path):
         raise FileNotFoundError(f"Mask file not found: {mask_path}")
 
-    from autosaxs.skill import calibrate
+    from autosaxs.skill.calibrate import calibrate
 
     result = calibrate(
         image_path,

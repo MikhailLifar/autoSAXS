@@ -47,6 +47,7 @@ def _write_atsas_dat(path: Path, q: np.ndarray, I: np.ndarray, sigma: np.ndarray
 
 
 def _sphere_block(vol, vol_lo, vol_hi, rout, rout_lo, rout_hi, poly, poly_lo, poly_hi, dist_type, rhs_lo, rhs_hi) -> list[str]:
+    rhs_init = 0.5 * (rhs_lo + rhs_hi)
     lines = [
         "SPHERE",
         f"  {vol:.4f}  {vol_lo:.2f}  {vol_hi:.2f}    !! volume fraction",
@@ -55,7 +56,7 @@ def _sphere_block(vol, vol_lo, vol_hi, rout, rout_lo, rout_hi, poly, poly_lo, po
         f"  {rout:.2f}  {rout_lo:.2f}  {rout_hi:.2f}   !! outer shell radius (Angstrom)",
         "  1.0    1.0    1.0      !! outer contrast",
         f"  {poly:.2f}  {poly_lo:.2f}  {poly_hi:.2f}   !! polydispersity",
-        f"  {rhs_hi:.2f}  {rhs_lo:.2f}  {rhs_hi:.2f}   !! hard sphere radius",
+        f"  {rhs_init:.2f}  {rhs_lo:.2f}  {rhs_hi:.2f}   !! hard sphere radius",
         f"  {dist_type}                        !! 1=Gauss 2=Schultz",
         "  0.0    0.0    0.0      !! sticky (0=no interactions)",
     ]
@@ -76,8 +77,11 @@ def _build_mixture_cmd(
 ) -> str:
     dist_name = "Gauss" if dist_type == 1 else "Schultz"
     vols = np.ones(n_phases) / n_phases
-    r_centers = np.linspace(r_min + 10.0, r_max - 20.0, n_phases)
-    poly_init = 5.0
+    # Evenly spaced initial radii inside [r_min, r_max].
+    # For n_phases=1 this yields the midpoint.
+    r_centers = np.linspace(r_min, r_max, n_phases + 2)[1:-1]
+    # poly_init = 0.5 * (poly_min + poly_max)
+    poly_init = 130.0
     lines = [
         "i                        !! init",
         "!!!!!!!!!!!!!!!!!!       !! init",
@@ -335,10 +339,12 @@ def _plot_comparison(
     plt.close(fig_log)
 
 
-def _plot_distributions(results: list[dict], out_path: Path) -> None:
+def _plot_distributions(results: list[dict], out_path: Path, *, r_min: float, r_max: float) -> None:
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots()
-    R_plot_Ang = np.linspace(1, 130, 400)
+    r_lo = max(0.0, float(r_min))
+    r_hi = max(r_lo + 1.0, float(r_max))
+    R_plot_Ang = np.linspace(max(1.0, r_lo), r_hi, 600)
     R_plot_nm = R_plot_Ang / 10.0
     colors = plt.cm.tab10(np.linspace(0, 1, 10))
     for idx, r in enumerate(results):
@@ -354,7 +360,7 @@ def _plot_distributions(results: list[dict], out_path: Path) -> None:
         ax.plot(R_plot_nm, total, "-", color=colors[idx % len(colors)], lw=1.8, label=lab)
     ax.set_xlabel(r"$R$ (nm)")
     ax.set_ylabel("P(R) (arb.)")
-    ax.set_xlim(0, 13)
+    ax.set_xlim(max(0.0, r_lo / 10.0), r_hi / 10.0)
     ax.set_ylim(0, None)
     ax.legend(loc="best")
     ax.grid(True, alpha=0.3)
@@ -500,7 +506,7 @@ def fit_mixtures(
             r["R2_log"] = r["R2_adj_log"] = r["BIC_log"] = np.nan
 
     _plot_comparison(q_full, I_full, results, comparison_path, comparison_log_path, fit_range_title)
-    _plot_distributions(results, distributions_path)
+    _plot_distributions(results, distributions_path, r_min=r_min, r_max=r_max)
     _save_results_csv(results, results_csv_path)
 
     best = min(results, key=lambda r: (np.nan if not np.isfinite(r.get("BIC_log", np.nan)) else r["BIC_log"], r["label"]))

@@ -42,7 +42,13 @@ from ase.io import read
 from .foreign.aiAssistantFramework.lib import llm
 # from aiAssistantFramework.lib import telegram
 # import controller as ai_controller
-from . import skill
+from .skill.calibrate import calibrate
+from .skill.fit_bodies import fit_bodies
+from .skill.fit_dammif import fit_dammif
+from .skill.fit_mixture import fit_mixture
+from .skill.integrate import integrate
+from .skill.plot import plot
+from .skill.subtract import subtract
 
 PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prompts')
 DEBUG = True
@@ -679,7 +685,7 @@ class Controller:
                 if mask_path:
                     context.append_path('calib_mask', mask_path)
             if calibrant_path:
-                out_cal = skill.calibrate(
+                out_cal = calibrate(
                     calibrant_path,
                     config_path,
                     directory,
@@ -784,7 +790,7 @@ class Controller:
                 buffer_2d_to_1d = {}
                 sample_2d_to_1d = {}
                 if buffer_paths:
-                    out_buf = skill.integrate(
+                    out_buf = integrate(
                         buffer_paths,
                         integrator_dir,
                         averaged_dir,
@@ -795,7 +801,7 @@ class Controller:
                     buffer_2d_to_1d = dict(zip(buffer_paths, integrated_buf_list))
                     _path_debug("integrate output buffer_2d_to_1d values (1d paths)", list(buffer_2d_to_1d.values()))
                 if sample_paths:
-                    out_sam = skill.integrate(
+                    out_sam = integrate(
                         sample_paths,
                         integrator_dir,
                         averaged_dir,
@@ -899,7 +905,7 @@ class Controller:
                 q_sub_min = q_range_abs[0] if q_range_abs else None
                 q_sub_max = q_range_abs[1] if q_range_abs else None
                 for s_p, b_p in aligned_pairs:
-                    out_sub = skill.subtract(
+                    out_sub = subtract(
                         s_p,
                         b_p,
                         subtracted_dir,
@@ -976,7 +982,7 @@ class Controller:
                     kratky_list = []
                     loglog_list = []
                     for p in profile_paths:
-                        out_plot = skill.plot(p, plots_dir, use_cache=fast_forward)
+                        out_plot = plot(p, plots_dir, use_cache=fast_forward)
                         guinier_list.append(out_plot.get('guinier_plot_path'))
                         kratky_list.append(out_plot.get('kratky_plot_path'))
                         loglog_list.append(out_plot.get('loglog_plot_path'))
@@ -1045,7 +1051,7 @@ class Controller:
                         q_max_nm = q_range_nm[1] if q_range_nm and len(q_range_nm) >= 2 else None
                         mixture_root = os.path.join(directory, 'mixture')
                         for i, b in enumerate(selected_order):
-                            out_mixture = skill.fit_mixture(
+                            out_mixture = fit_mixture(
                                 selected_profiles[b]['path'],
                                 os.path.join(mixture_root, b),
                                 config_path=context.config_path,
@@ -1068,7 +1074,7 @@ class Controller:
                         bodies_root = os.path.join(directory, 'bodies')
                         bodies_dirs_list = []
                         for b in selected_order:
-                            out_bodies = skill.fit_bodies(
+                            out_bodies = fit_bodies(
                                 selected_profiles[b]['path'],
                                 os.path.join(bodies_root, b),
                                 use_cache=fast_forward,
@@ -1085,7 +1091,7 @@ class Controller:
                         for b in selected_order:
                             gnom_p = descriptors_by_basename.get(b, (None, None))[1]
                             prof_p = selected_profiles[b]['path']
-                            out_dammif = skill.fit_dammif(
+                            out_dammif = fit_dammif(
                                 prof_p,
                                 os.path.join(dammif_root, b),
                                 gnom_path=gnom_p or prof_p,

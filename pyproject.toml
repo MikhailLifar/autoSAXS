@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autosaxs"
-version = "1.2.0"
+version = "1.3.0"
 description = "Interactive SAXS pipeline core: calibration, integration, subtraction, ATSAS descriptors, plots, shape fitting, reports"
 requires-python = ">=3.9"
 license = "MIT"
@@ -29,6 +29,7 @@ dependencies = [
     "pyFAI",
     "PyYAML",
     "reportlab",
+    "sasmodels",
     "scipy",
     "scikit-image",
     "scikit-learn",

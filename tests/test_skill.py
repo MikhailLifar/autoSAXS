@@ -23,22 +23,23 @@ if str(_REPOS) not in __import__("sys").path:
 from autosaxs.skill import (
     CACHE_FILENAME,
     apply_batch,
-    calibrate,
     check_output_integrity,
     compute_input_hash,
-    fit_bodies,
-    fit_dammif,
-    fit_mixture,
-    guinier_analysis,
-    integrate,
-    integrate_proxy,
-    plot,
-    plot_2d,
     read_cache,
     run_with_cache,
-    subtract,
     write_cache,
 )
+from autosaxs.skill.calibrate import calibrate
+from autosaxs.skill.fit_bodies import fit_bodies
+from autosaxs.skill.fit_dammif import fit_dammif
+from autosaxs.skill.fit_distances import fit_distances
+from autosaxs.skill.fit_mixture import fit_mixture
+from autosaxs.skill.guinier_analysis import guinier_analysis
+from autosaxs.skill.integrate import integrate
+from autosaxs.skill.integrate_proxy import integrate_proxy
+from autosaxs.skill.plot import plot
+from autosaxs.skill.plot_2d import plot_2d
+from autosaxs.skill.subtract import subtract
 from autosaxs.utils import read_saxs, write_saxs, write_data
 
 
@@ -109,6 +110,7 @@ def test_check_output_integrity_ok():
     ("plot", plot),
     ("plot_2d", plot_2d),
     ("guinier_analysis", guinier_analysis),
+    ("fit_distances", fit_distances),
     ("fit_mixture", fit_mixture),
     ("fit_bodies", fit_bodies),
     ("fit_dammif", fit_dammif),
@@ -152,7 +154,7 @@ def test_subtract_contract():
             use_cache=False,
         )
         assert "subtracted_1d" in result
-        assert os.path.isfile(result["subtracted_1d"])
+        assert os.path.isfile(str(result["subtracted_1d"]))
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +171,7 @@ def test_plot_contract():
         result = plot(profile_path, output_dir=out_dir, use_cache=False)
         for key in ("guinier_plot_path", "kratky_plot_path", "loglog_plot_path", "guinier_dat_path"):
             assert key in result, f"plot must return {key}"
-            assert os.path.isfile(result[key]), f"{key} must exist"
+            assert os.path.isfile(str(result[key])), f"{key} must exist"
 
 
 def test_plot_cache_hit_on_second_run():
@@ -210,7 +212,7 @@ def test_plot_2d_contract(monkeypatch):
         def _fake_read(path):
             return img_a if path.endswith("a.tif") else img_b
 
-        monkeypatch.setattr("autosaxs.skill.read_from_tiff", _fake_read)
+        monkeypatch.setattr("autosaxs.skill.plot_2d.read_from_tiff", _fake_read)
         out_dir = os.path.join(tmp, "plots2d")
         result = plot_2d(img_dir, output_dir=out_dir, use_cache=False)
         assert "plot_2d_png" in result
@@ -228,7 +230,7 @@ def test_plot_2d_cache_hit_on_second_run(monkeypatch):
         os.makedirs(img_dir, exist_ok=True)
         img_path = os.path.join(img_dir, "image.tif")
         Path(img_path).write_bytes(b"dummy")
-        monkeypatch.setattr("autosaxs.skill.read_from_tiff", lambda _: img)
+        monkeypatch.setattr("autosaxs.skill.plot_2d.read_from_tiff", lambda _: img)
         out_dir = os.path.join(tmp, "plot2d_out")
         r1 = plot_2d(img_dir, output_dir=out_dir, use_cache=True)
         assert "from_cache" not in r1 or r1.get("from_cache") is False
@@ -245,7 +247,7 @@ def test_plot_2d_single_file_contract(monkeypatch):
         img[2:8, 2:8] = 3.0
         img_path = os.path.join(tmp, "single.tif")
         Path(img_path).write_bytes(b"dummy")
-        monkeypatch.setattr("autosaxs.skill.read_from_tiff", lambda _: img)
+        monkeypatch.setattr("autosaxs.skill.plot_2d.read_from_tiff", lambda _: img)
         out_dir = os.path.join(tmp, "plots2d_single")
         result = plot_2d(img_path, output_dir=out_dir, use_cache=False)
         assert "plot_2d_png" in result
@@ -262,7 +264,7 @@ def test_integrate_proxy_single_file_contract(monkeypatch):
         img[6:12, 7:11] = 9.0
         img_path = os.path.join(tmp, "single.tif")
         Path(img_path).write_bytes(b"dummy")
-        monkeypatch.setattr("autosaxs.skill.read_from_tiff", lambda _: img)
+        monkeypatch.setattr("autosaxs.skill.integrate_proxy.read_from_tiff", lambda _: img)
         out_dir = os.path.join(tmp, "int_proxy")
         result = integrate_proxy(
             img_path,
@@ -292,7 +294,7 @@ def test_integrate_proxy_directory_contract(monkeypatch):
         img_path_b = os.path.join(img_dir, "b.tif")
         Path(img_path_a).write_bytes(b"dummy")
         Path(img_path_b).write_bytes(b"dummy")
-        monkeypatch.setattr("autosaxs.skill.read_from_tiff", lambda p: img_a if p.endswith("a.tif") else img_b)
+        monkeypatch.setattr("autosaxs.skill.integrate_proxy.read_from_tiff", lambda p: img_a if p.endswith("a.tif") else img_b)
         out_dir = os.path.join(tmp, "int_proxy_out")
         result = integrate_proxy(
             img_dir,
@@ -313,7 +315,7 @@ def test_integrate_proxy_raises_for_half_defined_center(monkeypatch):
         img = np.zeros((8, 8), dtype=np.float32)
         img_path = os.path.join(tmp, "single.tif")
         Path(img_path).write_bytes(b"dummy")
-        monkeypatch.setattr("autosaxs.skill.read_from_tiff", lambda _: img)
+        monkeypatch.setattr("autosaxs.skill.integrate_proxy.read_from_tiff", lambda _: img)
         with pytest.raises(ValueError):
             integrate_proxy(
                 img_path,
@@ -330,9 +332,9 @@ def test_integrate_proxy_center_estimation_failure_returns_empty(monkeypatch, ca
         img[3:8, 3:8] = 2.0
         img_path = os.path.join(tmp, "single.tif")
         Path(img_path).write_bytes(b"dummy")
-        monkeypatch.setattr("autosaxs.skill.read_from_tiff", lambda _: img)
+        monkeypatch.setattr("autosaxs.skill.integrate_proxy.read_from_tiff", lambda _: img)
         monkeypatch.setattr(
-            "autosaxs.skill._estimate_center_radial_symmetry",
+            "autosaxs.skill.integrate_proxy._estimate_center_radial_symmetry",
             lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("fail")),
         )
         out_dir = os.path.join(tmp, "int_proxy_empty")
@@ -360,7 +362,7 @@ def test_integrate_proxy_with_mask(monkeypatch):
         Path(img_path).write_bytes(b"dummy")
         np.save(mask_path, mask.astype(bool))
 
-        monkeypatch.setattr("autosaxs.skill.read_from_tiff", lambda _: img)
+        monkeypatch.setattr("autosaxs.skill.integrate_proxy.read_from_tiff", lambda _: img)
         out_dir = os.path.join(tmp, "int_proxy_mask")
         result = integrate_proxy(
             img_path,
@@ -371,7 +373,7 @@ def test_integrate_proxy_with_mask(monkeypatch):
             use_cache=False,
         )
         assert "integrated_1d" in result
-        assert os.path.isfile(result["integrated_1d"])
+        assert os.path.isfile(str(result["integrated_1d"]))
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +425,7 @@ def test_calibrate_default_mask_mode_is_from_file(monkeypatch):
         Path(cfg_path).write_text("dummy: true")
         np.save(mask_path, np.zeros((4, 4), dtype=bool))
 
-        monkeypatch.setattr("autosaxs.skill.load_config", lambda _: {"calibrant_name": "AgBh"})
+        monkeypatch.setattr("autosaxs.skill.calibrate.load_config", lambda _: {"calibrant_name": "AgBh"})
 
         class _DummyIntegrator:
             mask = None
@@ -441,8 +443,8 @@ def test_calibrate_default_mask_mode_is_from_file(monkeypatch):
                 "calib_data": np.zeros((8, 8), dtype=np.float32),
             }
 
-        monkeypatch.setattr("autosaxs.skill.autocalib_ring_analysis", _fake_autocalib_ring_analysis)
-        monkeypatch.setattr("autosaxs.skill.PLTViewer.view_mask", lambda *args, **kwargs: None)
+        monkeypatch.setattr("autosaxs.skill.calibrate.autocalib_ring_analysis", _fake_autocalib_ring_analysis)
+        monkeypatch.setattr("autosaxs.skill.calibrate.PLTViewer.view_mask", lambda *args, **kwargs: None)
 
         out = calibrate(
             calib_image=calib_path,
@@ -466,7 +468,7 @@ def test_calibrate_always_overrides_config_calibrant(monkeypatch):
         # Use two distinct known names to ensure override is visible.
         requested_calibrant = "AgBh"
 
-        monkeypatch.setattr("autosaxs.skill.load_config", lambda _: {"calibrant_name": "Si"})
+        monkeypatch.setattr("autosaxs.skill.calibrate.load_config", lambda _: {"calibrant_name": "Si"})
 
         class _DummyIntegrator:
             mask = None
@@ -485,8 +487,8 @@ def test_calibrate_always_overrides_config_calibrant(monkeypatch):
                 "calib_data": np.zeros((8, 8), dtype=np.float32),
             }
 
-        monkeypatch.setattr("autosaxs.skill.autocalib_ring_analysis", _fake_autocalib_ring_analysis)
-        monkeypatch.setattr("autosaxs.skill.PLTViewer.view_mask", lambda *args, **kwargs: None)
+        monkeypatch.setattr("autosaxs.skill.calibrate.autocalib_ring_analysis", _fake_autocalib_ring_analysis)
+        monkeypatch.setattr("autosaxs.skill.calibrate.PLTViewer.view_mask", lambda *args, **kwargs: None)
 
         out = calibrate(
             calib_image=calib_path,
@@ -555,6 +557,59 @@ def test_fit_dammif_raises_without_profile():
         )
 
 
+def test_fit_distances_contract(monkeypatch):
+    """
+    Contract test without requiring GNOM to be installed: monkeypatch subprocess.run to emulate `gnom`.
+    """
+    import subprocess as _sp
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.05, 2.0, 60)
+        I = np.exp(-q**2) + 0.01
+        sigma = 0.02 * I
+        profile_path = os.path.join(tmp, "profile.dat")
+        write_saxs(profile_path, q, I, sigma, {})
+
+        def _fake_run(args, cwd=None, capture_output=None, text=None):
+            # Expect: ["gnom", "--system=0", "--rmax=..", "--output", out_path, atsas_dat_path]
+            assert args[0] == "gnom"
+            assert "--system=0" in args
+            out_idx = args.index("--output")
+            out_path = args[out_idx + 1]
+            # Produce a minimal .out containing Total Estimate and a p(r) table block.
+            Path(out_path).write_text(
+                "\n".join(
+                    [
+                        "GNOM OUTPUT",
+                        "Total Estimate = 0.85",
+                        "",
+                        "R      P(R)    Error",
+                        "0.0    0.0     0.0",
+                        "5.0    1.0     0.1",
+                        "10.0   2.0     0.1",
+                        "15.0   1.5     0.1",
+                        "20.0   0.8     0.1",
+                        "25.0   0.2     0.1",
+                        "30.0   0.0     0.1",
+                        "",
+                    ]
+                )
+            )
+            return _sp.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr("autosaxs.skill.fit_distances.subprocess.run", _fake_run)
+
+        out_dir = os.path.join(tmp, "distances")
+        result = fit_distances(profile_path, output_dir=out_dir, use_cache=False)
+        for key in ("output_subdir", "gnom_out_paths", "best_gnom_out_path", "best_summary_path"):
+            assert key in result
+        assert os.path.isdir(str(result["output_subdir"]))
+        assert isinstance(result["gnom_out_paths"], list)
+        assert len(result["gnom_out_paths"]) > 0
+        assert os.path.isfile(str(result["best_gnom_out_path"]))
+        assert os.path.isfile(str(result["best_summary_path"]))
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -577,3 +632,25 @@ def test_run_with_cache_writes_cache():
         assert len(cache["records"]) == 1
         rec = cache["records"][0]
         assert "hash" in rec and "finish_date" in rec and "output_paths" in rec
+
+
+# ---------------------------------------------------------------------------
+# CLI invocation: smoke test that argparse dispatch works
+# ---------------------------------------------------------------------------
+def test_cli_invocation_smoke(capsys):
+    from autosaxs.cli import main as cli_main
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.1, 2.0, 20)
+        I = np.exp(-q**2)
+        sigma = 0.01 * I
+        profile_path = os.path.join(tmp, "profile.dat")
+        write_saxs(profile_path, q, I, sigma, {})
+
+        out_dir = os.path.join(tmp, "cli_plot_out")
+        rc = cli_main(["plot", profile_path, "--output-dir", out_dir, "--no-cache"])
+        assert rc == 0
+
+        captured = capsys.readouterr().out
+        assert "guinier_plot_path=" in captured
+        assert "kratky_plot_path=" in captured

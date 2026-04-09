@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import inspect
 from pathlib import Path
 
@@ -10,37 +9,23 @@ def _read_readme_header(repo_root: Path) -> str:
     return header_path.read_text(encoding="utf-8")
 
 
-def _skill_names_in_source_order(skill_py: Path) -> list[str]:
-    tree = ast.parse(skill_py.read_text(encoding="utf-8"))
-    names: list[str] = []
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef):
-            name = node.name
-            if name.startswith("_"):
-                continue
-            # Only include functions that have a docstring (skills should).
-            if ast.get_docstring(node) is None:
-                continue
-            names.append(name)
-    return names
-
-
 def main() -> int:
     repo_root = Path(__file__).resolve().parent
-    skill_py = repo_root / "autosaxs" / "skill.py"
     out_md = repo_root / "README.md"
 
     from autosaxs import skill as skill_mod
 
-    names = _skill_names_in_source_order(skill_py)
+    skills = skill_mod.list_skills(include_reports=True)
+    names = list(getattr(skill_mod, "SKILL_ORDER", []))
+    # Fall back to deterministic order if SKILL_ORDER is missing or incomplete.
+    for extra in sorted(set(skills) - set(names)):
+        names.append(extra)
 
     readme_preamble = _read_readme_header(repo_root).rstrip()
     parts: list[str] = [readme_preamble + "\n\n---\n"]
     for name in names:
-        fn = getattr(skill_mod, name, None)
-        if fn is None or not inspect.isfunction(fn):
-            continue
-        if getattr(fn, "__module__", None) != skill_mod.__name__:
+        fn = skills.get(name)
+        if fn is None:
             continue
         doc = inspect.getdoc(fn) or ""
         parts.append(f"\n## `{name}`\n\n{doc.rstrip()}\n\n---\n")
