@@ -14,7 +14,39 @@ def report_summary(
     use_cache: bool = True,
 ) -> Dict[str, Any]:
     """
-    Build a summary PDF report for all samples found inside an existing pipeline directory.
+    Build a summary PDF report for all samples found inside an existing pipeline directory. The skill discovers samples and combines plots/tables where data exists.
+
+    ### Arguments
+
+    - `directory` (str): Path to the existing pipeline output directory.
+    - `output_dir` (str, default `.`): Directory where the summary PDF is written.
+    - `output_path` (str | None, default `None`): Optional explicit output PDF path. If not provided, defaults to `<output_dir>/summary_report.pdf`.
+    - `use_cache` (bool, default `True`): Present for CLI parity; report generation does not use caching.
+
+    ### Returns
+
+    `dict[str, Any]` with:
+
+    - `report_pdf_path`: Path to the generated summary PDF.
+
+    ### Python usage
+
+    ```python
+    from autosaxs.skill import report_summary
+
+    out = report_summary(
+        directory="pipeline_out",
+        output_dir="reports",
+    )
+
+    print(out["report_pdf_path"])
+    ```
+
+    ### CLI usage
+
+    ```bash
+    autosaxs report_summary pipeline_out --output-dir reports
+    ```
     """
     from ..report import write_summary_report_pdf
 

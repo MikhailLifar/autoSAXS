@@ -37,7 +37,55 @@ def subtract(
     use_cache: bool = True,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Subtract a buffer curve from a sample 1D profile (e.g. match-tail scaling), writing the subtracted curve and diagnostic plots.
+    Subtract a buffer curve from a sample 1D profile. The current public interface supports match-tail scaling (`method="match_tail"`), optionally restricted to a q window.
+
+    ### Arguments
+
+    - `sample_1d` (str): Sample path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
+    - `buffer_1d` (str): Path to the buffer 1D `.dat` curve (must be an existing file).
+    - `output_dir` (str, default `.`): Directory where subtraction outputs are written.
+    - `method` (str, default `"match_tail"`): Buffer subtraction/scaling method.
+    - `q_min` (float | None, default `None`): Lower bound of q-range for scaling (only used if q_min/q_max logic is enabled).
+    - `q_max` (float | None, default `None`): Upper bound of q-range for scaling.
+    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+
+    Important constraint:
+
+    - If you set `q_max`, you must also set `q_min` (otherwise the skill raises `ValueError`).
+
+    ### Returns
+
+    `dict[str, str]` with:
+
+    - `subtracted_1d`: Path to the subtracted curve `.dat`.
+    - `diff_plot_path`: Path to a diff plot PNG.
+    - `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
+    - `sub_plot_path`: Path to a subtracted curve plot PNG.
+
+    ### Python usage
+
+    ```python
+    from autosaxs.skill import subtract
+
+    out = subtract(
+        sample_1d="integration/int_sample_01.dat",
+        buffer_1d="integration/int_buffer.dat",
+        output_dir="subtracted",
+        method="match_tail",
+        q_min=4.0,
+        q_max=6.0,
+        use_cache=True,
+    )
+
+    print(out["subtracted_1d"])
+    ```
+
+    ### CLI usage
+
+    ```bash
+    autosaxs subtract integration/int_sample_01.dat integration/int_buffer.dat \
+      --output-dir subtracted --method match_tail --q-min 4.0 --q-max 6.0
+    ```
     """
     match_tail_ops: Optional[Dict] = None
     if q_min is not None or q_max is not None:

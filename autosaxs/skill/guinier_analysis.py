@@ -29,7 +29,45 @@ def guinier_analysis(
     use_cache: bool = True,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Run Guinier analysis on a 1D profile and write results + ATSAS `.dat` for downstream tools.
+    Run Guinier analysis on a 1D profile (including multiple strategies such as first-interval fits and an adaptive choice). The skill writes:
+
+    - a text results file
+    - an ATSAS-format `.dat` file for downstream tools
+    - a YAML file describing the chosen Guinier region parameters
+
+    ### Arguments
+
+    - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
+    - `output_dir` (str, default `.`): Directory where analysis outputs are written.
+    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+
+    ### Returns
+
+    `dict[str, str]` with:
+
+    - `results_path`: Path to the results text file.
+    - `atsas_dat_path`: Path to the ATSAS-format `.dat` file.
+    - `guinier_region_path`: Path to the chosen Guinier region YAML.
+
+    ### Python usage
+
+    ```python
+    from autosaxs.skill import guinier_analysis
+
+    out = guinier_analysis(
+        profile="subtracted/sub_sample_01.dat",
+        output_dir="guinier",
+        use_cache=True,
+    )
+
+    print(out["guinier_region_path"])
+    ```
+
+    ### CLI usage
+
+    ```bash
+    autosaxs guinier_analysis subtracted/sub_sample_01.dat --output-dir guinier
+    ```
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))

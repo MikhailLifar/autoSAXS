@@ -26,7 +26,39 @@ def plot_2d(
     use_cache: bool = True,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Plot one 2D SAXS TIFF image (or all `.tif` images in a directory) to PNG using log-intensity scaling.
+    Render one 2D SAXS TIFF image (or all `.tif` images in a directory) to PNG using log-intensity scaling.
+
+    ### Arguments
+
+    - `image` (str): 2D path expression (file/dir/glob). Directories expand to `*.tif` (non-recursive).
+    - `output_dir` (str, default `.`): Directory where PNG(s) are written.
+    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+
+    ### Returns
+
+    `dict[str, str | list[str]]` with:
+
+    - `plot_2d_png`: Path (or list of paths, if `image` is a directory) to generated PNG(s).
+
+    ### Python usage
+
+    ```python
+    from autosaxs.skill import plot_2d
+
+    out = plot_2d(
+        image="raw/sample_01.tif",
+        output_dir="plots_2d",
+        use_cache=True,
+    )
+
+    print(out["plot_2d_png"])
+    ```
+
+    ### CLI usage
+
+    ```bash
+    autosaxs plot_2d raw/sample_01.tif --output-dir plots_2d
+    ```
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))

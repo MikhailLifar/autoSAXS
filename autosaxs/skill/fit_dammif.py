@@ -40,6 +40,40 @@ def fit_dammif(
 ) -> Dict[str, Union[str, List[str]]]:
     """
     Run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile. If a GNOM output file is available, you can provide it; otherwise the profile is used.
+
+    ### Arguments
+
+    - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
+    - `output_dir` (str, default `.`): Directory where `dammif` outputs are written.
+    - `gnom_path` (str | None, default `None`): Optional path to a GNOM `.out` file. If provided, `dammif` uses it.
+    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+
+    ### Returns
+
+    `dict[str, str]` with:
+
+    - `output_subdir`: Directory containing `dammif` fit artifacts (FIR/CIF and summary files).
+
+    ### Python usage
+
+    ```python
+    from autosaxs.skill import fit_dammif
+
+    out = fit_dammif(
+        profile="subtracted/sub_sample_01.dat",
+        output_dir="dammif",
+        gnom_path="guinier/sample_01_gnom.out",
+        use_cache=True,
+    )
+
+    print(out["output_subdir"])
+    ```
+
+    ### CLI usage
+
+    ```bash
+    autosaxs fit_dammif subtracted/sub_sample_01.dat --output-dir dammif --gnom-path guinier/sample_01_gnom.out
+    ```
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))

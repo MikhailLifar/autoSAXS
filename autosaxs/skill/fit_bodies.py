@@ -31,6 +31,40 @@ def fit_bodies(
 ) -> Dict[str, Union[str, List[str]]]:
     """
     Run ATSAS `bodies` fits for multiple candidate shapes on a 1D profile, exporting fit files (FIR, PNG, YAML, CSV) and a comparison figure.
+
+    ### Arguments
+
+    - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
+    - `output_dir` (str, default `.`): Directory where `bodies` outputs are written.
+    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+
+    ### Returns
+
+    `dict[str, str]` with:
+
+    - `output_subdir`: Directory containing the exported `bodies` fit artifacts.
+
+    The directory typically contains multiple per-shape FIT files plus aggregated `bodies_fits.yml` and `bodies_fits.csv` if any shapes successfully fit.
+
+    ### Python usage
+
+    ```python
+    from autosaxs.skill import fit_bodies
+
+    out = fit_bodies(
+        profile="subtracted/sub_sample_01.dat",
+        output_dir="bodies",
+        use_cache=True,
+    )
+
+    print(out["output_subdir"])
+    ```
+
+    ### CLI usage
+
+    ```bash
+    autosaxs fit_bodies subtracted/sub_sample_01.dat --output-dir bodies
+    ```
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))

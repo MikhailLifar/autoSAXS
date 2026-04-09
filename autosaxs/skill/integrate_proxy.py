@@ -39,6 +39,54 @@ def integrate_proxy(
 ) -> Dict[str, Union[str, List[str]]]:
     """
     Integrate 2D TIFF image(s) to a 1D curve **without detector calibration**, using radial averaging in pixel-radius space.
+
+    This is intended for quick-look / debugging when you don’t have a calibrated integrator yet. The output `.dat` stores metadata indicating the x-axis is `r_px` (pixels), not physical q.
+
+    ### Arguments
+
+    - `image` (str): 2D image path expression. Can be:
+      - a single `.tif` file path
+      - a directory (expands to `*.tif`, non-recursive)
+      - a glob expression (including `**`)
+    - `output_dir` (str, default `.`): Directory where integrated curves are written.
+    - `mask` (str | None, default `None`): Optional mask path; same shape as the image. (`pyFAI` convention: masked pixels are excluded.)
+    - `cy` (float | None, default `None`): Optional beam center y in pixels. Must be set together with `cx`.
+    - `cx` (float | None, default `None`): Optional beam center x in pixels. Must be set together with `cy`.
+    - `npt` (int, default `1000`): Number of points in the output x grid.
+    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+
+    Notes:
+
+    - If `cy/cx` are not provided, the skill **estimates** the center by radial-symmetry optimization and also writes a center diagnostic plot `*_center.png` into `output_dir`.
+    - If center estimation fails for an input, that item is skipped and the skill may return an empty list for `integrated_1d`.
+
+    ### Returns
+
+    `dict[str, str | list[str]]` with:
+
+    - `integrated_1d`: Path (or list of paths, if `image` is a directory) to integrated 1D `.dat` curves.
+
+    ### Python usage
+
+    ```python
+    from autosaxs.skill import integrate_proxy
+
+    out = integrate_proxy(
+        image="raw/sample_01.tif",
+        output_dir="integration_proxy",
+        mask="mask.msk",
+        npt=1000,
+        use_cache=True,
+    )
+
+    print(out["integrated_1d"])
+    ```
+
+    ### CLI usage
+
+    ```bash
+    autosaxs integrate_proxy raw/sample_01.tif --output-dir integration_proxy --mask mask.msk --npt 1000
+    ```
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))

@@ -33,6 +33,47 @@ def integrate(
 ) -> Dict[str, Union[str, List[str]]]:
     """
     Integrate 2D SAXS images to 1D curves (q, I, sigma) using a calibrated integrator produced by `calibrate`.
+
+    ### Arguments
+
+    - `images` (str): Image path expression. Can be:
+      - a single `.tif` file path
+      - a directory (expands to `*.tif`, non-recursive)
+      - a glob expression
+      - a comma-separated list of file paths (e.g. from multi-file drag & drop)
+    - `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`).
+    - `output_dir` (str, default `.`): Directory where integrated curves are written.
+    - `npt` (int, default `1000`): Number of points in the output q grid.
+    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+
+    ### Returns
+
+    `dict[str, str | list[str]]` with:
+
+    - `integrated_1d`: List of paths to integrated 1D `.dat` curves (one per input image).
+
+    ### Python usage
+
+    ```python
+    from autosaxs.skill import integrate
+
+    out = integrate(
+        images="/data/sample_*.tif",
+        integrator_dir="calibration/integrator",
+        output_dir="integration",
+        npt=1000,
+        use_cache=True,
+    )
+
+    print(out["integrated_1d"])
+    ```
+
+    ### CLI usage
+
+    ```bash
+    autosaxs integrate "/data/sample_01.tif, /data/sample_02.tif" calibration/integrator \
+      --output-dir integration --npt 1000
+    ```
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))

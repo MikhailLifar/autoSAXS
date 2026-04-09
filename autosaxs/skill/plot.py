@@ -30,7 +30,56 @@ def plot(
     use_cache: bool = True,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Generate standard plots for a 1D curve: Guinier, Kratky, log–log; also writes a Guinier `.dat`.
+    Generate standard plots for a 1D curve:
+
+    - Guinier plot (log(I) vs q^2)
+    - Kratky plot (I*q^2 vs q)
+    - log-log plot (log(I) vs log(q))
+
+    Also writes a Guinier `.dat` file (ln(I) vs q²) used downstream.
+
+    ### Arguments
+
+    - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
+    - `output_dir` (str, default `.`): Directory where plot files are written.
+    - `guinier_q_min` (float | None, default `None`): Lower q bound for selecting Guinier range (enables `guinier_dat_path`).
+    - `guinier_q_max` (float | None, default `None`): Upper q bound for selecting Guinier range.
+    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+
+    Important constraint:
+
+    - If you set `guinier_q_max`, you must also set `guinier_q_min` (otherwise the skill raises `ValueError`).
+
+    ### Returns
+
+    `dict[str, str]` with:
+
+    - `guinier_plot_path`: Path to the Guinier PNG.
+    - `kratky_plot_path`: Path to the Kratky PNG.
+    - `loglog_plot_path`: Path to the log-log PNG.
+    - `guinier_dat_path`: Path to the Guinier `.dat` (q², ln(I)) written by the skill (always written; independent of `guinier_q_min/max`).
+
+    ### Python usage
+
+    ```python
+    from autosaxs.skill import plot
+
+    out = plot(
+        profile="subtracted/sub_sample_01.dat",
+        output_dir="plots",
+        guinier_q_min=0.01,
+        guinier_q_max=0.05,
+        use_cache=True,
+    )
+
+    print(out["guinier_dat_path"])
+    ```
+
+    ### CLI usage
+
+    ```bash
+    autosaxs plot subtracted/sub_sample_01.dat --output-dir plots --guinier-q-min 0.01 --guinier-q-max 0.05
+    ```
     """
     guinier_region: Optional[tuple] = None
     if guinier_q_min is not None or guinier_q_max is not None:

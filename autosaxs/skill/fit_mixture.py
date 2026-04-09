@@ -26,6 +26,52 @@ def fit_mixture(
 ) -> Dict[str, Union[str, List[str]]]:
     """
     Run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and write a comparison plot, size distribution plot, and results CSV.
+
+    ### Arguments
+
+    - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
+    - `output_dir` (str, default `.`): Directory where the MIXTURE outputs are written.
+    - `config_path` (str | None, default `None`): Path to the autosaxs YAML config (must include a `mixture` section). Required for this skill.
+    - `q_min_nm` (float | None, default `None`): Optional q minimum bound (nm^-1) for the fitting range.
+    - `q_max_nm` (float | None, default `None`): Optional q maximum bound (nm^-1) for the fitting range.
+    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+
+    Important constraint:
+
+    - If you set `q_max_nm`, you must also set `q_min_nm` (otherwise the skill raises `ValueError`).
+
+    ### Returns
+
+    `dict[str, str]` with:
+
+    - `output_subdir`: The subdirectory that contains MIXTURE outputs.
+    - `comparison_path`: Path to the MIXTURE comparison plot.
+    - `distributions_path`: Path to the MIXTURE size distributions plot.
+    - `results_csv_path`: Path to the MIXTURE results CSV.
+
+    ### Python usage
+
+    ```python
+    from autosaxs.skill import fit_mixture
+
+    out = fit_mixture(
+        profile="subtracted/sub_sample_01.dat",
+        output_dir="mixture",
+        config_path="config_autosaxs.yml",
+        q_min_nm=0.8,
+        q_max_nm=2.5,
+        use_cache=True,
+    )
+
+    print(out["results_csv_path"])
+    ```
+
+    ### CLI usage
+
+    ```bash
+    autosaxs fit_mixture subtracted/sub_sample_01.dat --output-dir mixture --config-path config_autosaxs.yml \
+      --q-min-nm 0.8 --q-max-nm 2.5
+    ```
     """
     q_range_nm: Optional[tuple] = None
     if q_min_nm is not None or q_max_nm is not None:

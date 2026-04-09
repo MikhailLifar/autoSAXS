@@ -37,6 +37,55 @@ def calibrate(
 ) -> Dict[str, str]:
     """
     Calibrate detector geometry using a calibration image and a config (ring-analysis + geometry refinement). This is a prerequisite for `integrate`.
+
+    ### Arguments
+
+    - `calib_image` (str): Path to the calibration image (e.g. TIFF) used for ring analysis.
+    - `config_path` (str): Path to the autosaxs calibration config file. The config must include data required by the ring analysis and detector geometry refinement.
+    - `output_dir` (str, default `.`): Directory where results are written.
+    - `mask` (str | None, default `None`): Optional path to a mask used during ring analysis. Supports .txt (NuPy format), .msk (Fit2d)
+    - `mask_mode` (str, default `"f"`): Mask mode selector. One of `f/from_file`, `a/auto`, `c/combined`.
+    - `calibrant` (str, default `"AgBh"`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`).
+    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+
+    Important constraints:
+
+    - If `mask_mode` is `f/from_file` or `c/combined`, `mask` **must** be provided (the skill raises `ValueError` otherwise).
+
+    ### Returns
+
+    `dict[str, str]` with these output path roles:
+
+    - `integrator_dir`: Directory containing the calibrated integrator (used by `integrate`).
+    - `refined_path`: Path to the refined calibration YAML.
+    - `calibration_plots_dir`: Directory containing calibration plots.
+    - `calibration_curve_plot_path`: Path to the calibration q/I curve plot (PNG).
+    - `calibration_mask_path`: Path to the calibration mask visualization (PNG).
+
+    ### Python usage
+
+    ```python
+    from autosaxs.skill import calibrate
+
+    out = calibrate(
+        calib_image="AgBh.tif",
+        config_path="config_autocalib.yml",
+        output_dir="calibration",
+        mask="mask.msk",
+        mask_mode="f",
+        calibrant="AgBh",
+        use_cache=True,
+    )
+
+    print(out["integrator_dir"])
+    print(out["refined_path"])
+    ```
+
+    ### CLI usage
+
+    ```bash
+    autosaxs calibrate AgBh.tif config_autocalib.yml --output-dir calibration --mask mask.msk
+    ```
     """
     if calibrant not in ALL_CALIBRANTS:
         raise ValueError(

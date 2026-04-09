@@ -20,7 +20,7 @@ Its main goal is to make common SAXS processing steps **scriptable, cacheable, a
 
 ### Main design choices
 
-- **One public API for everything (“skills”)**: user-facing operations are implemented as Python functions with stable signatures in `repos/autosaxs/skill.py`. The CLI dispatches subcommands to those functions by introspecting signatures and docstrings.
+- **One public API for everything (“skills”)**: user-facing operations are implemented as Python functions with stable signatures in the `autosaxs.skill` package (`repos/autosaxs/skill/`). The CLI dispatches subcommands to those functions by introspecting signatures and docstrings.
 - **Path expressions instead of “single file only”**: most skills accept a file/dir/glob expression and expand it in a consistent way (directories expand non-recursively; empty expansion is an error).
 - **Cache-by-default**: when `use_cache=True`, skills may reuse outputs via a hidden cache file under the output directory (intended for fast re-runs during interactive work).
 - **External science stack integration**: `pyFAI` is used for calibration/integration; several downstream steps rely on **ATSAS** being installed (see below).
@@ -171,7 +171,7 @@ xvfb-run -a python -m pytest repos/tests/test_guisaxs.py
 
 This section documents the public *skills* exposed by the `autosaxs` package.
 
-Skills are Python functions in `repos/autosaxs/skill.py` with a fixed signature designed to be callable both from Python and from the `autosaxs` CLI.
+Skills are Python functions in the `autosaxs.skill` package (`repos/autosaxs/skill/`) with a fixed signature designed to be callable both from Python and from the `autosaxs` CLI.
 
 ### CLI vs Python (how commands are wired)
 
