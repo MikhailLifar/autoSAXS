@@ -34,6 +34,9 @@ def fit_distances(
     output_dir: str = ".",
     *,
     rg_nm: float,
+    first: Optional[int] = None,
+    last: Optional[int] = None,
+    smooth: Optional[float] = None,
     use_cache: bool = True,
 ) -> Dict[str, Union[str, List[str]]]:
     """
@@ -48,6 +51,9 @@ def fit_distances(
     - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
     - `output_dir` (str, default `.`): Directory where the GNOM outputs are written (one subdirectory per input profile).
     - `rg_nm` (float): Expected radius of gyration (Rg) in nm (typically from Guinier analysis).
+    - `first` (int | None, default `None`): DATGNOM `--first`. If set with `last`, runs one fit. If set alone, `last` is auto-searched. If omitted, `first` is auto-searched.
+    - `last` (int | None, default `None`): DATGNOM `--last`. Same pairing rules as `first`; if set alone, `first` is auto-searched.
+    - `smooth` (float | None, default `None`): DATGNOM `--smooth`. If set, that value is used and smoothness is not searched. If omitted during auto-search, trials use smoothness `2.0`. In full manual mode (`first` and `last` both set), omitted means do not pass `--smooth`.
     - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
     ### Returns
@@ -65,6 +71,9 @@ def fit_distances(
         input_paths=input_batch[0] if len(input_batch) == 1 else input_batch,
         output_dir=output_dir,
         rg_nm=float(rg_nm),
+        first=first,
+        last=last,
+        smooth=smooth,
         event_bus=bus,
         use_cache=use_cache,
     )
@@ -356,13 +365,16 @@ def _run_datgnom_once(
 @run_with_cache(
     path_keys_for_hash=["profile"],
     kwargs_for_hash=None,
-    kwargs_for_hash_keys=["rg_nm"],
+    kwargs_for_hash_keys=["rg_nm", "first", "last", "smooth"],
     include_config_in_hash=False,
 )
 def _fit_distances_paths(
     input_paths: Dict[str, Union[str, List[str]]],
     output_dir: str,
     rg_nm: float,
+    first: Optional[int] = None,
+    last: Optional[int] = None,
+    smooth: Optional[float] = None,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
     use_cache: bool = True,
@@ -428,136 +440,242 @@ def _fit_distances_paths(
             }
         )
 
-    if event_bus:
-        event_bus.publish(
-            EventType.MESSAGE,
-            {"text": f"DATGNOM (fit_distances): auto-searching --first/--last with Rg={float(rg_nm):.4f} nm…"},
-        )
-
     n_pts = int(len(q_nm))
-    first_grid = list(range(1, min(26, max(2, n_pts - 5)) + 1))
-    smooth_grid = [2.0]
+    manual = first is not None and last is not None
+    search_first = first is None
+    search_last = last is None
+    search_smooth = smooth is None
 
-    def _run_last_grid(last_grid: List[int]) -> None:
-        last_grid = sorted({int(x) for x in last_grid if 5 <= int(x) <= n_pts})
-        if not last_grid:
-            last_grid = [n_pts]
-        for cand_last in last_grid:
-            for cand_first in first_grid:
-                if cand_first >= cand_last:
-                    continue
-                for cand_smooth in smooth_grid:
-                    tmp_path: Optional[str] = None
-                    try:
-                        with tempfile.NamedTemporaryFile(
-                            mode="w",
-                            suffix=".out",
-                            prefix="datgnom_tmp_",
-                            dir=output_dir,
-                            delete=False,
-                        ) as tf:
-                            tmp_path = tf.name
-                        ok, rc, stderr, out_text = _run_datgnom_once(
-                            atsas_dat_path=atsas_dat_path,
-                            output_dir=output_dir,
-                            rg_nm=float(rg_nm),
-                            first=int(cand_first),
-                            last=int(cand_last),
-                            smooth=float(cand_smooth),
-                            out_path=tmp_path,
-                        )
-                        if not ok:
-                            continue
-                        # Intermediate candidates are not persisted; keep only metrics.
-                        _record_candidate(
-                            out_path="",
-                            rc=rc,
-                            stderr=stderr,
-                            out_text=out_text,
-                            cand_first=cand_first,
-                            cand_last=cand_last,
-                            cand_smooth=cand_smooth,
-                            intermediate=True,
-                        )
-                    finally:
-                        if tmp_path:
-                            try:
-                                os.remove(tmp_path)
-                            except OSError:
-                                pass
+    if manual:
+        assert first is not None and last is not None
+        fi, la = int(first), int(last)
+        if fi < 1 or la > n_pts or fi >= la:
+            raise ValueError(
+                f"fit_distances: require 1 <= first < last <= n_points ({n_pts}); got first={fi}, last={la}",
+            )
+        msg_extra = f" --smooth={float(smooth):.6g}" if smooth is not None else ""
+        if event_bus:
+            event_bus.publish(
+                EventType.MESSAGE,
+                {
+                    "text": (
+                        f"DATGNOM (fit_distances): fixed --first={fi} --last={la}{msg_extra} "
+                        f"with Rg={float(rg_nm):.4f} nm…"
+                    ),
+                },
+            )
+        out_path_final = os.path.join(output_dir, f"datgnom_rg_{float(rg_nm):.4f}.out")
+        ok, rc, stderr, out_text = _run_datgnom_once(
+            atsas_dat_path=atsas_dat_path,
+            output_dir=output_dir,
+            rg_nm=float(rg_nm),
+            first=fi,
+            last=la,
+            smooth=float(smooth) if smooth is not None else None,
+            out_path=out_path_final,
+        )
+        if not ok:
+            raise RuntimeError(f"fit_distances failed: datgnom exited with code {rc}\n{stderr}")
+        gnom_out_paths.append(out_path_final)
+        best_gnom_out_path = out_path_final
+        _record_candidate(
+            out_path=out_path_final,
+            rc=rc,
+            stderr=stderr,
+            out_text=out_text,
+            cand_first=fi,
+            cand_last=la,
+            cand_smooth=float(smooth) if smooth is not None else None,
+            intermediate=False,
+        )
+        best = dict(candidates[-1])
+        best = {**best, "out_path": best_gnom_out_path, "intermediate": False}
+    else:
+        fixed_parts: List[str] = []
+        if not search_first:
+            fixed_parts.append(f"--first={int(first)}")
+        if not search_last:
+            fixed_parts.append(f"--last={int(last)}")
+        if not search_smooth:
+            fixed_parts.append(f"--smooth={float(smooth):.6g}")
+        search_parts: List[str] = []
+        if search_first:
+            search_parts.append("first")
+        if search_last:
+            search_parts.append("last")
+        if search_smooth:
+            search_parts.append("smooth")
+        mode_msg = (
+            f"auto-search [{', '.join(search_parts)}]"
+            if search_parts
+            else "auto-search"
+        )
+        if fixed_parts:
+            mode_msg += f"; fixed [{', '.join(fixed_parts)}]"
+        if event_bus:
+            event_bus.publish(
+                EventType.MESSAGE,
+                {
+                    "text": (
+                        f"DATGNOM (fit_distances): {mode_msg} with Rg={float(rg_nm):.4f} nm…"
+                    ),
+                },
+            )
 
-    # Round 1: coarse search over a broad range of --last.
-    last_grid_round1 = [150, 180, 200, 220, 250, 300]
-    _run_last_grid(last_grid_round1)
+        first_grid = list(range(1, min(26, max(2, n_pts - 5)) + 1))
+        if search_first:
+            first_values = first_grid
+        else:
+            assert first is not None
+            fi0 = int(first)
+            if fi0 < 1 or fi0 >= n_pts:
+                raise ValueError(
+                    f"fit_distances: require 1 <= first < n_points ({n_pts}); got first={fi0}",
+                )
+            first_values = [fi0]
 
-    if not candidates:
-        raise RuntimeError("fit_distances failed: DATGNOM produced no successful candidates")
+        if search_smooth:
+            smooth_grid = [2.0]
+        else:
+            assert smooth is not None
+            smooth_grid = [float(smooth)]
 
-    def _total_estimate_key(c: Dict[str, Any]) -> float:
-        te = c.get("total_estimate")
-        try:
-            return float(te) if te is not None else float("-inf")
-        except Exception:
-            return float("-inf")
+        def _normalize_last_list(raw: List[int], *, from_user_grid: bool) -> List[int]:
+            if from_user_grid:
+                out = sorted({int(x) for x in raw if 5 <= int(x) <= n_pts})
+                return out if out else [n_pts]
+            if len(raw) != 1:
+                raise RuntimeError("fit_distances: internal error, fixed last expects one value")
+            la0 = int(raw[0])
+            if la0 < 1 or la0 > n_pts:
+                raise ValueError(
+                    f"fit_distances: require 1 <= last <= n_points ({n_pts}); got last={la0}",
+                )
+            return [la0]
 
-    def _is_suspicious(c: Dict[str, Any]) -> bool:
-        return bool(c.get("suspicious"))
+        def _run_last_grid(last_grid_raw: List[int], *, from_user_grid: bool) -> None:
+            last_list = _normalize_last_list(last_grid_raw, from_user_grid=from_user_grid)
+            for cand_last in last_list:
+                for cand_first in first_values:
+                    if cand_first >= cand_last:
+                        continue
+                    for cand_smooth in smooth_grid:
+                        tmp_path: Optional[str] = None
+                        try:
+                            with tempfile.NamedTemporaryFile(
+                                mode="w",
+                                suffix=".out",
+                                prefix="datgnom_tmp_",
+                                dir=output_dir,
+                                delete=False,
+                            ) as tf:
+                                tmp_path = tf.name
+                            ok, rc, stderr, out_text = _run_datgnom_once(
+                                atsas_dat_path=atsas_dat_path,
+                                output_dir=output_dir,
+                                rg_nm=float(rg_nm),
+                                first=int(cand_first),
+                                last=int(cand_last),
+                                smooth=float(cand_smooth),
+                                out_path=tmp_path,
+                            )
+                            if not ok:
+                                continue
+                            # Intermediate candidates are not persisted; keep only metrics.
+                            _record_candidate(
+                                out_path="",
+                                rc=rc,
+                                stderr=stderr,
+                                out_text=out_text,
+                                cand_first=cand_first,
+                                cand_last=cand_last,
+                                cand_smooth=cand_smooth,
+                                intermediate=True,
+                            )
+                        finally:
+                            if tmp_path:
+                                try:
+                                    os.remove(tmp_path)
+                                except OSError:
+                                    pass
 
-    def _select_best(cs: List[Dict[str, Any]]) -> Dict[str, Any]:
-        if not cs:
-            raise RuntimeError("fit_distances failed: DATGNOM produced no output .out files")
-        # Prefer non-suspicious when possible.
-        non_susp = [c for c in cs if not _is_suspicious(c)]
-        pool = non_susp if non_susp else cs
-        # Default: choose by Total Estimate (descending).
-        # Tie-breakers: prefer lower neg_frac, lower tail_ratio if available.
-        def key_default(c: Dict[str, Any]) -> tuple[float, float, float]:
-            neg = c.get("neg_frac")
-            tail = c.get("tail_ratio")
+        # Round 1: coarse search over --last (skipped when last is user-fixed).
+        if search_last:
+            last_grid_round1 = [150, 180, 200, 220, 250, 300]
+            _run_last_grid(last_grid_round1, from_user_grid=True)
+        else:
+            assert last is not None
+            _run_last_grid([int(last)], from_user_grid=False)
+
+        if not candidates:
+            raise RuntimeError("fit_distances failed: DATGNOM produced no successful candidates")
+
+        def _total_estimate_key(c: Dict[str, Any]) -> float:
+            te = c.get("total_estimate")
             try:
-                neg_v = float(neg) if neg is not None else 1.0
+                return float(te) if te is not None else float("-inf")
             except Exception:
-                neg_v = 1.0
-            try:
-                tail_v = float(tail) if tail is not None else 1.0
-            except Exception:
-                tail_v = 1.0
-            return (-_total_estimate_key(c), neg_v, tail_v)
+                return float("-inf")
 
-        return sorted(pool, key=key_default)[0]
+        def _is_suspicious(c: Dict[str, Any]) -> bool:
+            return bool(c.get("suspicious"))
 
-    best_round1 = _select_best(candidates)
+        def _select_best(cs: List[Dict[str, Any]]) -> Dict[str, Any]:
+            if not cs:
+                raise RuntimeError("fit_distances failed: DATGNOM produced no output .out files")
+            # Prefer non-suspicious when possible.
+            non_susp = [c for c in cs if not _is_suspicious(c)]
+            pool = non_susp if non_susp else cs
+            # Default: choose by Total Estimate (descending).
+            # Tie-breakers: prefer lower neg_frac, lower tail_ratio if available.
+            def key_default(c: Dict[str, Any]) -> tuple[float, float, float]:
+                neg = c.get("neg_frac")
+                tail = c.get("tail_ratio")
+                try:
+                    neg_v = float(neg) if neg is not None else 1.0
+                except Exception:
+                    neg_v = 1.0
+                try:
+                    tail_v = float(tail) if tail is not None else 1.0
+                except Exception:
+                    tail_v = 1.0
+                return (-_total_estimate_key(c), neg_v, tail_v)
 
-    # Round 2: refine --last around the best coarse candidate.
-    best_last_r1 = best_round1.get("last")
-    if best_last_r1 is not None:
-        center = int(best_last_r1)
-        neighborhood = [-40, -20, -10, -5, 0, 5, 10, 20, 40]
-        last_grid_round2 = [center + d for d in neighborhood]
-        _run_last_grid(last_grid_round2)
+            return sorted(pool, key=key_default)[0]
 
-    best = _select_best(candidates)
+        best_round1 = _select_best(candidates)
 
-    # Re-run best candidate to a persistent output file (only final output is saved).
-    best_first = best.get("first")
-    best_last = best.get("last")
-    best_smooth = best.get("smooth")
-    out_path_final = os.path.join(output_dir, f"datgnom_rg_{float(rg_nm):.4f}.out")
-    ok, rc, stderr, out_text = _run_datgnom_once(
-        atsas_dat_path=atsas_dat_path,
-        output_dir=output_dir,
-        rg_nm=float(rg_nm),
-        first=int(best_first) if best_first is not None else None,
-        last=int(best_last) if best_last is not None else None,
-        smooth=float(best_smooth) if best_smooth is not None else None,
-        out_path=out_path_final,
-    )
-    if not ok:
-        raise RuntimeError(f"fit_distances failed: final datgnom run exited with code {rc}\n{stderr}")
-    gnom_out_paths.append(out_path_final)
-    best_gnom_out_path = out_path_final
-    # Ensure the selected metadata reflects the persisted final output.
-    best = {**best, "out_path": best_gnom_out_path, "intermediate": False}
+        # Round 2: refine --last around the best coarse candidate (only when last is being searched).
+        if search_last:
+            best_last_r1 = best_round1.get("last")
+            if best_last_r1 is not None:
+                center = int(best_last_r1)
+                neighborhood = [-40, -20, -10, -5, 0, 5, 10, 20, 40]
+                last_grid_round2 = [center + d for d in neighborhood]
+                _run_last_grid(last_grid_round2, from_user_grid=True)
+
+        best = _select_best(candidates)
+
+        # Re-run best candidate to a persistent output file (only final output is saved).
+        best_first = best.get("first")
+        best_last = best.get("last")
+        best_smooth = best.get("smooth")
+        out_path_final = os.path.join(output_dir, f"datgnom_rg_{float(rg_nm):.4f}.out")
+        ok, rc, stderr, out_text = _run_datgnom_once(
+            atsas_dat_path=atsas_dat_path,
+            output_dir=output_dir,
+            rg_nm=float(rg_nm),
+            first=int(best_first) if best_first is not None else None,
+            last=int(best_last) if best_last is not None else None,
+            smooth=float(best_smooth) if best_smooth is not None else None,
+            out_path=out_path_final,
+        )
+        if not ok:
+            raise RuntimeError(f"fit_distances failed: final datgnom run exited with code {rc}\n{stderr}")
+        gnom_out_paths.append(out_path_final)
+        best_gnom_out_path = out_path_final
+        # Ensure the selected metadata reflects the persisted final output.
+        best = {**best, "out_path": best_gnom_out_path, "intermediate": False}
 
     # Export summary artifacts for downstream use/inspection:
     # - stable symlink to best DATGNOM .out

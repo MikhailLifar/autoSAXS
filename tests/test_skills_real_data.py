@@ -8,6 +8,12 @@ Prerequisites:
     reference/*.chi, reference_subtracted/sub_*.dat, and config.conf. Place a mask file (e.g. mask*.msk) in validation/.
 
 Metric: int_{q0}^{qmax} 2 * |I1(q) - I2(q)| / (|I1(q)|*|I2(q)| + eps)
+
+Subtracted curves: ``reference_subtracted/sub_*.dat`` and ``metrics_subtracted.csv`` are used only
+as a regression baseline against the pipeline output for the configured ``sub`` method (e.g.
+``point_match``). The reference files are not a perfect ground truth; when the subtraction
+algorithm changes intentionally, refresh the CSV (by running this test once) so future runs
+guard against accidental drift rather than enforcing agreement with an older heuristic.
 """
 import os
 import sys

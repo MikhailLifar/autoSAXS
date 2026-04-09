@@ -31,22 +31,28 @@ def subtract(
     buffer_1d: SingletonPathExpressionArg,
     output_dir: str = ".",
     *,
-    method: str = "match_tail",
+    method: str = "point_match",
     q_min: Optional[float] = None,
     q_max: Optional[float] = None,
+    sample_form: str = "Porod-plus-linear",
+    buffer_form: str = "linear",
+    point_match_factor: float = 0.995,
     use_cache: bool = True,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Subtract a buffer curve from a sample 1D profile. The current public interface supports match-tail scaling (`method="match_tail"`), optionally restricted to a q window.
+    Subtract a buffer curve from a sample 1D profile. Scaling uses either `point_match` (default)
+    or legacy `match_tail`, optionally restricted to a q window (`q_min` / `q_max`).
 
     ### Arguments
 
     - `sample_1d` (str): Sample path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
     - `buffer_1d` (str): Path to the buffer 1D `.dat` curve (must be an existing file).
     - `output_dir` (str, default `.`): Directory where subtraction outputs are written.
-    - `method` (str, default `"match_tail"`): Buffer subtraction/scaling method.
-    - `q_min` (float | None, default `None`): Lower bound of q-range for scaling (only used if q_min/q_max logic is enabled).
-    - `q_max` (float | None, default `None`): Upper bound of q-range for scaling.
+    - `method` (str, default `"point_match"`): `point_match` or `match_tail`.
+    - `q_min` (float | None, default `None`): Lower bound of q-range for fitting/scaling.
+    - `q_max` (float | None, default `None`): Upper bound of q-range; for `point_match` the match uses this as q intersect (upper edge of the window).
+    - `sample_form` / `buffer_form` (str): For `point_match` only — each is `linear`, `Porod`, or `Porod-plus-linear`.
+    - `point_match_factor` (float, default `0.995`): For `point_match`, scale satisfies `point_match_factor * I_sample_fit(q_max) = scale * I_buffer_fit(q_max)`.
     - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
     Important constraint:
@@ -71,7 +77,7 @@ def subtract(
         sample_1d="integration/int_sample_01.dat",
         buffer_1d="integration/int_buffer.dat",
         output_dir="subtracted",
-        method="match_tail",
+        method="point_match",
         q_min=4.0,
         q_max=6.0,
         use_cache=True,
@@ -84,14 +90,20 @@ def subtract(
 
     ```bash
     autosaxs subtract integration/int_sample_01.dat integration/int_buffer.dat \
-      --output-dir subtracted --method match_tail --q-min 4.0 --q-max 6.0
+      --output-dir subtracted --method point_match --q-min 4.0 --q-max 6.0
     ```
     """
-    match_tail_ops: Optional[Dict] = None
+    method_key = str(method).strip().lower().replace("-", "_")
+    match_tail_ops: Dict = {}
     if q_min is not None or q_max is not None:
         if q_min is None:
             raise ValueError("subtract: q_min must be set when q_max is set")
-        match_tail_ops = {"q_range_abs": (q_min, q_max)}
+        match_tail_ops["q_range_abs"] = (q_min, q_max)
+    if method_key == "point_match":
+        match_tail_ops["sample_form"] = sample_form
+        match_tail_ops["buffer_form"] = buffer_form
+        match_tail_ops["point_match_factor"] = point_match_factor
+    match_tail_ops_out: Optional[Dict] = match_tail_ops if match_tail_ops else None
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
     sample_1d = coerce_path_expression(sample_1d)
@@ -109,8 +121,8 @@ def subtract(
         output_dir=output_dir,
         event_bus=bus,
         use_cache=use_cache,
-        method=method,
-        match_tail_ops=match_tail_ops,
+        method=method_key,
+        match_tail_ops=match_tail_ops_out,
     )
 
 
@@ -127,7 +139,7 @@ def _subtract_paths(
     event_bus: Optional[EventBus] = None,
     use_cache: bool = True,
     sample_index: int = 0,
-    method: str = "match_tail",
+    method: str = "point_match",
     match_tail_ops: Optional[Dict] = None,
 ) -> Dict[str, Union[str, List[str]]]:
     _ = config, use_cache, sample_index

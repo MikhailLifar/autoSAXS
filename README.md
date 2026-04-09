@@ -360,16 +360,19 @@ autosaxs integrate_proxy raw/sample_01.tif --output-dir integration_proxy --mask
 
 ## `subtract`
 
-Subtract a buffer curve from a sample 1D profile. The current public interface supports match-tail scaling (`method="match_tail"`), optionally restricted to a q window.
+Subtract a buffer curve from a sample 1D profile. Scaling uses either `point_match` (default)
+or legacy `match_tail`, optionally restricted to a q window (`q_min` / `q_max`).
 
 ### Arguments
 
 - `sample_1d` (str): Sample path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `buffer_1d` (str): Path to the buffer 1D `.dat` curve (must be an existing file).
 - `output_dir` (str, default `.`): Directory where subtraction outputs are written.
-- `method` (str, default `"match_tail"`): Buffer subtraction/scaling method.
-- `q_min` (float | None, default `None`): Lower bound of q-range for scaling (only used if q_min/q_max logic is enabled).
-- `q_max` (float | None, default `None`): Upper bound of q-range for scaling.
+- `method` (str, default `"point_match"`): `point_match` or `match_tail`.
+- `q_min` (float | None, default `None`): Lower bound of q-range for fitting/scaling.
+- `q_max` (float | None, default `None`): Upper bound of q-range; for `point_match` the match uses this as q intersect (upper edge of the window).
+- `sample_form` / `buffer_form` (str): For `point_match` only — each is `linear`, `Porod`, or `Porod-plus-linear`.
+- `point_match_factor` (float, default `0.995`): For `point_match`, scale satisfies `point_match_factor * I_sample_fit(q_max) = scale * I_buffer_fit(q_max)`.
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
 Important constraint:
@@ -394,7 +397,7 @@ out = subtract(
     sample_1d="integration/int_sample_01.dat",
     buffer_1d="integration/int_buffer.dat",
     output_dir="subtracted",
-    method="match_tail",
+    method="point_match",
     q_min=4.0,
     q_max=6.0,
     use_cache=True,
@@ -406,7 +409,7 @@ print(out["subtracted_1d"])
 ### CLI usage
 
 ```bash
-autosaxs subtract integration/int_sample_01.dat integration/int_buffer.dat       --output-dir subtracted --method match_tail --q-min 4.0 --q-max 6.0
+autosaxs subtract integration/int_sample_01.dat integration/int_buffer.dat       --output-dir subtracted --method point_match --q-min 4.0 --q-max 6.0
 ```
 
 ---
@@ -561,6 +564,9 @@ among other things, the p(r) section.
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where the GNOM outputs are written (one subdirectory per input profile).
 - `rg_nm` (float): Expected radius of gyration (Rg) in nm (typically from Guinier analysis).
+- `first` (int | None, default `None`): DATGNOM `--first`. If set with `last`, runs one fit. If set alone, `last` is auto-searched. If omitted, `first` is auto-searched.
+- `last` (int | None, default `None`): DATGNOM `--last`. Same pairing rules as `first`; if set alone, `first` is auto-searched.
+- `smooth` (float | None, default `None`): DATGNOM `--smooth`. If set, that value is used and smoothness is not searched. If omitted during auto-search, trials use smoothness `2.0`. In full manual mode (`first` and `last` both set), omitted means do not pass `--smooth`.
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
 ### Returns

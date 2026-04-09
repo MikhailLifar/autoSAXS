@@ -607,6 +607,29 @@ class Controller:
         
         return answer, llm_answer_path
 
+    def subtract(self, context, sample_path, buffer_path, dest_dir=None, fast_forward=False):
+        """
+        Buffer subtraction using config section ``sub`` (q range, method, fit forms).
+        Returns ``(subtracted_dat_path, sub_plot_path)``.
+        """
+        sub_cfg = (context.config or {}).get("sub", {}) if context and context.config else {}
+        q_range_abs = sub_cfg.get("q_range_abs")
+        q_sub_min = q_range_abs[0] if q_range_abs and len(q_range_abs) >= 2 else None
+        q_sub_max = q_range_abs[1] if q_range_abs and len(q_range_abs) >= 2 else None
+        out = subtract(
+            sample_path,
+            buffer_path,
+            output_dir=dest_dir if dest_dir is not None else ".",
+            q_min=q_sub_min,
+            q_max=q_sub_max,
+            method=sub_cfg.get("method", "point_match"),
+            sample_form=sub_cfg.get("sample_form", "Porod-plus-linear"),
+            buffer_form=sub_cfg.get("buffer_form", "linear"),
+            point_match_factor=float(sub_cfg.get("point_match_factor", 0.995)),
+            use_cache=fast_forward,
+        )
+        return out["subtracted_1d"], out["sub_plot_path"]
+
     def pipeline_interactive(self, fast_forward=False):
         # Wire response queue for request/response over EventBus (§3)
         self._response_queue = queue.Queue()
@@ -901,7 +924,8 @@ class Controller:
                     raise RuntimeError(f"Buffer-sample alignment failed!\n\nOverlapped:\n{overlap_str[:2000]}\n\nNot paired:\n{not_paired_str}")
 
                 subtracted_dir = os.path.join(directory, 'subtracted')
-                q_range_abs = context.config.get('sub', {}).get('q_range_abs') if context.config else None
+                sub_cfg = context.config.get('sub', {}) if context.config else {}
+                q_range_abs = sub_cfg.get('q_range_abs')
                 q_sub_min = q_range_abs[0] if q_range_abs else None
                 q_sub_max = q_range_abs[1] if q_range_abs else None
                 for s_p, b_p in aligned_pairs:
@@ -911,6 +935,10 @@ class Controller:
                         subtracted_dir,
                         q_min=q_sub_min,
                         q_max=q_sub_max,
+                        method=sub_cfg.get('method', 'point_match'),
+                        sample_form=sub_cfg.get('sample_form', 'Porod-plus-linear'),
+                        buffer_form=sub_cfg.get('buffer_form', 'linear'),
+                        point_match_factor=float(sub_cfg.get('point_match_factor', 0.995)),
                         use_cache=fast_forward,
                     )
                     profile_paths.append(out_sub['subtracted_1d'])

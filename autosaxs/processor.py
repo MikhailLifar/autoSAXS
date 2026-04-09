@@ -690,6 +690,88 @@ def _match_tail_scale_two_step(
     return best_scale
 
 
+def _normalize_scattering_form(form: str) -> str:
+    key = str(form).strip().lower().replace("_", "-")
+    if key == "linear":
+        return "linear"
+    if key == "porod":
+        return "porod"
+    if key in ("porod-plus-linear", "porod+linear"):
+        return "porod-plus-linear"
+    raise ValueError(
+        f"Unknown scattering form {form!r}; expected 'linear', 'Porod', or 'Porod-plus-linear'"
+    )
+
+
+def _fit_intensity_at_q(
+    q_fit: np.ndarray,
+    I_fit: np.ndarray,
+    form: str,
+    n_min: int,
+    n_max: int,
+    q_eval: float,
+) -> float:
+    """
+    Fit I(q) in the window q_fit with the given analytical form and evaluate at q_eval.
+    Porod-type forms scan integer n in [n_min, n_max] and pick the lowest RSS.
+    """
+    form_n = _normalize_scattering_form(form)
+    q_fit = np.asarray(q_fit, dtype=float)
+    I_fit = np.asarray(I_fit, dtype=float)
+    if q_fit.size == 0:
+        return float("nan")
+    if q_eval <= 0 and form_n != "linear":
+        return float("nan")
+
+    if form_n == "linear":
+        if q_fit.size < 2:
+            return float(np.interp(q_eval, q_fit, I_fit)) if q_fit.size == 1 else float("nan")
+        coeffs = np.polyfit(q_fit, I_fit, 1)
+        return float(np.polyval(coeffs, q_eval))
+
+    if np.any(q_fit <= 0):
+        return float("nan")
+
+    if form_n == "porod":
+        if q_fit.size < 2:
+            return float("nan")
+        best_rss = np.inf
+        best_val = float("nan")
+        qe_n = float(q_eval)
+        for n in range(int(n_min), int(n_max) + 1):
+            col = np.power(q_fit, -n).reshape(-1, 1)
+            try:
+                beta, residuals, _, _ = np.linalg.lstsq(col, I_fit, rcond=None)
+                rss = float(np.sum(residuals ** 2)) if residuals.size else 0.0
+                if rss < best_rss:
+                    best_rss = rss
+                    A = float(beta[0])
+                    best_val = A * (qe_n ** (-n))
+            except (np.linalg.LinAlgError, IndexError, TypeError, FloatingPointError):
+                continue
+        return best_val
+
+    # porod-plus-linear
+    if q_fit.size < 3:
+        return float("nan")
+    best_rss = np.inf
+    best_val = float("nan")
+    qe_n = float(q_eval)
+    ones = np.ones_like(q_fit)
+    for n in range(int(n_min), int(n_max) + 1):
+        X = np.column_stack([np.power(q_fit, -n), q_fit, ones])
+        try:
+            beta, residuals, _, _ = np.linalg.lstsq(X, I_fit, rcond=None)
+            rss = float(np.sum(residuals ** 2)) if residuals.size else 0.0
+            if rss < best_rss:
+                best_rss = rss
+                A, B, C = float(beta[0]), float(beta[1]), float(beta[2])
+                best_val = A * (qe_n ** (-n)) + B * qe_n + C
+        except (np.linalg.LinAlgError, IndexError, TypeError, FloatingPointError):
+            continue
+    return best_val
+
+
 def subtract_buffer(
     buffer_path, src_path, destpath,
     image_path=None, 
@@ -700,7 +782,8 @@ def subtract_buffer(
     scaling_factor = 1.00
 
     q, I, sigma, _ = read_saxs(src_path)
-    if method == 'match_tail':
+    method_key = str(method).strip().lower().replace("-", "_")
+    if method_key in ('match_tail', 'point_match'):
         algo_ops = {'q_range_abs': None, 
                     'q_range_rel': (0.8, None), 
                     'approach_factor': 1.00,
@@ -734,12 +817,28 @@ def subtract_buffer(
         I_tail = I[idx]
         I_buff_tail = I_buff[idx]
 
-        scaling_factor = _match_tail_scale_two_step(
-            q_tail, I_tail, I_buff_tail,
-            n_min=int(algo_ops.get('n_min', 2)),
-            n_max=int(algo_ops.get('n_max', 6)),
-        )
-        scaling_factor *= algo_ops.get('approach_factor', 1.00)
+        if method_key == 'match_tail':
+            scaling_factor = _match_tail_scale_two_step(
+                q_tail, I_tail, I_buff_tail,
+                n_min=int(algo_ops.get('n_min', 2)),
+                n_max=int(algo_ops.get('n_max', 6)),
+            )
+            scaling_factor *= algo_ops.get('approach_factor', 1.00)
+        elif method_key == 'point_match':
+            # Scale so fitted models match at q_upper (upper bound q1 of the fit window = q intersect)
+            sample_form = algo_ops.get('sample_form', 'Porod-plus-linear')
+            buffer_form = algo_ops.get('buffer_form', 'linear')
+            q_intersect = float(q1)
+            pm_factor = float(algo_ops.get('point_match_factor', 0.995))
+            n_lo = int(algo_ops.get('n_min', 2))
+            n_hi = int(algo_ops.get('n_max', 6))
+            I_s = _fit_intensity_at_q(q_tail, I_tail, sample_form, n_lo, n_hi, q_intersect)
+            I_b = _fit_intensity_at_q(q_tail, I_buff_tail, buffer_form, n_lo, n_hi, q_intersect)
+            if not np.isfinite(I_s) or not np.isfinite(I_b) or abs(I_b) < 1e-30 * max(1.0, abs(I_s)):
+                scaling_factor = 1.0
+            else:
+                scaling_factor = pm_factor * I_s / I_b
+            scaling_factor *= algo_ops.get('approach_factor', 1.00)
 
     I_buffer_scaled = I_buff * scaling_factor
     I_sub = I - I_buffer_scaled
