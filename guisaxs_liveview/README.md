@@ -28,9 +28,9 @@ You may want to do this inside a virtual environment (venv or conda).
    - **Drag and drop** `.tif` / `.tiff` onto the **middle** panel (“Latest image (2D) — drop .tif here”), **or**
    - **Copy or save** files **directly into** that watch directory (not into subfolders).
 5. Watch the **middle** column for queue status and the latest **2D** image.
-6. **If calibration is required** → left column → **Set calibration** → follow the wizard (set calibrant image, config file and mask) → press "Run" → wait until finishes.
+6. **If calibration is required** → left column → **Set calibration** → follow the wizard (IMPORTANT - THESE ARE REQUIRED MANUAL STEPS: set calibrant image, config file and mask) → press "Run" → wait until finishes.
 After calibration is set, the integration is done with calibrated geometry.
-7. **If buffer subtraction is required** → **Set buffer** → choose buffer `.dat` and options in the wizard → **Apply**.
+7. **If buffer subtraction is required** → **Set buffer** → choose buffer `.dat` and options (IMPORTANT - THESE ARE REQUIRED MANUAL STEPS: set q_min and q_max, this is the range to match tails to get the correct buffer scale for subtraction, not necessarily very large) in the wizard → **Apply**.
 After buffer is set, automatic subtraction follows integration immediately for every new `.tif` file.
 8. **If you need extra modeling / fits** → use the **right** column (toggles and actions such as fit distances, as available).
 After you do fit_distances once, it is run automatically for every new `.tif` file.
