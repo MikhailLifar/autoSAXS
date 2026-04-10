@@ -60,6 +60,9 @@ class RunRequest:
                     argv.append(flag)
             elif v is None:
                 continue
+            elif isinstance(v, str) and not v.strip():
+                # Omit optional args saved as "" in YAML / form state (same as unset).
+                continue
             elif isinstance(v, (list, tuple)):
                 argv.append(flag)
                 argv.extend([str(x) for x in v])

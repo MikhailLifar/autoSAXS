@@ -283,7 +283,8 @@ class LiveviewPipeline(QObject):
                 except Exception:
                     pass
 
-            if st == LiveviewState.CD and self._latest_subtracted_dat:
+            st_after = self._state.current_state()
+            if st_after == LiveviewState.CD and self._latest_subtracted_dat:
                 self._start_fit_distances(profile_path=self._latest_subtracted_dat)
                 return
 

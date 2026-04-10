@@ -18,7 +18,21 @@ from ...logic.session_state import SessionPathHints
 from ...ui.path_field import PathField
 from ...ui.run_controls import RunControls
 from ...ui.skill_form import SkillForm
-from ..state import LiveviewSessionState
+
+
+def _clear_fit_distances_profile_field(form: SkillForm, meta) -> None:
+    """Liveview: never pre-fill or restore profile path (options only); browse dirs still come from hints."""
+    if meta is None:
+        return
+    for i, p in enumerate(meta.positional_params):
+        if p.name != "profile":
+            continue
+        widgets = getattr(form, "_pos_widgets", [])
+        if i < len(widgets):
+            w = widgets[i]
+            if isinstance(w, PathField):
+                w.set_text("")
+        break
 
 
 def _force_no_cache_and_fixed_output(form: SkillForm, *, outdir: str) -> None:
@@ -44,7 +58,6 @@ class FitDistancesWizardDialog(QDialog):
         *,
         watchdir: Path,
         hints: SessionPathHints,
-        session_state: LiveviewSessionState,
         saved_form_state: Optional[dict[str, Any]] = None,
         parent=None,
     ) -> None:
@@ -58,7 +71,7 @@ class FitDistancesWizardDialog(QDialog):
         meta = skills.get("fit_distances")
         self._form = SkillForm()
         self._controls = RunControls()
-        self._controls.run_button.setText("Run")
+        self._controls.run_button.setText("Run/Apply")
         self._meta = meta
 
         lay = QVBoxLayout(self)
@@ -73,14 +86,13 @@ class FitDistancesWizardDialog(QDialog):
                 saved_state=saved_form_state,
             )
             _force_no_cache_and_fixed_output(self._form, outdir=str(out))
-            self._prime_profile_default(session_state)
+            _clear_fit_distances_profile_field(self._form, meta)
             lay.addWidget(
                 QLabel(
-                    "Profile .dat — default: last integrated curve in states B/BD; "
-                    "last subtracted curve in states C/CD (falls back to integrated if no subtraction yet). "
-                    "Run saves fit_distances/fit_distances.conf, enables modeling, and runs fit_distances "
-                    "(outputs under fit_distances/). "
-                    "New .tif files: integrate → fit_distances (BD) or integrate → subtract → fit_distances (CD)."
+                    "Run/Apply always writes fit_distances/fit_distances.conf and turns on pipeline fitting "
+                    "(same as Enable fit_distances). If the profile field points to an existing .dat file, "
+                    "fit_distances runs immediately on that file; otherwise only parameters are stored and the "
+                    "queue uses subtracted or integrated curves when applicable (CD / BD)."
                 )
             )
             lay.addWidget(self._form, 1)
@@ -97,7 +109,7 @@ class FitDistancesWizardDialog(QDialog):
         self._controls.cancel_button.clicked.connect(self._on_cancel_clicked)
         self._controls.copy_cli_button.clicked.connect(self._on_copy_cli)
 
-    def rebuild(self, hints: SessionPathHints, session_state: LiveviewSessionState) -> None:
+    def rebuild(self, hints: SessionPathHints) -> None:
         if self._meta is None:
             return
         saved = None
@@ -114,23 +126,8 @@ class FitDistancesWizardDialog(QDialog):
             saved_state=saved,
         )
         _force_no_cache_and_fixed_output(self._form, outdir=str(out))
-        self._prime_profile_default(session_state)
-
-    def _prime_profile_default(self, session_state: LiveviewSessionState) -> None:
-        if self._meta is None:
-            return
-        lp = session_state.default_fit_distances_profile_path()
-        if lp is None:
-            return
-        for i, p in enumerate(self._meta.positional_params):
-            if p.name != "profile":
-                continue
-            widgets = getattr(self._form, "_pos_widgets", [])
-            if i < len(widgets):
-                w = widgets[i]
-                if isinstance(w, PathField) and not w.text().strip():
-                    w.set_text(str(lp.resolve()))
-            break
+        _clear_fit_distances_profile_field(self._form, self._meta)
+        self._controls.run_button.setText("Run/Apply")
 
     def build_fit_request(self) -> RunRequest:
         if self._meta is None:

@@ -99,6 +99,7 @@ class LiveviewLeftPanel(QWidget):
         lip = self._state.last_integrated_dat_path
         if lip is not None and lip.is_file():
             h.last_integrated_dat_path = str(lip.resolve())
+            h.one_d_profile_dir = str(lip.parent.resolve())
         return h
 
     def _open_calibration_wizard(self) -> None:

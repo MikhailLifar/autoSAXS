@@ -23,6 +23,9 @@ class SessionPathHints:
     two_d_tif_dir: Optional[str] = None
     # Shared directory for 1D .dat profiles (subtract / plot / guinier / fit_*); last valid primary path wins
     one_d_profile_dir: Optional[str] = None
+    # When set to an existing .dat file, analysis skills use it as the session default for ``profile``
+    # before falling back to ``one_d_profile_dir`` (liveview: latest integrated in B/BD, subtracted in C/CD).
+    preferred_profile_dat_path: Optional[str] = None
     # Liveview: path to the latest integrated sample .dat (buffer file-picker hint / browse anchor).
     last_integrated_dat_path: Optional[str] = None
     # Last mask file used (calibrate / integrate_proxy / any skill with optional mask)

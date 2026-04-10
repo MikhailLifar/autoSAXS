@@ -5,7 +5,6 @@ from typing import Any, Dict, Optional
 
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
-    QDialog,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -15,9 +14,15 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ...ui.preview_panel import open_image_viewer
+from ...ui.preview_panel import ImageViewerDialog, open_image_viewer
 from ..pipeline import LiveviewQueueStatus
-from .plots import DropTiffImageCanvas, LogCurvePlot, mpl_navigation_toolbar
+from .plots import (
+    DatCurveViewerDialog,
+    DropTiffImageCanvas,
+    LogCurvePlot,
+    open_compare_curves_dialog,
+    open_dat_curve_dialog,
+)
 
 
 class LiveviewMiddlePanel(QWidget):
@@ -87,17 +92,14 @@ class LiveviewMiddlePanel(QWidget):
         lay.addWidget(self._group_sub, 1)
         lay.addWidget(self._status_frame)
 
-        self._img.mpl_connect("button_press_event", lambda ev: self._open_2d_viewer())
-        self._main_plot.mpl_connect("button_press_event", lambda ev: self._open_1d_viewer())
-        self._compare_plot.mpl_connect("button_press_event", lambda ev: self._open_compare_viewer())
-        self._subtracted_plot.mpl_connect("button_press_event", lambda ev: self._open_subtracted_viewer())
+        self._img.mpl_connect("button_press_event", self._on_mpl_click_open_2d)
+        self._main_plot.mpl_connect("button_press_event", self._on_mpl_click_open_1d)
+        self._compare_plot.mpl_connect("button_press_event", self._on_mpl_click_open_compare)
+        self._subtracted_plot.mpl_connect("button_press_event", self._on_mpl_click_open_subtracted)
 
-        self._viewer_1d: QDialog | None = None
-        self._viewer_compare: QDialog | None = None
-        self._viewer_subtracted: QDialog | None = None
-        self._viewer_panel_1d: LogCurvePlot | None = None
-        self._viewer_panel_compare: LogCurvePlot | None = None
-        self._viewer_panel_subtracted: LogCurvePlot | None = None
+        # Raster (2D) vs interactive .dat curves (matplotlib toolbar).
+        self._raster_preview_dialog: ImageViewerDialog | None = None
+        self._curve_preview_dialog: DatCurveViewerDialog | None = None
         self._curve_x_label = "q (nm$^{-1}$)"
 
     def set_queue_status(self, status: LiveviewQueueStatus) -> None:
@@ -116,6 +118,46 @@ class LiveviewMiddlePanel(QWidget):
         else:
             self._current_line.setText("")
         self._queue_bar.setRange(0, 0)
+
+    @staticmethod
+    def _is_left_click_in_axes(ev: object) -> bool:
+        if getattr(ev, "inaxes", None) is None:
+            return False
+        return int(getattr(ev, "button", 0)) == 1
+
+    def _raster_viewer_dialog(self) -> ImageViewerDialog:
+        if self._raster_preview_dialog is None:
+            self._raster_preview_dialog = ImageViewerDialog(self)
+        return self._raster_preview_dialog
+
+    def _curve_viewer_dialog(self) -> DatCurveViewerDialog:
+        if self._curve_preview_dialog is None:
+            self._curve_preview_dialog = DatCurveViewerDialog(self)
+        return self._curve_preview_dialog
+
+    def _store_raster_viewer(self, dlg: ImageViewerDialog | None) -> None:
+        if dlg is not None:
+            self._raster_preview_dialog = dlg
+
+    def _on_mpl_click_open_2d(self, ev: object) -> None:
+        if not self._is_left_click_in_axes(ev):
+            return
+        self._open_2d_viewer()
+
+    def _on_mpl_click_open_1d(self, ev: object) -> None:
+        if not self._is_left_click_in_axes(ev):
+            return
+        self._open_1d_viewer()
+
+    def _on_mpl_click_open_compare(self, ev: object) -> None:
+        if not self._is_left_click_in_axes(ev):
+            return
+        self._open_compare_viewer()
+
+    def _on_mpl_click_open_subtracted(self, ev: object) -> None:
+        if not self._is_left_click_in_axes(ev):
+            return
+        self._open_subtracted_viewer()
 
     def _set_single_curve_mode(self, visible: bool) -> None:
         self._group_main.setVisible(visible)
@@ -180,80 +222,40 @@ class LiveviewMiddlePanel(QWidget):
     def _open_2d_viewer(self) -> None:
         if not self._current_image_path:
             return
-        open_image_viewer(self, self._current_image_path)
+        self._store_raster_viewer(
+            open_image_viewer(self, self._current_image_path, reuse=self._raster_viewer_dialog())
+        )
 
     def _open_1d_viewer(self) -> None:
         if not self._current_curve_path:
             return
-        if self._viewer_1d is None:
-            dlg = QDialog(self)
-            dlg.setWindowTitle("1D viewer")
-            dlg.resize(1100, 800)
-            lay = QVBoxLayout(dlg)
-            panel = LogCurvePlot()
-            lay.addWidget(mpl_navigation_toolbar(panel, dlg))
-            lay.addWidget(panel, 1)
-            self._viewer_1d = dlg
-            self._viewer_panel_1d = panel
-        assert self._viewer_panel_1d is not None and self._viewer_1d is not None
-        plot = self._viewer_panel_1d
-        try:
-            plot.set_x_label(self._curve_x_label)  # type: ignore[attr-defined]
-            plot.plot_dat(self._current_curve_path)  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        self._viewer_1d.show()
-        self._viewer_1d.raise_()
-        self._viewer_1d.activateWindow()
+        open_dat_curve_dialog(
+            self,
+            self._current_curve_path,
+            reuse=self._curve_viewer_dialog(),
+            x_label=self._curve_x_label,
+        )
 
     def _open_compare_viewer(self) -> None:
         if not self._compare_sample_path or not self._compare_buffer_path:
             return
-        if self._viewer_compare is None:
-            dlg = QDialog(self)
-            dlg.setWindowTitle("Sample + scaled buffer")
-            dlg.resize(1100, 800)
-            lay = QVBoxLayout(dlg)
-            panel = LogCurvePlot()
-            lay.addWidget(mpl_navigation_toolbar(panel, dlg))
-            lay.addWidget(panel, 1)
-            self._viewer_compare = dlg
-            self._viewer_panel_compare = panel
-        assert self._viewer_panel_compare is not None and self._viewer_compare is not None
-        p = self._viewer_panel_compare
-        try:
-            p.set_x_label("q (nm$^{-1}$)")  # type: ignore[attr-defined]
-            p.plot_sample_and_scaled_buffer(  # type: ignore[attr-defined]
-                self._compare_sample_path,
-                self._compare_buffer_path,
-                subtract_options=self._sub_subtract_opts,
-            )
-        except Exception:
-            pass
-        self._viewer_compare.show()
-        self._viewer_compare.raise_()
-        self._viewer_compare.activateWindow()
+        open_compare_curves_dialog(
+            self,
+            self._compare_sample_path,
+            self._compare_buffer_path,
+            subtract_options=self._sub_subtract_opts,
+            reuse=self._curve_viewer_dialog(),
+        )
 
     def _open_subtracted_viewer(self) -> None:
         if not self._current_subtracted_path:
             return
-        if self._viewer_subtracted is None:
-            dlg = QDialog(self)
-            dlg.setWindowTitle("Subtracted curve")
-            dlg.resize(1100, 800)
-            lay = QVBoxLayout(dlg)
-            panel = LogCurvePlot()
-            lay.addWidget(mpl_navigation_toolbar(panel, dlg))
-            lay.addWidget(panel, 1)
-            self._viewer_subtracted = dlg
-            self._viewer_panel_subtracted = panel
-        assert self._viewer_panel_subtracted is not None and self._viewer_subtracted is not None
-        plot = self._viewer_panel_subtracted
-        try:
-            plot.set_x_label("q (nm$^{-1}$)")  # type: ignore[attr-defined]
-            plot.plot_dat(self._current_subtracted_path)  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        self._viewer_subtracted.show()
-        self._viewer_subtracted.raise_()
-        self._viewer_subtracted.activateWindow()
+        subtitled = f"Subtracted — {Path(self._current_subtracted_path).name}"
+        open_dat_curve_dialog(
+            self,
+            self._current_subtracted_path,
+            reuse=self._curve_viewer_dialog(),
+            x_label="q (nm$^{-1}$)",
+            curve_label="subtracted",
+            window_title=subtitled,
+        )

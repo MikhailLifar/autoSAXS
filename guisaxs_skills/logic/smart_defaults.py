@@ -428,7 +428,12 @@ def session_hint_for_positional_path(
             return str(resolve_under_workdir(hints.integrator_dir, workdir))
     if skill_name == "subtract" and param_name == "sample_1d":
         return _dir_hint_if_exists(hints.one_d_profile_dir, workdir)
+    if skill_name == "subtract" and param_name == "buffer_1d":
+        return _file_hint_if_exists(hints.last_integrated_dat_path, workdir)
     if skill_name in ANALYSIS_SKILLS_WITH_PROFILE and param_name == "profile":
+        pf = _file_hint_if_exists(hints.preferred_profile_dat_path, workdir)
+        if pf:
+            return pf
         od = _dir_hint_if_exists(hints.one_d_profile_dir, workdir)
         if od:
             return od

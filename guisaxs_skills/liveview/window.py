@@ -177,14 +177,21 @@ class LiveviewMainWindow(QMainWindow):
     def _on_modeling_enabled_changed(self, enabled: bool) -> None:
         _ = enabled
 
+    @staticmethod
+    def _resolved_profile_path(profile_arg: str, *, watchdir: Path) -> Path:
+        p = Path((profile_arg or "").strip().split(",")[0].strip()).expanduser()
+        return p.resolve() if p.is_absolute() else (watchdir / p).resolve()
+
+    def _fit_distances_profile_file_ok(self, req: RunRequest) -> bool:
+        if not req.positional:
+            return False
+        raw = (req.positional[0] or "").strip()
+        if not raw:
+            return False
+        path = self._resolved_profile_path(raw, watchdir=self._watchdir_resolved)
+        return path.is_file()
+
     def _on_fit_distances_run(self) -> None:
-        if self._state.current_state() == LiveviewState.A:
-            QMessageBox.information(
-                self,
-                "fit_distances",
-                "Modeling is not available in State A. Run calibration first (see liveview spec §4.2).",
-            )
-            return
         if self._runner.is_running():
             QMessageBox.warning(
                 self,
@@ -192,9 +199,22 @@ class LiveviewMainWindow(QMainWindow):
                 "Another skill is still running. Wait for it to finish, then try again.",
             )
             return
+        wd = self._watchdir_resolved
+        has_prof = self._right.fit_distances_wizard_has_existing_profile_file(wd)
         try:
-            self._right.save_fit_distances_conf_from_open_wizard()
+            self._right.save_fit_distances_conf_from_open_wizard(enable_modeling=True)
+            self._right.sync_modeling_ui_to_session_state()
+            if not has_prof:
+                return
+
             req = self._right.build_fit_distances_request_from_wizard()
+            if not self._fit_distances_profile_file_ok(req):
+                QMessageBox.warning(
+                    self,
+                    "fit_distances",
+                    "The profile path is not an existing file.",
+                )
+                return
             opts = dict(req.options)
             opts.pop("use_cache", None)
             od = opts.get("output_dir", "")

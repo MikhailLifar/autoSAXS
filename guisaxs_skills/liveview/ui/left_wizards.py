@@ -155,7 +155,8 @@ class BufferWizardDialog(QDialog):
             lay.addWidget(
                 QLabel(
                     "Buffer .dat and subtract options (sample curve comes from the live queue). "
-                    "File-picker hint for buffer: directory of the latest integrated .dat when available."
+                    "When the pipeline has produced an integrated curve, the buffer field defaults to that "
+                    ".dat and the file browser opens in its directory."
                 )
             )
             lay.addWidget(self._form, 1)

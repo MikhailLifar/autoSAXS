@@ -570,9 +570,19 @@ def test_fit_distances_contract(monkeypatch):
         profile_path = os.path.join(tmp, "profile.dat")
         write_saxs(profile_path, q, I, sigma, {})
 
-        def _fake_run(cmd, cwd=None, capture_output=None, text=None):
+        def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
+            # subprocess.run is process-wide; fit_distances also calls run_autorg_atsas → autorg.
+            exe = cmd[0] if cmd else ""
+            if exe == "autorg":
+                fake_out = (
+                    "Rg = 2.5\n"
+                    "I(0) = 1.0\n"
+                    "Quality: 0.95\n"
+                    "Points 1 to 10 (10 total)\n"
+                )
+                return _sp.CompletedProcess(args=cmd, returncode=0, stdout=fake_out, stderr="")
             # Expect: ["datgnom", "--rg=...", "--first=..", "--last=..", ...] "-o", out_path, atsas_dat_path
-            assert cmd[0] == "datgnom"
+            assert exe == "datgnom"
             assert any(str(a).startswith("--rg=") for a in cmd)
             out_idx = cmd.index("-o")
             out_path = cmd[out_idx + 1]

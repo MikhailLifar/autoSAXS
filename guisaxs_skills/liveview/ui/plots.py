@@ -11,7 +11,7 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 from matplotlib.figure import Figure
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import QSizePolicy, QWidget
+from PyQt5.QtWidgets import QDialog, QSizePolicy, QVBoxLayout, QWidget
 
 
 def mpl_navigation_toolbar(canvas: FigureCanvas, parent: QWidget) -> NavigationToolbar2QT:
@@ -113,6 +113,104 @@ class LogCurvePlot(FigureCanvas):
         self._ax.grid(True, alpha=0.2)
         self.draw_idle()
         self.setCursor(Qt.PointingHandCursor if (m_s.any() or m_b.any()) else Qt.ArrowCursor)
+
+
+class DatCurveViewerDialog(QDialog):
+    """
+    Full-window interactive SAXS curve view: matplotlib NavigationToolbar (zoom, pan, home, save) + LogCurvePlot.
+    Used for .dat artifacts; thumbnails elsewhere stay rasterized for speed.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Curve viewer")
+        self.resize(1100, 800)
+        self._plot = LogCurvePlot()
+        lay = QVBoxLayout(self)
+        lay.addWidget(mpl_navigation_toolbar(self._plot, self))
+        lay.addWidget(self._plot, 1)
+
+    def plot_panel(self) -> LogCurvePlot:
+        return self._plot
+
+    def show_single_dat(
+        self,
+        path: str,
+        *,
+        x_label: Optional[str] = None,
+        curve_label: Optional[str] = None,
+        window_title: Optional[str] = None,
+    ) -> None:
+        if window_title:
+            self.setWindowTitle(window_title)
+        else:
+            self.setWindowTitle(f"Curve viewer — {Path(path).name}")
+        if x_label is not None:
+            self._plot.set_x_label(x_label)
+        try:
+            self._plot.plot_dat(path, label=curve_label)
+        except Exception:
+            self._plot.clear()
+            if self._plot.figure.axes:
+                self._plot.figure.axes[0].set_title("Could not load curve")
+            self._plot.draw_idle()
+
+    def show_sample_buffer_compare(
+        self,
+        sample_path: str,
+        buffer_path: str,
+        *,
+        subtract_options: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.setWindowTitle(f"Sample + scaled buffer — {Path(sample_path).name} / {Path(buffer_path).name}")
+        self._plot.set_x_label("q (nm$^{-1}$)")
+        self._plot.plot_sample_and_scaled_buffer(
+            sample_path,
+            buffer_path,
+            subtract_options=subtract_options,
+        )
+
+
+def open_dat_curve_dialog(
+    parent: Optional[QWidget],
+    path: str,
+    *,
+    reuse: Optional[DatCurveViewerDialog] = None,
+    x_label: Optional[str] = None,
+    curve_label: Optional[str] = None,
+    window_title: Optional[str] = None,
+) -> Optional[DatCurveViewerDialog]:
+    """Open or refresh an interactive .dat curve viewer (matplotlib zoom/pan toolbar)."""
+    p = (path or "").strip()
+    if not p or not os.path.isfile(p) or Path(p).suffix.lower() != ".dat":
+        return reuse
+    dlg = reuse if reuse is not None else DatCurveViewerDialog(parent)
+    dlg.show_single_dat(p, x_label=x_label, curve_label=curve_label, window_title=window_title)
+    dlg.show()
+    dlg.raise_()
+    dlg.activateWindow()
+    return dlg
+
+
+def open_compare_curves_dialog(
+    parent: Optional[QWidget],
+    sample_path: str,
+    buffer_path: str,
+    *,
+    subtract_options: Optional[Dict[str, Any]] = None,
+    reuse: Optional[DatCurveViewerDialog] = None,
+) -> Optional[DatCurveViewerDialog]:
+    """Interactive sample + scaled buffer overlay (same model as the small compare plot)."""
+    sp = (sample_path or "").strip()
+    bp = (buffer_path or "").strip()
+    if not sp or not bp or not os.path.isfile(sp) or not os.path.isfile(bp):
+        return reuse
+    dlg = reuse if reuse is not None else DatCurveViewerDialog(parent)
+    dlg.show_sample_buffer_compare(sp, bp, subtract_options=subtract_options)
+    dlg.show()
+    dlg.raise_()
+    dlg.activateWindow()
+    return dlg
 
 
 def subtract_options_to_match_tail_ops(opts: Dict[str, Any]) -> tuple[str, Optional[dict]]:

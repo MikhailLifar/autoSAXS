@@ -556,21 +556,26 @@ autosaxs guinier_analysis subtracted/sub_sample_01.dat --output-dir guinier
 Run ATSAS DATGNOM to obtain a pair distance distribution function p(r) for a **monodisperse** system from a 1D SAXS curve.
 
 The skill invokes `gnom` from `PATH` in command-line mode, explicitly enforcing `--system=0` and running
-an automated GNOM-based transform via `datgnom` with a user-provided `Rg` (in nm). Input curves are expected
-in nm^-1 and are passed through in ATSAS `.dat` format. DATGNOM produces a single `.out` file; the `.out` contains,
-among other things, the p(r) section.
+an automated GNOM-based transform via `datgnom` with `Rg` (in nm). Input curves are expected in nm^-1 and are
+passed through in ATSAS `.dat` format. If `rg_nm` and/or `first` are omitted, ATSAS ``autorg`` is run on the
+profile: user-supplied values take precedence over AUTORG for each parameter. If AUTORG fails, the skill falls
+back to the previous grid search for unset parameters; if `rg_nm` is still missing, a sliding-window Guinier fit
+(:func:`autosaxs.guinier.find_guinier_region`) supplies `Rg`. When AUTORG succeeds and `last` is omitted, DATGNOM
+is run without ``--last``. DATGNOM produces a single `.out` file; the `.out` contains, among other things, the p(r) section.
 
 ### Arguments
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where the GNOM outputs are written (one subdirectory per input profile).
-- `rg_nm` (float): Expected radius of gyration (Rg) in nm (typically from Guinier analysis).
-- `first` (int | None, default `None`): DATGNOM `--first`. If set with `last`, runs one fit. If set alone, `last` is auto-searched. If omitted, `first` is auto-searched.
-- `last` (int | None, default `None`): DATGNOM `--last`. Same pairing rules as `first`; if set alone, `first` is auto-searched.
+- `rg_nm` (float | None, default `None`): Expected Rg in nm. If omitted, taken from AUTORG when possible, else from Guinier search.
+- `first` (int | None, default `None`): DATGNOM `--first`. If omitted, taken from AUTORG Guinier interval when possible. If set with `last`, runs one fit. If set alone, `last` is auto-searched unless AUTORG succeeded and `last` is omitted (then DATGNOM runs without `--last`). If omitted and AUTORG fails or gives no interval, `first` is auto-searched.
+- `last` (int | None, default `None`): DATGNOM `--last`. Same pairing rules as `first`; if set alone, `first` is auto-searched. Omitted with successful AUTORG implies a single DATGNOM run without `--last`.
 - `smooth` (float | None, default `None`): DATGNOM `--smooth`. If set, that value is used and smoothness is not searched. If omitted during auto-search, trials use smoothness `2.0`. In full manual mode (`first` and `last` both set), omitted means do not pass `--smooth`.
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
 ### Returns
-`dict[str, str]` with: `output_subdir`, `gnom_out_paths`, `best_gnom_out_path`, `best_summary_path`.
+`dict[str, str]` with: `output_subdir`, `gnom_out_paths`, `best_gnom_out_path`, `best_summary_path`,
+`fit_params_path` (YAML with the `rg_nm`, `first`, and `last` used for the final DATGNOM fit), plus the
+existing artifact paths (`best_symlink_out_path`, `fits_csv_path`, PNG paths, etc.).
 
 ---
 

@@ -27,13 +27,14 @@ from .deps import (
     write_saxs_atsas_format,
 )
 from .common import PathExpressionArg, coerce_path_expression, expand_files_from_unwrapped
+from ..guinier import find_guinier_region, run_autorg_atsas
 
 
 def fit_distances(
     profile: PathExpressionArg,
     output_dir: str = ".",
     *,
-    rg_nm: float,
+    rg_nm: Optional[float] = None,
     first: Optional[int] = None,
     last: Optional[int] = None,
     smooth: Optional[float] = None,
@@ -43,21 +44,26 @@ def fit_distances(
     Run ATSAS DATGNOM to obtain a pair distance distribution function p(r) for a **monodisperse** system from a 1D SAXS curve.
 
     The skill invokes `gnom` from `PATH` in command-line mode, explicitly enforcing `--system=0` and running
-    an automated GNOM-based transform via `datgnom` with a user-provided `Rg` (in nm). Input curves are expected
-    in nm^-1 and are passed through in ATSAS `.dat` format. DATGNOM produces a single `.out` file; the `.out` contains,
-    among other things, the p(r) section.
+    an automated GNOM-based transform via `datgnom` with `Rg` (in nm). Input curves are expected in nm^-1 and are
+    passed through in ATSAS `.dat` format. If `rg_nm` and/or `first` are omitted, ATSAS ``autorg`` is run on the
+    profile: user-supplied values take precedence over AUTORG for each parameter. If AUTORG fails, the skill falls
+    back to the previous grid search for unset parameters; if `rg_nm` is still missing, a sliding-window Guinier fit
+    (:func:`autosaxs.guinier.find_guinier_region`) supplies `Rg`. When AUTORG succeeds and `last` is omitted, DATGNOM
+    is run without ``--last``. DATGNOM produces a single `.out` file; the `.out` contains, among other things, the p(r) section.
 
     ### Arguments
     - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
     - `output_dir` (str, default `.`): Directory where the GNOM outputs are written (one subdirectory per input profile).
-    - `rg_nm` (float): Expected radius of gyration (Rg) in nm (typically from Guinier analysis).
-    - `first` (int | None, default `None`): DATGNOM `--first`. If set with `last`, runs one fit. If set alone, `last` is auto-searched. If omitted, `first` is auto-searched.
-    - `last` (int | None, default `None`): DATGNOM `--last`. Same pairing rules as `first`; if set alone, `first` is auto-searched.
+    - `rg_nm` (float | None, default `None`): Expected Rg in nm. If omitted, taken from AUTORG when possible, else from Guinier search.
+    - `first` (int | None, default `None`): DATGNOM `--first`. If omitted, taken from AUTORG Guinier interval when possible. If set with `last`, runs one fit. If set alone, `last` is auto-searched unless AUTORG succeeded and `last` is omitted (then DATGNOM runs without `--last`). If omitted and AUTORG fails or gives no interval, `first` is auto-searched.
+    - `last` (int | None, default `None`): DATGNOM `--last`. Same pairing rules as `first`; if set alone, `first` is auto-searched. Omitted with successful AUTORG implies a single DATGNOM run without `--last`.
     - `smooth` (float | None, default `None`): DATGNOM `--smooth`. If set, that value is used and smoothness is not searched. If omitted during auto-search, trials use smoothness `2.0`. In full manual mode (`first` and `last` both set), omitted means do not pass `--smooth`.
     - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
     ### Returns
-    `dict[str, str]` with: `output_subdir`, `gnom_out_paths`, `best_gnom_out_path`, `best_summary_path`.
+    `dict[str, str]` with: `output_subdir`, `gnom_out_paths`, `best_gnom_out_path`, `best_summary_path`,
+    `fit_params_path` (YAML with the `rg_nm`, `first`, and `last` used for the final DATGNOM fit), plus the
+    existing artifact paths (`best_symlink_out_path`, `fits_csv_path`, PNG paths, etc.).
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
@@ -70,7 +76,7 @@ def fit_distances(
     return _fit_distances_paths(
         input_paths=input_batch[0] if len(input_batch) == 1 else input_batch,
         output_dir=output_dir,
-        rg_nm=float(rg_nm),
+        rg_nm=None if rg_nm is None else float(rg_nm),
         first=first,
         last=last,
         smooth=smooth,
@@ -371,7 +377,7 @@ def _run_datgnom_once(
 def _fit_distances_paths(
     input_paths: Dict[str, Union[str, List[str]]],
     output_dir: str,
-    rg_nm: float,
+    rg_nm: Optional[float] = None,
     first: Optional[int] = None,
     last: Optional[int] = None,
     smooth: Optional[float] = None,
@@ -397,6 +403,47 @@ def _fit_distances_paths(
 
     atsas_dat_path = os.path.join(output_dir, f"{base}_atsas.dat")
     write_saxs_atsas_format(atsas_dat_path, q_nm, I, sigma)
+
+    user_rg_nm = rg_nm
+    user_first = first
+    user_last = last
+
+    need_autorg = (rg_nm is None) or (first is None)
+    autorg_result: Optional[Dict[str, Any]] = None
+    if need_autorg:
+        if event_bus:
+            event_bus.publish(EventType.MESSAGE, {"text": "fit_distances: running AUTORG…"})
+        autorg_result = run_autorg_atsas(atsas_dat_path, q_nm)
+        if autorg_result is not None:
+            if rg_nm is None:
+                rg_nm = float(autorg_result["Rg"])
+            if first is None:
+                fp = autorg_result.get("first_point_1based")
+                if fp is not None:
+                    first = int(fp)
+            if event_bus:
+                event_bus.publish(EventType.MESSAGE, {"text": "fit_distances: AUTORG succeeded."})
+        elif event_bus:
+            event_bus.publish(
+                EventType.MESSAGE,
+                {"text": "fit_distances: AUTORG failed or unparsable; using parameter search / Guinier fallback."},
+            )
+
+    if rg_nm is None:
+        gr = find_guinier_region(q_nm, I, sigma=sigma)
+        if gr is None:
+            raise RuntimeError(
+                "fit_distances: Rg is unknown (no rg_nm, AUTORG failed, and Guinier region search failed).",
+            )
+        rg_nm = float(gr["rg"])
+        if event_bus:
+            event_bus.publish(
+                EventType.MESSAGE,
+                {"text": f"fit_distances: Rg from sliding-window Guinier fit: {rg_nm:.4f} nm"},
+            )
+
+    rg_nm = float(rg_nm)
+    autorg_ok = bool(need_autorg and autorg_result is not None)
 
     gnom_out_paths: List[str] = []
     candidates: List[Dict[str, Any]] = []
@@ -446,7 +493,54 @@ def _fit_distances_paths(
     search_last = last is None
     search_smooth = smooth is None
 
-    if manual:
+    autorg_omit_last_mode = bool(autorg_ok and last is None and first is not None)
+
+    if autorg_omit_last_mode:
+        assert first is not None
+        fi = int(first)
+        if fi < 1 or fi >= n_pts:
+            raise ValueError(
+                f"fit_distances: require 1 <= first < n_points ({n_pts}) for DATGNOM without --last; got first={fi}",
+            )
+        cand_smooth = float(smooth) if smooth is not None else 2.0
+        sm_msg = f" --smooth={cand_smooth:.6g}"
+        if event_bus:
+            event_bus.publish(
+                EventType.MESSAGE,
+                {
+                    "text": (
+                        f"DATGNOM (fit_distances): after AUTORG, single run --first={fi} (no --last){sm_msg} "
+                        f"with Rg={float(rg_nm):.4f} nm…"
+                    ),
+                },
+            )
+        out_path_final = os.path.join(output_dir, f"datgnom_rg_{float(rg_nm):.4f}.out")
+        ok, rc, stderr, out_text = _run_datgnom_once(
+            atsas_dat_path=atsas_dat_path,
+            output_dir=output_dir,
+            rg_nm=float(rg_nm),
+            first=fi,
+            last=None,
+            smooth=cand_smooth,
+            out_path=out_path_final,
+        )
+        if not ok:
+            raise RuntimeError(f"fit_distances failed: datgnom exited with code {rc}\n{stderr}")
+        gnom_out_paths.append(out_path_final)
+        best_gnom_out_path = out_path_final
+        _record_candidate(
+            out_path=out_path_final,
+            rc=rc,
+            stderr=stderr,
+            out_text=out_text,
+            cand_first=fi,
+            cand_last=None,
+            cand_smooth=cand_smooth,
+            intermediate=False,
+        )
+        best = dict(candidates[-1])
+        best = {**best, "out_path": best_gnom_out_path, "intermediate": False}
+    elif manual:
         assert first is not None and last is not None
         fi, la = int(first), int(last)
         if fi < 1 or la > n_pts or fi >= la:
@@ -847,11 +941,58 @@ def _fit_distances_paths(
             except Exception:
                 pass
 
+    fit_params_path = os.path.join(output_dir, f"{base}_fit_distances_fit_params.yml")
+    fit_params_doc = {
+        "rg_nm": float(best["rg_nm"]),
+        "first": best.get("first"),
+        "last": best.get("last"),
+    }
+    with open(fit_params_path, "w") as fp:
+        yaml.dump(fit_params_doc, fp, default_flow_style=False)
+
+    if user_rg_nm is not None:
+        rg_param_src = "user"
+    elif need_autorg and autorg_result is not None:
+        rg_param_src = "autorg"
+    else:
+        rg_param_src = "guinier"
+
+    if user_first is not None:
+        first_param_src = "user"
+    elif need_autorg and autorg_result is not None and autorg_result.get("first_point_1based") is not None:
+        first_param_src = "autorg"
+    else:
+        first_param_src = "search"
+
+    if user_last is not None:
+        last_param_src = "user"
+    elif autorg_omit_last_mode:
+        last_param_src = "omitted_no_datgnom_last"
+    else:
+        last_param_src = "search"
+
+    autorg_summary: Optional[Dict[str, Any]] = None
+    if need_autorg:
+        autorg_summary = {
+            "ok": autorg_ok,
+            "Rg": autorg_result.get("Rg") if autorg_result else None,
+            "first_point_1based": autorg_result.get("first_point_1based") if autorg_result else None,
+            "last_point_1based": autorg_result.get("last_point_1based") if autorg_result else None,
+            "guinier_interval": autorg_result.get("guinier_interval") if autorg_result else None,
+        }
+
     best_summary_path = os.path.join(output_dir, f"{base}_fit_distances_best.yml")
     summary = {
         "profile": profile,
         "atsas_dat_path": atsas_dat_path,
         "unit_note": "Input profile assumed q in nm^-1; DATGNOM uses the same units, therefore Rg and r are in nm.",
+        "fit_params_path": fit_params_path,
+        "fit_param_sources": {
+            "rg_nm": rg_param_src,
+            "first": first_param_src,
+            "last": last_param_src,
+        },
+        "autorg": autorg_summary,
         "selected": {
             "rg_nm": float(best["rg_nm"]),
             "first": best.get("first"),
@@ -878,6 +1019,7 @@ def _fit_distances_paths(
         "gnom_out_paths": gnom_out_paths,
         "best_gnom_out_path": best_gnom_out_path,
         "best_summary_path": best_summary_path,
+        "fit_params_path": fit_params_path,
         "best_symlink_out_path": best_link_path,
         "fits_csv_path": fits_csv_path,
         "fit_vs_exp_png_path": fit_vs_exp_png_path or "",

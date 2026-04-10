@@ -49,6 +49,26 @@ def _is_optional_scalar_annotation(ann: Any, scalar_type: Any) -> bool:
     return False
 
 
+def _parse_optional_int(value: str) -> Optional[int]:
+    """Argparse type for Optional[int]: empty / whitespace -> None (e.g. ``--first=`` from YAML or shell)."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    return int(s)
+
+
+def _parse_optional_float(value: str) -> Optional[float]:
+    """Argparse type for Optional[float]: empty / whitespace -> None."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    return float(s)
+
+
 def _wrap_path_expression_value(value: Any, ann: Any) -> Any:
     """
     Wrap raw CLI strings into PathExpression / SingletonPathExpression instances based on annotation.
@@ -150,10 +170,20 @@ def _add_skill_subparser(subparsers: argparse._SubParsersAction, name: str, fn: 
                 continue
 
             if _is_optional_scalar_annotation(ann, int):
-                p.add_argument(opt_name, dest=param.name, type=int, default=param.default)
+                p.add_argument(
+                    opt_name,
+                    dest=param.name,
+                    type=_parse_optional_int,
+                    default=param.default,
+                )
                 continue
             if _is_optional_scalar_annotation(ann, float):
-                p.add_argument(opt_name, dest=param.name, type=float, default=param.default)
+                p.add_argument(
+                    opt_name,
+                    dest=param.name,
+                    type=_parse_optional_float,
+                    default=param.default,
+                )
                 continue
 
             p.add_argument(opt_name, dest=param.name, default=param.default)
