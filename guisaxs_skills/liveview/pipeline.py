@@ -78,7 +78,11 @@ class LiveviewPipeline(QObject):
         self._durations.clear()
 
     def enqueue(self, *, path: str, detected_at_monotonic: float) -> None:
-        self._queue.put(QueueItem(path=path, detected_at_monotonic=float(detected_at_monotonic)))
+        cur = self._current_item.path if self._current_item else None
+        self._queue.put_if_absent(
+            QueueItem(path=path, detected_at_monotonic=float(detected_at_monotonic)),
+            current_path=cur,
+        )
 
     def _emit_status(self) -> None:
         avg = (sum(self._durations) / len(self._durations)) if self._durations else 0.0

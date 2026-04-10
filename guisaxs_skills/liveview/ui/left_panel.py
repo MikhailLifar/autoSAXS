@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ...logic.session_state import SessionPathHints
 from ...ui.preview_panel import PreviewPanel
 from ..state import LiveviewSessionState
 from .left_wizards import BufferWizardDialog, CalibrationWizardDialog
@@ -87,6 +88,19 @@ class LiveviewLeftPanel(QWidget):
 
         self._refresh_buffer_preview_from_state()
 
+    def _build_buffer_path_hints(self) -> SessionPathHints:
+        h = SessionPathHints()
+        wd = self._state.watchdir
+        if self._state.integrator_dir is not None:
+            h.integrator_dir = str(self._state.integrator_dir.resolve())
+        av = wd / "averaged"
+        if av.is_dir():
+            h.integrate_output_dir = str(av.resolve())
+        lip = self._state.last_integrated_dat_path
+        if lip is not None and lip.is_file():
+            h.last_integrated_dat_path = str(lip.resolve())
+        return h
+
     def _open_calibration_wizard(self) -> None:
         if self._cal_wizard is None:
             self._cal_wizard = CalibrationWizardDialog(watchdir=self._state.watchdir, parent=self)
@@ -95,8 +109,15 @@ class LiveviewLeftPanel(QWidget):
         self._cal_wizard.activateWindow()
 
     def _open_buffer_wizard(self) -> None:
+        hints = self._build_buffer_path_hints()
         if self._buf_wizard is None:
-            self._buf_wizard = BufferWizardDialog(watchdir=self._state.watchdir, parent=self)
+            self._buf_wizard = BufferWizardDialog(
+                watchdir=self._state.watchdir,
+                hints=hints,
+                parent=self,
+            )
+        else:
+            self._buf_wizard.rebuild(hints)
         self._buf_wizard.show()
         self._buf_wizard.raise_()
         self._buf_wizard.activateWindow()

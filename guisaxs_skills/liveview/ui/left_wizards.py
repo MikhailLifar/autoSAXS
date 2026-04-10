@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from ...logic.session_state import SessionPathHints
 from ...logic.skill_catalog import discover_skills
 from ...ui.run_controls import RunControls
 from ...ui.skill_form import SkillForm
@@ -125,11 +126,12 @@ class CalibrationWizardDialog(QDialog):
 
 
 class BufferWizardDialog(QDialog):
-    def __init__(self, *, watchdir: Path, parent=None) -> None:
+    def __init__(self, *, watchdir: Path, hints: SessionPathHints, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Set buffer")
         self.setMinimumWidth(560)
         self.resize(720, 640)
+        self._watchdir = watchdir
 
         skills = {m.name: m for m in discover_skills()}
         meta = skills.get("subtract")
@@ -145,14 +147,15 @@ class BufferWizardDialog(QDialog):
                 meta,
                 workdir=watchdir,
                 default_output_dir=str(out),
-                hints=_empty_hints(),
+                hints=hints,
                 saved_state=None,
             )
             _force_no_cache_and_fixed_output(self._form, outdir=str(out))
             _disable_subtract_sample_field(self._form, meta)
             lay.addWidget(
                 QLabel(
-                    "Buffer .dat and subtract options (sample curve is taken from the live queue automatically)."
+                    "Buffer .dat and subtract options (sample curve comes from the live queue). "
+                    "File-picker hint for buffer: directory of the latest integrated .dat when available."
                 )
             )
             lay.addWidget(self._form, 1)
@@ -170,6 +173,22 @@ class BufferWizardDialog(QDialog):
         lay.addWidget(buttons)
 
         self._apply.clicked.connect(self._on_apply)
+
+    def rebuild(self, hints: SessionPathHints) -> None:
+        if self._meta is None:
+            return
+        saved = self._form.state()
+        out = self._watchdir / "subtracted"
+        out.mkdir(parents=True, exist_ok=True)
+        self._form.set_skill(
+            self._meta,
+            workdir=self._watchdir,
+            default_output_dir=str(out),
+            hints=hints,
+            saved_state=saved,
+        )
+        _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+        _disable_subtract_sample_field(self._form, self._meta)
 
     def _on_apply(self) -> None:
         parent = self.parent()

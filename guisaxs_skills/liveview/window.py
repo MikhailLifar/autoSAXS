@@ -135,16 +135,6 @@ class LiveviewMainWindow(QMainWindow):
             return str(p.resolve())
         return str((self._watchdir_resolved / p).resolve())
 
-    def _copy_into_watchdir(self, src: Path) -> Path:
-        """Copy src into watchdir if needed; return path to use for the queue (under watchdir)."""
-        src_r = src.resolve()
-        watch = self._watchdir_resolved
-        if self._path_under_watchdir(src_r):
-            return src_r
-        dest = watch / src_r.name
-        shutil.copy2(src_r, dest)
-        return dest
-
     def _on_tiff_files_dropped(self, paths: object) -> None:
         if not isinstance(paths, list):
             return
@@ -154,8 +144,14 @@ class LiveviewMainWindow(QMainWindow):
             p = Path(raw)
             if not p.is_file():
                 continue
-            final = self._copy_into_watchdir(p)
-            self._pipeline.enqueue(path=str(final), detected_at_monotonic=time.monotonic())
+            src_r = p.resolve()
+            if self._path_under_watchdir(src_r):
+                self._pipeline.enqueue(path=str(src_r), detected_at_monotonic=time.monotonic())
+                continue
+            dest = self._watchdir_resolved / src_r.name
+            shutil.copy2(src_r, dest)
+            # Enqueue immediately; if the watcher also fires for this copy, put_if_absent drops the duplicate.
+            self._pipeline.enqueue(path=str(dest), detected_at_monotonic=time.monotonic())
 
     def _on_run_calibration(self) -> None:
         if self._runner.is_running():

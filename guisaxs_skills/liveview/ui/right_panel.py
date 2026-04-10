@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any, Optional
 
 import yaml
 from PyQt5.QtCore import pyqtSignal
@@ -33,6 +34,8 @@ class LiveviewRightPanel(QWidget):
         super().__init__()
         self._state = state
         self._fit_wizard: FitDistancesWizardDialog | None = None
+        # Session-only form snapshot for fit_distances wizard (positional + options, not output_dir lock).
+        self._fit_distances_saved_form: Optional[dict[str, Any]] = None
 
         skills = {m.name: m for m in discover_skills()}
         self._meta_fit = skills.get("fit_distances")
@@ -93,12 +96,17 @@ class LiveviewRightPanel(QWidget):
         wd = self._state.watchdir
         if self._state.integrator_dir is not None:
             h.integrator_dir = str(self._state.integrator_dir.resolve())
+        st = self._state.current_state()
         profile_parent = None
-        if self._state.current_state() == LiveviewState.CD:
+        if st in (LiveviewState.C, LiveviewState.CD):
             ls = self._state.last_subtracted_dat_path
             if ls is not None and ls.is_file():
                 profile_parent = ls.parent
-        if profile_parent is None:
+        if profile_parent is None and st in (LiveviewState.C, LiveviewState.CD):
+            lip = self._state.last_integrated_dat_path
+            if lip is not None and lip.is_file():
+                profile_parent = lip.parent
+        if profile_parent is None and st in (LiveviewState.B, LiveviewState.BD):
             lip = self._state.last_integrated_dat_path
             if lip is not None and lip.is_file():
                 profile_parent = lip.parent
@@ -145,8 +153,10 @@ class LiveviewRightPanel(QWidget):
                 watchdir=self._state.watchdir,
                 hints=hints,
                 session_state=self._state,
+                saved_form_state=self._fit_distances_saved_form,
                 parent=self,
             )
+            self._fit_wizard.finished.connect(self._persist_fit_wizard_form)
         else:
             self._fit_wizard.rebuild(hints, self._state)
         self._fit_wizard.show()
@@ -157,6 +167,15 @@ class LiveviewRightPanel(QWidget):
         enabled = bool(self._enabled.isChecked())
         self._state.fit_distances_enabled = enabled
         self.modeling_enabled_changed.emit(enabled)
+
+    def _persist_fit_wizard_form(self, _result: int = 0) -> None:
+        w = self._fit_wizard
+        if w is None or self._meta_fit is None:
+            return
+        try:
+            self._fit_distances_saved_form = w._form.state()  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
     def build_fit_distances_request_from_wizard(self) -> RunRequest:
         if self._fit_wizard is None:
@@ -187,6 +206,10 @@ class LiveviewRightPanel(QWidget):
         self._enabled.setChecked(True)
         self._enabled.blockSignals(False)
         self.modeling_enabled_changed.emit(True)
+        try:
+            self._fit_distances_saved_form = wizard._form.state()  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
     def set_fit_distances_running(self, running: bool) -> None:
         if self._fit_wizard is not None:

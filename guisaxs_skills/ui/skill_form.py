@@ -515,12 +515,22 @@ class SkillForm(QWidget):
                 opd = hints.one_d_profile_dir
                 if opd and path_exists(opd, workdir):
                     start = str(resolve_under_workdir(opd, workdir))
+            buf_start = None
+            lip = hints.last_integrated_dat_path
+            if lip and path_exists(lip, workdir):
+                p = resolve_under_workdir(str(lip).strip(), workdir)
+                if p.is_file():
+                    buf_start = str(p.parent.resolve())
             if start:
                 for i, p in enumerate(meta.positional_params):
                     if p.name not in ("sample_1d", "buffer_1d"):
                         continue
                     w = self._pos_widgets[i]
-                    if isinstance(w, PathField) and self._path_field_is_empty(w):
+                    if not isinstance(w, PathField) or not self._path_field_is_empty(w):
+                        continue
+                    if p.name == "buffer_1d" and buf_start:
+                        w.set_browse_start_dir(buf_start)
+                    else:
                         w.set_browse_start_dir(start)
         if meta.name in ANALYSIS_SKILLS_WITH_PROFILE:
             start = None

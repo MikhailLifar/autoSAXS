@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, Optional
 
 from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import (
@@ -44,6 +45,7 @@ class FitDistancesWizardDialog(QDialog):
         watchdir: Path,
         hints: SessionPathHints,
         session_state: LiveviewSessionState,
+        saved_form_state: Optional[dict[str, Any]] = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -68,17 +70,17 @@ class FitDistancesWizardDialog(QDialog):
                 workdir=watchdir,
                 default_output_dir=str(out),
                 hints=hints,
-                saved_state=None,
+                saved_state=saved_form_state,
             )
             _force_no_cache_and_fixed_output(self._form, outdir=str(out))
             self._prime_profile_default(session_state)
             lay.addWidget(
                 QLabel(
-                    "Profile .dat — default: last subtracted curve in state CD, otherwise last integrated. "
+                    "Profile .dat — default: last integrated curve in states B/BD; "
+                    "last subtracted curve in states C/CD (falls back to integrated if no subtraction yet). "
                     "Run saves fit_distances/fit_distances.conf, enables modeling, and runs fit_distances "
                     "(outputs under fit_distances/). "
-                    "New .tif files then use integrate → subtract → fit_distances (CD) "
-                    "or integrate → fit_distances on the integrated curve (BD)."
+                    "New .tif files: integrate → fit_distances (BD) or integrate → subtract → fit_distances (CD)."
                 )
             )
             lay.addWidget(self._form, 1)
@@ -98,6 +100,10 @@ class FitDistancesWizardDialog(QDialog):
     def rebuild(self, hints: SessionPathHints, session_state: LiveviewSessionState) -> None:
         if self._meta is None:
             return
+        saved = None
+        par = self.parent()
+        if par is not None:
+            saved = getattr(par, "_fit_distances_saved_form", None)
         out = self._watchdir / "fit_distances"
         out.mkdir(parents=True, exist_ok=True)
         self._form.set_skill(
@@ -105,7 +111,7 @@ class FitDistancesWizardDialog(QDialog):
             workdir=self._watchdir,
             default_output_dir=str(out),
             hints=hints,
-            saved_state=None,
+            saved_state=saved,
         )
         _force_no_cache_and_fixed_output(self._form, outdir=str(out))
         self._prime_profile_default(session_state)

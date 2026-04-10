@@ -23,6 +23,8 @@ class SessionPathHints:
     two_d_tif_dir: Optional[str] = None
     # Shared directory for 1D .dat profiles (subtract / plot / guinier / fit_*); last valid primary path wins
     one_d_profile_dir: Optional[str] = None
+    # Liveview: path to the latest integrated sample .dat (buffer file-picker hint / browse anchor).
+    last_integrated_dat_path: Optional[str] = None
     # Last mask file used (calibrate / integrate_proxy / any skill with optional mask)
     mask_file_path: Optional[str] = None
     # Last config file used (.conf for calibrate, YAML for fit_mixture, etc.)

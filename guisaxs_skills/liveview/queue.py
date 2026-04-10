@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import collections
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Deque, Optional
 
 
@@ -18,8 +20,29 @@ class FIFOQueue:
     def clear(self) -> None:
         self._q.clear()
 
+    @staticmethod
+    def _norm_key(path: str) -> str:
+        try:
+            return str(Path(path).resolve())
+        except Exception:
+            return os.path.normcase(os.path.abspath(path))
+
+    def contains_path(self, path: str) -> bool:
+        k = self._norm_key(path)
+        return any(self._norm_key(it.path) == k for it in self._q)
+
     def put(self, item: QueueItem) -> None:
         self._q.append(item)
+
+    def put_if_absent(self, item: QueueItem, *, current_path: Optional[str] = None) -> bool:
+        """Append item only if the same path is not already queued or currently processing. Preserves FIFO order."""
+        k = self._norm_key(item.path)
+        if current_path is not None and self._norm_key(current_path) == k:
+            return False
+        if any(self._norm_key(it.path) == k for it in self._q):
+            return False
+        self._q.append(item)
+        return True
 
     def get_nowait(self) -> Optional[QueueItem]:
         if not self._q:

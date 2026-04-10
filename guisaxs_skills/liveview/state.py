@@ -43,13 +43,19 @@ class LiveviewSessionState:
         return LiveviewState.BD if self.fit_distances_enabled else LiveviewState.B
 
     def default_fit_distances_profile_path(self) -> Optional[Path]:
-        """CD: prefer last subtracted .dat; otherwise last integrated .dat."""
-        if self.current_state() == LiveviewState.CD:
+        """State B/BD: last integrated .dat. State C/CD: last subtracted .dat (else last integrated)."""
+        st = self.current_state()
+        if st in (LiveviewState.C, LiveviewState.CD):
             ls = self.last_subtracted_dat_path
             if ls is not None and ls.is_file():
                 return ls
-        li = self.last_integrated_dat_path
-        if li is not None and li.is_file():
-            return li
+            li = self.last_integrated_dat_path
+            if li is not None and li.is_file():
+                return li
+            return None
+        if st in (LiveviewState.B, LiveviewState.BD):
+            li = self.last_integrated_dat_path
+            if li is not None and li.is_file():
+                return li
         return None
 
