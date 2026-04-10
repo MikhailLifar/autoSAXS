@@ -18,6 +18,7 @@ def default_output_dir_for_skill(*, workdir: Path, skill_name: str) -> Path:
         "fit_mixture": "mixture",
         "fit_bodies": "bodies",
         "fit_dammif": "dammif",
+        "fit_distances": "fit_distances",
     }
     sub = mapping.get(skill_name, skill_name)
     return workdir if not sub else (workdir / sub)

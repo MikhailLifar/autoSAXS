@@ -41,4 +41,5 @@ tifffile==2025.12.12
 tkinterdnd2==0.4.3
 tzdata==2025.3
 uv==0.9.17
+watchdog>=4.0.0
 wheel==0.45.1

@@ -132,6 +132,7 @@ class PathField(QWidget):
             derived = browse_start_dir_for_resolved_paths(paths, self._workdir)
             if derived:
                 return derived
+            return str(self._workdir.resolve())
         if self._browse_start_dir:
             return self._browse_start_dir
         return os.getcwd()

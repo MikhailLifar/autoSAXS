@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -72,6 +73,7 @@ class SkillRunner(QObject):
         latest_stderr_path(self._workdir).write_text("", encoding="utf-8")
 
         proc = QProcess(self)
+        proc.setWorkingDirectory(str(self._workdir.resolve()))
         proc.setProgram(sys.executable)
         proc.setArguments(["-m", "autosaxs.cli", *request.cli_argv()])
         proc.readyReadStandardOutput.connect(self._on_stdout)
@@ -113,6 +115,22 @@ class SkillRunner(QObject):
 
         result = parse_key_value_stdout(self._stdout_buf)
         # Enrich artifacts for certain skills (GUI-side only; does not affect computation).
+        if self._skill_name == "fit_distances":
+            bp = result.get("best_summary_path")
+            if isinstance(bp, str) and bp.strip() and os.path.isfile(bp):
+                try:
+                    data = yaml.safe_load(Path(bp).read_text(encoding="utf-8", errors="replace"))
+                    if isinstance(data, dict):
+                        for key in ("fit_vs_exp_png_path", "best_pr_png_path"):
+                            cur = result.get(key)
+                            cur_s = cur.strip().lower() if isinstance(cur, str) else ""
+                            if cur_s and cur_s != "none":
+                                continue
+                            v = data.get(key)
+                            if isinstance(v, str) and v.strip():
+                                result[key] = v
+                except Exception:
+                    pass
         if self._skill_name == "calibrate":
             plots_dir = result.get("calibration_plots_dir")
             if isinstance(plots_dir, str) and plots_dir:

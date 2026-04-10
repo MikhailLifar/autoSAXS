@@ -11,3 +11,4 @@ autosaxs/temp/
 guisaxs_temp/
 # local GUI state
 guisaxs_skills/.last_workdir.txt
+guisaxs_skills/.last_watchdir_liveview.txt

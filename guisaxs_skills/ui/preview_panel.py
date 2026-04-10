@@ -7,7 +7,7 @@ from typing import Optional
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import QDialog, QLabel, QScrollArea, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QComboBox, QDialog, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
 
 
 class _ClickableImageLabel(QLabel):
@@ -27,31 +27,73 @@ class _ClickableImageLabel(QLabel):
         super().mousePressEvent(event)
 
 
-class _ImageViewerDialog(QDialog):
+class ImageViewerDialog(QDialog):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Artifact viewer")
+        self.setWindowTitle("Image viewer")
         self.resize(1100, 800)
 
         self._image = QLabel()
         self._image.setAlignment(Qt.AlignCenter)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setAlignment(Qt.AlignCenter)
-        scroll.setWidget(self._image)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setAlignment(Qt.AlignCenter)
+        self._scroll.setWidget(self._image)
+
+        self._zoom = QComboBox()
+        self._zoom.addItems(["Fit", "25%", "50%", "100%", "200%", "400%"])
+        self._zoom.setCurrentText("Fit")
+        self._zoom.currentTextChanged.connect(self._apply_zoom)
+
+        self._path: Optional[str] = None
+        self._pix: Optional[QPixmap] = None
 
         lay = QVBoxLayout(self)
-        lay.addWidget(scroll)
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Zoom:"))
+        top.addWidget(self._zoom)
+        top.addStretch(1)
+        lay.addLayout(top)
+        lay.addWidget(self._scroll, 1)
 
     def set_image_path(self, path: str) -> None:
-        self.setWindowTitle(f"Artifact viewer — {path}")
+        self._path = path
+        self.setWindowTitle(f"Image viewer — {path}")
         pix = QPixmap(path)
-        if pix.isNull():
+        self._pix = None if pix.isNull() else pix
+        if self._pix is None:
             self._image.setText("Unable to load image.")
             self._image.setPixmap(QPixmap())
             return
-        self._image.setPixmap(pix)
+        self._apply_zoom()
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        if self._zoom.currentText() == "Fit":
+            self._apply_zoom()
+
+    def _apply_zoom(self) -> None:
+        if self._pix is None:
+            return
+        mode = self._zoom.currentText()
+        if mode == "Fit":
+            # Fit to viewport while preserving aspect ratio.
+            viewport = self._scroll.viewport().size()
+            if viewport.width() <= 0 or viewport.height() <= 0:
+                return
+            scaled = self._pix.scaled(viewport, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self._image.setPixmap(scaled)
+            self._image.adjustSize()
+            return
+        try:
+            pct = int(mode.strip().replace("%", ""))
+        except Exception:
+            pct = 100
+        w = max(1, int(self._pix.width() * (pct / 100.0)))
+        h = max(1, int(self._pix.height() * (pct / 100.0)))
+        scaled = self._pix.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self._image.setPixmap(scaled)
         self._image.adjustSize()
 
 
@@ -68,7 +110,7 @@ class PreviewPanel(QWidget):
 
         self._current_image_path: Optional[str] = None
         self._current_pixmap: Optional[QPixmap] = None
-        self._viewer: Optional[_ImageViewerDialog] = None
+        self._viewer: Optional[ImageViewerDialog] = None
         self._temp_preview_png: Optional[str] = None
 
         lay = QVBoxLayout(self)
@@ -149,17 +191,43 @@ class PreviewPanel(QWidget):
     def _render_tiff_to_png(self, src_path: str, out_path: str) -> bool:
         from matplotlib.figure import Figure
 
+        import numpy as np
+
+        img = None
         try:
-            import matplotlib.image as mpimg
+            import fabio
+
+            img = fabio.open(src_path).data
         except Exception:
+            img = None
+        if img is None:
+            try:
+                import tifffile
+
+                img = tifffile.imread(src_path)
+            except Exception:
+                img = None
+        if img is None:
             return False
 
-        img = mpimg.imread(src_path)
+        a = np.asarray(img)
+        if a.ndim > 2:
+            a = a.reshape((-1,) + a.shape[-2:])[0]
+        a = np.asarray(a, dtype=float)
+        a = np.log1p(np.maximum(a, 0.0))
+
         fig = Figure(figsize=(8, 6), dpi=140)
         ax = fig.add_subplot(111)
-        ax.imshow(img, cmap="gray" if getattr(img, "ndim", 2) == 2 else None)
-        ax.set_axis_off()
-        fig.tight_layout(pad=0)
+        ax.imshow(a, cmap="viridis", origin="lower", aspect="equal", interpolation="nearest")
+        ax.set_xlabel("x (px)")
+        ax.set_ylabel("y (px)")
+        ax.set_title(Path(src_path).name if "Path" in globals() else src_path)
+        try:
+            cbar = fig.colorbar(ax.images[0], ax=ax, fraction=0.046, pad=0.04)
+            cbar.set_label("log(1 + I)")
+        except Exception:
+            pass
+        fig.tight_layout()
         fig.savefig(out_path, format="png")
         return os.path.exists(out_path) and os.path.getsize(out_path) > 0
 
@@ -174,9 +242,20 @@ class PreviewPanel(QWidget):
         q, I, sigma, _meta = read_saxs(src_path)
         fig = Figure(figsize=(8, 5), dpi=140)
         ax = fig.add_subplot(111)
+        try:
+            import numpy as np
+
+            q = np.asarray(q)
+            I = np.asarray(I)
+            m = np.isfinite(q) & np.isfinite(I) & (I > 0)
+            q = q[m]
+            I = I[m]
+        except Exception:
+            pass
         ax.plot(q, I, linewidth=1.0)
-        ax.set_xlabel("q")
-        ax.set_ylabel("I")
+        ax.set_xlabel("q (nm$^{-1}$)")
+        ax.set_ylabel("I (a.u.)")
+        ax.set_yscale("log")
         ax.grid(True, alpha=0.25)
         fig.tight_layout()
         fig.savefig(out_path, format="png")
@@ -276,7 +355,7 @@ class PreviewPanel(QWidget):
         if not self._current_image_path:
             return
         if self._viewer is None:
-            self._viewer = _ImageViewerDialog(self)
+            self._viewer = ImageViewerDialog(self)
         self._viewer.set_image_path(self._current_image_path)
         self._viewer.show()
         self._viewer.raise_()
@@ -290,4 +369,37 @@ class PreviewPanel(QWidget):
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._cleanup_temp_preview()
         super().closeEvent(event)
+
+
+def open_image_viewer(parent: Optional[QWidget], source_path: str) -> None:
+    """
+    Open the shared zoomable image viewer (Fit / % zoom — same as left/right thumbnail click-through).
+    Resolves .tif / .dat / .csv to a raster preview when needed, then loads into the viewer.
+    """
+    path = (source_path or "").strip()
+    if not path or not os.path.exists(path):
+        return
+    sfx = Path(path).suffix.lower()
+    if sfx in (".png", ".jpg", ".jpeg", ".bmp"):
+        raster = path
+    else:
+        helper = PreviewPanel()
+        helper.show_path(path)
+        raster = helper._current_image_path
+        if not raster or not os.path.exists(raster):
+            helper._cleanup_temp_preview()
+            return
+        dlg = ImageViewerDialog(parent)
+        dlg.set_image_path(raster)
+        helper._cleanup_temp_preview()
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        return
+
+    dlg = ImageViewerDialog(parent)
+    dlg.set_image_path(raster)
+    dlg.show()
+    dlg.raise_()
+    dlg.activateWindow()
 
