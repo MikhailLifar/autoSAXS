@@ -579,6 +579,40 @@ existing artifact paths (`best_symlink_out_path`, `fits_csv_path`, PNG paths, et
 
 ---
 
+## `fit_sizes`
+
+Run ATSAS GNOM to obtain a size distribution function **D(R)** for a **polydisperse** system from a 1D SAXS curve.
+
+This skill runs `gnom` in command-line mode to reconstruct the size distribution function \(D(R)\) from a 1D
+scattering profile. In GNOM terminology, this corresponds to `system=1` (polydisperse solid spheres, the default)
+or `system=5` (polydisperse long cylinders / rods). GNOM requires an explicit real-space maximum (`--rmax`), so
+if `rmax_nm` is not provided, this skill estimates `Rg` (in nm) via ATSAS `autorg` when possible (or a
+sliding-window Guinier fit fallback) and searches a small set of plausible `rmax` values, selecting the one with
+the highest GNOM `Total Estimate` reported in the `.out`.
+
+### Arguments
+- `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Output directory (one subdirectory per input profile).
+- `shape` (str, default `spheres`): Polydisperse system model. Options:
+    - `spheres`: GNOM `--system=1` (volume distribution for solid spheres).
+    - `rods`: GNOM `--system=5` (length distribution for long cylinders). Requires `rad56_nm` (cylinder radius).
+    - `ellipsoids`: accepted for API compatibility but **not supported by GNOM command-line** (GNOM system 2 is
+      interactive-only). The skill will raise a clear error if selected.
+- `rg_nm` (float | None): Expected Rg in nm; if omitted, inferred by AUTORG when possible, else via Guinier fit.
+- `rmin_nm` (float | None, default `0.0`): GNOM `--rmin` (nm). If None, GNOM default is used.
+- `rmax_nm` (float | None): GNOM `--rmax` (nm). Required by GNOM; if omitted, the skill searches candidates.
+- `rad56_nm` (float | None): GNOM `--rad56` for `shape=rods` (nm cylinder radius). Ignored for spheres.
+- `first`/`last` (int | None): GNOM `--first`/`--last` data-point indices (1-based).
+- `alpha` (float | None, default `0.0`): GNOM `--alpha`. Use 0.0 (default) for automatic alpha search.
+- `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
+- `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+
+### Returns
+Dict with paths: `output_subdir`, `gnom_out_paths`, `best_gnom_out_path`, `best_summary_path`, `fit_params_path`,
+plus `best_dr_png_path`/`best_dr_png_error`, `fit_vs_exp_png_path`/`fit_vs_exp_png_error`, and `fits_csv_path`.
+
+---
+
 ## `fit_mixture`
 
 Run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and write a comparison plot, size distribution plot, and results CSV.
@@ -638,6 +672,9 @@ Run ATSAS `bodies` fits for multiple candidate shapes on a 1D profile, exporting
 
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where `bodies` outputs are written.
+- `shapes` (list[str] | None, default `None`): Subset of body model names to fit (`BODIES_SHAPES_LIST`). `None` or empty means fit **all** models (single `bodies` invocation). A non-empty list runs `bodies --body=...` per shape.
+- `first` (int | None, default `None`): Passed to `bodies` as `--first` (1-based data point index). Omitted when `None`.
+- `last` (int | None, default `None`): Passed to `bodies` as `--last` (1-based data point index). Omitted when `None`.
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
 ### Returns
@@ -656,6 +693,9 @@ from autosaxs.skill import fit_bodies
 out = fit_bodies(
     profile="subtracted/sub_sample_01.dat",
     output_dir="bodies",
+    shapes=["cylinder", "ellipsoid"],
+    first=10,
+    last=120,
     use_cache=True,
 )
 
@@ -665,7 +705,7 @@ print(out["output_subdir"])
 ### CLI usage
 
 ```bash
-autosaxs fit_bodies subtracted/sub_sample_01.dat --output-dir bodies
+autosaxs fit_bodies subtracted/sub_sample_01.dat --output-dir bodies --shapes cylinder ellipsoid --first 10 --last 120
 ```
 
 ---

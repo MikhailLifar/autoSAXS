@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
+import yaml
 from PyQt5.QtGui import QGuiApplication
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGroupBox,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
+    QSpinBox,
     QVBoxLayout,
 )
 
@@ -19,20 +27,19 @@ from ...ui.path_field import PathField
 from ...ui.run_controls import RunControls
 from ...ui.skill_form import SkillForm
 
-
-def _clear_fit_distances_profile_field(form: SkillForm, meta) -> None:
-    """Liveview: never pre-fill or restore profile path (options only); browse dirs still come from hints."""
-    if meta is None:
-        return
-    for i, p in enumerate(meta.positional_params):
-        if p.name != "profile":
-            continue
-        widgets = getattr(form, "_pos_widgets", [])
-        if i < len(widgets):
-            w = widgets[i]
-            if isinstance(w, PathField):
-                w.set_text("")
-        break
+try:
+    from autosaxs.skill.fit_bodies import BODIES_SHAPES_LIST
+except Exception:
+    BODIES_SHAPES_LIST = [
+        "cylinder",
+        "dumbbell",
+        "ellipsoid",
+        "elliptic-cylinder",
+        "hollow-cylinder",
+        "hollow-sphere",
+        "parallelepiped",
+        "rotation-ellipsoid",
+    ]
 
 
 def _force_no_cache_and_fixed_output(form: SkillForm, *, outdir: str) -> None:
@@ -50,6 +57,28 @@ def _force_no_cache_and_fixed_output(form: SkillForm, *, outdir: str) -> None:
             out.setEnabled(False)
     except Exception:
         pass
+
+
+def _remove_skill_option_field(form: SkillForm, opt_name: str) -> None:
+    """Drop an option row from ``SkillForm`` (e.g. hide ``config_path`` handled elsewhere)."""
+    w = form._opt_fields.pop(opt_name, None)
+    if w is not None:
+        form._opt_layout.removeRow(w)
+
+
+def _clear_profile_positional_field(form: SkillForm, meta) -> None:
+    """Clear first positional `profile` PathField (options-only wizards for liveview)."""
+    if meta is None:
+        return
+    for i, p in enumerate(meta.positional_params):
+        if p.name != "profile":
+            continue
+        widgets = getattr(form, "_pos_widgets", [])
+        if i < len(widgets):
+            w = widgets[i]
+            if isinstance(w, PathField):
+                w.set_text("")
+        break
 
 
 class FitDistancesWizardDialog(QDialog):
@@ -86,13 +115,12 @@ class FitDistancesWizardDialog(QDialog):
                 saved_state=saved_form_state,
             )
             _force_no_cache_and_fixed_output(self._form, outdir=str(out))
-            _clear_fit_distances_profile_field(self._form, meta)
+            _clear_profile_positional_field(self._form, meta)
             lay.addWidget(
                 QLabel(
-                    "Run/Apply always writes fit_distances/fit_distances.conf and turns on pipeline fitting "
-                    "(same as Enable fit_distances). If the profile field points to an existing .dat file, "
-                    "fit_distances runs immediately on that file; otherwise only parameters are stored and the "
-                    "queue uses subtracted or integrated curves when applicable (CD / BD)."
+                    "Run/Apply writes fit_distances/fit_distances.conf. If analysis mode is Off, it switches to "
+                    "Monodisperse p(r). With an existing profile .dat, fit_distances runs immediately; otherwise "
+                    "only parameters are stored and the queue uses the integrated or subtracted curve (BD / CD)."
                 )
             )
             lay.addWidget(self._form, 1)
@@ -115,7 +143,7 @@ class FitDistancesWizardDialog(QDialog):
         saved = None
         par = self.parent()
         if par is not None:
-            saved = getattr(par, "_fit_distances_saved_form", None)
+            saved = getattr(par, "_fit_distances_saved_form", None)  # noqa: SLF001
         out = self._watchdir / "fit_distances"
         out.mkdir(parents=True, exist_ok=True)
         self._form.set_skill(
@@ -126,7 +154,7 @@ class FitDistancesWizardDialog(QDialog):
             saved_state=saved,
         )
         _force_no_cache_and_fixed_output(self._form, outdir=str(out))
-        _clear_fit_distances_profile_field(self._form, self._meta)
+        _clear_profile_positional_field(self._form, self._meta)
         self._controls.run_button.setText("Run/Apply")
 
     def build_fit_request(self) -> RunRequest:
@@ -155,6 +183,400 @@ class FitDistancesWizardDialog(QDialog):
             return
         try:
             req = self._form.build_request()
+        except Exception as e:
+            QMessageBox.critical(self, "Cannot build request", str(e))
+            return
+        text = "autosaxs " + " ".join(req.cli_argv())
+        QGuiApplication.clipboard().setText(text)
+
+
+class FitBodiesWizardDialog(QDialog):
+    """Choose ATSAS BODIES shapes for liveview primitives mode (saved to fit_bodies/fit_bodies.conf)."""
+
+    def __init__(
+        self,
+        *,
+        watchdir: Path,
+        saved_shapes: Optional[list[str]] = None,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Set fit_bodies (shapes)")
+        self.setMinimumWidth(480)
+        self.resize(520, 420)
+        self._watchdir = watchdir
+
+        self._list = QListWidget()
+        self._list.setMinimumHeight(220)
+        for name in BODIES_SHAPES_LIST:
+            it = QListWidgetItem(name)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            self._list.addItem(it)
+        self._apply_saved_shapes(saved_shapes)
+
+        self._controls = RunControls()
+        self._controls.run_button.setText("Run/Apply")
+        self._controls.copy_cli_button.setVisible(False)
+
+        lay = QVBoxLayout(self)
+        lay.addWidget(
+            QLabel(
+                "Select body models to fit. Default is ellipsoid only. GNOM / p(r) settings come from "
+                "“Set fit_distances (GNOM / p(r))…”. Run/Apply writes fit_bodies/fit_bodies.conf; the live queue "
+                "runs fit_distances then fit_bodies using the GNOM first/last interval."
+            )
+        )
+        lay.addWidget(self._list, 1)
+        lay.addWidget(self._controls)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.close)
+        buttons.accepted.connect(self.close)
+        lay.addWidget(buttons)
+
+        self._controls.run_button.clicked.connect(self._on_run_clicked)
+        self._controls.cancel_button.clicked.connect(self._on_cancel_clicked)
+
+    def _apply_saved_shapes(self, saved_shapes: Optional[list[str]]) -> None:
+        want = set(saved_shapes) if saved_shapes else set()
+        default_ellipsoid_only = not want
+        for i in range(self._list.count()):
+            it = self._list.item(i)
+            name = it.text()
+            if default_ellipsoid_only:
+                it.setCheckState(Qt.Checked if name == "ellipsoid" else Qt.Unchecked)
+            else:
+                it.setCheckState(Qt.Checked if name in want else Qt.Unchecked)
+
+    def rebuild(self, *, saved_shapes: Optional[list[str]] = None) -> None:
+        self._apply_saved_shapes(saved_shapes)
+
+    def selected_shapes(self) -> list[str]:
+        names: list[str] = []
+        for i in range(self._list.count()):
+            it = self._list.item(i)
+            if it.checkState() == Qt.Checked:
+                names.append(it.text())
+        return names
+
+    def set_running(self, running: bool) -> None:
+        self._controls.set_running(bool(running))
+
+    def _on_run_clicked(self) -> None:
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "fit_bodies_run_requested"):
+            getattr(parent, "fit_bodies_run_requested").emit()
+
+    def _on_cancel_clicked(self) -> None:
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "fit_distances_cancel_requested"):
+            getattr(parent, "fit_distances_cancel_requested").emit()
+
+
+class FitSizesWizardDialog(QDialog):
+    def __init__(
+        self,
+        *,
+        watchdir: Path,
+        hints: SessionPathHints,
+        saved_form_state: Optional[dict[str, Any]] = None,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Set fit_sizes")
+        self.setMinimumWidth(560)
+        self.resize(720, 640)
+        self._watchdir = watchdir
+
+        skills = {m.name: m for m in discover_skills()}
+        meta = skills.get("fit_sizes")
+        self._form = SkillForm()
+        self._controls = RunControls()
+        self._controls.run_button.setText("Run/Apply")
+        self._meta = meta
+
+        lay = QVBoxLayout(self)
+        if meta is not None:
+            out = watchdir / "fit_sizes"
+            out.mkdir(parents=True, exist_ok=True)
+            self._form.set_skill(
+                meta,
+                workdir=watchdir,
+                default_output_dir=str(out),
+                hints=hints,
+                saved_state=saved_form_state,
+            )
+            _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+            _clear_profile_positional_field(self._form, meta)
+            lay.addWidget(
+                QLabel(
+                    "Run/Apply writes fit_sizes/fit_sizes.conf (options only). The live queue passes the "
+                    "integrated or subtracted .dat automatically when Polydisperse d(r) mode is selected."
+                )
+            )
+            lay.addWidget(self._form, 1)
+            lay.addWidget(self._controls)
+        else:
+            lay.addWidget(QLabel("fit_sizes skill is not available."))
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.close)
+        buttons.accepted.connect(self.close)
+        lay.addWidget(buttons)
+
+        self._controls.run_button.clicked.connect(self._on_run_clicked)
+        self._controls.cancel_button.clicked.connect(self._on_cancel_clicked)
+        self._controls.copy_cli_button.clicked.connect(self._on_copy_cli)
+
+    def rebuild(self, hints: SessionPathHints) -> None:
+        if self._meta is None:
+            return
+        saved = None
+        par = self.parent()
+        if par is not None:
+            saved = getattr(par, "_fit_sizes_saved_form", None)  # noqa: SLF001
+        out = self._watchdir / "fit_sizes"
+        out.mkdir(parents=True, exist_ok=True)
+        self._form.set_skill(
+            self._meta,
+            workdir=self._watchdir,
+            default_output_dir=str(out),
+            hints=hints,
+            saved_state=saved,
+        )
+        _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+        _clear_profile_positional_field(self._form, self._meta)
+
+    def build_fit_sizes_request(self) -> RunRequest:
+        if self._meta is None:
+            raise RuntimeError("fit_sizes skill is not available")
+        return self._form.build_request()
+
+    def set_running(self, running: bool) -> None:
+        if self._meta is not None:
+            self._controls.set_running(bool(running))
+
+    def _on_run_clicked(self) -> None:
+        if self._meta is None:
+            return
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "fit_sizes_run_requested"):
+            getattr(parent, "fit_sizes_run_requested").emit()
+
+    def _on_cancel_clicked(self) -> None:
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "fit_distances_cancel_requested"):
+            getattr(parent, "fit_distances_cancel_requested").emit()
+
+    def _on_copy_cli(self) -> None:
+        if self._meta is None:
+            return
+        try:
+            req = self._form.build_request()
+        except Exception as e:
+            QMessageBox.critical(self, "Cannot build request", str(e))
+            return
+        text = "autosaxs " + " ".join(req.cli_argv())
+        QGuiApplication.clipboard().setText(text)
+
+
+# Written under watchdir/mixture/; only contains the ``mixture:`` section for ``fit_mixture --config-path``.
+LIVEVIEW_MIXTURE_YML_NAME = "liveview_mixture.yml"
+
+
+class FitMixtureWizardDialog(QDialog):
+    """MIXTURE model parameters + fit_mixture options (q range); profile and config path are implicit."""
+
+    def __init__(
+        self,
+        *,
+        watchdir: Path,
+        hints: SessionPathHints,
+        saved_form_state: Optional[dict[str, Any]] = None,
+        saved_mixture_params: Optional[dict[str, Any]] = None,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Set fit_mixture (MIXTURE)")
+        self.setMinimumWidth(560)
+        self.resize(720, 640)
+        self._watchdir = watchdir
+
+        skills = {m.name: m for m in discover_skills()}
+        meta = skills.get("fit_mixture")
+        self._form = SkillForm()
+        self._controls = RunControls()
+        self._controls.run_button.setText("Run/Apply")
+        self._meta = meta
+
+        self._mix_group = QGroupBox("MIXTURE parameters")
+        mf = QFormLayout(self._mix_group)
+        self._sp_max_nph = QSpinBox()
+        self._sp_max_nph.setRange(1, 10)
+        self._sp_max_nph.setValue(3)
+        self._sp_maxit = QSpinBox()
+        self._sp_maxit.setRange(1, 100000)
+        self._sp_maxit.setValue(100)
+        self._sp_r_min = QDoubleSpinBox()
+        self._sp_r_min.setRange(0.01, 1e6)
+        self._sp_r_min.setDecimals(4)
+        self._sp_r_min.setValue(5.0)
+        self._sp_r_max = QDoubleSpinBox()
+        self._sp_r_max.setRange(0.01, 1e6)
+        self._sp_r_max.setDecimals(4)
+        self._sp_r_max.setValue(120.0)
+        self._sp_poly_min = QDoubleSpinBox()
+        self._sp_poly_min.setRange(0.001, 1e6)
+        self._sp_poly_min.setDecimals(4)
+        self._sp_poly_min.setValue(0.5)
+        self._sp_poly_max = QDoubleSpinBox()
+        self._sp_poly_max.setRange(0.001, 1e6)
+        self._sp_poly_max.setDecimals(4)
+        self._sp_poly_max.setValue(60.0)
+        mf.addRow("max_nph (phases)", self._sp_max_nph)
+        mf.addRow("maxit", self._sp_maxit)
+        mf.addRow("r_min (Å)", self._sp_r_min)
+        mf.addRow("r_max (Å)", self._sp_r_max)
+        mf.addRow("poly_min (Å)", self._sp_poly_min)
+        mf.addRow("poly_max (Å)", self._sp_poly_max)
+
+        lay = QVBoxLayout(self)
+        if meta is not None:
+            out = watchdir / "mixture"
+            out.mkdir(parents=True, exist_ok=True)
+            self._form.set_skill(
+                meta,
+                workdir=watchdir,
+                default_output_dir=str(out),
+                hints=hints,
+                saved_state=saved_form_state,
+            )
+            _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+            _clear_profile_positional_field(self._form, meta)
+            _remove_skill_option_field(self._form, "config_path")
+            lay.addWidget(
+                QLabel(
+                    "MIXTURE settings are saved to mixture/liveview_mixture.yml. Run/Apply stores parameters and, "
+                    "if a profile .dat is set below, runs fit_mixture immediately. The live queue uses the "
+                    "subtracted (or integrated) curve when Polydisperse mixture mode is on."
+                )
+            )
+            lay.addWidget(self._mix_group)
+            lay.addWidget(self._form, 1)
+            lay.addWidget(self._controls)
+            if saved_mixture_params:
+                self.set_mixture_params(saved_mixture_params)
+        else:
+            lay.addWidget(QLabel("fit_mixture skill is not available."))
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.close)
+        buttons.accepted.connect(self.close)
+        lay.addWidget(buttons)
+
+        if meta is not None:
+            self._controls.run_button.clicked.connect(self._on_run_clicked)
+            self._controls.cancel_button.clicked.connect(self._on_cancel_clicked)
+            self._controls.copy_cli_button.clicked.connect(self._on_copy_cli)
+
+    def mixture_params(self) -> dict[str, Any]:
+        return {
+            "max_nph": int(self._sp_max_nph.value()),
+            "maxit": int(self._sp_maxit.value()),
+            "r_min": float(self._sp_r_min.value()),
+            "r_max": float(self._sp_r_max.value()),
+            "poly_min": float(self._sp_poly_min.value()),
+            "poly_max": float(self._sp_poly_max.value()),
+        }
+
+    def set_mixture_params(self, d: dict[str, Any]) -> None:
+        if not isinstance(d, dict):
+            return
+        try:
+            if "max_nph" in d:
+                self._sp_max_nph.setValue(int(d["max_nph"]))
+            if "maxit" in d:
+                self._sp_maxit.setValue(int(d["maxit"]))
+            if "r_min" in d:
+                self._sp_r_min.setValue(float(d["r_min"]))
+            if "r_max" in d:
+                self._sp_r_max.setValue(float(d["r_max"]))
+            if "poly_min" in d:
+                self._sp_poly_min.setValue(float(d["poly_min"]))
+            if "poly_max" in d:
+                self._sp_poly_max.setValue(float(d["poly_max"]))
+        except (TypeError, ValueError):
+            pass
+
+    def mixture_config_yaml_path(self) -> Path:
+        d = self._watchdir / "mixture"
+        d.mkdir(parents=True, exist_ok=True)
+        return (d / LIVEVIEW_MIXTURE_YML_NAME).resolve()
+
+    def write_mixture_config_yaml(self) -> Path:
+        path = self.mixture_config_yaml_path()
+        doc = {"mixture": self.mixture_params()}
+        path.write_text(yaml.safe_dump(doc, sort_keys=True, allow_unicode=True), encoding="utf-8")
+        return path
+
+    def rebuild(self, hints: SessionPathHints) -> None:
+        if self._meta is None:
+            return
+        par = self.parent()
+        saved = None
+        mix_saved: Optional[dict[str, Any]] = None
+        if par is not None:
+            saved = getattr(par, "_fit_mixture_saved_form", None)  # noqa: SLF001
+            mix_saved = getattr(par, "_fit_mixture_saved_mixture_params", None)  # noqa: SLF001
+        out = self._watchdir / "mixture"
+        out.mkdir(parents=True, exist_ok=True)
+        self._form.set_skill(
+            self._meta,
+            workdir=self._watchdir,
+            default_output_dir=str(out),
+            hints=hints,
+            saved_state=saved,
+        )
+        _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+        _clear_profile_positional_field(self._form, self._meta)
+        _remove_skill_option_field(self._form, "config_path")
+        self._controls.run_button.setText("Run/Apply")
+        if isinstance(mix_saved, dict) and mix_saved:
+            self.set_mixture_params(mix_saved)
+
+    def build_fit_mixture_request(self) -> RunRequest:
+        if self._meta is None:
+            raise RuntimeError("fit_mixture skill is not available")
+        cfg_path = self.write_mixture_config_yaml()
+        req = self._form.build_request()
+        opts = dict(req.options)
+        opts["config_path"] = str(cfg_path)
+        opts.pop("use_cache", None)
+        opts["use_cache"] = False
+        return RunRequest(skill_name=req.skill_name, positional=list(req.positional), options=opts)
+
+    def set_running(self, running: bool) -> None:
+        if self._meta is not None:
+            self._controls.set_running(bool(running))
+
+    def _on_run_clicked(self) -> None:
+        if self._meta is None:
+            return
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "fit_mixture_run_requested"):
+            getattr(parent, "fit_mixture_run_requested").emit()
+
+    def _on_cancel_clicked(self) -> None:
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "fit_distances_cancel_requested"):
+            getattr(parent, "fit_distances_cancel_requested").emit()
+
+    def _on_copy_cli(self) -> None:
+        if self._meta is None:
+            return
+        try:
+            self.write_mixture_config_yaml()
+            req = self.build_fit_mixture_request()
         except Exception as e:
             QMessageBox.critical(self, "Cannot build request", str(e))
             return

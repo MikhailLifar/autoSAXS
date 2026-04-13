@@ -347,6 +347,11 @@ def _run_datgnom_once(
     """
     Returns (ok, returncode, stderr, out_text).
     """
+    # Always pass absolute paths because we run with cwd=output_dir and the caller
+    # may already include output_dir in the provided relative paths.
+    atsas_dat_path_abs = str(Path(atsas_dat_path).expanduser().resolve())
+    out_path_abs = str(Path(out_path).expanduser().resolve())
+
     cmd: List[str] = ["datgnom", f"--rg={float(rg_nm):.6g}"]
     if first is not None:
         cmd.append(f"--first={int(first)}")
@@ -354,14 +359,14 @@ def _run_datgnom_once(
         cmd.append(f"--last={int(last)}")
     if smooth is not None:
         cmd.append(f"--smooth={float(smooth):.6g}")
-    cmd += ["-o", out_path, atsas_dat_path]
+    cmd += ["-o", out_path_abs, atsas_dat_path_abs]
     proc = subprocess.run(cmd, cwd=output_dir, capture_output=True, text=True)
     if proc.returncode != 0:
         return False, int(proc.returncode), (proc.stderr or "")[:2000], ""
-    if not os.path.isfile(out_path):
+    if not os.path.isfile(out_path_abs):
         return False, int(proc.returncode), "gnom reported success but output file was not created", ""
     try:
-        out_text = Path(out_path).read_text(errors="replace")
+        out_text = Path(out_path_abs).read_text(errors="replace")
     except OSError as e:
         return False, int(proc.returncode), f"failed to read DATGNOM output: {e}", ""
     return True, int(proc.returncode), (proc.stderr or "")[:2000], out_text
@@ -447,6 +452,7 @@ def _fit_distances_paths(
 
     gnom_out_paths: List[str] = []
     candidates: List[Dict[str, Any]] = []
+    failures: List[Dict[str, Any]] = []
 
     def _record_candidate(
         *,
@@ -459,14 +465,36 @@ def _fit_distances_paths(
         cand_smooth: Optional[float],
         intermediate: bool,
     ) -> None:
-        diag = _summarize_out_quality(out_text)
+        # Parse once per candidate: previous implementation parsed p(r) twice (via _summarize_out_quality + here).
+        total = _parse_gnom_total_estimate(out_text)
+        suspicious = bool(re.search(r"SUSPICIOUS", out_text or "", flags=re.IGNORECASE))
         rmax_nm = _parse_out_real_space_rmax(out_text)
         pr = _parse_gnom_pr_table(out_text)
+
+        diag: Dict[str, Any] = {"total_estimate": total}
         prm: Dict[str, Any] = {}
-        if pr is not None:
+        if pr is None:
+            diag["parse_pr_ok"] = False
+        else:
             r, p = pr
-            prm = _pr_metrics(r, p)
-        suspicious = bool(re.search(r"SUSPICIOUS", out_text or "", flags=re.IGNORECASE))
+            diag["parse_pr_ok"] = True
+            p = np.asarray(p, dtype=float)
+            if p.size == 0 or not np.any(np.isfinite(p)):
+                diag["parse_pr_ok"] = False
+            else:
+                p_abs_max = float(np.nanmax(np.abs(p))) if np.any(np.isfinite(p)) else 0.0
+                diag["p_abs_max"] = p_abs_max
+                if np.isfinite(p_abs_max) and p_abs_max > 0:
+                    diag["neg_frac"] = float(np.mean(p < 0.0))
+                    tail_n = min(5, int(p.size))
+                    tail = p[-tail_n:]
+                    diag["tail_ratio"] = float(np.nanmean(np.abs(tail)) / (p_abs_max + 1e-12))
+                    if p.size >= 3:
+                        d2 = np.diff(p, n=2)
+                        diag["smoothness"] = float(np.nanmean(np.abs(d2)) / (p_abs_max + 1e-12))
+                    else:
+                        diag["smoothness"] = 1.0
+                prm = _pr_metrics(np.asarray(r, dtype=float), p)
         if not intermediate:
             gnom_out_paths.append(out_path)
         candidates.append(
@@ -634,6 +662,20 @@ def _fit_distances_paths(
             assert smooth is not None
             smooth_grid = [float(smooth)]
 
+        # Reuse one temp path for all intermediate evaluations to avoid per-candidate
+        # NamedTemporaryFile create/delete overhead.
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".out",
+                prefix="datgnom_eval_",
+                dir=output_dir,
+                delete=False,
+            ) as tf:
+                eval_tmp_path = tf.name
+        except Exception as e:
+            raise RuntimeError(f"fit_distances: failed to create temporary DATGNOM output file: {e}")
+
         def _normalize_last_list(raw: List[int], *, from_user_grid: bool) -> List[int]:
             if from_user_grid:
                 out = sorted({int(x) for x in raw if 5 <= int(x) <= n_pts})
@@ -654,44 +696,44 @@ def _fit_distances_paths(
                     if cand_first >= cand_last:
                         continue
                     for cand_smooth in smooth_grid:
-                        tmp_path: Optional[str] = None
-                        try:
-                            with tempfile.NamedTemporaryFile(
-                                mode="w",
-                                suffix=".out",
-                                prefix="datgnom_tmp_",
-                                dir=output_dir,
-                                delete=False,
-                            ) as tf:
-                                tmp_path = tf.name
-                            ok, rc, stderr, out_text = _run_datgnom_once(
-                                atsas_dat_path=atsas_dat_path,
-                                output_dir=output_dir,
-                                rg_nm=float(rg_nm),
-                                first=int(cand_first),
-                                last=int(cand_last),
-                                smooth=float(cand_smooth),
-                                out_path=tmp_path,
+                        ok, rc, stderr, out_text = _run_datgnom_once(
+                            atsas_dat_path=atsas_dat_path,
+                            output_dir=output_dir,
+                            rg_nm=float(rg_nm),
+                            first=int(cand_first),
+                            last=int(cand_last),
+                            smooth=float(cand_smooth),
+                            out_path=eval_tmp_path,
+                        )
+                        if not ok:
+                            failures.append(
+                                {
+                                    "rg_nm": float(rg_nm),
+                                    "first": int(cand_first),
+                                    "last": int(cand_last),
+                                    "smooth": float(cand_smooth),
+                                    "ok": False,
+                                    "returncode": int(rc),
+                                    "stderr": stderr,
+                                }
                             )
-                            if not ok:
-                                continue
-                            # Intermediate candidates are not persisted; keep only metrics.
-                            _record_candidate(
-                                out_path="",
-                                rc=rc,
-                                stderr=stderr,
-                                out_text=out_text,
-                                cand_first=cand_first,
-                                cand_last=cand_last,
-                                cand_smooth=cand_smooth,
-                                intermediate=True,
-                            )
-                        finally:
-                            if tmp_path:
-                                try:
-                                    os.remove(tmp_path)
-                                except OSError:
-                                    pass
+                            if event_bus:
+                                msg = f"DATGNOM (fit_distances): trial failed (rc={rc})."
+                                if stderr:
+                                    msg += f" {stderr}"
+                                event_bus.publish(EventType.MESSAGE, {"text": msg})
+                            continue
+                        # Intermediate candidates are not persisted; keep only metrics.
+                        _record_candidate(
+                            out_path="",
+                            rc=rc,
+                            stderr=stderr,
+                            out_text=out_text,
+                            cand_first=cand_first,
+                            cand_last=cand_last,
+                            cand_smooth=cand_smooth,
+                            intermediate=True,
+                        )
 
         # Round 1: coarse search over --last (skipped when last is user-fixed).
         if search_last:
@@ -770,6 +812,12 @@ def _fit_distances_paths(
         best_gnom_out_path = out_path_final
         # Ensure the selected metadata reflects the persisted final output.
         best = {**best, "out_path": best_gnom_out_path, "intermediate": False}
+
+        if eval_tmp_path:
+            try:
+                os.remove(eval_tmp_path)
+            except OSError:
+                pass
 
     # Export summary artifacts for downstream use/inspection:
     # - stable symlink to best DATGNOM .out
@@ -1004,6 +1052,7 @@ def _fit_distances_paths(
             "total_estimate": best.get("total_estimate"),
         },
         "candidates": candidates,
+        "failures": failures,
         "best_symlink_out_path": best_link_path,
         "fits_csv_path": fits_csv_path,
         "fit_vs_exp_png_path": fit_vs_exp_png_path,

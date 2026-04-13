@@ -18,6 +18,7 @@ from .deps import (
     apply_batch,
     calc_chi2,
     compute_dammif_descriptors,
+    ensure_q_nm,
     read_bodies_cif,
     read_saxs,
     run_with_cache,
@@ -120,16 +121,28 @@ def _fit_dammif_paths(
         profile = profile[0] if profile else None
     if isinstance(gnom_path, list):
         gnom_path = gnom_path[0] if gnom_path else None
+    gnom_path = os.path.expanduser(str(gnom_path)) if gnom_path else gnom_path
+    if profile is not None:
+        profile = os.path.expanduser(str(profile))
     if not gnom_path or not os.path.isfile(gnom_path):
         raise FileNotFoundError("fit_dammif requires input_paths['profile'] or input_paths['gnom_path']")
+    # DAMMIF runs with cwd=output_dir; pass absolute paths into ATSAS (same issue as fit_bodies).
+    gnom_path = os.path.normpath(os.path.abspath(gnom_path))
+    if profile:
+        profile = os.path.normpath(os.path.abspath(profile))
+    if not os.path.isfile(gnom_path):
+        raise FileNotFoundError(f"fit_dammif gnom_path not found after resolve: {gnom_path}")
     if event_bus:
         event_bus.publish(EventType.MESSAGE, {"text": "DAMMIF fit…"})
     base = _strip_sub_int_prefix(os.path.splitext(os.path.basename(gnom_path))[0])
     os.makedirs(output_dir, exist_ok=True)
-    dammif_prefix = os.path.join(output_dir, "dammif")
     for i in range(1, int(DAMMIF_REPS_NUM) + 1):
+        # `cwd=output_dir` means DAMMIF prefixes should be relative,
+        # otherwise it may attempt to write to output_dir/output_dir/...
+        dammif_prefix = f"dammif-{i}"
         proc = subprocess.run(
-            ["dammif", f"--prefix={dammif_prefix}-{i}", "--mode=fast", str(gnom_path)],
+            # ATSAS DAMMIF documentation uses FAST/SLOW/INTERACTIVE (case-sensitive in some builds).
+            ["dammif", f"--prefix={dammif_prefix}", "--mode=FAST", str(gnom_path)],
             cwd=output_dir,
             capture_output=True,
             text=True,
@@ -139,33 +152,56 @@ def _fit_dammif_paths(
 
     profile_1d = profile or gnom_path
     q, I, sigma, _ = read_saxs(profile_1d)
+    # Autosaxs pipeline convention is q in nm^-1; incoming files may be in Å^-1.
+    q, I, sigma = ensure_q_nm(q, I, sigma)
     to_plot = []
     fits_data = []
+    # Reference "experimental" curve for the comparison plot/CSV.
+    # If DAMMIF is given a GNOM .out, its .fir contains the exact curve DAMMIF fitted (often scaled/regularized),
+    # which may not be on the same intensity scale as the original .dat.
+    exp_ref: Optional[tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]] = None
     for i in range(DAMMIF_REPS_NUM):
         fir_path = os.path.join(output_dir, f"dammif-{i+1}.fir")
         cif_path = os.path.join(output_dir, f"dammif-{i+1}-1.cif")
         if not os.path.isfile(fir_path):
             continue
         data = np.loadtxt(fir_path, skiprows=1, dtype=np.float64)
-        q_fit, I_fit, sigma_d = data[:, 0], data[:, 3], data[:, 2]
-        q_fit = q_fit * 10.0
-        idx = q <= q_fit[-1]
-        q_int, I_int = q[idx], I[idx]
-        sigma_interp = np.interp(q_int, q_fit, sigma_d)
-        I_fit_interp = np.interp(q_int, q_fit, I_fit)
-        chi2 = calc_chi2(I_int, I_fit_interp, sigma_interp)
+        # DAMMIF .fir format:
+        #   sExp | iExp | Err | iFit(+Const)  (header contains Chi^2)
+        q_fit = data[:, 0]
+        I_exp_fit = data[:, 1]
+        sigma_fit = data[:, 2]
+        I_fit = data[:, 3]
+
+        # If DAMMIF was fed a GNOM .out, sExp is in Å^-1 (see dammif-*.log: "Angular units: angstrom").
+        # Convert to nm^-1 so we can overlay with autosaxs' nm^-1 convention.
+        if str(gnom_path).lower().endswith(".out"):
+            q_fit = q_fit * 10.0
+        if exp_ref is None:
+            exp_ref = (q_fit, I_exp_fit, sigma_fit)
+
+        # Compute chi2 in the same space DAMMIF reports it (against iExp/Err in .fir),
+        # otherwise mixing with the raw profile grid/units can inflate chi2 dramatically.
+        chi2 = calc_chi2(I_exp_fit, I_fit, sigma_fit)
+
+        # Plot the fit curve (and the data DAMMIF actually fitted) on its native grid.
+        q_int = q_fit
+        I_fit_interp = I_fit
         atoms = read_bodies_cif(cif_path) if os.path.isfile(cif_path) else None
         descr = compute_dammif_descriptors(atoms) if atoms is not None else {}
-        fits_data.append((f"dammif-{i}", {**descr, "chi2": float(chi2)}, q_int, I_fit_interp))
-        to_plot.extend([q_int, I_fit_interp, f"dammif-{i}; $\\chi^2$: {chi2:.2f}"])
+        # Keys must match ATSAS prefixes (dammif-1, dammif-2, …) so dammif_fits.yml lines up with
+        # ``dammif-{n}-1.cif`` (liveview and other UIs resolve the best model via ``{key}-1.cif``).
+        rep_tag = f"dammif-{i + 1}"
+        fits_data.append((rep_tag, {**descr, "chi2": float(chi2)}, q_int, I_fit_interp))
+        to_plot.extend([q_int, I_fit_interp, f"{rep_tag}; $\\chi^2$: {chi2:.2f}"])
         if atoms is not None:
             PLTViewer.plot_3d_views_and_scattering(
                 atoms,
                 q_int,
-                I_int,
-                sigma_interp,
+                I_exp_fit,
+                sigma_fit,
                 I_fit_interp,
-                plotFilePath=os.path.join(output_dir, f"dammif-{i}_view.png"),
+                plotFilePath=os.path.join(output_dir, f"{rep_tag}_view.png"),
             )
     dammif_fits_yml = os.path.join(output_dir, "dammif_fits.yml")
     dammif_fits_csv = os.path.join(output_dir, "dammif_fits.csv")
@@ -174,13 +210,17 @@ def _fit_dammif_paths(
         fits_yml = {k: {kk: float(vv) for kk, vv in d.items()} for k, d, _q, _i in fits_data}
         with open(dammif_fits_yml, "w") as f:
             yaml.dump(fits_yml, f, default_flow_style=False)
-        q_max = max(to_plot[i][-1] for i in range(0, len(to_plot), 3))
-        idx2 = q <= q_max
+        if exp_ref is not None:
+            q_exp, I_exp, sigma_exp = exp_ref
+        else:
+            q_exp, I_exp, sigma_exp = q, I, sigma
+
         csv_cols = ["q", "exp"] + [k for k, *_ in fits_data]
-        csv_arrays = [q[idx2], I[idx2]] + [np.interp(q[idx2], _q, _i) for _k, _d, _q, _i in fits_data]
+        csv_arrays = [q_exp, I_exp] + [np.interp(q_exp, _q, _i) for _k, _d, _q, _i in fits_data]
         pd.DataFrame(dict(zip(csv_cols, csv_arrays))).to_csv(dammif_fits_csv, index=False)
-        to_plot2 = [q[idx2], I[idx2], {"label": "exp", "lw": 4}] + to_plot
-        if sigma is None:
+
+        to_plot2 = [q_exp, I_exp, {"label": "exp", "lw": 4}] + to_plot
+        if sigma_exp is None:
             PLTViewer.view_curves(
                 *to_plot2,
                 title=f"Fits comparison for\n{base}",
@@ -192,7 +232,7 @@ def _fit_dammif_paths(
         else:
             PLTViewer.view_curves(
                 *to_plot2,
-                sigmas=(sigma[idx2],),
+                sigmas=(sigma_exp,),
                 title=f"Fits comparison for\n{base}",
                 xlabel="q (nm-1)",
                 ylabel="I",

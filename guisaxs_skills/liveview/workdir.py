@@ -38,7 +38,7 @@ def save_last_watchdir(path: str) -> None:
         return
 
 
-def select_watchdir(parent=None) -> Optional[str]:
-    # First-time (or no saved watchdir): QFileDialog uses cwd; not the last watchdir.
-    return select_workdir(parent=parent)
+def select_watchdir(parent=None, *, initial_directory: Optional[str] = None) -> Optional[str]:
+    """Pick a watch folder (same dialog UX as guisaxs_skills working directory)."""
+    return select_workdir(parent=parent, initial_directory=initial_directory)
 

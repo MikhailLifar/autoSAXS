@@ -506,7 +506,8 @@ class PLTViewer(Viewer):
         # Scattering subplot
         ax = fig.add_subplot(224)
         ax.plot(q, I, 'o', label='Experimental', markersize=4, alpha=0.7)
-        ax.fill_between(q, I - sigma, I + sigma, alpha=0.5)
+        if sigma is not None:
+            ax.fill_between(q, I - sigma, I + sigma, alpha=0.5)
         ax.plot(q, I_fit, '-', label='Fit', linewidth=2)
         ax.set_xlabel(r'$q$ (nm$^{-1}$)')
         ax.set_ylabel(r'$I(q)$ (a.u.)')

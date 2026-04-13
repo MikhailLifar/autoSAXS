@@ -12,6 +12,8 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QComboBox, QDialog, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
 
+from ..logic.path_display import contracted_path_label
+
 
 def _render_tiff_to_png(src_path: str, out_path: str) -> bool:
     from matplotlib.figure import Figure
@@ -46,7 +48,8 @@ def _render_tiff_to_png(src_path: str, out_path: str) -> bool:
     ax.imshow(a, cmap="viridis", origin="lower", aspect="equal", interpolation="nearest")
     ax.set_xlabel("x (px)")
     ax.set_ylabel("y (px)")
-    ax.set_title(Path(src_path).name)
+    short, _full = contracted_path_label(src_path)
+    ax.set_title(short)
     try:
         cbar = fig.colorbar(ax.images[0], ax=ax, fraction=0.046, pad=0.04)
         cbar.set_label("log(1 + I)")
@@ -228,7 +231,7 @@ class _ClickableImageLabel(QLabel):
 class ImageViewerDialog(QDialog):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Image viewer")
+        self.setWindowTitle("Image")
         self.resize(1100, 800)
 
         self._image = QLabel()
@@ -242,6 +245,7 @@ class ImageViewerDialog(QDialog):
         self._zoom = QComboBox()
         self._zoom.addItems(["Fit", "25%", "50%", "100%", "200%", "400%"])
         self._zoom.setCurrentText("Fit")
+        self._zoom.setToolTip("Zoom")
         self._zoom.currentTextChanged.connect(self._apply_zoom)
 
         self._path: Optional[str] = None
@@ -249,18 +253,31 @@ class ImageViewerDialog(QDialog):
 
         lay = QVBoxLayout(self)
         top = QHBoxLayout()
-        top.addWidget(QLabel("Zoom:"))
         top.addWidget(self._zoom)
         top.addStretch(1)
         lay.addLayout(top)
         lay.addWidget(self._scroll, 1)
 
-    def set_image_path(self, path: str, *, window_title: Optional[str] = None) -> None:
+    def set_image_path(
+        self,
+        path: str,
+        *,
+        window_title: Optional[str] = None,
+        full_path_tooltip: Optional[str] = None,
+    ) -> None:
         self._path = path
+        tip_source = (full_path_tooltip or path or "").strip()
+        short, full_tip = contracted_path_label(tip_source) if tip_source else ("", "")
+        tip = full_tip if full_tip else ""
+        self.setToolTip(tip)
+        self._scroll.setToolTip(tip)
+        self._image.setToolTip(tip)
         if window_title:
             self.setWindowTitle(window_title)
+        elif tip_source:
+            self.setWindowTitle(f"Image — {short}")
         else:
-            self.setWindowTitle(f"Image viewer — {path}")
+            self.setWindowTitle("Image")
         pix = QPixmap(path)
         self._pix = None if pix.isNull() else pix
         if self._pix is None:
@@ -301,7 +318,7 @@ class ImageViewerDialog(QDialog):
 class PreviewPanel(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        self._label = QLabel("Select an artifact to preview")
+        self._label = QLabel("")
         self._label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self._label.setWordWrap(True)
 
@@ -321,11 +338,14 @@ class PreviewPanel(QWidget):
         lay.addWidget(self._label)
         lay.addWidget(self._image, 1)
 
-    def show_path(self, path: str) -> None:
+    def show_path(self, path: str, *, path_label_visible: bool = True) -> None:
         self._cleanup_temp_preview()
         self._source_path_for_viewer = None
-        self._label.setText(path)
+        self._label.setText("")
+        self._label.setToolTip("")
         self._image.clear()
+        self._image.setToolTip("")
+        self.setToolTip("")
         self._current_image_path = None
         self._current_pixmap = None
         self._image.set_on_click(None)
@@ -333,6 +353,13 @@ class PreviewPanel(QWidget):
             return
         p = Path(path)
         self._source_path_for_viewer = str(p)
+        short, full = contracted_path_label(p)
+        if path_label_visible:
+            self._label.setText(short)
+            self._label.setToolTip(full)
+        else:
+            self._label.setText("")
+            self._label.setToolTip(full)
         suffix = p.suffix.lower()
         preview_path: Optional[str] = None
         if suffix in (".png", ".jpg", ".jpeg", ".bmp"):
@@ -348,6 +375,9 @@ class PreviewPanel(QWidget):
             self._current_pixmap = pix
             self._rescale_preview()
             self._image.set_on_click(self._open_viewer)
+            if not path_label_visible:
+                self._image.setToolTip(full)
+                self.setToolTip(full)
 
     def _cleanup_temp_preview(self) -> None:
         if self._temp_preview_png and os.path.exists(self._temp_preview_png):
@@ -411,7 +441,10 @@ class PreviewPanel(QWidget):
             return
         if self._viewer is None:
             self._viewer = ImageViewerDialog(self)
-        self._viewer.set_image_path(self._current_image_path)
+        self._viewer.set_image_path(
+            self._current_image_path,
+            full_path_tooltip=self._source_path_for_viewer or self._current_image_path,
+        )
         self._viewer.show()
         self._viewer.raise_()
         self._viewer.activateWindow()
@@ -432,6 +465,7 @@ def open_image_viewer(
     *,
     reuse: Optional[ImageViewerDialog] = None,
     window_title: Optional[str] = None,
+    full_path_tooltip: Optional[str] = None,
 ) -> Optional[ImageViewerDialog]:
     """
     Open the shared zoomable raster viewer (Fit / % zoom — same as left/right thumbnail click-through).
@@ -441,7 +475,11 @@ def open_image_viewer(
     if not raster or not os.path.exists(raster):
         return reuse
     dlg = reuse if reuse is not None else ImageViewerDialog(parent)
-    dlg.set_image_path(raster, window_title=window_title)
+    dlg.set_image_path(
+        raster,
+        window_title=window_title,
+        full_path_tooltip=full_path_tooltip if full_path_tooltip is not None else source_path,
+    )
     if temp_png:
         try:
             os.unlink(temp_png)

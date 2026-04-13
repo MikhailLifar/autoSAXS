@@ -91,6 +91,20 @@ class SkillRunner(QObject):
             return
         self._proc.terminate()
 
+    def wait_until_idle(self, timeout_ms: int = 8000) -> bool:
+        """After ``cancel()``, wait for the subprocess to finish so workdir can be changed safely."""
+        if not self._proc:
+            return True
+        if self._proc.state() == QProcess.NotRunning:
+            self._proc = None
+            return True
+        return bool(self._proc.waitForFinished(int(timeout_ms)))
+
+    def set_workdir(self, workdir: Path) -> None:
+        if self.is_running():
+            raise RuntimeError("SkillRunner workdir cannot change while a skill is running")
+        self._workdir = workdir.expanduser().resolve()
+
     def _on_stdout(self) -> None:
         if not self._proc:
             return

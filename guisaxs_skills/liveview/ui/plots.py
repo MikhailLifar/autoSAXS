@@ -13,6 +13,8 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QDialog, QSizePolicy, QVBoxLayout, QWidget
 
+from ...logic.path_display import contracted_path_label
+
 
 def mpl_navigation_toolbar(canvas: FigureCanvas, parent: QWidget) -> NavigationToolbar2QT:
     """Matplotlib zoom / pan / home / save toolbar for figure dialogs (same affordances everywhere)."""
@@ -50,11 +52,12 @@ class LogCurvePlot(FigureCanvas):
         I = np.asarray(I)
         m = np.isfinite(q) & np.isfinite(I) & (I > 0)
         self._ax.clear()
+        short, _f = contracted_path_label(path)
         if m.any():
-            self._ax.plot(q[m], I[m], label=label or path)
+            self._ax.plot(q[m], I[m], label=label or short)
         if label:
             self._ax.legend(fontsize=8)
-        self._ax.set_title(Path(path).name)
+        self._ax.set_title(short)
         self._ax.set_xlabel(self._x_label)
         self._ax.set_ylabel("I (a.u.)")
         self._ax.set_yscale("log")
@@ -67,37 +70,76 @@ class LogCurvePlot(FigureCanvas):
         sample_path: str,
         buffer_path: str,
         *,
+        subtracted_path: str = "",
         subtract_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         log10(I) vs q for sample and buffer after the same scaling subtract uses (point_match / match_tail).
         """
-        from autosaxs.processor import subtract_buffer
+        from autosaxs.utils import read_saxs
 
-        method, mtops = subtract_options_to_match_tail_ops(subtract_options or {})
-        fd, tmp = tempfile.mkstemp(suffix=".dat")
-        os.close(fd)
+        # Fast path: use scaling_factor recorded in the subtracted .dat metadata.
+        scale: Optional[float] = None
+        sp = (subtracted_path or "").strip()
+        if sp and os.path.isfile(sp):
+            try:
+                _q_sub, _I_sub, _sigma_sub, meta = read_saxs(sp)
+                if isinstance(meta, dict):
+                    subm = meta.get("subtract")
+                    if isinstance(subm, dict):
+                        sf = subm.get("scaling_factor")
+                        if sf is not None:
+                            scale = float(sf)
+            except Exception:
+                scale = None
+
         try:
-            q, I_sub, I_buff_scaled, *_rest = subtract_buffer(
-                buffer_path,
-                sample_path,
-                tmp,
-                method=method,
-                match_tail_ops=mtops,
-            )
+            q_s, I_s, _sig_s, _meta_s = read_saxs(sample_path)
+            q_b, I_b, _sig_b, _meta_b = read_saxs(buffer_path)
+            q_s = np.asarray(q_s, dtype=float)
+            I_s = np.asarray(I_s, dtype=float)
+            q_b = np.asarray(q_b, dtype=float)
+            I_b = np.asarray(I_b, dtype=float)
         except Exception:
             self.clear()
-            self._ax.set_title("Could not build sample/buffer overlay")
+            self._ax.set_title("Could not load sample/buffer curves")
             self.draw_idle()
             return
-        finally:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
 
-        I_sample = np.asarray(I_sub, dtype=float) + np.asarray(I_buff_scaled, dtype=float)
-        q = np.asarray(q, dtype=float)
+        if scale is None:
+            # Fallback: recompute scaling (legacy behavior).
+            from autosaxs.processor import subtract_buffer
+
+            method, mtops = subtract_options_to_match_tail_ops(subtract_options or {})
+            fd, tmp = tempfile.mkstemp(suffix=".dat")
+            os.close(fd)
+            try:
+                q, I_sub, I_buff_scaled, *_rest = subtract_buffer(
+                    buffer_path,
+                    sample_path,
+                    tmp,
+                    method=method,
+                    match_tail_ops=mtops,
+                )
+                I_sample = np.asarray(I_sub, dtype=float) + np.asarray(I_buff_scaled, dtype=float)
+                q = np.asarray(q, dtype=float)
+            except Exception:
+                self.clear()
+                self._ax.set_title("Could not build sample/buffer overlay")
+                self.draw_idle()
+                return
+            finally:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+        else:
+            # Scale buffer using recorded factor and align onto sample q-grid.
+            q = q_s
+            if q_b.size and q_s.size and not np.array_equal(q_b, q_s):
+                I_b = np.interp(q_s, q_b, I_b)
+            I_buff_scaled = np.asarray(I_b, dtype=float) * float(scale)
+            I_sample = I_s
         m_s = np.isfinite(q) & np.isfinite(I_sample) & (I_sample > 0)
         m_b = np.isfinite(q) & np.isfinite(I_buff_scaled) & (I_buff_scaled > 0)
         self._ax.clear()
@@ -106,7 +148,7 @@ class LogCurvePlot(FigureCanvas):
         if m_b.any():
             self._ax.plot(q[m_b], I_buff_scaled[m_b], label="buffer (scaled)", linewidth=1.0)
         self._ax.legend(fontsize=8)
-        self._ax.set_title("Sample + scaled buffer")
+        self._ax.set_title("S + buffer")
         self._ax.set_xlabel(self._x_label)
         self._ax.set_ylabel("I (a.u.)")
         self._ax.set_yscale("log")
@@ -123,7 +165,7 @@ class DatCurveViewerDialog(QDialog):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Curve viewer")
+        self.setWindowTitle("Curve")
         self.resize(1100, 800)
         self._plot = LogCurvePlot()
         lay = QVBoxLayout(self)
@@ -141,10 +183,14 @@ class DatCurveViewerDialog(QDialog):
         curve_label: Optional[str] = None,
         window_title: Optional[str] = None,
     ) -> None:
+        short, full = contracted_path_label(path)
+        tip = full
         if window_title:
             self.setWindowTitle(window_title)
         else:
-            self.setWindowTitle(f"Curve viewer — {Path(path).name}")
+            self.setWindowTitle(f"Curve — {short}")
+        self.setToolTip(tip)
+        self._plot.setToolTip(tip)
         if x_label is not None:
             self._plot.set_x_label(x_label)
         try:
@@ -160,13 +206,19 @@ class DatCurveViewerDialog(QDialog):
         sample_path: str,
         buffer_path: str,
         *,
+        subtracted_path: str = "",
         subtract_options: Optional[Dict[str, Any]] = None,
     ) -> None:
-        self.setWindowTitle(f"Sample + scaled buffer — {Path(sample_path).name} / {Path(buffer_path).name}")
+        s_s, s_f = contracted_path_label(sample_path)
+        b_s, b_f = contracted_path_label(buffer_path)
+        self.setWindowTitle(f"S+B — {s_s} · {b_s}")
+        self.setToolTip(f"{s_f}\n{b_f}")
+        self._plot.setToolTip(f"{s_f}\n{b_f}")
         self._plot.set_x_label("q (nm$^{-1}$)")
         self._plot.plot_sample_and_scaled_buffer(
             sample_path,
             buffer_path,
+            subtracted_path=subtracted_path,
             subtract_options=subtract_options,
         )
 
@@ -197,6 +249,7 @@ def open_compare_curves_dialog(
     sample_path: str,
     buffer_path: str,
     *,
+    subtracted_path: str = "",
     subtract_options: Optional[Dict[str, Any]] = None,
     reuse: Optional[DatCurveViewerDialog] = None,
 ) -> Optional[DatCurveViewerDialog]:
@@ -206,7 +259,7 @@ def open_compare_curves_dialog(
     if not sp or not bp or not os.path.isfile(sp) or not os.path.isfile(bp):
         return reuse
     dlg = reuse if reuse is not None else DatCurveViewerDialog(parent)
-    dlg.show_sample_buffer_compare(sp, bp, subtract_options=subtract_options)
+    dlg.show_sample_buffer_compare(sp, bp, subtracted_path=subtracted_path, subtract_options=subtract_options)
     dlg.show()
     dlg.raise_()
     dlg.activateWindow()
@@ -293,7 +346,8 @@ class Image2DPlot(FigureCanvas):
         self._remove_colorbar()
         self._ax.clear()
 
-        self._ax.set_title(Path(path).name)
+        short, _f = contracted_path_label(path)
+        self._ax.set_title(short)
         self._ax.set_xlabel("x (px)")
         self._ax.set_ylabel("y (px)")
         im = self._ax.imshow(
@@ -337,7 +391,7 @@ class DropTiffImageCanvas(Image2DPlot):
         self._ax.text(
             0.5,
             0.5,
-            "Drop .tif / .tiff here",
+            "Drop .tif",
             transform=self._ax.transAxes,
             ha="center",
             va="center",

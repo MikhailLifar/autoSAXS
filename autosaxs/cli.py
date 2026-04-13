@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import inspect
 import sys
-from typing import Any, Callable, Dict, List, Optional, Tuple, get_args, get_origin, get_type_hints
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, get_args, get_origin, get_type_hints
 
 from .path_expression import PathExpression, SingletonPathExpression
 
@@ -17,6 +17,25 @@ def _is_list_annotation(ann: Any) -> bool:
     if origin in (list, List):
         return True
     return False
+
+
+def _is_list_str_annotation(ann: Any) -> bool:
+    """True for list[str] / List[str]."""
+    origin = get_origin(ann)
+    if origin not in (list, List):
+        return False
+    args = get_args(ann)
+    return len(args) == 1 and args[0] is str
+
+
+def _is_optional_list_str_annotation(ann: Any) -> bool:
+    """True for Optional[list[str]] / Optional[List[str]]."""
+    origin = get_origin(ann)
+    if origin is not Union:
+        return False
+    args = get_args(ann)
+    non_none = [a for a in args if a is not type(None)]  # noqa: E721
+    return len(non_none) == 1 and _is_list_str_annotation(non_none[0])
 
 
 def _is_optional_tuple2_annotation(ann: Any) -> bool:
@@ -183,6 +202,17 @@ def _add_skill_subparser(subparsers: argparse._SubParsersAction, name: str, fn: 
                     dest=param.name,
                     type=_parse_optional_float,
                     default=param.default,
+                )
+                continue
+
+            if _is_optional_list_str_annotation(ann):
+                p.add_argument(
+                    opt_name,
+                    dest=param.name,
+                    nargs="*",
+                    default=None,
+                    metavar="SHAPE",
+                    help="BODIES model names to fit (default: all). Example: --shapes cylinder ellipsoid",
                 )
                 continue
 

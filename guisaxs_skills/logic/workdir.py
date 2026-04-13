@@ -44,7 +44,7 @@ def save_last_workdir(path: str) -> None:
         return
 
 
-def select_workdir(parent: Optional[QWidget]) -> Optional[str]:
+def select_workdir(parent: Optional[QWidget], *, initial_directory: Optional[str] = None) -> Optional[str]:
     dlg = QFileDialog(parent, "Select working directory")
     dlg.setFileMode(QFileDialog.Directory)
     dlg.setOption(QFileDialog.ShowDirsOnly, True)
@@ -52,6 +52,10 @@ def select_workdir(parent: Optional[QWidget]) -> Optional[str]:
     dlg.setViewMode(QFileDialog.Detail)
     dlg.setMinimumSize(980, 720)
     dlg.resize(1100, 760)
+    if initial_directory:
+        d = os.path.abspath(initial_directory.strip())
+        if os.path.isdir(d):
+            dlg.setDirectory(d)
 
     view = dlg.findChild(QTreeView)
     if view is not None and view.header() is not None:

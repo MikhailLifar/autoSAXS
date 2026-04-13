@@ -33,3 +33,25 @@ class CurvePlot(FigureCanvas):
         self._ax.grid(True, alpha=0.2)
         self.draw_idle()
 
+    def plot_two_series(
+        self,
+        q1,
+        y1,
+        q2,
+        y2,
+        *,
+        label1: str = "exp",
+        label2: str = "fit",
+        xlabel: str = "q (nm$^{-1}$)",
+        ylabel: str = "I",
+    ) -> None:
+        """Overlay two 1D series (e.g. experimental vs best BODIES fit from CSV columns)."""
+        self._ax.clear()
+        self._ax.plot(q1, y1, label=label1, linewidth=1.2)
+        self._ax.plot(q2, y2, label=label2, linewidth=1.0, alpha=0.85)
+        self._ax.set_xlabel(xlabel)
+        self._ax.set_ylabel(ylabel)
+        self._ax.legend(fontsize=8)
+        self._ax.grid(True, alpha=0.2)
+        self.draw_idle()
+

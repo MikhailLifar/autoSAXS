@@ -849,12 +849,29 @@ def subtract_buffer(
     else:
         sigma_sub = None
 
-    write_saxs(destpath, q, I_sub, sigma_sub, metadata={
-                'type': 'sub',
-                'sample_path': src_path,
-                'buffer_path': buffer_path
-            } 
-        )
+    # Embed full subtraction parameters into the output .dat header (YAML metadata).
+    # This makes each subtracted curve self-describing, without requiring extra sidecar files.
+    used_ops = None
+    try:
+        used_ops = dict(algo_ops) if isinstance(algo_ops, dict) else None
+    except Exception:
+        used_ops = None
+    write_saxs(
+        destpath,
+        q,
+        I_sub,
+        sigma_sub,
+        metadata={
+            'type': 'sub',
+            'sample_path': src_path,
+            'buffer_path': buffer_path,
+            'subtract': {
+                'method': method_key,
+                'scaling_factor': float(scaling_factor),
+                'match_tail_ops': used_ops,
+            },
+        },
+    )
     
     return q, I_sub, I_buffer_scaled, sigma_sub, sigma_buffer_scaled
 

@@ -9,11 +9,11 @@ This document specifies a new desktop GUI application (“guisaxs-liveview”) f
 - **1. Purpose and non-goals**
 - **2. Non-negotiable constraints**
 - **3. User workflow (session narrative)**
-- **4. Processing state machine (A/B/C plus modeling toggle)**
+- **4. Processing state machine (A/B/C plus analysis mode)**
 - **5. Directory watching + queueing (stability, ordering, backpressure)**
 - **6. UI layout (three columns) and required widgets**
 - **7. Output directories and naming (autosaxs conventions)**
-- **8. Right column modeling: `fit_distances` contract**
+- **8. Right column: analysis modes and skill contracts**
 - **9. Edge cases and invariants**
 
 ---
@@ -22,7 +22,7 @@ This document specifies a new desktop GUI application (“guisaxs-liveview”) f
 
 ### 1.1 Purpose
 
-**One-sentence summary:** **guisaxs-liveview** is a single-window desktop GUI that watches a directory for **new stable `.tif` files**, processes them **sequentially** via `autosaxs` skills, and continuously updates live plots (2D + 1D) and modeling outputs (GNOM-based \(p(r)\)).
+**One-sentence summary:** **guisaxs-liveview** is a single-window desktop GUI that watches a directory for **new stable `.tif` files**, processes them **sequentially** via `autosaxs` skills, and continuously updates live plots (2D + 1D) and optional **right-column analysis** outputs according to a user-selected analysis mode (monodisperse \(p(r)\), DAM, primitives, polydisperse \(d(r)\), mixture, or off).
 
 **Main user goal:** Start a session by choosing a **watch directory**, then iteratively configure processing during the session (calibration → buffer) while the app keeps up with incoming data using a **FIFO queue** and never freezes.
 
@@ -56,7 +56,7 @@ The GUI MUST NOT call `autosaxs.processor`, pyFAI, or subtraction/integration ro
 - `calibrate`
 - `integrate`
 - `subtract`
-- `fit_distances`
+- **Analysis skills (right column; subset may run per file depending on selected mode, see §8):** `fit_distances`, `fit_dammif`, `fit_bodies`, `fit_sizes`, `fit_mixture`
 
 Preview-only reading of existing `.dat`/`.png` files for display is allowed.
 
@@ -67,7 +67,7 @@ All autosaxs skills invoked by this app MUST be run with caching **disabled**:
 - Python API form: pass `use_cache=False`
 - CLI form: pass `--no-cache`
 
-This applies to every run of: `integrate_proxy`, `calibrate`, `integrate`, `subtract`, `fit_distances`.
+This applies to every run of: `integrate_proxy`, `calibrate`, `integrate`, `subtract`, and every analysis skill listed in §2.2 (`fit_distances`, `fit_dammif`, `fit_bodies`, `fit_sizes`, `fit_mixture`).
 
 ### 2.4 Isolation + responsiveness (hard requirement)
 
@@ -102,7 +102,7 @@ The main window MUST include a top header/panel and a menu action analogous to `
   - stop watching the old directory
   - clear the incoming `.tif` queue
   - clear all live views (middle + right)
-  - reset session state to defaults (State A, modeling toggle off, no calibration, no buffer)
+  - reset session state to defaults (State A, analysis mode **Off**, no calibration, no buffer)
   - start watching the newly selected directory
   - apply the “only process new files” rule relative to the new watcher start time
 
@@ -116,7 +116,7 @@ The pipeline changes apply to **subsequent files** (no mandatory reprocessing of
 
 ---
 
-## 4. Processing state machine (A/B/C plus modeling toggle)
+## 4. Processing state machine (A/B/C plus analysis mode)
 
 ### 4.1 Definitions
 
@@ -124,6 +124,7 @@ The pipeline changes apply to **subsequent files** (no mandatory reprocessing of
 - **Incoming image:** a `.tif` that was detected as new and became stable.
 - **Per-file pipeline:** the exact sequence of skill invocations performed for one incoming image.
 - **Middle column view:** always reflects the **latest fully processed** incoming image (not “currently processing”).
+- **Analysis mode:** user choice in the right column, implemented as a **drop-down list**. The **first option is always `Off`** (default): no analysis skills run after integration/subtraction. Any other option selects a concrete analysis pipeline and UI (see §6.4 and §8).
 
 ### 4.2 State A — Default (no calibration, no buffer)
 
@@ -137,10 +138,11 @@ The pipeline changes apply to **subsequent files** (no mandatory reprocessing of
 - 2D image view for the incoming `.tif`.
 - 1D curve integrated in **pixel space** (proxy integration) as the main curve plot.
 
-**Right column modeling (required behavior):**
+**Right column analysis (required behavior):**
 
-- `fit_distances` is **never available** in State A.
-- The UI must show a clear “Modeling available after calibration” placeholder.
+- Analysis skills are **never run** in State A regardless of the drop-down selection.
+- The user MUST be allowed to **choose any analysis mode (including non-`Off`) before calibration**; the choice is **remembered** and applies automatically to **subsequent** files once State **B** or **C** is active (no need to re-select after calibrating).
+- While still in State A, the UI SHOULD show a clear note that analysis runs only after calibration (e.g. “Analysis runs after calibration”), without blocking or clearing the user’s mode choice.
 
 ### 4.3 State B — Calibrated (calibration set, no buffer)
 
@@ -150,18 +152,17 @@ The pipeline changes apply to **subsequent files** (no mandatory reprocessing of
 
 - Run `integrate` (using the calibrated integrator directory from the successful `calibrate` run).
 - Save `.dat` outputs under `averaged/` in the watch directory.
+- If analysis mode is **not** `Off`, append the skill sequence for that mode (§8) on the **latest integrated q-space curve** for this file.
 
 **Middle column display (required):**
 
 - 2D image view for the incoming `.tif`.
 - 1D curve in **q-space** \((q\ \mathrm{nm}^{-1})\) as the main curve plot.
 
-**Right column modeling (required behavior):**
+**Right column analysis (required behavior):**
 
-- By default, State B does not imply modeling; modeling is controlled by a toggle.
-- If modeling is enabled (State **BD**), run `fit_distances` on the latest integrated q-space curve (see §8) and display:
-  - fit overlay (experimental \(I(q)\) vs fitted)
-  - resulting \(p(r)\)
+- If analysis mode is `Off` (State **B**): show the mode selector and an idle / no-analysis state; do not run analysis skills.
+- If analysis mode is not `Off` (State **BD**): run the selected mode’s skills on the integrated curve (§8) and update the right column with that mode’s plots and viewers (fit comparison and mode-specific outputs).
 
 ### 4.4 State C — Calibrated + buffer set
 
@@ -174,6 +175,7 @@ The pipeline changes apply to **subsequent files** (no mandatory reprocessing of
   - sample = the newly integrated curve
   - buffer = the selected buffer curve
 - Save subtracted outputs under `subtracted/` in the watch directory.
+- If analysis mode is **not** `Off`, append the skill sequence for that mode (§8) on the **latest subtracted curve** for this file.
 
 **Middle column display (required):**
 
@@ -183,21 +185,21 @@ The pipeline changes apply to **subsequent files** (no mandatory reprocessing of
   1. **Left bottom:** sample curve + **scaled buffer curve used for subtraction**, plotted as **log \(I\) vs \(q\)**.
   2. **Right bottom:** subtracted curve, plotted as **log \(I\) vs \(q\)**.
 
-**Right column modeling (required behavior):**
+**Right column analysis (required behavior):**
 
-- By default, State C does not imply modeling; modeling is controlled by a toggle.
-- If modeling is enabled (State **CD**), run `fit_distances` on the **latest subtracted** curve (preferred input for modeling) and display the fit overlay and \(p(r)\).
+- If analysis mode is `Off` (State **C**): same as State **B** with `Off` — no analysis skills; idle state.
+- If analysis mode is not `Off` (State **CD**): run the selected mode’s skills on the **subtracted** curve (§8) and update the right column accordingly.
 
-### 4.5 Modeling toggle states (BD / CD)
+### 4.5 Analysis mode vs calibrated states (BD / CD)
 
-Modeling (`fit_distances`) can be enabled or disabled in calibrated states:
+In calibrated states, whether analysis runs is determined **only** by the drop-down:
 
-- **B**: calibrated integration only, modeling disabled
-- **BD**: calibrated integration + modeling enabled (`fit_distances` on integrated curve)
-- **C**: calibrated integration + subtraction enabled, modeling disabled
-- **CD**: calibrated integration + subtraction enabled + modeling enabled (`fit_distances` on subtracted curve)
+- **`Off`:** no analysis skills after `integrate` (State **B**) or after `integrate` + `subtract` (State **C**).
+- **Not `Off`:** analysis runs according to §8 on the same 1D input as above (**BD:** integrated q-space curve; **CD:** subtracted curve).
 
-**Invariant:** Modeling is never available in State A.
+**Invariant:** Analysis skills are never run in State A.
+
+**Default:** On app launch and after **change watch directory** (§3.2), analysis mode MUST reset to **`Off`**.
 
 ---
 
@@ -246,7 +248,7 @@ Use a three-column main window (a horizontal splitter) consistent with `guisaxs_
 
 - **Left:** parameters
 - **Middle:** live view
-- **Right:** modeling
+- **Right:** analysis (mode selector + mode-specific plots/viewers)
 
 ### 6.2 Left column — parameters (required sections)
 
@@ -292,15 +294,24 @@ The middle column is the “live dashboard” that updates after each fully proc
 - A queue view thin button
 - A log/status area is allowed, but the middle column must prioritize live visuals.
 
-### 6.4 Right column — modeling view
+### 6.4 Right column — analysis view
 
-Right column is dedicated to `fit_distances` outputs:
+The right column is driven by an **analysis mode** drop-down (**`Off` first**, default **`Off`**). Each option defines which skills run (when calibration allows; §4) and which widgets are shown. The column SHOULD reuse `guisaxs_skills`-style parameter panels and plots where equivalents already exist.
 
-- input parameters panel, similar to the panel for this skill in `guisaxs_skills`
-- latest modeling status (Idle/Running/Failed)
-- fit overlay plot
-- \(p(r)\) plot
-- optionally: key scalar outputs (e.g. \(D_\max\), \(R_g\)) if `fit_distances` provides them
+**Drop-down options (fixed order, exact user-visible labels):**
+
+1. **`Off`** — no analysis skills; idle / placeholder when uncalibrated; when calibrated, no post-integration analysis.
+2. **`Monodisperse analysis: p(r)`** — `fit_distances`; **fit comparison** + **\(p(r)\)**.
+3. **`Monodisperse analysis: DAM`** — `fit_distances` then `fit_dammif` (§8.3); **fit comparison** + **\(p(r)\)** + **interactive 3D** (§8.7).
+4. **`Monodisperse analysis: primitives`** — `fit_bodies` (optional **subset of body models**, default all; see §8.6); **experimental vs best-fit** \(I(q)\) comparison + **interactive 3D** of the **winning** shape only.
+5. **`Polydisperse analysis: d(r)`** — `fit_sizes`; **fit comparison** + **\(d(r)\)**.
+6. **`Polydisperse analysis: mixture`** — `fit_mixture`; **fit comparison** + **mixture** UI/plots as produced by the skill.
+
+**Common requirements:**
+
+- **Per-mode parameter sections** (show/hide or stack) matching the active option; when `Off`, parameters for analysis skills need not be shown. For **primitives**, include UI to pick a **subset** of body models (passed through to `fit_bodies`; default = all).
+- **Latest analysis status** (Idle/Running/Failed) for the active mode.
+- **Changing the selected mode** affects **only subsequent** incoming files after the change (§9.1); the UI MAY update immediately to the new layout, but MUST NOT re-run skills for already processed files.
 
 ---
 
@@ -330,26 +341,60 @@ The spec intentionally does not restate exact filename templates here; the imple
 
 ---
 
-## 8. Right column modeling: `fit_distances` contract
+## 8. Right column: analysis modes and skill contracts
 
-### 8.1 When to run
+### 8.1 When to run (input curve)
 
-- State A: do not run (never available).
-- State **BD**: run on the latest integrated q-space curve.
-- State **CD**: run on the latest subtracted curve.
+For **every** analysis mode except **`Off`**, the **same input rules** apply:
 
-### 8.2 Inputs and outputs
+- State A: **never** run analysis skills.
+- State **BD** (calibrated, no buffer, mode ≠ `Off`): run on the **latest integrated q-space** `.dat` for the current file.
+- State **CD** (calibrated + buffer, mode ≠ `Off`): run on the **latest subtracted** `.dat` for the current file.
 
-The modeling view must be driven exclusively by the outputs produced by the `fit_distances` skill (and any plots it returns/produces). The GUI must treat `fit_distances` as a black box and only display its artifacts.
+No mode in this spec uses a different input source than the above.
 
-### 8.3 Performance and queueing
+### 8.2 Black-box rule
 
-`fit_distances` may be slower than integration/subtraction. The implementation MUST choose one of:
+The GUI MUST treat each skill as a **black box**: display artifacts, logs, and plots produced by the skill (and standard autosaxs run metadata). It MUST NOT reimplement scientific logic in-process.
 
-- **Option 1 (simple, recommended):** run `fit_distances` inline as part of the per-file sequential pipeline, so the UI only advances when modeling is done.
-- **Option 2 (advanced):** maintain a separate sequential modeling queue that always processes the **latest available** curve (dropping intermediate modeling tasks) while integration/subtraction continues.
+### 8.3 Per-mode skill sequence and UI mapping
 
-**This spec defaults to Option 1** for determinism, unless a later performance requirement mandates Option 2.
+| Drop-down label | Skill(s) (in order) | Right-column content (minimum) |
+|-----------------|---------------------|--------------------------------|
+| `Off` | *(none)* | Mode selector + idle / placeholder |
+| `Monodisperse analysis: p(r)` | `fit_distances` | Fit comparison (\(I(q)\)); \(p(r)\) |
+| `Monodisperse analysis: DAM` | `fit_distances` → `fit_dammif` | Fit comparison; \(p(r)\); interactive 3D |
+| `Monodisperse analysis: primitives` | `fit_bodies` | Exp. vs **best** fit \(I(q)\); interactive 3D of **best** shape (same 3D widget as DAM; §8.7) |
+| `Polydisperse analysis: d(r)` | `fit_sizes` | Fit comparison; \(d(r)\) |
+| `Polydisperse analysis: mixture` | `fit_mixture` | Fit comparison; mixture |
+
+**DAM mode (chaining, hard requirement):** `fit_dammif` MUST consume the **GNOM result produced by `fit_distances`** in the same per-file pipeline (same logical run / outputs as defined by autosaxs conventions). If `fit_distances` **fails**, the pipeline MUST **abort** further analysis for that file (do not run `fit_dammif`). If `fit_dammif` fails, treat the file’s analysis as failed per §5.5; aborting the chain on the first failure is acceptable.
+
+### 8.4 Performance and queueing
+
+Analysis skills may be slower than integration/subtraction. The implementation MUST choose one of:
+
+- **Option 1 (simple, recommended):** run the selected mode’s skill sequence **inline** as part of the **per-file sequential** pipeline, so the queue worker does not start the next incoming image until the current file’s analysis (if any) has finished.
+- **Option 2 (advanced):** maintain a separate sequential analysis queue that always processes the **latest available** curve (dropping intermediate analysis tasks) while integration/subtraction continues.
+
+**This spec requires Option 1** for all modes for determinism. Users who need faster queue throughput SHOULD set analysis mode to **`Off`**. Option 2 remains a future option if performance requirements change.
+
+### 8.5 Failure policy within a mode
+
+For multi-step modes (e.g. DAM), failure of an earlier step implies later steps are not run for that file. Global per-file failure handling remains §5.5 (skip file, log, continue queue).
+
+### 8.6 `fit_bodies` — body-model subset (skill contract)
+
+The `fit_bodies` skill MUST accept an optional argument specifying which ATSAS **body** models to fit:
+
+- **Default:** `None` (or equivalent) means **all** supported models (the full canonical set used by the skill).
+- **Non-default:** a **subset** of model names (any non-empty subset of that canonical set). The liveview **primitives** mode MUST expose this as user-configurable parameters and pass them into the skill invocation.
+
+Canonical names are defined in code (`BODIES_SHAPES_LIST` in `repos/autosaxs/skill/fit_bodies.py`); the UI SHOULD list the same names for multi-select.
+
+### 8.7 Interactive 3D viewer (implementation requirement)
+
+Modes **DAM** and **primitives** require an **interactive 3D** view: the user can **rotate** the model and view it from **different angles**. The **same** 3D viewer component MUST be reused for **both** DAM and primitives (best-shape) so behavior and maintenance stay consistent. It MUST be distinct from existing **2D** curve / image viewers in `guisaxs_skills` (those remain valid for \(I(q)\), \(p(r)\), etc.).
 
 ---
 
@@ -357,7 +402,7 @@ The modeling view must be driven exclusively by the outputs produced by the `fit
 
 ### 9.1 No reprocessing by default
 
-Changing calibration or buffer during a session affects only **future** incoming files. The app does not automatically reprocess previously processed files or the current queue backlog.
+Changing **calibration**, **buffer**, or **analysis mode** (drop-down) during a session affects only **future** incoming files. The app does not automatically reprocess previously processed files or the current queue backlog.
 
 (A future enhancement may add explicit “Reprocess backlog from X” controls; not required.)
 

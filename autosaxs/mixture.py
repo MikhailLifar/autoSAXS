@@ -81,7 +81,8 @@ def _build_mixture_cmd(
     # For n_phases=1 this yields the midpoint.
     r_centers = np.linspace(r_min, r_max, n_phases + 2)[1:-1]
     # poly_init = 0.5 * (poly_min + poly_max)
-    poly_init = 130.0
+    # poly_init = 130.0
+    poly_init = 5.0
     lines = [
         "i                        !! init",
         "!!!!!!!!!!!!!!!!!!       !! init",

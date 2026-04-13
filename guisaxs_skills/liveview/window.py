@@ -7,17 +7,31 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QLabel, QMainWindow, QMessageBox, QSplitter, QVBoxLayout, QWidget
+from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..core.event_bus import EventBus
 from ..core.models import RunRequest
-from ..core.paths import latest_stderr_path
+from ..core.paths import latest_stderr_path, runs_dir
 from ..logic.runner_qprocess import RunOutcome, SkillRunner
 from .pipeline import LiveviewPipeline, LiveviewQueueStatus
 from .queue import FIFOQueue
+from .session_persistence import load_liveview_session_settings, save_liveview_session_settings
 from .state import LiveviewSessionState, LiveviewState
+from .workdir import save_last_watchdir, select_watchdir
 from .watcher import DirectoryWatcher, WatcherConfig
+from .logic.middle_from_stem import apply_middle_view_from_disk
+from .logic.right_from_stem import apply_right_outputs_from_disk
+from ..logic.path_display import contracted_path_label
 from .ui.left_panel import LiveviewLeftPanel, pick_calibration_curve_image_path
 from .ui.middle_panel import LiveviewMiddlePanel
 from .ui.right_panel import LiveviewRightPanel
@@ -28,6 +42,7 @@ class LiveviewMainWindow(QMainWindow):
         super().__init__()
         self._bus = bus
         self._state = LiveviewSessionState(watchdir=watchdir)
+        load_liveview_session_settings(self._state)
 
         self._queue = FIFOQueue()
         self._runner = SkillRunner(workdir=watchdir)
@@ -40,6 +55,7 @@ class LiveviewMainWindow(QMainWindow):
         self._pipeline.queue_status.connect(self._on_queue_status)
         self._pipeline.error.connect(self._on_error)
         self._pipeline.latest_artifacts.connect(self._on_latest_artifacts)
+        self._pipeline.session_file_completed.connect(self._on_session_file_completed)
 
         self.setWindowTitle("guisaxs-liveview")
 
@@ -59,9 +75,17 @@ class LiveviewMainWindow(QMainWindow):
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(6, 6, 6, 6)
-        self._watchdir_label = QLabel(f"Watchdir: {watchdir}")
+        wd_short, wd_full = contracted_path_label(watchdir)
+        self._watchdir_label = QLabel(wd_short)
+        self._watchdir_label.setToolTip(f"Watchdir\n{wd_full}")
         self._watchdir_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        layout.addWidget(self._watchdir_label)
+        top = QHBoxLayout()
+        top.addWidget(self._watchdir_label, 1)
+        self._change_watchdir_btn = QPushButton("Change watch folder…")
+        self._change_watchdir_btn.setToolTip("Same folder picker as guisaxs_skills working directory")
+        self._change_watchdir_btn.clicked.connect(self._on_change_watchdir)
+        top.addWidget(self._change_watchdir_btn, 0, Qt.AlignRight)
+        layout.addLayout(top)
         layout.addWidget(self._splitter, 1)
         self.setCentralWidget(container)
 
@@ -69,13 +93,44 @@ class LiveviewMainWindow(QMainWindow):
         self._watcher.start()
         self._wire_ui()
         self._last_2d_path: str = ""
+        self._history_index: int = 0
         self._watchdir_resolved = watchdir.resolve()
+        self._apply_loaded_session_to_ui()
+        self._refresh_history_chrome()
+
+    def _enforce_column_width_ratio(self) -> None:
+        """Keep left:middle:right at 1:3:1 (spec). Right panel children can request huge min widths; cap and setSizes."""
+        sp = self._splitter
+        total = int(sp.width())
+        if total < 320:
+            return
+        # Integer fifths for 1:3:1
+        unit = total // 5
+        left_sz = unit
+        right_sz = unit
+        mid_sz = total - left_sz - right_sz
+        if mid_sz < 200:
+            return
+        # Prevent wide child widgets from stealing horizontal space from the middle column
+        min_side = 240
+        max_side = max(min_side, left_sz)
+        self._left.setMaximumWidth(max_side)
+        self._right.setMaximumWidth(max_side)
         try:
-            self._splitter.setSizes([320, 900, 420])
+            sp.setSizes([left_sz, mid_sz, right_sz])
         except Exception:
             pass
 
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        QTimer.singleShot(0, self._enforce_column_width_ratio)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._enforce_column_width_ratio()
+
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._persist_session_settings()
         try:
             self._watcher.stop()
         except Exception:
@@ -94,8 +149,99 @@ class LiveviewMainWindow(QMainWindow):
         # Called from watchdog thread. Enqueue only; no Qt calls here.
         self._pipeline.enqueue(path=path, detected_at_monotonic=detected_at_monotonic)
 
+    def _middle_updates_follow_pipeline(self) -> bool:
+        hist = self._pipeline.session_processed_tiffs
+        n = len(hist)
+        if n == 0:
+            return True
+        return self._history_index == n - 1
+
+    def _refresh_history_chrome(self) -> None:
+        hist = list(self._pipeline.session_processed_tiffs)
+        n = len(hist)
+        if n == 0:
+            self._middle.set_history_nav_visible(False)
+            return
+        self._middle.set_history_nav_visible(True)
+        if self._history_index >= n:
+            self._history_index = n - 1
+        if self._history_index < 0:
+            self._history_index = 0
+        name = Path(hist[self._history_index]).name
+        self._middle.set_history_label(f"{self._history_index + 1} / {n} · {name}")
+        self._middle.set_history_prev_enabled(self._history_index > 0)
+        self._middle.set_history_next_enabled(self._history_index < n - 1)
+        self._middle.set_process_enabled(True)
+
+    def _on_session_file_completed(self, _path: str) -> None:
+        hist = self._pipeline.session_processed_tiffs
+        n = len(hist)
+        if n == 0:
+            self._refresh_history_chrome()
+            return
+        # Hist already includes the new path; user was "on live tail" iff they were at the previous last index.
+        was_at_previous_tail = n == 1 or self._history_index == n - 2
+        if was_at_previous_tail:
+            self._history_index = n - 1
+        self._refresh_history_chrome()
+
+    def _on_history_step(self, delta: int) -> None:
+        hist = list(self._pipeline.session_processed_tiffs)
+        n = len(hist)
+        if n == 0 or delta == 0:
+            return
+        self._history_index = max(0, min(n - 1, self._history_index + int(delta)))
+        self._refresh_history_chrome()
+        tiff_path = hist[self._history_index]
+        apply_middle_view_from_disk(
+            self._middle,
+            watchdir=self._watchdir_resolved,
+            tiff_path=tiff_path,
+            state=self._state,
+            subtract_options=self._load_subtract_yaml_options(),
+        )
+        tl = tiff_path.lower()
+        if tl.endswith((".tif", ".tiff")):
+            self._last_2d_path = tiff_path
+        self._refresh_right_outputs_for_session_history()
+
+    def _refresh_right_outputs_for_session_history(self) -> None:
+        hist = list(self._pipeline.session_processed_tiffs)
+        if not hist:
+            # No completed session TIFFs yet: keep whatever live pipeline or manual runs showed.
+            self._right.sync_modeling_ui_to_session_state()
+            return
+        idx = max(0, min(self._history_index, len(hist) - 1))
+        stem = Path(hist[idx]).stem
+        apply_right_outputs_from_disk(
+            self._right,
+            watchdir=self._watchdir_resolved,
+            tiff_stem=stem,
+            mode=self._state.analysis_mode,
+        )
+        self._right.sync_modeling_ui_to_session_state()
+
+    def _on_analysis_mode_changed(self, _mode: object) -> None:
+        self._refresh_right_outputs_for_session_history()
+
+    def _on_process_history_file_requested(self) -> None:
+        hist = list(self._pipeline.session_processed_tiffs)
+        if not hist:
+            return
+        idx = max(0, min(self._history_index, len(hist) - 1))
+        path = hist[idx]
+        try:
+            key = str(Path(path).resolve())
+        except Exception:
+            key = path.strip()
+        if not key:
+            return
+        self._pipeline.enqueue(path=key, detected_at_monotonic=time.monotonic())
+
     def _on_queue_status(self, status: LiveviewQueueStatus) -> None:
         self._middle.set_queue_status(status)
+        if not self._middle_updates_follow_pipeline():
+            return
         # Update 2D view from current/last path.
         p = status.current_path or status.last_processed_path
         if isinstance(p, str) and p.lower().endswith((".tif", ".tiff")):
@@ -108,14 +254,134 @@ class LiveviewMainWindow(QMainWindow):
         # TODO: surface in UI.
         _ = text
 
+    def _persist_session_settings(self) -> None:
+        save_liveview_session_settings(self._state)
+
+    def _apply_loaded_session_to_ui(self) -> None:
+        self._left.sync_buffer_preview_from_state()
+        rp = self._state.calibration_refined_yml_path
+        self._left.set_calibration_params_from_path(
+            str(rp) if rp is not None and rp.is_file() else None
+        )
+        cpp = self._state.calibration_curve_plot_path
+        if cpp is not None and cpp.is_file():
+            self._left.set_calibration_preview_path(str(cpp))
+        else:
+            self._left.set_calibration_preview_path("")
+        st = self._state.current_state()
+        if st in (LiveviewState.C, LiveviewState.CD):
+            self._middle.show_subtraction_placeholder()
+
+    def _on_change_watchdir(self) -> None:
+        if self._runner.is_running():
+            QMessageBox.warning(
+                self,
+                "Watch folder",
+                "A skill is still running. Wait for it to finish, then change the watch folder.",
+            )
+            return
+        cur = str(self._watchdir_resolved)
+        chosen = select_watchdir(parent=self, initial_directory=cur)
+        if not chosen:
+            return
+        new_p = Path(chosen).resolve()
+        if new_p == self._watchdir_resolved:
+            return
+        self._switch_watchdir(new_p)
+
+    def _switch_watchdir(self, new_p: Path) -> None:
+        self._persist_session_settings()
+        self._runner.cancel()
+        if not self._runner.wait_until_idle():
+            QMessageBox.warning(
+                self,
+                "Watch folder",
+                "The running subprocess did not stop in time. Try again after it finishes.",
+            )
+            return
+        try:
+            self._watcher.stop()
+        except Exception:
+            pass
+        try:
+            self._pipeline.stop()
+            self._pipeline.reset()
+        except Exception:
+            pass
+
+        self._state.reset_for_new_watchdir(new_p)
+        load_liveview_session_settings(self._state)
+        self._right.reload_configs_from_watchdir()
+        try:
+            self._runner.set_workdir(new_p)
+        except RuntimeError:
+            QMessageBox.warning(self, "Watch folder", "Cannot switch while a skill is running.")
+            return
+
+        runs_dir(self._state.watchdir).mkdir(parents=True, exist_ok=True)
+        self._watcher.restart_at(new_p)
+        self._pipeline.start()
+        self._watchdir_resolved = new_p.resolve()
+        wd_short, wd_full = contracted_path_label(new_p)
+        self._watchdir_label.setText(wd_short)
+        self._watchdir_label.setToolTip(f"Watchdir\n{wd_full}")
+        save_last_watchdir(str(new_p))
+        self._last_2d_path = ""
+        self._history_index = 0
+        self._right.clear_output_previews()
+        self._right.sync_modeling_ui_to_session_state()
+        self._apply_loaded_session_to_ui()
+        self._refresh_history_chrome()
+
+    def _refresh_middle_for_current_state(self) -> None:
+        st = self._state.current_state()
+        if st in (LiveviewState.C, LiveviewState.CD):
+            self._middle.show_subtraction_placeholder()
+        else:
+            self._middle.show_curve("", x_label="px" if st == LiveviewState.A else "q (nm$^{-1}$)")
+        self._middle.show_image("")
+        self._last_2d_path = ""
+
+    def _on_reset_calibration(self) -> None:
+        self._state.reset_calibration_to_state_a()
+        self._persist_session_settings()
+        self._left.set_calibration_preview_path("")
+        self._left.set_calibration_params_from_path(None)
+        self._left.sync_buffer_preview_from_state()
+        self._left.reset_calibration_wizard_form()
+        self._right.force_analysis_mode_off()
+        self._right.clear_output_previews()
+        self._right.sync_modeling_ui_to_session_state()
+        self._refresh_middle_for_current_state()
+        self._refresh_right_outputs_for_session_history()
+
+    def _on_reset_buffer(self) -> None:
+        self._state.reset_buffer_to_state_b()
+        self._persist_session_settings()
+        self._left.sync_buffer_preview_from_state()
+        self._left.reset_buffer_wizard_form()
+        self._right.force_analysis_mode_off()
+        self._right.clear_output_previews()
+        self._right.sync_modeling_ui_to_session_state()
+        self._refresh_middle_for_current_state()
+        self._refresh_right_outputs_for_session_history()
+
     def _wire_ui(self) -> None:
         self._left.calibration_changed.connect(self._on_run_calibration)
         self._left.calibration_cancel_requested.connect(self._on_cancel_calibration)
+        self._left.calibration_reset_requested.connect(self._on_reset_calibration)
+        self._left.buffer_reset_requested.connect(self._on_reset_buffer)
         self._left.subtract_config_changed.connect(self._on_subtract_config_changed)
         self._right.modeling_enabled_changed.connect(self._on_modeling_enabled_changed)
         self._right.fit_distances_run_requested.connect(self._on_fit_distances_run)
+        self._right.fit_sizes_run_requested.connect(self._on_fit_sizes_run)
+        self._right.fit_mixture_run_requested.connect(self._on_fit_mixture_run)
+        self._right.fit_bodies_run_requested.connect(self._on_fit_bodies_run)
         self._right.fit_distances_cancel_requested.connect(self._on_cancel_calibration)
         self._middle.tiff_files_dropped.connect(self._on_tiff_files_dropped)
+        self._middle.history_step.connect(self._on_history_step)
+        self._middle.process_history_file_requested.connect(self._on_process_history_file_requested)
+        self._right.analysis_mode_changed.connect(self._on_analysis_mode_changed)
         self._runner.started.connect(self._on_runner_started)
         self._runner.finished.connect(self._on_runner_finished)
 
@@ -169,6 +435,7 @@ class LiveviewMainWindow(QMainWindow):
             pass
 
     def _on_subtract_config_changed(self) -> None:
+        self._persist_session_settings()
         self._right.sync_modeling_ui_to_session_state()
         st = self._state.current_state()
         if st in (LiveviewState.C, LiveviewState.CD):
@@ -237,6 +504,110 @@ class LiveviewMainWindow(QMainWindow):
             return
         self._runner.start(req)
 
+    def _on_fit_sizes_run(self) -> None:
+        if self._runner.is_running():
+            QMessageBox.warning(
+                self,
+                "Busy",
+                "Another skill is still running. Wait for it to finish, then try again.",
+            )
+            return
+        wd = self._watchdir_resolved
+        has_prof = self._right.fit_sizes_wizard_has_existing_profile_file(wd)
+        try:
+            self._right.save_fit_sizes_conf_from_open_wizard(enable_modeling=True)
+            self._right.sync_modeling_ui_to_session_state()
+            if not has_prof:
+                return
+            req = self._right.build_fit_sizes_request_from_wizard()
+            if not self._fit_distances_profile_file_ok(req):
+                QMessageBox.warning(
+                    self,
+                    "fit_sizes",
+                    "The profile path is not an existing file.",
+                )
+                return
+            opts = dict(req.options)
+            opts.pop("use_cache", None)
+            od = opts.get("output_dir", "")
+            opts["output_dir"] = (
+                self._resolve_under_watchdir(str(od))
+                if (isinstance(od, str) and od.strip())
+                else str((self._watchdir_resolved / "fit_sizes").resolve())
+            )
+            opts["use_cache"] = False
+            positional: list[str] = []
+            for p in req.positional:
+                raw = (p or "").strip()
+                if "," in raw:
+                    positional.append(raw)
+                else:
+                    positional.append(self._resolve_under_watchdir(raw))
+            req = RunRequest(skill_name=req.skill_name, positional=positional, options=opts)
+        except Exception as e:
+            QMessageBox.critical(self, "fit_sizes", str(e))
+            return
+        self._runner.start(req)
+
+    def _on_fit_mixture_run(self) -> None:
+        if self._runner.is_running():
+            QMessageBox.warning(
+                self,
+                "Busy",
+                "Another skill is still running. Wait for it to finish, then try again.",
+            )
+            return
+        wd = self._watchdir_resolved
+        has_prof = self._right.fit_mixture_wizard_has_existing_profile_file(wd)
+        try:
+            self._right.save_fit_mixture_conf_from_open_wizard(enable_modeling=True)
+            self._right.sync_modeling_ui_to_session_state()
+            if not has_prof:
+                return
+            req = self._right.build_fit_mixture_request_from_wizard()
+            if not self._fit_distances_profile_file_ok(req):
+                QMessageBox.warning(
+                    self,
+                    "fit_mixture",
+                    "The profile path is not an existing file.",
+                )
+                return
+            opts = dict(req.options)
+            opts.pop("use_cache", None)
+            od = opts.get("output_dir", "")
+            opts["output_dir"] = (
+                self._resolve_under_watchdir(str(od))
+                if (isinstance(od, str) and od.strip())
+                else str((self._watchdir_resolved / "mixture").resolve())
+            )
+            opts["use_cache"] = False
+            positional: list[str] = []
+            for p in req.positional:
+                raw = (p or "").strip()
+                if "," in raw:
+                    positional.append(raw)
+                else:
+                    positional.append(self._resolve_under_watchdir(raw))
+            req = RunRequest(skill_name=req.skill_name, positional=positional, options=opts)
+        except Exception as e:
+            QMessageBox.critical(self, "fit_mixture", str(e))
+            return
+        self._runner.start(req)
+
+    def _on_fit_bodies_run(self) -> None:
+        if self._runner.is_running():
+            QMessageBox.warning(
+                self,
+                "Busy",
+                "Another skill is still running. Wait for it to finish, then try again.",
+            )
+            return
+        try:
+            self._right.save_fit_bodies_conf_from_open_wizard(enable_modeling=True)
+            self._right.sync_modeling_ui_to_session_state()
+        except Exception as e:
+            QMessageBox.critical(self, "fit_bodies", str(e))
+
     def _sync_last_integrated_from_result(self, result: dict) -> None:
         integ = result.get("integrated_1d")
         path_str: Optional[str] = None
@@ -266,11 +637,9 @@ class LiveviewMainWindow(QMainWindow):
                 self._state.last_subtracted_dat_path = p
 
     def _load_subtract_yaml_options(self) -> Dict[str, Any]:
-        p = self._state.subtract_conf_path
-        if p is None or not p.is_file():
-            return {}
+        # Subtract options are stored in session state (not written to disk).
         try:
-            data = yaml.safe_load(p.read_text(encoding="utf-8", errors="replace"))
+            data = self._state.subtract_options
             if isinstance(data, dict):
                 return {str(k): v for k, v in data.items()}
         except Exception:
@@ -289,42 +658,39 @@ class LiveviewMainWindow(QMainWindow):
         try:
             st = self._state.current_state()
 
-            # Middle: §4.4 — States C/CD use two bottom plots (sample+buffer | subtracted), not a single integrated plot.
-            if st in (LiveviewState.C, LiveviewState.CD):
-                sub = result.get("subtracted_1d")
-                sub_path = sub.strip() if isinstance(sub, str) else ""
-                if sub_path and os.path.isfile(sub_path):
-                    samp = self._state.last_integrated_dat_path
-                    buf = self._state.buffer_dat_path
-                    self._middle.show_subtraction_views(
-                        sample_dat=str(samp) if samp is not None and samp.is_file() else "",
-                        buffer_dat=str(buf) if buf is not None and buf.is_file() else "",
-                        subtracted_dat=sub_path,
-                        subtract_options=self._load_subtract_yaml_options(),
-                    )
-                    return
-                integ = result.get("integrated_1d")
-                has_integ = (isinstance(integ, str) and integ.strip()) or (
-                    isinstance(integ, list) and integ and isinstance(integ[-1], str) and integ[-1].strip()
-                )
-                if has_integ:
-                    self._middle.show_subtraction_placeholder()
-                return
+            if self._middle_updates_follow_pipeline():
+                # Middle: §4.4 — States C/CD use two bottom plots (sample+buffer | subtracted), not a single integrated plot.
+                if st in (LiveviewState.C, LiveviewState.CD):
+                    sub = result.get("subtracted_1d")
+                    sub_path = sub.strip() if isinstance(sub, str) else ""
+                    if sub_path and os.path.isfile(sub_path):
+                        samp = self._state.last_integrated_dat_path
+                        buf = self._state.buffer_dat_path
+                        self._middle.show_subtraction_views(
+                            sample_dat=str(samp) if samp is not None and samp.is_file() else "",
+                            buffer_dat=str(buf) if buf is not None and buf.is_file() else "",
+                            subtracted_dat=sub_path,
+                            subtract_options=self._load_subtract_yaml_options(),
+                        )
+                    else:
+                        integ = result.get("integrated_1d")
+                        has_integ = (isinstance(integ, str) and integ.strip()) or (
+                            isinstance(integ, list) and integ and isinstance(integ[-1], str) and integ[-1].strip()
+                        )
+                        if has_integ:
+                            self._middle.show_subtraction_placeholder()
+                else:
+                    # States A, B, BD — single 2D + single 1D curve.
+                    integ = result.get("integrated_1d")
+                    if isinstance(integ, list) and integ and isinstance(integ[-1], str):
+                        xlab = "px" if st == LiveviewState.A else "q (nm$^{-1}$)"
+                        self._middle.show_curve(integ[-1], x_label=xlab)
+                    elif isinstance(integ, str) and integ:
+                        xlab = "px" if st == LiveviewState.A else "q (nm$^{-1}$)"
+                        self._middle.show_curve(integ, x_label=xlab)
 
-            # States A, B, BD — single 2D + single 1D curve.
-            integ = result.get("integrated_1d")
-            if isinstance(integ, list) and integ and isinstance(integ[-1], str):
-                xlab = "px" if st == LiveviewState.A else "q (nm$^{-1}$)"
-                self._middle.show_curve(integ[-1], x_label=xlab)
-            elif isinstance(integ, str) and integ:
-                xlab = "px" if st == LiveviewState.A else "q (nm$^{-1}$)"
-                self._middle.show_curve(integ, x_label=xlab)
-
-            # Right: fit_distances plots.
-            fit_png = self._norm_artifact_path(result.get("fit_vs_exp_png_path"))
-            pr_png = self._norm_artifact_path(result.get("best_pr_png_path"))
-            if fit_png or pr_png:
-                self._right.show_fit_outputs(fit_png=fit_png, pr_png=pr_png)
+            if self._middle_updates_follow_pipeline():
+                self._right.ingest_skill_result(result)
         finally:
             self._right.sync_modeling_ui_to_session_state()
 
@@ -347,7 +713,14 @@ class LiveviewMainWindow(QMainWindow):
         self._left.set_calibration_running(False)
         self._right.set_fit_distances_running(False)
         if outcome.request is not None and not outcome.success:
-            if outcome.request.skill_name in ("calibrate", "fit_distances"):
+            if outcome.request.skill_name in (
+                "calibrate",
+                "fit_distances",
+                "fit_dammif",
+                "fit_bodies",
+                "fit_sizes",
+                "fit_mixture",
+            ):
                 detail = ""
                 try:
                     sp = latest_stderr_path(self._watchdir_resolved)
@@ -367,12 +740,33 @@ class LiveviewMainWindow(QMainWindow):
                 integ_dir = outcome.result.get("integrator_dir")
                 if isinstance(integ_dir, str) and integ_dir.strip():
                     self._state.integrator_dir = Path(integ_dir.strip())
+                refined_s = outcome.result.get("refined_path")
+                rpath: Optional[Path] = None
+                if isinstance(refined_s, str) and refined_s.strip():
+                    rp = Path(refined_s.strip())
+                    if rp.is_file():
+                        rpath = rp.resolve()
+                if rpath is None and self._state.integrator_dir is not None:
+                    cand = self._state.integrator_dir.parent / "refined.yml"
+                    if cand.is_file():
+                        rpath = cand.resolve()
+                self._state.calibration_refined_yml_path = rpath
+                self._left.set_calibration_params_from_path(str(rpath) if rpath is not None else None)
                 img = pick_calibration_curve_image_path(outcome.result)
                 if img:
+                    self._state.calibration_curve_plot_path = Path(img)
                     self._left.set_calibration_preview_path(img)
-            elif outcome.request.skill_name == "fit_distances":
-                fit_png = self._norm_artifact_path(outcome.result.get("fit_vs_exp_png_path"))
-                pr_png = self._norm_artifact_path(outcome.result.get("best_pr_png_path"))
-                self._right.show_fit_outputs(fit_png=fit_png, pr_png=pr_png)
+                else:
+                    self._state.calibration_curve_plot_path = None
+                    self._left.set_calibration_preview_path("")
+                self._persist_session_settings()
+            elif outcome.request.skill_name in (
+                "fit_distances",
+                "fit_dammif",
+                "fit_bodies",
+                "fit_sizes",
+                "fit_mixture",
+            ):
+                self._right.ingest_skill_result(outcome.result)
         self._right.sync_modeling_ui_to_session_state()
 

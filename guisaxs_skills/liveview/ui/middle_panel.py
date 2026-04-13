@@ -10,12 +10,15 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QProgressBar,
+    QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from ...ui.preview_panel import ImageViewerDialog, open_image_viewer
 from ..pipeline import LiveviewQueueStatus
+from ...logic.path_display import contracted_path_label
 from .plots import (
     DatCurveViewerDialog,
     DropTiffImageCanvas,
@@ -27,6 +30,8 @@ from .plots import (
 
 class LiveviewMiddlePanel(QWidget):
     tiff_files_dropped = pyqtSignal(object)  # list[str]
+    history_step = pyqtSignal(int)  # -1 = older, +1 = newer
+    process_history_file_requested = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -37,14 +42,39 @@ class LiveviewMiddlePanel(QWidget):
         self._compare_buffer_path = ""
         self._sub_subtract_opts: Dict[str, Any] = {}
 
-        self._group_img = QGroupBox("Latest image (2D) — drop .tif here")
+        self._nav_frame = QWidget()
+        nav_lay = QHBoxLayout(self._nav_frame)
+        nav_lay.setContentsMargins(0, 0, 0, 4)
+        self._btn_hist_prev = QPushButton("<")
+        self._btn_hist_prev.setFixedWidth(40)
+        self._btn_hist_prev.setToolTip("Previous processed file (session)")
+        self._btn_hist_prev.clicked.connect(lambda: self.history_step.emit(-1))
+        self._btn_hist_next = QPushButton(">")
+        self._btn_hist_next.setFixedWidth(40)
+        self._btn_hist_next.setToolTip("Next processed file (session)")
+        self._btn_hist_next.clicked.connect(lambda: self.history_step.emit(1))
+        self._btn_process = QPushButton("Process")
+        self._btn_process.setToolTip("Enqueue the selected file for the live pipeline (same as a new upload)")
+        self._btn_process.clicked.connect(self.process_history_file_requested.emit)
+        self._history_label = QLabel("")
+        self._history_label.setWordWrap(True)
+        self._history_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        nav_lay.addWidget(self._btn_hist_prev)
+        nav_lay.addWidget(self._btn_hist_next)
+        nav_lay.addWidget(self._btn_process)
+        nav_lay.addWidget(self._history_label, 1)
+        self._nav_frame.setVisible(False)
+        self._btn_hist_prev.setEnabled(False)
+        self._btn_hist_next.setEnabled(False)
+
+        self._group_img = QGroupBox("2D")
         self._img = DropTiffImageCanvas()
         self._img.tiff_files_dropped.connect(self.tiff_files_dropped.emit)
         il = QVBoxLayout(self._group_img)
         il.addWidget(self._img)
 
         # States A / B / BD: single 1D curve (proxy or integrated q-space).
-        self._group_main = QGroupBox("Latest curve")
+        self._group_main = QGroupBox("1D")
         self._main_plot = LogCurvePlot()
         gl = QVBoxLayout(self._group_main)
         gl.addWidget(self._main_plot)
@@ -55,11 +85,11 @@ class LiveviewMiddlePanel(QWidget):
         sub_outer.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
         left_col = QVBoxLayout()
-        left_col.addWidget(QLabel("Sample + scaled buffer (log I vs q)"))
+        left_col.addWidget(QLabel("S + buffer"))
         self._compare_plot = LogCurvePlot()
         left_col.addWidget(self._compare_plot, 1)
         right_col = QVBoxLayout()
-        right_col.addWidget(QLabel("Subtracted"))
+        right_col.addWidget(QLabel("Sub"))
         self._subtracted_plot = LogCurvePlot()
         right_col.addWidget(self._subtracted_plot, 1)
         row.addLayout(left_col, 1)
@@ -69,7 +99,7 @@ class LiveviewMiddlePanel(QWidget):
 
         self._status_frame = QFrame()
         self._status_frame.setFrameShape(QFrame.StyledPanel)
-        self._status_line = QLabel("Idle — no images in queue")
+        self._status_line = QLabel("Idle")
         self._status_line.setWordWrap(True)
         self._current_line = QLabel("")
         self._current_line.setWordWrap(True)
@@ -87,6 +117,7 @@ class LiveviewMiddlePanel(QWidget):
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._nav_frame, 0)
         lay.addWidget(self._group_img, 2)
         lay.addWidget(self._group_main, 1)
         lay.addWidget(self._group_sub, 1)
@@ -102,21 +133,39 @@ class LiveviewMiddlePanel(QWidget):
         self._curve_preview_dialog: DatCurveViewerDialog | None = None
         self._curve_x_label = "q (nm$^{-1}$)"
 
+    def set_history_nav_visible(self, visible: bool) -> None:
+        self._nav_frame.setVisible(bool(visible))
+
+    def set_history_label(self, text: str) -> None:
+        self._history_label.setText(text or "")
+
+    def set_history_prev_enabled(self, enabled: bool) -> None:
+        self._btn_hist_prev.setEnabled(bool(enabled))
+
+    def set_history_next_enabled(self, enabled: bool) -> None:
+        self._btn_hist_next.setEnabled(bool(enabled))
+
+    def set_process_enabled(self, enabled: bool) -> None:
+        self._btn_process.setEnabled(bool(enabled))
+
     def set_queue_status(self, status: LiveviewQueueStatus) -> None:
         rem = max(0, int(status.remaining))
         if rem == 0:
-            self._status_line.setText("Idle — no images in queue")
+            self._status_line.setText("Idle")
             self._current_line.setText("")
+            self._current_line.setToolTip("")
             self._queue_bar.setRange(0, 1)
             self._queue_bar.setValue(0)
             return
-        word = "image" if rem == 1 else "images"
-        self._status_line.setText(f"{rem} {word} remaining to process")
+        self._status_line.setText(f"Queue · {rem}")
         cur = (status.current_path or "").strip()
         if cur:
-            self._current_line.setText(f"Now: {Path(cur).name}")
+            c_short, c_full = contracted_path_label(cur)
+            self._current_line.setText(c_short)
+            self._current_line.setToolTip(c_full)
         else:
             self._current_line.setText("")
+            self._current_line.setToolTip("")
         self._queue_bar.setRange(0, 0)
 
     @staticmethod
@@ -203,6 +252,7 @@ class LiveviewMiddlePanel(QWidget):
             self._compare_plot.plot_sample_and_scaled_buffer(
                 self._compare_sample_path,
                 self._compare_buffer_path,
+                subtracted_path=self._current_subtracted_path,
                 subtract_options=self._sub_subtract_opts,
             )
         else:
@@ -223,7 +273,12 @@ class LiveviewMiddlePanel(QWidget):
         if not self._current_image_path:
             return
         self._store_raster_viewer(
-            open_image_viewer(self, self._current_image_path, reuse=self._raster_viewer_dialog())
+            open_image_viewer(
+                self,
+                self._current_image_path,
+                reuse=self._raster_viewer_dialog(),
+                full_path_tooltip=self._current_image_path,
+            )
         )
 
     def _open_1d_viewer(self) -> None:
@@ -243,6 +298,7 @@ class LiveviewMiddlePanel(QWidget):
             self,
             self._compare_sample_path,
             self._compare_buffer_path,
+            subtracted_path=self._current_subtracted_path,
             subtract_options=self._sub_subtract_opts,
             reuse=self._curve_viewer_dialog(),
         )
@@ -250,7 +306,8 @@ class LiveviewMiddlePanel(QWidget):
     def _open_subtracted_viewer(self) -> None:
         if not self._current_subtracted_path:
             return
-        subtitled = f"Subtracted — {Path(self._current_subtracted_path).name}"
+        sub_short, _sub_full = contracted_path_label(self._current_subtracted_path)
+        subtitled = f"Sub — {sub_short}"
         open_dat_curve_dialog(
             self,
             self._current_subtracted_path,

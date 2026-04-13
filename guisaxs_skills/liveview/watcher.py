@@ -98,3 +98,10 @@ class DirectoryWatcher:
         except Exception:
             pass
 
+    def restart_at(self, directory: Path) -> None:
+        """Stop (if running), point at ``directory``, reset “new file” baseline, and watch again."""
+        self.stop()
+        self._directory = directory.expanduser().resolve()
+        self._started_at_epoch = time.time()
+        self.start()
+

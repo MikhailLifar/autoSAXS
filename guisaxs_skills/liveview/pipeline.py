@@ -3,17 +3,22 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, List, Optional, Tuple
 
 import yaml
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
 from ..core.models import RunRequest
-from ..core.paths import latest_request_path, latest_result_path, latest_stderr_path, latest_stdout_path, runs_dir
+from ..core.paths import runs_dir
 from ..logic.runner_qprocess import RunOutcome, SkillRunner
 from .queue import FIFOQueue, QueueItem
 from .stability import StabilityConfig, StabilityTracker
-from .state import LiveviewSessionState, LiveviewState
+from .state import (
+    AnalysisMode,
+    DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES,
+    LiveviewSessionState,
+    LiveviewState,
+)
 
 
 @dataclass(frozen=True)
@@ -30,6 +35,8 @@ class LiveviewPipeline(QObject):
     queue_status = pyqtSignal(object)  # LiveviewQueueStatus
     latest_artifacts = pyqtSignal(object)  # dict (skill result)
     error = pyqtSignal(str)
+    # Emitted once when a TIFF finishes the per-file pipeline successfully (no skill re-run on browse).
+    session_file_completed = pyqtSignal(str)
 
     def __init__(self, *, state: LiveviewSessionState, runner: SkillRunner, queue: FIFOQueue) -> None:
         super().__init__()
@@ -49,10 +56,14 @@ class LiveviewPipeline(QObject):
         self._last_processed: str = ""
         self._durations: list[float] = []
 
-        self._pending_step: Optional[str] = None  # integrate_proxy|integrate|subtract|fit_distances
-        self._pending_run_dir: Optional[Path] = None
+        self._pending_step: Optional[str] = None
         self._latest_integrated_dat: Optional[str] = None
         self._latest_subtracted_dat: Optional[str] = None
+        # After fit_distances succeeds, run fit_dammif (DAM mode) or fit_bodies (primitives mode).
+        self._chain_fit_dammif_after: bool = False
+        self._chain_fit_bodies_after: bool = False
+        self._analysis_profile_abs: Optional[str] = None
+        self._session_tiff_history: List[str] = []
 
         self._runner.finished.connect(self._on_skill_finished)
 
@@ -66,6 +77,32 @@ class LiveviewPipeline(QObject):
         self._current_item = None
         self._current_stability = None
         self._pending_step = None
+        self._chain_fit_dammif_after = False
+        self._chain_fit_bodies_after = False
+        self._analysis_profile_abs = None
+
+    @property
+    def session_processed_tiffs(self) -> tuple[str, ...]:
+        return tuple(self._session_tiff_history)
+
+    @staticmethod
+    def _is_tiff_path(path: str) -> bool:
+        pl = path.lower()
+        return pl.endswith(".tif") or pl.endswith(".tiff")
+
+    def _append_session_tiff(self, path: str) -> None:
+        try:
+            key = str(Path(path).resolve())
+        except Exception:
+            key = path.strip()
+        if not key or not self._is_tiff_path(key):
+            return
+        try:
+            if key in self._session_tiff_history:
+                self._session_tiff_history.remove(key)
+            self._session_tiff_history.append(key)
+        except Exception:
+            return
 
     def reset(self) -> None:
         self._queue.clear()
@@ -76,6 +113,10 @@ class LiveviewPipeline(QObject):
         self._latest_subtracted_dat = None
         self._last_processed = ""
         self._durations.clear()
+        self._chain_fit_dammif_after = False
+        self._chain_fit_bodies_after = False
+        self._analysis_profile_abs = None
+        self._session_tiff_history.clear()
 
     def enqueue(self, *, path: str, detected_at_monotonic: float) -> None:
         cur = self._current_item.path if self._current_item else None
@@ -114,6 +155,9 @@ class LiveviewPipeline(QObject):
             self._pending_step = None
             self._latest_integrated_dat = None
             self._latest_subtracted_dat = None
+            self._chain_fit_dammif_after = False
+            self._chain_fit_bodies_after = False
+            self._analysis_profile_abs = None
 
         # Wait until current file is stable.
         if self._current_stability is not None:
@@ -145,7 +189,6 @@ class LiveviewPipeline(QObject):
         outdir = self._state.watchdir / "averaged_proxy"
         outdir.mkdir(parents=True, exist_ok=True)
         self._pending_step = "integrate_proxy"
-        self._pending_run_dir = self._new_run_dir(skill_name="integrate_proxy")
         self._runner.start(
             RunRequest(
                 skill_name="integrate_proxy",
@@ -163,7 +206,6 @@ class LiveviewPipeline(QObject):
         outdir = self._state.watchdir / "averaged"
         outdir.mkdir(parents=True, exist_ok=True)
         self._pending_step = "integrate"
-        self._pending_run_dir = self._new_run_dir(skill_name="integrate")
         self._runner.start(
             RunRequest(
                 skill_name="integrate",
@@ -174,16 +216,15 @@ class LiveviewPipeline(QObject):
 
     def _start_subtract(self) -> None:
         assert self._latest_integrated_dat is not None
-        if self._state.buffer_dat_path is None or self._state.subtract_conf_path is None:
+        if self._state.buffer_dat_path is None or self._state.subtract_options is None:
             self.error.emit("Cannot subtract: buffer or subtract config is not set.")
             self._finish_current(False)
             return
         outdir = self._state.watchdir / "subtracted"
         outdir.mkdir(parents=True, exist_ok=True)
         self._pending_step = "subtract"
-        self._pending_run_dir = self._new_run_dir(skill_name="subtract")
         opts = {"output_dir": str(outdir), "use_cache": False}
-        opts.update(self._load_yaml_options(self._state.subtract_conf_path))
+        opts.update(dict(self._state.subtract_options or {}))
         self._runner.start(
             RunRequest(
                 skill_name="subtract",
@@ -192,21 +233,48 @@ class LiveviewPipeline(QObject):
             )
         )
 
-    def _start_fit_distances(self, *, profile_path: str) -> None:
+    def _resolve_profile_abs(self, profile_path: str) -> str:
+        pp = Path(profile_path).expanduser()
+        return str(pp.resolve() if pp.is_absolute() else (self._state.watchdir / pp).resolve())
+
+    def _start_analysis_for_profile(self, profile_path: str) -> None:
+        mode = self._state.analysis_mode
+        if not mode.is_active():
+            self._finish_current(True)
+            return
+        profile_abs = self._resolve_profile_abs(profile_path)
+        self._analysis_profile_abs = profile_abs
+        self._chain_fit_dammif_after = False
+        if mode == AnalysisMode.MONODISPERSE_PR:
+            self._start_fit_distances(profile_abs=profile_abs)
+            return
+        if mode == AnalysisMode.MONODISPERSE_DAM:
+            self._chain_fit_dammif_after = True
+            self._start_fit_distances(profile_abs=profile_abs)
+            return
+        if mode == AnalysisMode.MONODISPERSE_BODIES:
+            self._chain_fit_bodies_after = True
+            self._start_fit_distances(profile_abs=profile_abs)
+            return
+        if mode == AnalysisMode.POLYDISPERSE_DR:
+            self._start_fit_sizes(profile_abs=profile_abs)
+            return
+        if mode == AnalysisMode.POLYDISPERSE_MIXTURE:
+            self._start_fit_mixture(profile_abs=profile_abs)
+            return
+        self._finish_current(True)
+
+    def _start_fit_distances(self, *, profile_abs: str) -> None:
         outdir = self._state.watchdir / "fit_distances"
         outdir.mkdir(parents=True, exist_ok=True)
         self._pending_step = "fit_distances"
-        self._pending_run_dir = self._new_run_dir(skill_name="fit_distances")
         opts: dict = {}
         if self._state.fit_distances_conf_path is not None:
             opts.update(self._load_yaml_options(self._state.fit_distances_conf_path))
-        # Saved YAML must not override liveview output location or caching policy.
         opts.pop("output_dir", None)
         opts.pop("use_cache", None)
         opts["output_dir"] = str(outdir.resolve())
         opts["use_cache"] = False
-        pp = Path(profile_path).expanduser()
-        profile_abs = str(pp.resolve() if pp.is_absolute() else (self._state.watchdir / pp).resolve())
         self._runner.start(
             RunRequest(
                 skill_name="fit_distances",
@@ -215,17 +283,183 @@ class LiveviewPipeline(QObject):
             )
         )
 
+    def _start_fit_dammif(self, *, profile_abs: str, gnom_path: str) -> None:
+        outdir = self._state.watchdir / "dammif"
+        outdir.mkdir(parents=True, exist_ok=True)
+        self._pending_step = "fit_dammif"
+        self._runner.start(
+            RunRequest(
+                skill_name="fit_dammif",
+                positional=[profile_abs],
+                options={
+                    "output_dir": str(outdir.resolve()),
+                    "use_cache": False,
+                    "gnom_path": gnom_path,
+                },
+            )
+        )
+
+    @staticmethod
+    def _resolve_under_watchdir(watchdir: Path, raw: Any) -> Optional[Path]:
+        """Turn a skill-returned path (absolute or watchdir-relative) into a resolved file path."""
+        if raw is None:
+            return None
+        s = str(raw).strip()
+        if not s or s.lower() == "none":
+            return None
+        p = Path(s).expanduser()
+        path = p.resolve() if p.is_absolute() else (watchdir / p).resolve()
+        return path if path.is_file() else None
+
+    @staticmethod
+    def _coerce_opt_int(val: Any) -> Optional[int]:
+        if val is None:
+            return None
+        if isinstance(val, bool):
+            return None
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _read_first_last_from_best_summary(path: Path) -> Tuple[Optional[int], Optional[int]]:
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, TypeError, yaml.YAMLError):
+            return None, None
+        if not isinstance(data, dict):
+            return None, None
+        sel = data.get("selected")
+        if not isinstance(sel, dict):
+            return None, None
+        return (
+            LiveviewPipeline._coerce_opt_int(sel.get("first")),
+            LiveviewPipeline._coerce_opt_int(sel.get("last")),
+        )
+
+    @staticmethod
+    def _read_first_last_from_fit_params(path: Path) -> Tuple[Optional[int], Optional[int]]:
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, TypeError, yaml.YAMLError):
+            return None, None
+        if not isinstance(data, dict):
+            return None, None
+        return (
+            LiveviewPipeline._coerce_opt_int(data.get("first")),
+            LiveviewPipeline._coerce_opt_int(data.get("last")),
+        )
+
+    @classmethod
+    def _parse_first_last_from_fit_distances_result(
+        cls, *, watchdir: Path, result: dict
+    ) -> tuple[Optional[int], Optional[int]]:
+        """
+        Read DATGNOM ``--first`` / ``--last`` for chaining into ``fit_bodies``.
+
+        Prefer ``best_summary_path`` (``selected.first`` / ``selected.last``). If that yields no
+        integers (missing key, parse failure, or path not in ``result``), fall back to
+        ``fit_params_path`` (flat ``first`` / ``last``) — same run, written by ``fit_distances``.
+        """
+        first_i: Optional[int] = None
+        last_i: Optional[int] = None
+
+        bs = cls._resolve_under_watchdir(watchdir, result.get("best_summary_path"))
+        if bs is not None:
+            first_i, last_i = cls._read_first_last_from_best_summary(bs)
+
+        if first_i is None and last_i is None:
+            fp = cls._resolve_under_watchdir(watchdir, result.get("fit_params_path"))
+            if fp is not None:
+                first_i, last_i = cls._read_first_last_from_fit_params(fp)
+        elif first_i is None or last_i is None:
+            fp = cls._resolve_under_watchdir(watchdir, result.get("fit_params_path"))
+            if fp is not None:
+                f2, l2 = cls._read_first_last_from_fit_params(fp)
+                if first_i is None:
+                    first_i = f2
+                if last_i is None:
+                    last_i = l2
+
+        return first_i, last_i
+
+    def _start_fit_bodies(
+        self,
+        *,
+        profile_abs: str,
+        first: Optional[int] = None,
+        last: Optional[int] = None,
+    ) -> None:
+        outdir = self._state.watchdir / "fit_bodies"
+        outdir.mkdir(parents=True, exist_ok=True)
+        self._pending_step = "fit_bodies"
+        opts: dict = {"output_dir": str(outdir.resolve()), "use_cache": False}
+        shapes = self._state.fit_bodies_shapes
+        if shapes is None or len(shapes) == 0:
+            shapes = list(DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES)
+        opts["shapes"] = list(shapes)
+        if first is not None:
+            opts["first"] = int(first)
+        if last is not None:
+            opts["last"] = int(last)
+        self._runner.start(
+            RunRequest(
+                skill_name="fit_bodies",
+                positional=[profile_abs],
+                options=opts,
+            )
+        )
+
+    def _start_fit_sizes(self, *, profile_abs: str) -> None:
+        outdir = self._state.watchdir / "fit_sizes"
+        outdir.mkdir(parents=True, exist_ok=True)
+        self._pending_step = "fit_sizes"
+        opts: dict = {}
+        if self._state.fit_sizes_conf_path is not None:
+            opts.update(self._load_yaml_options(self._state.fit_sizes_conf_path))
+        opts.pop("output_dir", None)
+        opts.pop("use_cache", None)
+        opts["output_dir"] = str(outdir.resolve())
+        opts["use_cache"] = False
+        self._runner.start(
+            RunRequest(
+                skill_name="fit_sizes",
+                positional=[profile_abs],
+                options=opts,
+            )
+        )
+
+    def _start_fit_mixture(self, *, profile_abs: str) -> None:
+        cfg = self._state.fit_mixture_config_path
+        if cfg is None or not cfg.is_file():
+            self.error.emit(
+                "fit_mixture: set mixture config YAML in the right panel (config file missing); skipping file."
+            )
+            self._finish_current(False)
+            return
+        outdir = self._state.watchdir / "mixture"
+        outdir.mkdir(parents=True, exist_ok=True)
+        self._pending_step = "fit_mixture"
+        self._runner.start(
+            RunRequest(
+                skill_name="fit_mixture",
+                positional=[profile_abs],
+                options={
+                    "output_dir": str(outdir.resolve()),
+                    "use_cache": False,
+                    "config_path": str(cfg.resolve()),
+                },
+            )
+        )
+
     def _on_skill_finished(self, outcome: RunOutcome) -> None:
-        self._snapshot_latest_run()
-        # Always emit artifacts for UI to update (even on failure).
         self.latest_artifacts.emit(outcome.result)
 
         step = self._pending_step
         self._pending_step = None
-        self._pending_run_dir = None
 
         if not outcome.success:
-            # Manual runs (calibrate / fit_distances wizard) do not set _pending_step; never drop a queued file.
             if step is not None:
                 if self._current_item is not None:
                     self.error.emit(f"Skill failed ({step}), skipping: {self._current_item.path}")
@@ -235,12 +469,10 @@ class LiveviewPipeline(QObject):
         st = self._state.current_state()
 
         if step == "integrate_proxy":
-            # Done for State A.
             self._finish_current(True)
             return
 
         if step == "integrate":
-            # Capture the newest integrated curve path.
             integrated = outcome.result.get("integrated_1d")
             if isinstance(integrated, list) and integrated and isinstance(integrated[-1], str):
                 self._latest_integrated_dat = integrated[-1]
@@ -263,7 +495,7 @@ class LiveviewPipeline(QObject):
                 return
 
             if st == LiveviewState.BD and self._latest_integrated_dat:
-                self._start_fit_distances(profile_path=self._latest_integrated_dat)
+                self._start_analysis_for_profile(self._latest_integrated_dat)
                 return
 
             self._finish_current(True)
@@ -285,67 +517,78 @@ class LiveviewPipeline(QObject):
 
             st_after = self._state.current_state()
             if st_after == LiveviewState.CD and self._latest_subtracted_dat:
-                self._start_fit_distances(profile_path=self._latest_subtracted_dat)
+                self._start_analysis_for_profile(self._latest_subtracted_dat)
                 return
 
             self._finish_current(True)
             return
 
         if step == "fit_distances":
+            chain_dam = self._chain_fit_dammif_after
+            chain_bodies = self._chain_fit_bodies_after
+            self._chain_fit_dammif_after = False
+            self._chain_fit_bodies_after = False
+            prof = self._analysis_profile_abs
+
+            if chain_dam:
+                gnom = outcome.result.get("best_gnom_out_path")
+                gpath = ""
+                if isinstance(gnom, str) and gnom.strip():
+                    gp = Path(gnom.strip()).expanduser()
+                    gpath = str(gp.resolve() if gp.is_absolute() else (self._state.watchdir / gp).resolve())
+                if not prof or not gpath or not Path(gpath).is_file():
+                    self.error.emit("DAM: missing or invalid best_gnom_out_path after fit_distances; skipping file.")
+                    self._analysis_profile_abs = None
+                    self._finish_current(False)
+                    return
+                self._start_fit_dammif(profile_abs=prof, gnom_path=gpath)
+                return
+
+            if chain_bodies:
+                if not prof:
+                    self.error.emit("Primitives: internal error (no profile path after fit_distances); skipping file.")
+                    self._analysis_profile_abs = None
+                    self._finish_current(False)
+                    return
+                fi, la = self._parse_first_last_from_fit_distances_result(
+                    watchdir=self._state.watchdir, result=outcome.result
+                )
+                self._start_fit_bodies(profile_abs=prof, first=fi, last=la)
+                return
+
+            self._analysis_profile_abs = None
+            self._finish_current(True)
+            return
+
+        if step == "fit_dammif":
+            self._analysis_profile_abs = None
+            self._finish_current(True)
+            return
+
+        if step in ("fit_bodies", "fit_sizes", "fit_mixture"):
             self._finish_current(True)
             return
 
     def _finish_current(self, ok: bool) -> None:
         if self._current_item is None:
             return
+        completed_path = self._current_item.path
         dt = max(0.0, time.monotonic() - self._current_started_at)
         if ok:
             self._durations.append(dt)
             if len(self._durations) > 50:
                 self._durations = self._durations[-50:]
-        self._last_processed = self._current_item.path
+            self._append_session_tiff(completed_path)
+            self.session_file_completed.emit(completed_path)
+        self._last_processed = completed_path
         self._current_item = None
         self._current_stability = None
         self._pending_step = None
         self._latest_integrated_dat = None
         self._latest_subtracted_dat = None
-
-    def _new_run_dir(self, *, skill_name: str) -> Path:
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        base = f"{ts}_{skill_name}"
-        d = runs_dir(self._state.watchdir) / base
-        # De-dup in case multiple starts within same second.
-        if d.exists():
-            for i in range(1, 1000):
-                cand = runs_dir(self._state.watchdir) / f"{base}_{i:03d}"
-                if not cand.exists():
-                    d = cand
-                    break
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-
-    def _snapshot_latest_run(self) -> None:
-        """
-        Copy `runs/latest/*` into the per-run directory for traceability.
-        """
-        if self._pending_run_dir is None:
-            return
-        try:
-            dst = self._pending_run_dir
-            # Best-effort copies; ignore failures.
-            for src in (
-                latest_request_path(self._state.watchdir),
-                latest_stdout_path(self._state.watchdir),
-                latest_stderr_path(self._state.watchdir),
-                latest_result_path(self._state.watchdir),
-            ):
-                try:
-                    if src.exists():
-                        (dst / src.name).write_bytes(src.read_bytes())
-                except Exception:
-                    pass
-        except Exception:
-            return
+        self._chain_fit_dammif_after = False
+        self._chain_fit_bodies_after = False
+        self._analysis_profile_abs = None
 
     def _load_yaml_options(self, path: Optional[Path]) -> dict:
         if path is None:
@@ -357,4 +600,3 @@ class LiveviewPipeline(QObject):
         except Exception:
             pass
         return {}
-
