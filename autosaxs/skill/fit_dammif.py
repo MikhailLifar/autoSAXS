@@ -24,16 +24,16 @@ from .deps import (
     run_with_cache,
 )
 from .common import (
-    PathExpressionArg,
+    DatPathExpressionArg,
     SingletonPathExpressionArg,
-    coerce_path_expression,
+    coerce_dat_path_expression,
     coerce_singleton_path_expression,
     expand_files_from_unwrapped,
 )
 
 
 def fit_dammif(
-    profile: PathExpressionArg,
+    profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
     gnom_path: Optional[SingletonPathExpressionArg] = None,
@@ -78,7 +78,7 @@ def fit_dammif(
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
-    profile = coerce_path_expression(profile)
+    profile = coerce_dat_path_expression(profile)
     expanded_profiles = expand_files_from_unwrapped(profile.unwrap(), kind="1d_dat")
     for p in expanded_profiles:
         if Path(p).suffix.lower() != ".dat":

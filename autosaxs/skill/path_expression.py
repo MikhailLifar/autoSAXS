@@ -5,7 +5,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Set
+from typing import Iterable, List, Optional, Sequence, Set, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 
@@ -54,6 +54,32 @@ class PathExpression:
     """
 
     expr: str
+    ext: Optional[Union[str, Tuple[str, ...]]] = None
+
+    @staticmethod
+    def _normalize_exts(ext: Optional[Union[str, Sequence[str]]]) -> Optional[Tuple[str, ...]]:
+        if ext is None:
+            return None
+        if isinstance(ext, str):
+            exts = (ext,)
+        else:
+            exts = tuple(ext)
+        out: List[str] = []
+        for e in exts:
+            if not isinstance(e, str):
+                continue
+            t = e.strip()
+            if not t:
+                continue
+            if not t.startswith("."):
+                t = "." + t
+            out.append(t.lower())
+        return tuple(out) if out else None
+
+    @staticmethod
+    def _ext_error(*, allowed: Tuple[str, ...], actual: str) -> ValueError:
+        exp = " or ".join(allowed)
+        return ValueError(f"{exp} is accepted, but the uploaded file is {actual}")
 
     def unwrap(self) -> List[str]:
         raw = _normalize_pathish(self.expr)
@@ -87,6 +113,15 @@ class PathExpression:
         expanded = _stable_dedup(expanded)
         if not expanded:
             raise FileNotFoundError(f"No existing paths matched: {self.expr!r}")
+        allowed = self._normalize_exts(self.ext)
+        if allowed:
+            for p in expanded:
+                if not os.path.isfile(p):
+                    # Extension-constrained expressions must resolve to files only.
+                    raise self._ext_error(allowed=allowed, actual=Path(p).suffix.lower())
+                actual = Path(p).suffix.lower()
+                if actual not in allowed:
+                    raise self._ext_error(allowed=allowed, actual=actual)
         return expanded
 
 
@@ -101,4 +136,40 @@ class SingletonPathExpression(PathExpression):
         if len(items) != 1:
             raise ValueError(f"Expected exactly one existing path, got {len(items)} for: {self.expr!r}")
         return items
+
+
+@dataclass(frozen=True)
+class ConfigPathExpression(SingletonPathExpression):
+    """
+    A SingletonPathExpression that semantically represents a config file path.
+
+    GUIs may render extra affordances for this type (e.g. "Get Default").
+    """
+
+    ext: Optional[Union[str, Tuple[str, ...]]] = (".conf", ".yml", ".yaml")
+
+
+@dataclass(frozen=True)
+class TiffPathExpression(PathExpression):
+    ext: Optional[Union[str, Tuple[str, ...]]] = (".tif", ".tiff")
+
+
+@dataclass(frozen=True)
+class SingletonTiffPathExpression(SingletonPathExpression):
+    ext: Optional[Union[str, Tuple[str, ...]]] = (".tif", ".tiff")
+
+
+@dataclass(frozen=True)
+class DatPathExpression(PathExpression):
+    ext: Optional[Union[str, Tuple[str, ...]]] = ".dat"
+
+
+@dataclass(frozen=True)
+class SingletonDatPathExpression(SingletonPathExpression):
+    ext: Optional[Union[str, Tuple[str, ...]]] = ".dat"
+
+
+@dataclass(frozen=True)
+class SingletonMaskPathExpression(SingletonPathExpression):
+    ext: Optional[Union[str, Tuple[str, ...]]] = (".txt", ".npy", ".msk")
 

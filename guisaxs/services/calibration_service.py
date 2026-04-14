@@ -114,7 +114,7 @@ class CalibrationService:
         service_config_file = os.path.join(self.temp_dir, 'calibration_config.json')
         status_file = os.path.join(self.temp_dir, 'calibration_status.json')
         output_dir = os.path.join(self.temp_dir, 'calibration_output')
-        calib_config_yaml = os.path.join(self.temp_dir, "calibration_config.yml")
+        calib_config_yaml = os.path.join(self.temp_dir, "calibration_config.conf")
         
         os.makedirs(output_dir, exist_ok=True)
         

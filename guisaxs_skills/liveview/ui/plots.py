@@ -47,14 +47,36 @@ class LogCurvePlot(FigureCanvas):
     def plot_dat(self, path: str, *, label: Optional[str] = None) -> None:
         from autosaxs.utils import read_saxs
 
-        q, I, _sigma, _meta = read_saxs(path)
+        q, I, sigma, _meta = read_saxs(path)
         q = np.asarray(q)
         I = np.asarray(I)
+        sigma = np.asarray(sigma) if sigma is not None else None
         m = np.isfinite(q) & np.isfinite(I) & (I > 0)
+        if sigma is not None:
+            m = m & np.isfinite(sigma) & (sigma >= 0)
         self._ax.clear()
         short, _f = contracted_path_label(path)
         if m.any():
-            self._ax.plot(q[m], I[m], label=label or short)
+            qq = q[m]
+            ii = I[m]
+            ss = sigma[m] if sigma is not None else None
+            if ss is not None:
+                # Keep error bars valid on log-scale (avoid <= 0 lower bound).
+                ss = np.minimum(ss, 0.99 * ii)
+                self._ax.errorbar(
+                    qq,
+                    ii,
+                    yerr=ss,
+                    fmt="o",
+                    markersize=3.0,
+                    linewidth=0,
+                    elinewidth=0.8,
+                    capsize=0,
+                    alpha=0.9,
+                    label=label or short,
+                )
+            else:
+                self._ax.scatter(qq, ii, s=10, alpha=0.9, label=label or short)
         if label:
             self._ax.legend(fontsize=8)
         self._ax.set_title(short)
@@ -94,12 +116,14 @@ class LogCurvePlot(FigureCanvas):
                 scale = None
 
         try:
-            q_s, I_s, _sig_s, _meta_s = read_saxs(sample_path)
-            q_b, I_b, _sig_b, _meta_b = read_saxs(buffer_path)
+            q_s, I_s, sig_s, _meta_s = read_saxs(sample_path)
+            q_b, I_b, sig_b, _meta_b = read_saxs(buffer_path)
             q_s = np.asarray(q_s, dtype=float)
             I_s = np.asarray(I_s, dtype=float)
             q_b = np.asarray(q_b, dtype=float)
             I_b = np.asarray(I_b, dtype=float)
+            sig_s = np.asarray(sig_s, dtype=float) if sig_s is not None else None
+            sig_b = np.asarray(sig_b, dtype=float) if sig_b is not None else None
         except Exception:
             self.clear()
             self._ax.set_title("Could not load sample/buffer curves")
@@ -123,6 +147,15 @@ class LogCurvePlot(FigureCanvas):
                 )
                 I_sample = np.asarray(I_sub, dtype=float) + np.asarray(I_buff_scaled, dtype=float)
                 q = np.asarray(q, dtype=float)
+                # Keep sigmas on the original curves (still useful for visualization);
+                # align them to the computed q-grid if needed.
+                sig_sample = None
+                sig_buff_scaled = None
+                if sig_s is not None and q_s.size and q.size:
+                    sig_sample = sig_s if np.array_equal(q_s, q) else np.interp(q, q_s, sig_s)
+                if sig_b is not None and q_b.size and q.size:
+                    # scaling factor is unknown in this path; skip buffer sigma to avoid lying.
+                    sig_buff_scaled = None
             except Exception:
                 self.clear()
                 self._ax.set_title("Could not build sample/buffer overlay")
@@ -138,15 +171,59 @@ class LogCurvePlot(FigureCanvas):
             q = q_s
             if q_b.size and q_s.size and not np.array_equal(q_b, q_s):
                 I_b = np.interp(q_s, q_b, I_b)
+                if sig_b is not None:
+                    sig_b = np.interp(q_s, q_b, sig_b)
             I_buff_scaled = np.asarray(I_b, dtype=float) * float(scale)
             I_sample = I_s
+            sig_sample = sig_s
+            sig_buff_scaled = sig_b * float(scale) if sig_b is not None else None
         m_s = np.isfinite(q) & np.isfinite(I_sample) & (I_sample > 0)
         m_b = np.isfinite(q) & np.isfinite(I_buff_scaled) & (I_buff_scaled > 0)
+        if sig_sample is not None:
+            m_s = m_s & np.isfinite(sig_sample) & (sig_sample >= 0)
+        if sig_buff_scaled is not None:
+            m_b = m_b & np.isfinite(sig_buff_scaled) & (sig_buff_scaled >= 0)
         self._ax.clear()
         if m_s.any():
-            self._ax.plot(q[m_s], I_sample[m_s], label="sample", linewidth=1.0)
+            qq = q[m_s]
+            ii = I_sample[m_s]
+            ss = sig_sample[m_s] if sig_sample is not None else None
+            if ss is not None:
+                ss = np.minimum(ss, 0.99 * ii)
+                self._ax.errorbar(
+                    qq,
+                    ii,
+                    yerr=ss,
+                    fmt="o",
+                    markersize=2.8,
+                    linewidth=0,
+                    elinewidth=0.7,
+                    capsize=0,
+                    alpha=0.9,
+                    label="sample",
+                )
+            else:
+                self._ax.scatter(qq, ii, s=10, alpha=0.9, label="sample")
         if m_b.any():
-            self._ax.plot(q[m_b], I_buff_scaled[m_b], label="buffer (scaled)", linewidth=1.0)
+            qq = q[m_b]
+            ii = I_buff_scaled[m_b]
+            ss = sig_buff_scaled[m_b] if sig_buff_scaled is not None else None
+            if ss is not None:
+                ss = np.minimum(ss, 0.99 * ii)
+                self._ax.errorbar(
+                    qq,
+                    ii,
+                    yerr=ss,
+                    fmt="o",
+                    markersize=2.8,
+                    linewidth=0,
+                    elinewidth=0.7,
+                    capsize=0,
+                    alpha=0.75,
+                    label="buffer (scaled)",
+                )
+            else:
+                self._ax.scatter(qq, ii, s=10, alpha=0.75, label="buffer (scaled)")
         self._ax.legend(fontsize=8)
         self._ax.set_title("S + buffer")
         self._ax.set_xlabel(self._x_label)

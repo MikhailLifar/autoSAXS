@@ -5,7 +5,7 @@ import inspect
 import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, get_args, get_origin, get_type_hints
 
-from .path_expression import PathExpression, SingletonPathExpression
+from .path_expression import ConfigPathExpression, PathExpression, SingletonPathExpression
 
 
 def _to_kebab(s: str) -> str:
@@ -105,14 +105,24 @@ def _wrap_path_expression_value(value: Any, ann: Any) -> Any:
         non_none = [a for a in args if a is not type(None)]  # noqa: E721
         if len(non_none) == 1:
             return _wrap_path_expression_value(value, non_none[0])
+        # Prefer any concrete PathExpression subclass present in the union.
+        for t in non_none:
+            if isinstance(t, type) and issubclass(t, PathExpression):
+                return t(str(value))
         if PathExpression in non_none:
             return PathExpression(str(value))
+        if ConfigPathExpression in non_none:
+            return ConfigPathExpression(str(value))
         if SingletonPathExpression in non_none:
             return SingletonPathExpression(str(value))
         return value
 
+    if isinstance(ann, type) and issubclass(ann, PathExpression):
+        return ann(str(value))
     if ann is PathExpression:
         return PathExpression(str(value))
+    if ann is ConfigPathExpression:
+        return ConfigPathExpression(str(value))
     if ann is SingletonPathExpression:
         return SingletonPathExpression(str(value))
     return value

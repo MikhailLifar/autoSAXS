@@ -7,19 +7,19 @@ from typing import Dict, List, Optional, Union
 
 from .deps import EventBus, EventType, apply_batch, load_config, run_with_cache
 from .common import (
-    PathExpressionArg,
-    SingletonPathExpressionArg,
-    coerce_path_expression,
-    coerce_singleton_path_expression,
+    ConfigPathExpressionArg,
+    DatPathExpressionArg,
+    coerce_dat_path_expression,
+    coerce_config_path_expression,
     expand_files_from_unwrapped,
 )
 
 
 def fit_mixture(
-    profile: PathExpressionArg,
+    profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
-    config_path: Optional[SingletonPathExpressionArg] = None,
+    config_path: Optional[ConfigPathExpressionArg] = None,
     q_min_nm: Optional[float] = None,
     q_max_nm: Optional[float] = None,
     use_cache: bool = True,
@@ -80,14 +80,14 @@ def fit_mixture(
         q_range_nm = (q_min_nm, q_max_nm)
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
-    profile = coerce_path_expression(profile)
+    profile = coerce_dat_path_expression(profile)
     expanded_profiles = expand_files_from_unwrapped(profile.unwrap(), kind="1d_dat")
     for p in expanded_profiles:
         if Path(p).suffix.lower() != ".dat":
             raise ValueError("fit_mixture input files must have .dat extension")
     if config_path is None:
         raise ValueError("fit_mixture requires config_path (path to YAML config containing a 'mixture' section)")
-    config_path = coerce_singleton_path_expression(config_path)
+    config_path = coerce_config_path_expression(config_path)
     cfg_path = config_path.unwrap()[0]
     if not os.path.isfile(cfg_path):
         raise FileNotFoundError(f"fit_mixture config_path not found: {cfg_path!r}")

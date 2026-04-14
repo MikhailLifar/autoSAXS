@@ -18,17 +18,17 @@ from .deps import (
     subtract_buffer,
 )
 from .common import (
-    PathExpressionArg,
-    SingletonPathExpressionArg,
-    coerce_path_expression,
-    coerce_singleton_path_expression,
+    DatPathExpressionArg,
+    SingletonDatPathExpressionArg,
+    coerce_dat_path_expression,
+    coerce_singleton_dat_path_expression,
     expand_files_from_unwrapped,
 )
 
 
 def subtract(
-    sample_1d: PathExpressionArg,
-    buffer_1d: SingletonPathExpressionArg,
+    sample_1d: DatPathExpressionArg,
+    buffer_1d: SingletonDatPathExpressionArg,
     output_dir: str = ".",
     *,
     method: str = "point_match",
@@ -106,8 +106,8 @@ def subtract(
     match_tail_ops_out: Optional[Dict] = match_tail_ops if match_tail_ops else None
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
-    sample_1d = coerce_path_expression(sample_1d)
-    buffer_1d = coerce_singleton_path_expression(buffer_1d)
+    sample_1d = coerce_dat_path_expression(sample_1d)
+    buffer_1d = coerce_singleton_dat_path_expression(buffer_1d)
     buff = buffer_1d.unwrap()[0]
     if not buff or not os.path.isfile(buff):
         raise FileNotFoundError("subtract requires buffer_1d to be an existing file")

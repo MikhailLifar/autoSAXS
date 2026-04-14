@@ -15,7 +15,7 @@ from .deps import (
     run_with_cache,
 )
 from .common import (
-    PathExpressionArg,
+    TiffPathExpressionArg,
     SingletonPathExpressionArg,
     coerce_path_expression,
     coerce_singleton_path_expression,
@@ -24,7 +24,7 @@ from .common import (
 
 
 def integrate(
-    images: PathExpressionArg,
+    images: TiffPathExpressionArg,
     integrator_dir: SingletonPathExpressionArg,
     output_dir: str = ".",
     *,

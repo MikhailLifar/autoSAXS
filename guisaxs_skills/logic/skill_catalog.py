@@ -6,7 +6,16 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, get_args, get_origin, get_type_hints
 
 from ..core.models import SkillMeta, SkillParam
-from autosaxs.path_expression import PathExpression, SingletonPathExpression
+from autosaxs.path_expression import (
+    ConfigPathExpression,
+    DatPathExpression,
+    PathExpression,
+    SingletonDatPathExpression,
+    SingletonMaskPathExpression,
+    SingletonPathExpression,
+    SingletonTiffPathExpression,
+    TiffPathExpression,
+)
 
 
 def _public_skill_functions() -> Dict[str, Callable]:
@@ -59,6 +68,12 @@ def _contains_type(ann: Any, needle: Any) -> bool:
     """
     if ann is needle:
         return True
+    if isinstance(ann, type) and isinstance(needle, type):
+        try:
+            if issubclass(ann, needle):
+                return True
+        except Exception:
+            pass
     if _is_union(ann):
         return any(_contains_type(a, needle) for a in get_args(ann))
     origin = get_origin(ann)
@@ -81,6 +96,18 @@ def _annotation_label(fn: Callable, param: inspect.Parameter, type_hints: Dict[s
     if ann is inspect._empty:
         return None
 
+    if _contains_type(ann, ConfigPathExpression):
+        return "ConfigPathExpression"
+    if _contains_type(ann, SingletonMaskPathExpression):
+        return "SingletonMaskPathExpression"
+    if _contains_type(ann, TiffPathExpression):
+        return "TiffPathExpression"
+    if _contains_type(ann, SingletonTiffPathExpression):
+        return "SingletonTiffPathExpression"
+    if _contains_type(ann, DatPathExpression):
+        return "DatPathExpression"
+    if _contains_type(ann, SingletonDatPathExpression):
+        return "SingletonDatPathExpression"
     if _contains_type(ann, SingletonPathExpression):
         return "SingletonPathExpression"
     if _contains_type(ann, PathExpression):

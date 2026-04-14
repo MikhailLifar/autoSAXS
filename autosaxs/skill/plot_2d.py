@@ -16,11 +16,11 @@ from .deps import (
     read_from_tiff,
     run_with_cache,
 )
-from .common import PathExpressionArg, coerce_path_expression, expand_files_from_unwrapped
+from .common import TiffPathExpressionArg, coerce_path_expression, expand_files_from_unwrapped
 
 
 def plot_2d(
-    image: PathExpressionArg,
+    image: TiffPathExpressionArg,
     output_dir: str = ".",
     *,
     use_cache: bool = True,

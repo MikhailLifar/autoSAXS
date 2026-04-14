@@ -19,8 +19,8 @@ from .deps import (
     write_saxs,
 )
 from .common import (
-    PathExpressionArg,
-    SingletonPathExpressionArg,
+    SingletonMaskPathExpressionArg,
+    TiffPathExpressionArg,
     coerce_optional_singleton_path_expression,
     coerce_path_expression,
     expand_files_from_unwrapped,
@@ -28,10 +28,10 @@ from .common import (
 
 
 def integrate_proxy(
-    image: PathExpressionArg,
+    image: TiffPathExpressionArg,
     output_dir: str = ".",
     *,
-    mask: Optional[SingletonPathExpressionArg] = None,
+    mask: Optional[SingletonMaskPathExpressionArg] = None,
     cy: Optional[float] = None,
     cx: Optional[float] = None,
     npt: int = 1000,

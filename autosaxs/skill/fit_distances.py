@@ -26,12 +26,12 @@ from .deps import (
     run_with_cache,
     write_saxs_atsas_format,
 )
-from .common import PathExpressionArg, coerce_path_expression, expand_files_from_unwrapped
+from .common import DatPathExpressionArg, coerce_dat_path_expression, expand_files_from_unwrapped
 from ..guinier import find_guinier_region, run_autorg_atsas
 
 
 def fit_distances(
-    profile: PathExpressionArg,
+    profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
     rg_nm: Optional[float] = None,
@@ -67,7 +67,7 @@ def fit_distances(
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
-    profile = coerce_path_expression(profile)
+    profile = coerce_dat_path_expression(profile)
     expanded_profiles = expand_files_from_unwrapped(profile.unwrap(), kind="1d_dat")
     for p in expanded_profiles:
         if Path(p).suffix.lower() != ".dat":

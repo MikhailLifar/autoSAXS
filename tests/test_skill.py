@@ -403,7 +403,7 @@ def test_calibrate_rejects_unknown_calibrant():
 def test_calibrate_requires_mask_for_default_from_file_mode():
     with tempfile.TemporaryDirectory() as tmp:
         calib_path = os.path.join(tmp, "calib.tif")
-        cfg_path = os.path.join(tmp, "config.yml")
+        cfg_path = os.path.join(tmp, "config.conf")
         Path(calib_path).write_bytes(b"dummy")
         Path(cfg_path).write_text("dummy: true")
 
@@ -419,7 +419,7 @@ def test_calibrate_requires_mask_for_default_from_file_mode():
 def test_calibrate_default_mask_mode_is_from_file(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         calib_path = os.path.join(tmp, "calib.tif")
-        cfg_path = os.path.join(tmp, "config.yml")
+        cfg_path = os.path.join(tmp, "config.conf")
         mask_path = os.path.join(tmp, "mask.npy")
         Path(calib_path).write_bytes(b"dummy")
         Path(cfg_path).write_text("dummy: true")
@@ -459,7 +459,7 @@ def test_calibrate_default_mask_mode_is_from_file(monkeypatch):
 def test_calibrate_always_overrides_config_calibrant(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         calib_path = os.path.join(tmp, "calib.tif")
-        cfg_path = os.path.join(tmp, "config.yml")
+        cfg_path = os.path.join(tmp, "config.conf")
         mask_path = os.path.join(tmp, "mask.npy")
         Path(calib_path).write_bytes(b"dummy")
         Path(cfg_path).write_text("dummy: true")

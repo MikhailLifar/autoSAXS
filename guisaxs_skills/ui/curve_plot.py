@@ -13,11 +13,13 @@ class CurvePlot(FigureCanvas):
         self._ax = self._fig.add_subplot(111)
         self._ax.set_xlabel("q")
         self._ax.set_ylabel("I")
+        self._ax.set_yscale("log")
 
     def clear(self) -> None:
         self._ax.clear()
         self._ax.set_xlabel("q")
         self._ax.set_ylabel("I")
+        self._ax.set_yscale("log")
         self.draw_idle()
 
     def plot_dat(self, path: str, *, label: Optional[str] = None) -> None:
@@ -25,11 +27,46 @@ class CurvePlot(FigureCanvas):
 
         q, I, sigma, _meta = read_saxs(path)
         self._ax.clear()
-        self._ax.plot(q, I, label=label or path)
+        try:
+            import numpy as np
+
+            q = np.asarray(q)
+            I = np.asarray(I)
+            sigma = np.asarray(sigma) if sigma is not None else None
+            m = np.isfinite(q) & np.isfinite(I) & (I > 0)
+            if sigma is not None:
+                m = m & np.isfinite(sigma) & (sigma >= 0)
+            q = q[m]
+            I = I[m]
+            if sigma is not None:
+                sigma = sigma[m]
+        except Exception:
+            pass
+
+        if "np" in locals():
+            if sigma is not None and len(I):
+                sigma = np.minimum(sigma, 0.99 * I)
+
+        if sigma is not None:
+            self._ax.errorbar(
+                q,
+                I,
+                yerr=sigma,
+                fmt="o",
+                markersize=3.0,
+                linewidth=0,
+                elinewidth=0.8,
+                capsize=0,
+                alpha=0.9,
+                label=label or path,
+            )
+        else:
+            self._ax.scatter(q, I, s=10, alpha=0.9, label=label or path)
         if label:
             self._ax.legend(fontsize=8)
         self._ax.set_xlabel("q")
         self._ax.set_ylabel("I")
+        self._ax.set_yscale("log")
         self._ax.grid(True, alpha=0.2)
         self.draw_idle()
 

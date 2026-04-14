@@ -21,7 +21,7 @@ from .deps import (
     read_saxs,
     run_with_cache,
 )
-from .common import PathExpressionArg, coerce_path_expression, expand_files_from_unwrapped
+from .common import DatPathExpressionArg, coerce_dat_path_expression, expand_files_from_unwrapped
 
 
 def _write_bodies_invoke_log(output_dir: str, commands: List[List[str]]) -> None:
@@ -43,7 +43,7 @@ def _write_bodies_invoke_log(output_dir: str, commands: List[List[str]]) -> None
 
 
 def fit_bodies(
-    profile: PathExpressionArg,
+    profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
     shapes: Optional[List[str]] = None,
@@ -96,7 +96,7 @@ def fit_bodies(
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
-    profile = coerce_path_expression(profile)
+    profile = coerce_dat_path_expression(profile)
     expanded_profiles = expand_files_from_unwrapped(profile.unwrap(), kind="1d_dat")
     for p in expanded_profiles:
         if Path(p).suffix.lower() != ".dat":

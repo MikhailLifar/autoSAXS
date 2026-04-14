@@ -68,7 +68,7 @@ def _render_dat_to_png(src_path: str, out_path: str) -> bool:
     except Exception:
         return False
 
-    q, I, _sigma, _meta = read_saxs(src_path)
+    q, I, sigma, _meta = read_saxs(src_path)
     fig = Figure(figsize=(8, 5), dpi=140)
     ax = fig.add_subplot(111)
     try:
@@ -76,12 +76,36 @@ def _render_dat_to_png(src_path: str, out_path: str) -> bool:
 
         q = np.asarray(q)
         I = np.asarray(I)
+        sigma = np.asarray(sigma) if sigma is not None else None
         m = np.isfinite(q) & np.isfinite(I) & (I > 0)
+        if sigma is not None:
+            m = m & np.isfinite(sigma) & (sigma >= 0)
         q = q[m]
         I = I[m]
+        if sigma is not None:
+            sigma = sigma[m]
     except Exception:
         pass
-    ax.plot(q, I, linewidth=1.0)
+
+    if "np" in locals():
+        # Make the thumbnail stable on log-y by avoiding errors that cross <= 0.
+        if sigma is not None and len(I):
+            sigma = np.minimum(sigma, 0.99 * I)
+
+    if sigma is not None:
+        ax.errorbar(
+            q,
+            I,
+            yerr=sigma,
+            fmt="o",
+            markersize=3.0,
+            linewidth=0,
+            elinewidth=0.7,
+            capsize=0,
+            alpha=0.9,
+        )
+    else:
+        ax.scatter(q, I, s=10, alpha=0.9)
     ax.set_xlabel("q (nm$^{-1}$)")
     ax.set_ylabel("I (a.u.)")
     ax.set_yscale("log")

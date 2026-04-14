@@ -18,11 +18,11 @@ from .deps import (
     run_with_cache,
     write_data,
 )
-from .common import PathExpressionArg, coerce_path_expression, expand_files_from_unwrapped
+from .common import DatPathExpressionArg, coerce_dat_path_expression, expand_files_from_unwrapped
 
 
 def plot(
-    profile: PathExpressionArg,
+    profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
     guinier_q_min: Optional[float] = None,
@@ -88,7 +88,7 @@ def plot(
         guinier_region = (guinier_q_min, guinier_q_max)
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
-    profile = coerce_path_expression(profile)
+    profile = coerce_dat_path_expression(profile)
     expanded_profiles = expand_files_from_unwrapped(profile.unwrap(), kind="1d_dat")
     for p in expanded_profiles:
         if Path(p).suffix.lower() != ".dat":

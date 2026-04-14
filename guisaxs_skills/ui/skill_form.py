@@ -97,6 +97,8 @@ class SkillForm(QWidget):
                 f = PathField(
                     mode="any",
                     allow_multiple=not self._is_singleton_path_expression_annotation(p.annotation),
+                    show_get_default=self._is_config_path_expression_annotation(p.annotation),
+                    expected_exts=self._expected_exts_for_annotation(p.annotation),
                 )
                 f.set_workdir(workdir)
                 self._pos_widgets.append(f)
@@ -129,6 +131,8 @@ class SkillForm(QWidget):
                 f = PathField(
                     mode="any",
                     allow_multiple=not self._is_singleton_path_expression_annotation(opt.annotation),
+                    show_get_default=self._is_config_path_expression_annotation(opt.annotation),
+                    expected_exts=self._expected_exts_for_annotation(opt.annotation),
                 )
                 f.set_workdir(workdir)
                 if opt.default is not None:
@@ -617,7 +621,31 @@ class SkillForm(QWidget):
     @staticmethod
     def _is_singleton_path_expression_annotation(annotation: Optional[str]) -> bool:
         a = (annotation or "").strip()
-        return "SingletonPathExpression" in a
+        return (
+            ("SingletonPathExpression" in a)
+            or ("ConfigPathExpression" in a)
+            or ("SingletonTiffPathExpression" in a)
+            or ("SingletonDatPathExpression" in a)
+            or ("SingletonMaskPathExpression" in a)
+        )
+
+    @staticmethod
+    def _is_config_path_expression_annotation(annotation: Optional[str]) -> bool:
+        a = (annotation or "").strip()
+        return "ConfigPathExpression" in a
+
+    @staticmethod
+    def _expected_exts_for_annotation(annotation: Optional[str]) -> Optional[tuple[str, ...]]:
+        a = (annotation or "").strip()
+        if "ConfigPathExpression" in a:
+            return (".conf", ".yml", ".yaml")
+        if "TiffPathExpression" in a or "SingletonTiffPathExpression" in a:
+            return (".tif", ".tiff")
+        if "DatPathExpression" in a or "SingletonDatPathExpression" in a:
+            return (".dat",)
+        if "SingletonMaskPathExpression" in a:
+            return (".txt", ".npy", ".msk")
+        return None
 
     @staticmethod
     def _clear_layout(layout: QFormLayout) -> None:

@@ -19,11 +19,11 @@ from .deps import (
     run_with_cache,
     write_saxs_atsas_format,
 )
-from .common import PathExpressionArg, coerce_path_expression, expand_files_from_unwrapped
+from .common import DatPathExpressionArg, coerce_dat_path_expression, expand_files_from_unwrapped
 
 
 def guinier_analysis(
-    profile: PathExpressionArg,
+    profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
     use_cache: bool = True,
@@ -71,7 +71,7 @@ def guinier_analysis(
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
-    profile = coerce_path_expression(profile)
+    profile = coerce_dat_path_expression(profile)
     expanded_profiles = expand_files_from_unwrapped(profile.unwrap(), kind="1d_dat")
     for p in expanded_profiles:
         if Path(p).suffix.lower() != ".dat":

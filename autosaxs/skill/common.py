@@ -4,10 +4,25 @@ import os
 from pathlib import Path
 from typing import List, Optional, Union
 
-from .path_expression import PathExpression, SingletonPathExpression
+from .path_expression import (
+    ConfigPathExpression,
+    DatPathExpression,
+    PathExpression,
+    SingletonDatPathExpression,
+    SingletonMaskPathExpression,
+    SingletonPathExpression,
+    SingletonTiffPathExpression,
+    TiffPathExpression,
+)
 
 PathExpressionArg = Union[str, Path, PathExpression, List[str], List[Path], tuple]
 SingletonPathExpressionArg = Union[str, Path, SingletonPathExpression]
+ConfigPathExpressionArg = Union[str, Path, ConfigPathExpression]
+TiffPathExpressionArg = Union[str, Path, TiffPathExpression]
+SingletonTiffPathExpressionArg = Union[str, Path, SingletonTiffPathExpression]
+DatPathExpressionArg = Union[str, Path, DatPathExpression]
+SingletonDatPathExpressionArg = Union[str, Path, SingletonDatPathExpression]
+SingletonMaskPathExpressionArg = Union[str, Path, SingletonMaskPathExpression]
 
 
 def coerce_path_expression(value: PathExpressionArg) -> PathExpression:
@@ -27,6 +42,54 @@ def coerce_singleton_path_expression(value: SingletonPathExpressionArg) -> Singl
     if isinstance(value, Path):
         return SingletonPathExpression(str(value))
     return SingletonPathExpression(str(value))
+
+
+def coerce_config_path_expression(value: ConfigPathExpressionArg) -> ConfigPathExpression:
+    if isinstance(value, ConfigPathExpression):
+        return value
+    if isinstance(value, Path):
+        return ConfigPathExpression(str(value))
+    return ConfigPathExpression(str(value))
+
+
+def coerce_tiff_path_expression(value: TiffPathExpressionArg) -> TiffPathExpression:
+    if isinstance(value, TiffPathExpression):
+        return value
+    if isinstance(value, Path):
+        return TiffPathExpression(str(value))
+    return TiffPathExpression(str(value))
+
+
+def coerce_dat_path_expression(value: DatPathExpressionArg) -> DatPathExpression:
+    if isinstance(value, DatPathExpression):
+        return value
+    if isinstance(value, Path):
+        return DatPathExpression(str(value))
+    return DatPathExpression(str(value))
+
+
+def coerce_singleton_tiff_path_expression(value: SingletonTiffPathExpressionArg) -> SingletonTiffPathExpression:
+    if isinstance(value, SingletonTiffPathExpression):
+        return value
+    if isinstance(value, Path):
+        return SingletonTiffPathExpression(str(value))
+    return SingletonTiffPathExpression(str(value))
+
+
+def coerce_singleton_dat_path_expression(value: SingletonDatPathExpressionArg) -> SingletonDatPathExpression:
+    if isinstance(value, SingletonDatPathExpression):
+        return value
+    if isinstance(value, Path):
+        return SingletonDatPathExpression(str(value))
+    return SingletonDatPathExpression(str(value))
+
+
+def coerce_singleton_mask_expression(value: SingletonMaskPathExpressionArg) -> SingletonMaskPathExpression:
+    if isinstance(value, SingletonMaskPathExpression):
+        return value
+    if isinstance(value, Path):
+        return SingletonMaskPathExpression(str(value))
+    return SingletonMaskPathExpression(str(value))
 
 
 def coerce_optional_singleton_path_expression(

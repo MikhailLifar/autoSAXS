@@ -20,12 +20,9 @@ You may want to do this inside a virtual environment (venv or conda).
 
 0. Make sure a Python environment, where `autosaxs[gui]` is installed, is activated in your terminal.
 1. Type **`guisaxs-liveview`**. The GUI starts.
-2. If asked, **select a directory** in the opening file browser.  
-   - Must exist and be **writable**.  
-   - Cancel → app exits.  
-   - Next time it may skip this if it still remembers a valid last folder.
+2. If asked, **select a directory** in the opening file browser.Next time it may skip this if it still remembers a valid last folder.
 3. You can feed TIFFs in two ways:
-   - **Drag and drop** `.tif` / `.tiff` onto the **middle** panel (“Latest image (2D) — drop .tif here”), **or**
+   - **Drag and drop** `.tif` / `.tiff` onto the **middle** panel (“Latest image (2D) — drop .tif here”) (YOU CAN D-N-D MULTIPLE `.tif` / `.tiff` AT ONCE!), **or**
    - **Copy or save** files **directly into** that watch directory (not into subfolders).
 5. Watch the **middle** column for queue status and the latest **2D** image.
 6. **If calibration is required** → left column → **Set calibration** → follow the wizard (IMPORTANT - THESE ARE REQUIRED MANUAL STEPS: set calibrant image, config file and mask) → press "Run" → wait until finishes.
@@ -34,12 +31,13 @@ After calibration is set, the integration is done with calibrated geometry.
 After buffer is set, automatic subtraction follows integration immediately for every new `.tif` file.
 8. **Optional modeling / fits (right column, “Analysis”)** → pick a mode from the **drop-down** at the top of the **Analysis** group, then use the buttons below it to open the wizards and save options (GNOM / shapes / mixture, etc., depending on the mode). The chosen pipeline runs **automatically for every new `.tif`** once calibration is in place (and uses the live 1D curve after integration, or subtraction if you configured a buffer). The list entries are:
    - **Off** — no extra fit steps after integration (and subtraction if enabled).
-   - **Monodisperse analysis: p(r)** — **fit_distances** (GNOM): fit vs data and pair-distance distribution **p(r)**.
-   - **Monodisperse analysis: DAM** — same GNOM setup as **p(r)**, then **DAMMIF** on the GNOM **.out**; adds **3D** preview of the bead model.
-   - **Monodisperse analysis: primitives** — **fit_distances** (same GNOM options as **p(r)**) followed by **fit_bodies** for simple geometric **primitives**; shows curve comparison and **3D** for the best-fitting shape.
-   - **Polydisperse analysis: d(r)** — **fit_sizes**: polydisperse size distribution **d(r)** (and fit plot).
+   - **Monodisperse analysis: p(r)** — **fit_distances** (AUTORG + GNOM): fit vs data and pair-distance distribution **p(r)**.
+   - **Monodisperse analysis: DAM** — same GNOM setup as **p(r)**, then **DAMMIF** (FAST mode) on the GNOM **.out**; adds **3D** preview of the bead model.
+   - **Monodisperse analysis: primitives** — **fit_distances** (same GNOM options as **p(r)**) followed by **fit_bodies** (internally invokes BODIES) for simple geometric **primitives**; shows curve comparison and **3D** for the best-fitting shape.
+   - **Polydisperse analysis: d(r)** — **fit_sizes**: polydisperse size distribution **d(r)** (GNOM) and fit plot.
    - **Polydisperse analysis: mixture** — **fit_mixture** (MIXTURE): multi-component modeling; shows component and distribution previews.
-9. **To quit** → close the window.
+9. The top panel. There are three buttons: "<", ">" and "Process". "<" and ">" allow you to navigate through the files processed in this section. Remember - these buttons don't trigger any processing, they just re-upload existing results. If some results are missing, the corresponding fields just remain empty. To run the processing for the current 2D image, press "Process" button whcih is equivalent to re-uploading the file.
+10. **To quit** → close the window.
 
 ---
 
@@ -67,7 +65,7 @@ All paths below are **inside your selected Watchdir** (the folder shown at the t
   - This folder is used as the calibration skill `output_dir` (contains the produced integrator directory and plots/results from calibration).
 
 - **Integration outputs**:
-  - When **not calibrated yet** (State A proxy): `Watchdir/averaged_proxy/` (from `integrate_proxy`)
+  - When **not calibrated yet** (proxy integrate): `Watchdir/averaged_proxy/` (from `integrate_proxy`)
   - When calibrated (normal integrate): `Watchdir/averaged/` (from `integrate`)
   - The latest integrated 1D curve path is also recorded in the skill `result.yml` under `integrated_1d`.
 

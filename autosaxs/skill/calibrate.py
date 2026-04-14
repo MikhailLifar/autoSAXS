@@ -19,18 +19,21 @@ from .deps import (
     run_with_cache,
 )
 from .common import (
-    SingletonPathExpressionArg,
+    ConfigPathExpressionArg,
+    SingletonMaskPathExpressionArg,
+    SingletonTiffPathExpressionArg,
+    coerce_config_path_expression,
     coerce_optional_singleton_path_expression,
-    coerce_singleton_path_expression,
+    coerce_singleton_tiff_path_expression,
 )
 
 
 def calibrate(
-    calib_image: SingletonPathExpressionArg,
-    config_path: SingletonPathExpressionArg,
+    calib_image: SingletonTiffPathExpressionArg,
+    config_path: ConfigPathExpressionArg,
     output_dir: str = ".",
     *,
-    mask: Optional[SingletonPathExpressionArg] = None,
+    mask: Optional[SingletonMaskPathExpressionArg] = None,
     mask_mode: str = "f",
     calibrant: str = "AgBh",
     use_cache: bool = True,
@@ -94,8 +97,8 @@ def calibrate(
         )
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
-    calib_image = coerce_singleton_path_expression(calib_image)
-    config_path = coerce_singleton_path_expression(config_path)
+    calib_image = coerce_singleton_tiff_path_expression(calib_image)
+    config_path = coerce_config_path_expression(config_path)
     mask_expr = coerce_optional_singleton_path_expression(mask)
     imgs = calib_image.unwrap()
     cfg = config_path.unwrap()[0]

@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 import yaml
 
-from .common import PathExpressionArg, coerce_path_expression, expand_files_from_unwrapped
+from .common import DatPathExpressionArg, coerce_dat_path_expression, expand_files_from_unwrapped
 from .deps import (
     EventBus,
     EventType,
@@ -31,7 +31,7 @@ from ..guinier import find_guinier_region, run_autorg_atsas
 
 
 def fit_sizes(
-    profile: PathExpressionArg,
+    profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
     shape: str = "spheres",
@@ -78,7 +78,7 @@ def fit_sizes(
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
-    profile = coerce_path_expression(profile)
+    profile = coerce_dat_path_expression(profile)
     expanded_profiles = expand_files_from_unwrapped(profile.unwrap(), kind="1d_dat")
     for p in expanded_profiles:
         if Path(p).suffix.lower() != ".dat":

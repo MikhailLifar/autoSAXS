@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QLineEdit, QPushButton, QWidget
+from PyQt5.QtCore import QEvent
+from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QLineEdit, QMessageBox, QPushButton, QWidget
 from PyQt5.QtWidgets import QTreeView
 
 from ..logic.path_normalize import normalize_pathish
@@ -17,25 +18,63 @@ class PathField(QWidget):
 
     path_changed = pyqtSignal()
 
-    def __init__(self, *, mode: str = "any", allow_multiple: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        mode: str = "any",
+        allow_multiple: bool = False,
+        show_get_default: bool = False,
+        expected_exts: Optional[tuple[str, ...]] = None,
+    ) -> None:
         super().__init__()
         self._mode = mode  # any|file|dir
         self._allow_multiple = bool(allow_multiple)
+        self._show_get_default = bool(show_get_default)
+        self._expected_exts = tuple(x.lower() for x in (expected_exts or ()) if isinstance(x, str) and x.strip())
+        self._last_ext_warned_path: Optional[str] = None
+        self._last_valid_state: dict = {"text": "", "dropped_paths": []}
         self._browse_start_dir: Optional[str] = None
         self._workdir: Optional[Path] = None
         self._dropped_paths: list[str] = []
         self._edit = QLineEdit()
+        # Prevent QLineEdit from "inserting text at cursor" on drop; we handle drops at the widget level.
+        self._edit.setAcceptDrops(False)
+        self._edit.installEventFilter(self)
         self._browse = QPushButton("Browse")
+        self._get_default = QPushButton("Get Default")
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._edit, 1)
         lay.addWidget(self._browse, 0)
+        if self._show_get_default:
+            lay.addWidget(self._get_default, 0)
 
         self.setAcceptDrops(True)
         self._browse.clicked.connect(self._on_browse)
+        self._get_default.clicked.connect(self._on_get_default)
         self._edit.textEdited.connect(self._on_text_edited)
         self._edit.textChanged.connect(lambda _t: self.path_changed.emit())
+        self._edit.textChanged.connect(lambda _t: self._maybe_warn_ext_mismatch())
+    def eventFilter(self, obj, event):  # type: ignore[override]
+        # Ensure drops on the line edit behave like drops on the whole widget (replace content).
+        if obj is self._edit:
+            if event.type() in (QEvent.DragEnter, QEvent.DragMove):
+                md = event.mimeData()
+                if md is not None and md.hasUrls():
+                    event.acceptProposedAction()
+                    return True
+            if event.type() == QEvent.Drop:
+                md = event.mimeData()
+                if md is not None and md.hasUrls():
+                    urls = md.urls()
+                    paths = [u.toLocalFile() for u in urls if u.toLocalFile()]
+                    if paths:
+                        self._set_dropped_paths(paths)
+                    event.acceptProposedAction()
+                    return True
+        return super().eventFilter(obj, event)
+
 
     def text(self) -> str:
         return self._edit.text().strip()
@@ -109,6 +148,8 @@ class PathField(QWidget):
                 self._edit.setText(t)
         finally:
             self._edit.blockSignals(False)
+        # Do not validate+warn when restoring programmatic state, but keep a baseline "valid" snapshot.
+        self._last_valid_state = self.state()
 
     def set_text(self, value: str) -> None:
         self._dropped_paths = []
@@ -117,6 +158,8 @@ class PathField(QWidget):
             self._edit.setText(value)
         finally:
             self._edit.blockSignals(False)
+        # Programmatic set: treat as baseline (smart defaults / saved state).
+        self._last_valid_state = self.state()
 
     def set_browse_start_dir(self, path: Optional[str]) -> None:
         """Fallback directory for the file dialog when the field has no resolved paths (e.g. session hints)."""
@@ -125,6 +168,49 @@ class PathField(QWidget):
     def set_workdir(self, workdir: Optional[Path]) -> None:
         """Used to resolve relative paths when choosing the dialog start directory."""
         self._workdir = workdir
+
+    def _config_default_dest_path(self) -> Path:
+        wd = self._workdir.resolve() if self._workdir is not None else Path.cwd().resolve()
+        return wd / "config.conf"
+
+    @staticmethod
+    def _copy_autosaxs_default_config_to(dest: Path) -> None:
+        """
+        Copy autosaxs/config_base.conf to dest.
+        """
+        try:
+            import importlib.resources as ir
+
+            data = ir.files("autosaxs").joinpath("config_base.conf").read_bytes()
+        except Exception as e:
+            raise FileNotFoundError("Cannot load autosaxs/config_base.conf from installed package") from e
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(dest.suffix + ".tmp")
+        tmp.write_bytes(data)
+        os.replace(str(tmp), str(dest))
+
+    def _on_get_default(self) -> None:
+        dest = self._config_default_dest_path()
+        if dest.exists():
+            resp = QMessageBox.question(
+                self,
+                "Overwrite config?",
+                f"Overwrite existing file?\n\n{str(dest)}",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if resp != QMessageBox.Yes:
+                return
+        try:
+            self._copy_autosaxs_default_config_to(dest)
+        except Exception as e:
+            QMessageBox.critical(self, "Cannot write config", str(e))
+            return
+
+        self._dropped_paths = []
+        self._edit.setText(str(dest))
+        self._maybe_warn_ext_mismatch(force=True)
 
     def _dialog_start_directory(self) -> str:
         if self._workdir is not None:
@@ -148,9 +234,13 @@ class PathField(QWidget):
         paths = [u.toLocalFile() for u in urls if u.toLocalFile()]
         if not paths:
             return
+        self._set_dropped_paths(paths)
 
+    def _set_dropped_paths(self, paths: list[str]) -> None:
+        # Replace any existing content with the dropped list.
         self._dropped_paths = list(paths)
         self._sync_display_from_dropped()
+        self._maybe_warn_ext_mismatch(force=True)
 
     def _on_browse(self) -> None:
         start = self._dialog_start_directory()
@@ -179,16 +269,85 @@ class PathField(QWidget):
                 if self._allow_multiple and len(selected) > 1:
                     self._dropped_paths = list(selected)
                     self._sync_display_from_dropped()
+                    self._maybe_warn_ext_mismatch(force=True)
                     return
                 path = selected[0] if selected else ""
         if path:
             self._dropped_paths = []
             self._edit.setText(path)
+            self._maybe_warn_ext_mismatch(force=True)
 
     def _on_text_edited(self, _text: str) -> None:
         # If the user starts typing, treat it as manual entry and drop any stored multi-drop list.
         if self._dropped_paths:
             self._dropped_paths = []
+        self._maybe_warn_ext_mismatch()
+
+    def _restore_last_valid_state(self) -> None:
+        st = dict(self._last_valid_state or {})
+        self._edit.blockSignals(True)
+        try:
+            self._dropped_paths = list(st.get("dropped_paths") or [])
+            self._edit.setText((st.get("text") or "").strip())
+        finally:
+            self._edit.blockSignals(False)
+
+    def _maybe_warn_ext_mismatch(self, *, force: bool = False) -> None:
+        if not self._expected_exts:
+            return
+        # Multi-file: validate dropped paths / multi-browse selection (exact file list only).
+        if self._allow_multiple:
+            paths = list(self._dropped_paths)
+            if not paths:
+                return
+            bad: Optional[tuple[str, str]] = None  # (path, actual_suffix)
+            for raw in paths:
+                p = Path(normalize_pathish(raw)).expanduser()
+                try:
+                    if not p.is_file():
+                        continue
+                except OSError:
+                    continue
+                actual = p.suffix.lower()
+                if actual not in self._expected_exts:
+                    bad = (str(p), actual)
+                    break
+            if bad is None:
+                self._last_ext_warned_path = None
+                self._last_valid_state = self.state()
+                return
+            sp, actual = bad
+            if not force and self._last_ext_warned_path == sp:
+                return
+            self._last_ext_warned_path = sp
+            exp = " or ".join(self._expected_exts)
+            QMessageBox.warning(self, "Unexpected file type", f"{exp} is accepted, but the uploaded file is {actual}")
+            self._restore_last_valid_state()
+            return
+        t = normalize_pathish(self.text())
+        if not t:
+            # Empty is always ok; update baseline.
+            self._last_valid_state = self.state()
+            return
+        p = Path(t).expanduser()
+        try:
+            if not p.is_file():
+                return
+        except OSError:
+            return
+        actual = p.suffix.lower()
+        if actual in self._expected_exts:
+            self._last_ext_warned_path = None
+            self._last_valid_state = self.state()
+            return
+        sp = str(p)
+        if not force and self._last_ext_warned_path == sp:
+            return
+        self._last_ext_warned_path = sp
+        exp = " or ".join(self._expected_exts)
+        QMessageBox.warning(self, "Unexpected file type", f"{exp} is accepted, but the uploaded file is {actual}")
+        # Enforce: revert to the previous valid content (or clear if none).
+        self._restore_last_valid_state()
 
     def _sync_display_from_dropped(self) -> None:
         if not self._dropped_paths:

@@ -1,14 +1,15 @@
 # autosaxs: interactive SAXS pipeline core (controller, processor, skill, utils, guinier, event_bus, cli, viewer, context, gui, gui_interface, api, polydispfit, report)
-__version__ = "1.6.0"
+__version__ = "1.7.0"
 import re
 import subprocess
+import warnings
 
-_REQUIRED_ATSAS_VERSION = "3.2.1"
+_RECOMMENDED_ATSAS_VERSION = "3.2.1"
 _ATSAS_DOWNLOAD_URL = "https://www.embl-hamburg.de/biosaxs/download.html"
 
 
 def _check_atsas_installed():
-    """Verify ATSAS is installed and version is 3.2.1 (see dammif -v)."""
+    """Verify ATSAS is installed; warn on version mismatch (see dammif -v)."""
     try:
         result = subprocess.run(
             ["dammif", "-v"],
@@ -19,16 +20,31 @@ def _check_atsas_installed():
         out = (result.stdout or "") + (result.stderr or "")
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         raise RuntimeError(
-            f"Apparently ATSAS {_REQUIRED_ATSAS_VERSION} package, on which autosaxs module relies, "
-            f"is not installed. Install ATSAS {_REQUIRED_ATSAS_VERSION} here: {_ATSAS_DOWNLOAD_URL}"
+            "Apparently ATSAS package, on which autosaxs module relies, is not installed. "
+            f"Install ATSAS here: {_ATSAS_DOWNLOAD_URL}"
         )
     match = re.search(r"ATSAS\s+(\d+\.\d+\.\d+)", out)
-    if not match or match.group(1) != _REQUIRED_ATSAS_VERSION:
-        raise RuntimeError(
-            f"Apparently ATSAS {_REQUIRED_ATSAS_VERSION} package, on which autosaxs module relies, "
-            f"is not installed. Install ATSAS {_REQUIRED_ATSAS_VERSION} here: {_ATSAS_DOWNLOAD_URL}"
+    if not match:
+        warnings.warn(
+            "ATSAS appears to be installed (dammif found), but its version could not be parsed from "
+            "`dammif -v` output. Some autosaxs functions may not work as expected.",
+            RuntimeWarning,
+            stacklevel=2,
         )
-    print(f"ATSAS {_REQUIRED_ATSAS_VERSION}. installed - autosaxs is ready for use!")
+        print("ATSAS installed - autosaxs is ready for use!")
+        return
+
+    installed_version = match.group(1)
+    if installed_version != _RECOMMENDED_ATSAS_VERSION:
+        warnings.warn(
+            f"ATSAS version mismatch: autosaxs was developed/tested with ATSAS "
+            f"{_RECOMMENDED_ATSAS_VERSION}, but detected ATSAS {installed_version}. "
+            "Some autosaxs functions may not work due to the mismatch.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    print(f"ATSAS {installed_version} installed - autosaxs is ready for use!")
 
 
 _check_atsas_installed()
