@@ -45,7 +45,7 @@ class LogCurvePlot(FigureCanvas):
         self.setCursor(Qt.ArrowCursor)
 
     def plot_dat(self, path: str, *, label: Optional[str] = None) -> None:
-        from autosaxs.utils import read_saxs
+        from autosaxs.core.utils import read_saxs
 
         q, I, sigma, _meta = read_saxs(path)
         q = np.asarray(q)
@@ -98,7 +98,7 @@ class LogCurvePlot(FigureCanvas):
         """
         log10(I) vs q for sample and buffer after the same scaling subtract uses (point_match / match_tail).
         """
-        from autosaxs.utils import read_saxs
+        from autosaxs.core.utils import read_saxs
 
         # Fast path: use scaling_factor recorded in the subtracted .dat metadata.
         scale: Optional[float] = None
@@ -132,7 +132,7 @@ class LogCurvePlot(FigureCanvas):
 
         if scale is None:
             # Fallback: recompute scaling (legacy behavior).
-            from autosaxs.processor import subtract_buffer
+            from autosaxs.core.processor import subtract_buffer
 
             method, mtops = subtract_options_to_match_tail_ops(subtract_options or {})
             fd, tmp = tempfile.mkstemp(suffix=".dat")

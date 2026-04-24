@@ -35,7 +35,7 @@ step "Install autosaxs with GUI extra (needed for guisaxs tests)"
 
 step "Run GUI tests headless (xvfb-run required)"
 cd "${REPO_DIR}"
-xvfb-run -a "${PY}" -m pytest tests/test_guisaxs.py -v --tb=short
+xvfb-run -a "${PY}" -m pytest tests/test_guisaxs_liveview.py -v --tb=short
 
 step "Tests OK"
 echo "run_tests.sh finished at $(date -Is)"

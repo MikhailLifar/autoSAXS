@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autosaxs"
-version = "1.7.0"
+version = "2.0.0"
 description = "Interactive SAXS pipeline core: calibration, integration, subtraction, ATSAS descriptors, plots, shape fitting, reports"
 requires-python = ">=3.9"
 license = "MIT"
@@ -48,7 +48,7 @@ guisaxs-liveview = "guisaxs_liveview.__main__:main"
 
 [project.optional-dependencies]
 gui = ["customtkinter", "tkinterdnd2", "PyQt5", "watchdog"]
-dev = ["build", "pip"]
+dev = ["build", "pip", "import-linter"]
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -56,6 +56,7 @@ include = ["autosaxs*", "guisaxs*", "guisaxs_skills*", "guisaxs_liveview*"]
 
 [tool.setuptools.package-data]
 autosaxs = [
+    "config_base.conf",
     "global/*.yml",
     "global/templates/*",
     "prompts/**/*.txt",

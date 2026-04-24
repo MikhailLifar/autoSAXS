@@ -23,7 +23,7 @@ class CurvePlot(FigureCanvas):
         self.draw_idle()
 
     def plot_dat(self, path: str, *, label: Optional[str] = None) -> None:
-        from autosaxs.utils import read_saxs
+        from autosaxs.core.utils import read_saxs
 
         q, I, sigma, _meta = read_saxs(path)
         self._ax.clear()

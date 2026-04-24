@@ -164,15 +164,24 @@ def find_config_conf_near(base: Path) -> Optional[Path]:
 
 
 def find_mask_near(base: Path) -> Optional[Path]:
-    """Pick first mask file: mask*.txt, mask*.npy in sorted order, then mask.msk; search base then parent."""
+    """
+    Pick a likely mask file near a dataset folder.
+
+    Preference order (sorted within each glob) in `base` then `base.parent`:
+    - mask*.txt, mask*.npy (NumPy-style), mask*.msk (Fit2D)
+    - mask.msk (exact legacy name)
+    - any *.msk (last resort)
+    """
 
     def first_in(directory: Path) -> Optional[Path]:
         candidates: List[Path] = []
         candidates.extend(sorted(directory.glob("mask*.txt")))
         candidates.extend(sorted(directory.glob("mask*.npy")))
+        candidates.extend(sorted(directory.glob("mask*.msk")))
         msk = directory / "mask.msk"
         if msk.is_file():
             candidates.append(msk)
+        candidates.extend(sorted(directory.glob("*.msk")))
         for c in candidates:
             if c.is_file():
                 return c

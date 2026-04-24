@@ -38,11 +38,11 @@ REPO_AUTOSAXS = SCRIPT_DIR / "repos" / "autosaxs"
 if str(REPO_AUTOSAXS) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR / "repos"))
 
-from autosaxs.saxs_controller import Controller
-from autosaxs.report import _parse_descriptors_from_results
-from autosaxs.context import Context
-from autosaxs.event_bus import EventBus, EventType
-from autosaxs import viewer
+from autosaxs.pipeline.saxs_controller import Controller
+from autosaxs.core.utils import _parse_descriptors_from_results
+from autosaxs.core.context import Context
+from autosaxs.core.event_bus import EventBus, EventType
+from autosaxs.core import viewer
 
 
 # ---------------------------------------------------------------------------

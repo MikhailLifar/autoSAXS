@@ -34,7 +34,7 @@ if _REPOS not in sys.path:
     sys.path.insert(0, _REPOS)
 
 from autosaxs import api
-from autosaxs.utils import read_saxs, read_chi, read_reference_sub_dat, integration_comparison_metric
+from autosaxs.core.utils import read_saxs, read_chi, read_reference_sub_dat, integration_comparison_metric
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(_REPOS, ".."))
 VALIDATION_DIR = os.path.join(WORKSPACE_ROOT, "validation")

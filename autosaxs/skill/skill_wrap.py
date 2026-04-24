@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Union, overload
 
 import yaml
 
-from ..event_bus import EventBus, EventType
+from ..core.event_bus import EventBus, EventType
 
 CACHE_FILENAME = ".cache"
 

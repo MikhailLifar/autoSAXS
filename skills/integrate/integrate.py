@@ -44,11 +44,11 @@ def main():
     import matplotlib
     matplotlib.use("Agg")
 
-    from autosaxs.context import Context
-    from autosaxs.event_bus import EventBus, EventType
-    from autosaxs.processor import IntegratorExtended
-    from autosaxs.saxs_controller import Controller
-    from autosaxs.viewer import PLTViewer
+    from autosaxs.core.context import Context
+    from autosaxs.core.event_bus import EventBus, EventType
+    from autosaxs.core.processor import IntegratorExtended
+    from autosaxs.pipeline.saxs_controller import Controller
+    from autosaxs.core.viewer import PLTViewer
 
     event_bus = EventBus()
 

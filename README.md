@@ -553,17 +553,10 @@ autosaxs guinier_analysis subtracted/sub_sample_01.dat --output-dir guinier
 
 ## `fit_distances`
 
-Run ATSAS DATGNOM to obtain a pair distance distribution function p(r) for a **monodisperse** system from a 1D SAXS curve.
-
-The skill invokes `gnom` from `PATH` in command-line mode, explicitly enforcing `--system=0` and running
-an automated GNOM-based transform via `datgnom` with `Rg` (in nm). Input curves are expected in nm^-1 and are
-passed through in ATSAS `.dat` format. If `rg_nm` and/or `first` are omitted, ATSAS ``autorg`` is run on the
-profile: user-supplied values take precedence over AUTORG for each parameter. If AUTORG fails, the skill falls
-back to the previous grid search for unset parameters; if `rg_nm` is still missing, a sliding-window Guinier fit
-(:func:`autosaxs.guinier.find_guinier_region`) supplies `Rg`. When AUTORG succeeds and `last` is omitted, DATGNOM
-is run without ``--last``. DATGNOM produces a single `.out` file; the `.out` contains, among other things, the p(r) section.
+Run ATSAS DATGNOM to obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve.
 
 ### Arguments
+
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where the GNOM outputs are written (one subdirectory per input profile).
 - `rg_nm` (float | None, default `None`): Expected Rg in nm. If omitted, taken from AUTORG when possible, else from Guinier search.
@@ -573,24 +566,47 @@ is run without ``--last``. DATGNOM produces a single `.out` file; the `.out` con
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
 ### Returns
-`dict[str, str]` with: `output_subdir`, `gnom_out_paths`, `best_gnom_out_path`, `best_summary_path`,
-`fit_params_path` (YAML with the `rg_nm`, `first`, and `last` used for the final DATGNOM fit), plus the
-existing artifact paths (`best_symlink_out_path`, `fits_csv_path`, PNG paths, etc.).
+
+`dict[str, str | list[str]]` with:
+
+- `output_subdir`: The per-sample output directory used for this profile.
+- `gnom_out_paths`: List of DATGNOM `.out` paths written for this profile (typically a single “best” `.out`).
+- `best_gnom_out_path`: Path to the selected “best” DATGNOM `.out`.
+- `best_summary_path`: Path to a YAML summary of candidate runs and the selected parameters.
+- `fit_params_path`: Path to a YAML file containing the fit parameters used for the final run.
+- `best_symlink_out_path`: Best-effort symlink path to the selected `.out` (may be missing on some filesystems).
+- `fits_csv_path`: Path to a CSV containing candidate scores/metadata.
+- `fit_vs_exp_png_path` / `fit_vs_exp_png_error`: Fit-vs-experiment plot output or error message.
+- `best_pr_png_path` / `best_pr_png_error`: \(p(r)\) plot output or error message.
+
+### Python usage
+
+```python
+from autosaxs.skill import fit_distances
+
+out = fit_distances(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="distances",
+    use_cache=True,
+)
+
+print(out["best_gnom_out_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs fit_distances subtracted/sub_sample_01.dat --output-dir distances
+```
 
 ---
 
 ## `fit_sizes`
 
-Run ATSAS GNOM to obtain a size distribution function **D(R)** for a **polydisperse** system from a 1D SAXS curve.
-
-This skill runs `gnom` in command-line mode to reconstruct the size distribution function \(D(R)\) from a 1D
-scattering profile. In GNOM terminology, this corresponds to `system=1` (polydisperse solid spheres, the default)
-or `system=5` (polydisperse long cylinders / rods). GNOM requires an explicit real-space maximum (`--rmax`), so
-if `rmax_nm` is not provided, this skill estimates `Rg` (in nm) via ATSAS `autorg` when possible (or a
-sliding-window Guinier fit fallback) and searches a small set of plausible `rmax` values, selecting the one with
-the highest GNOM `Total Estimate` reported in the `.out`.
+Run ATSAS GNOM (system=1/5) to obtain a size distribution function \(D(R)\) for a polydisperse system from a 1D SAXS curve.
 
 ### Arguments
+
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Output directory (one subdirectory per input profile).
 - `shape` (str, default `spheres`): Polydisperse system model. Options:
@@ -608,8 +624,40 @@ the highest GNOM `Total Estimate` reported in the `.out`.
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
 ### Returns
-Dict with paths: `output_subdir`, `gnom_out_paths`, `best_gnom_out_path`, `best_summary_path`, `fit_params_path`,
-plus `best_dr_png_path`/`best_dr_png_error`, `fit_vs_exp_png_path`/`fit_vs_exp_png_error`, and `fits_csv_path`.
+
+`dict[str, str | list[str]]` with:
+
+- `output_subdir`: The per-sample output directory used for this profile.
+- `gnom_out_paths`: List of GNOM `.out` paths written for this profile (typically a single “best” `.out`).
+- `best_gnom_out_path`: Path to the selected “best” GNOM `.out`.
+- `best_summary_path`: Path to a YAML summary of candidate runs and the selected parameters.
+- `fit_params_path`: Path to a YAML file containing the fit parameters used for the final run.
+- `best_symlink_out_path`: Best-effort symlink path to the selected `.out` (may be missing on some filesystems).
+- `fits_csv_path`: Path to a CSV containing candidate scores/metadata.
+- `fit_vs_exp_png_path` / `fit_vs_exp_png_error`: Fit-vs-experiment plot output or error message.
+- `best_dr_png_path` / `best_dr_png_error`: \(D(R)\) plot output or error message.
+- `dr_csv_path`: Path to a CSV export of \(D(R)\) (if successfully parsed).
+
+### Python usage
+
+```python
+from autosaxs.skill import fit_sizes
+
+out = fit_sizes(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="sizes",
+    shape="spheres",
+    use_cache=True,
+)
+
+print(out["best_gnom_out_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs fit_sizes subtracted/sub_sample_01.dat --output-dir sizes --shape spheres
+```
 
 ---
 

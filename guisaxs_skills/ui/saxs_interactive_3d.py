@@ -43,7 +43,7 @@ def _build_isosurface_poly3d(
     from matplotlib import cm
     from matplotlib.colors import Normalize
 
-    from autosaxs.utils import calculate_atoms_density_and_isosurface
+    from autosaxs.core.utils import calculate_atoms_density_and_isosurface
 
     density, level, min_coords, max_coords = calculate_atoms_density_and_isosurface(
         atoms,
@@ -99,7 +99,7 @@ def _build_shape_isosurface_poly3d(
     from matplotlib import cm
     from matplotlib.colors import Normalize
 
-    from autosaxs.utils import calculate_shape_density_and_isosurface
+    from autosaxs.core.utils import calculate_shape_density_and_isosurface
 
     density, level, min_coords, max_coords = calculate_shape_density_and_isosurface(
         (shape_name, shape_params),
@@ -308,7 +308,7 @@ class SaxsInteractive3DWidget(QWidget):
             self.clear()
             return False
         try:
-            from autosaxs.utils import read_bodies_cif
+            from autosaxs.core.utils import read_bodies_cif
 
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):

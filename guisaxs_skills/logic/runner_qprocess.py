@@ -75,7 +75,9 @@ class SkillRunner(QObject):
         proc = QProcess(self)
         proc.setWorkingDirectory(str(self._workdir.resolve()))
         proc.setProgram(sys.executable)
-        proc.setArguments(["-m", "autosaxs.cli", *request.cli_argv()])
+        # autosaxs.cli is a package (no __main__.py), so `-m autosaxs.cli` fails.
+        # Run the actual CLI module that has `if __name__ == "__main__": ...`.
+        proc.setArguments(["-m", "autosaxs.cli.cli", *request.cli_argv()])
         proc.readyReadStandardOutput.connect(self._on_stdout)
         proc.readyReadStandardError.connect(self._on_stderr)
         proc.finished.connect(self._on_finished)

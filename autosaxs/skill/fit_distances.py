@@ -27,7 +27,7 @@ from .deps import (
     write_saxs_atsas_format,
 )
 from .common import DatPathExpressionArg, coerce_dat_path_expression, expand_files_from_unwrapped
-from ..guinier import find_guinier_region, run_autorg_atsas
+from .guinier_analysis.guinier import find_guinier_region, run_autorg_atsas
 
 
 def fit_distances(
@@ -41,17 +41,10 @@ def fit_distances(
     use_cache: bool = True,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Run ATSAS DATGNOM to obtain a pair distance distribution function p(r) for a **monodisperse** system from a 1D SAXS curve.
-
-    The skill invokes `gnom` from `PATH` in command-line mode, explicitly enforcing `--system=0` and running
-    an automated GNOM-based transform via `datgnom` with `Rg` (in nm). Input curves are expected in nm^-1 and are
-    passed through in ATSAS `.dat` format. If `rg_nm` and/or `first` are omitted, ATSAS ``autorg`` is run on the
-    profile: user-supplied values take precedence over AUTORG for each parameter. If AUTORG fails, the skill falls
-    back to the previous grid search for unset parameters; if `rg_nm` is still missing, a sliding-window Guinier fit
-    (:func:`autosaxs.guinier.find_guinier_region`) supplies `Rg`. When AUTORG succeeds and `last` is omitted, DATGNOM
-    is run without ``--last``. DATGNOM produces a single `.out` file; the `.out` contains, among other things, the p(r) section.
+    Run ATSAS DATGNOM to obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve.
 
     ### Arguments
+
     - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
     - `output_dir` (str, default `.`): Directory where the GNOM outputs are written (one subdirectory per input profile).
     - `rg_nm` (float | None, default `None`): Expected Rg in nm. If omitted, taken from AUTORG when possible, else from Guinier search.
@@ -61,9 +54,38 @@ def fit_distances(
     - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
     ### Returns
-    `dict[str, str]` with: `output_subdir`, `gnom_out_paths`, `best_gnom_out_path`, `best_summary_path`,
-    `fit_params_path` (YAML with the `rg_nm`, `first`, and `last` used for the final DATGNOM fit), plus the
-    existing artifact paths (`best_symlink_out_path`, `fits_csv_path`, PNG paths, etc.).
+
+    `dict[str, str | list[str]]` with:
+
+    - `output_subdir`: The per-sample output directory used for this profile.
+    - `gnom_out_paths`: List of DATGNOM `.out` paths written for this profile (typically a single “best” `.out`).
+    - `best_gnom_out_path`: Path to the selected “best” DATGNOM `.out`.
+    - `best_summary_path`: Path to a YAML summary of candidate runs and the selected parameters.
+    - `fit_params_path`: Path to a YAML file containing the fit parameters used for the final run.
+    - `best_symlink_out_path`: Best-effort symlink path to the selected `.out` (may be missing on some filesystems).
+    - `fits_csv_path`: Path to a CSV containing candidate scores/metadata.
+    - `fit_vs_exp_png_path` / `fit_vs_exp_png_error`: Fit-vs-experiment plot output or error message.
+    - `best_pr_png_path` / `best_pr_png_error`: \(p(r)\) plot output or error message.
+
+    ### Python usage
+
+    ```python
+    from autosaxs.skill import fit_distances
+
+    out = fit_distances(
+        profile="subtracted/sub_sample_01.dat",
+        output_dir="distances",
+        use_cache=True,
+    )
+
+    print(out["best_gnom_out_path"])
+    ```
+
+    ### CLI usage
+
+    ```bash
+    autosaxs fit_distances subtracted/sub_sample_01.dat --output-dir distances
+    ```
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))

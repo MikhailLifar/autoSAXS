@@ -16,11 +16,11 @@ if str(SCRIPT_DIR / "repos") not in sys.path:
 import matplotlib
 matplotlib.use("Agg")
 
-from autosaxs.context import Context
-from autosaxs.event_bus import EventBus, EventType
-from autosaxs.saxs_controller import Controller
-from autosaxs.report import _parse_descriptors_from_results
-from autosaxs import viewer
+from autosaxs.core.context import Context
+from autosaxs.core.event_bus import EventBus, EventType
+from autosaxs.pipeline.saxs_controller import Controller
+from autosaxs.core.utils import _parse_descriptors_from_results
+from autosaxs.core import viewer
 
 
 DEBUG_DIR = SCRIPT_DIR / "debug" / "unstable_rg_debug"

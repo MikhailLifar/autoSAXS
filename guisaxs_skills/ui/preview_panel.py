@@ -64,7 +64,7 @@ def _render_dat_to_png(src_path: str, out_path: str) -> bool:
     from matplotlib.figure import Figure
 
     try:
-        from autosaxs.utils import read_saxs
+        from autosaxs.core.utils import read_saxs
     except Exception:
         return False
 

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, get_args, get_origin, get_type_hints
 
 from ..core.models import SkillMeta, SkillParam
-from autosaxs.path_expression import (
+from autosaxs.core.path_expression import (
     ConfigPathExpression,
     DatPathExpression,
     PathExpression,

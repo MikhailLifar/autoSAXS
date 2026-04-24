@@ -1,0 +1,5 @@
+pipeline: protein_v0
+steps:
+- calibration
+- integration
+- subtraction

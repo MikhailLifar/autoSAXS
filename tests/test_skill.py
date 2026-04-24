@@ -40,7 +40,7 @@ from autosaxs.skill.integrate_proxy import integrate_proxy
 from autosaxs.skill.plot import plot
 from autosaxs.skill.plot_2d import plot_2d
 from autosaxs.skill.subtract import subtract
-from autosaxs.utils import read_saxs, write_saxs, write_data
+from autosaxs.core.utils import read_saxs, write_saxs, write_data
 
 
 # ---------------------------------------------------------------------------

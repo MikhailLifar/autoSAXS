@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import List, Optional, Union
 
-from .path_expression import (
+from ..core.path_expression import (
     ConfigPathExpression,
     DatPathExpression,
     PathExpression,

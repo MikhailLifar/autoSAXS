@@ -1,0 +1,49 @@
+[importlinter]
+root_package = autosaxs
+
+[importlinter:contract:core_independent]
+name = Core does not depend on higher layers
+type = forbidden
+source_modules =
+    autosaxs.core
+forbidden_modules =
+    autosaxs.skill
+    autosaxs.pipeline
+    autosaxs.cli
+
+[importlinter:contract:skill_independent]
+name = Skill does not depend on pipeline or cli
+type = forbidden
+source_modules =
+    autosaxs.skill
+forbidden_modules =
+    autosaxs.pipeline
+    autosaxs.cli
+
+[importlinter:contract:pipeline_cli_peers]
+name = Pipeline and CLI are peers (no cross-import)
+type = forbidden
+source_modules =
+    autosaxs.pipeline
+forbidden_modules =
+    autosaxs.cli
+
+[importlinter:contract:cli_pipeline_peers]
+name = CLI and Pipeline are peers (no cross-import)
+type = forbidden
+source_modules =
+    autosaxs.cli
+forbidden_modules =
+    autosaxs.pipeline
+
+[importlinter:contract:foreign_leaf]
+name = Foreign code does not import autosaxs
+type = forbidden
+source_modules =
+    autosaxs.foreign
+forbidden_modules =
+    autosaxs.core
+    autosaxs.skill
+    autosaxs.pipeline
+    autosaxs.cli
+

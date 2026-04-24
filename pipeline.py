@@ -3,7 +3,10 @@ Entry point for the interactive SAXS pipeline.
 Wires EventBus, connects CLI (or GUI), creates Controller and runs pipeline_interactive.
 See docs/pipeline_interactive_spec.md §3.
 """
-from autosaxs import EventBus, Controller, cli_interface, gui_interface, viewer
+from autosaxs.core.event_bus import EventBus
+from autosaxs.core import viewer
+from autosaxs.pipeline.saxs_controller import Controller
+from autosaxs.pipeline import cli_interface, gui_interface
 
 if __name__ == "__main__":
     event_bus = EventBus()

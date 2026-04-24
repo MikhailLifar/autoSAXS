@@ -8,7 +8,7 @@ shared runtime utilities from *within* the `autosaxs.skill` package.
 from __future__ import annotations
 
 # Eventing / progress
-from ..event_bus import EventBus, EventType  # noqa: F401
+from ..core.event_bus import EventBus, EventType  # noqa: F401
 
 # Wrappers / caching
 from .skill_wrap import (  # noqa: F401
@@ -23,16 +23,16 @@ from .skill_wrap import (  # noqa: F401
 )
 
 # Core algorithms / processing
-from ..autocalib import autocalib_ring_analysis  # noqa: F401
-from ..guinier import run_guinier_analysis  # noqa: F401
-from ..processor import (  # noqa: F401
+from .calibrate.autocalib import autocalib_ring_analysis  # noqa: F401
+from .guinier_analysis.guinier import run_guinier_analysis  # noqa: F401
+from ..core.processor import (  # noqa: F401
     IntegratorExtended,
     integrate_2d_to_1d,
     subtract_buffer,
 )
 
 # IO + misc helpers
-from ..utils import (  # noqa: F401
+from ..core.utils import (  # noqa: F401
     calc_chi2,
     compute_dammif_descriptors,
     ensure_q_nm,
@@ -47,5 +47,5 @@ from ..utils import (  # noqa: F401
 )
 
 # Plotting helpers
-from ..viewer import PLTViewer  # noqa: F401
+from ..core.viewer import PLTViewer  # noqa: F401
 
