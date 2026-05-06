@@ -57,7 +57,7 @@ def plot_2d(
     ### CLI usage
 
     ```bash
-    autosaxs plot_2d raw/sample_01.tif --output-dir plots_2d
+    autosaxs plot-2d raw/sample_01.tif --output-dir plots_2d
     ```
     """
     bus = EventBus()

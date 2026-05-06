@@ -23,10 +23,10 @@ from ..core.event_bus import EventBus
 from ..core.models import RunRequest
 from ..core.paths import latest_stderr_path, runs_dir
 from ..logic.runner_qprocess import RunOutcome, SkillRunner
-from .pipeline import LiveviewPipeline, LiveviewQueueStatus
-from .queue import FIFOQueue
+from .executor import LiveviewJobExecutor, LiveviewQueueStatus
 from .session_persistence import load_liveview_session_settings, save_liveview_session_settings
 from .state import LiveviewSessionState, LiveviewState
+from .state import AnalysisMode
 from .workdir import save_last_watchdir, select_watchdir
 from .watcher import DirectoryWatcher, WatcherConfig
 from .logic.middle_from_stem import apply_middle_view_from_disk
@@ -35,6 +35,7 @@ from ..logic.path_display import contracted_path_label
 from .ui.left_panel import LiveviewLeftPanel, pick_calibration_curve_image_path
 from .ui.middle_panel import LiveviewMiddlePanel
 from .ui.right_panel import LiveviewRightPanel
+from .ui.subtraction_wizard import SubtractionWizardDialog
 
 
 class LiveviewMainWindow(QMainWindow):
@@ -44,18 +45,17 @@ class LiveviewMainWindow(QMainWindow):
         self._state = LiveviewSessionState(watchdir=watchdir)
         load_liveview_session_settings(self._state)
 
-        self._queue = FIFOQueue()
         self._runner = SkillRunner(workdir=watchdir)
+        self._executor = LiveviewJobExecutor(state=self._state, runner=self._runner)
         self._watcher = DirectoryWatcher(
             directory=watchdir,
             cfg=WatcherConfig(recursive=False),
             on_new_file=self._on_new_file_detected,
         )
-        self._pipeline = LiveviewPipeline(state=self._state, runner=self._runner, queue=self._queue)
-        self._pipeline.queue_status.connect(self._on_queue_status)
-        self._pipeline.error.connect(self._on_error)
-        self._pipeline.latest_artifacts.connect(self._on_latest_artifacts)
-        self._pipeline.session_file_completed.connect(self._on_session_file_completed)
+        self._executor.queue_status.connect(self._on_queue_status)
+        self._executor.error.connect(self._on_error)
+        self._executor.latest_artifacts.connect(self._on_latest_artifacts)
+        self._executor.session_file_completed.connect(self._on_session_file_completed)
 
         self.setWindowTitle("guisaxs-liveview")
 
@@ -89,7 +89,7 @@ class LiveviewMainWindow(QMainWindow):
         layout.addWidget(self._splitter, 1)
         self.setCentralWidget(container)
 
-        self._pipeline.start()
+        self._executor.start()
         self._watcher.start()
         self._wire_ui()
         self._last_2d_path: str = ""
@@ -97,6 +97,7 @@ class LiveviewMainWindow(QMainWindow):
         self._watchdir_resolved = watchdir.resolve()
         self._apply_loaded_session_to_ui()
         self._refresh_history_chrome()
+        self._sub_wizard: SubtractionWizardDialog | None = None
 
     def _enforce_column_width_ratio(self) -> None:
         """Keep left:middle:right at 1:3:1 (spec). Right panel children can request huge min widths; cap and setSizes."""
@@ -136,7 +137,7 @@ class LiveviewMainWindow(QMainWindow):
         except Exception:
             pass
         try:
-            self._pipeline.stop()
+            self._executor.stop()
         except Exception:
             pass
         try:
@@ -147,17 +148,17 @@ class LiveviewMainWindow(QMainWindow):
 
     def _on_new_file_detected(self, path: str, detected_at_monotonic: float) -> None:
         # Called from watchdog thread. Enqueue only; no Qt calls here.
-        self._pipeline.enqueue(path=path, detected_at_monotonic=detected_at_monotonic)
+        self._executor.enqueue_tiff(path=path, detected_at_monotonic=detected_at_monotonic)
 
     def _middle_updates_follow_pipeline(self) -> bool:
-        hist = self._pipeline.session_processed_tiffs
+        hist = self._executor.session_processed_tiffs
         n = len(hist)
         if n == 0:
             return True
         return self._history_index == n - 1
 
     def _refresh_history_chrome(self) -> None:
-        hist = list(self._pipeline.session_processed_tiffs)
+        hist = list(self._executor.session_processed_tiffs)
         n = len(hist)
         if n == 0:
             self._middle.set_history_nav_visible(False)
@@ -174,7 +175,7 @@ class LiveviewMainWindow(QMainWindow):
         self._middle.set_process_enabled(True)
 
     def _on_session_file_completed(self, _path: str) -> None:
-        hist = self._pipeline.session_processed_tiffs
+        hist = self._executor.session_processed_tiffs
         n = len(hist)
         if n == 0:
             self._refresh_history_chrome()
@@ -186,7 +187,7 @@ class LiveviewMainWindow(QMainWindow):
         self._refresh_history_chrome()
 
     def _on_history_step(self, delta: int) -> None:
-        hist = list(self._pipeline.session_processed_tiffs)
+        hist = list(self._executor.session_processed_tiffs)
         n = len(hist)
         if n == 0 or delta == 0:
             return
@@ -206,7 +207,7 @@ class LiveviewMainWindow(QMainWindow):
         self._refresh_right_outputs_for_session_history()
 
     def _refresh_right_outputs_for_session_history(self) -> None:
-        hist = list(self._pipeline.session_processed_tiffs)
+        hist = list(self._executor.session_processed_tiffs)
         if not hist:
             # No completed session TIFFs yet: keep whatever live pipeline or manual runs showed.
             self._right.sync_modeling_ui_to_session_state()
@@ -225,7 +226,7 @@ class LiveviewMainWindow(QMainWindow):
         self._refresh_right_outputs_for_session_history()
 
     def _on_process_history_file_requested(self) -> None:
-        hist = list(self._pipeline.session_processed_tiffs)
+        hist = list(self._executor.session_processed_tiffs)
         if not hist:
             return
         idx = max(0, min(self._history_index, len(hist) - 1))
@@ -236,7 +237,7 @@ class LiveviewMainWindow(QMainWindow):
             key = path.strip()
         if not key:
             return
-        self._pipeline.enqueue(path=key, detected_at_monotonic=time.monotonic())
+        self._executor.enqueue_tiff(path=key, detected_at_monotonic=time.monotonic())
 
     def _on_queue_status(self, status: LiveviewQueueStatus) -> None:
         self._middle.set_queue_status(status)
@@ -304,8 +305,7 @@ class LiveviewMainWindow(QMainWindow):
         except Exception:
             pass
         try:
-            self._pipeline.stop()
-            self._pipeline.reset()
+            self._executor.stop()
         except Exception:
             pass
 
@@ -320,7 +320,17 @@ class LiveviewMainWindow(QMainWindow):
 
         runs_dir(self._state.watchdir).mkdir(parents=True, exist_ok=True)
         self._watcher.restart_at(new_p)
-        self._pipeline.start()
+        # Recreate executor so it uses the updated state + runner workdir cleanly.
+        try:
+            self._executor.deleteLater()
+        except Exception:
+            pass
+        self._executor = LiveviewJobExecutor(state=self._state, runner=self._runner)
+        self._executor.queue_status.connect(self._on_queue_status)
+        self._executor.error.connect(self._on_error)
+        self._executor.latest_artifacts.connect(self._on_latest_artifacts)
+        self._executor.session_file_completed.connect(self._on_session_file_completed)
+        self._executor.start()
         self._watchdir_resolved = new_p.resolve()
         wd_short, wd_full = contracted_path_label(new_p)
         self._watchdir_label.setText(wd_short)
@@ -381,9 +391,77 @@ class LiveviewMainWindow(QMainWindow):
         self._middle.tiff_files_dropped.connect(self._on_tiff_files_dropped)
         self._middle.history_step.connect(self._on_history_step)
         self._middle.process_history_file_requested.connect(self._on_process_history_file_requested)
+        self._middle.subtraction_wizard_requested.connect(self._open_subtraction_wizard)
         self._right.analysis_mode_changed.connect(self._on_analysis_mode_changed)
         self._runner.started.connect(self._on_runner_started)
         self._runner.finished.connect(self._on_runner_finished)
+
+    def _open_subtraction_wizard(self) -> None:
+        st = self._state.current_state()
+        if st not in (LiveviewState.C, LiveviewState.CD):
+            return
+        # While wizard is open, pause queue advancement (but do not cancel current skill).
+        self._executor.pause()
+        ctx = self._middle.current_subtraction_context()
+        sample_dat = str(ctx.get("sample_dat") or "")
+        buffer_dat = str(ctx.get("buffer_dat") or "")
+        subtracted_dat = str(ctx.get("subtracted_dat") or "")
+        subtract_options = ctx.get("subtract_options") if isinstance(ctx.get("subtract_options"), dict) else {}
+        if self._sub_wizard is None:
+            self._sub_wizard = SubtractionWizardDialog(
+                sample_dat=sample_dat,
+                buffer_dat=buffer_dat,
+                subtracted_dat=subtracted_dat,
+                subtract_options=subtract_options,
+                parent=self,
+            )
+            self._sub_wizard.preview_scale_changed.connect(self._middle.preview_manual_subtraction_scale)
+            self._sub_wizard.apply_requested.connect(self._on_subtraction_apply_requested)
+        else:
+            # Recreate dialog to update paths reliably (simpler than mutating internal state).
+            try:
+                self._sub_wizard.close()
+            except Exception:
+                pass
+            self._sub_wizard = SubtractionWizardDialog(
+                sample_dat=sample_dat,
+                buffer_dat=buffer_dat,
+                subtracted_dat=subtracted_dat,
+                subtract_options=subtract_options,
+                parent=self,
+            )
+            self._sub_wizard.preview_scale_changed.connect(self._middle.preview_manual_subtraction_scale)
+            self._sub_wizard.apply_requested.connect(self._on_subtraction_apply_requested)
+        try:
+            self._sub_wizard.finished.connect(lambda _code: self._executor.resume())  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        self._sub_wizard.show()
+        self._sub_wizard.raise_()
+        self._sub_wizard.activateWindow()
+
+    def _on_subtraction_apply_requested(self, scaling_factor: float) -> None:
+        ctx = self._middle.current_subtraction_context()
+        sample_dat = str(ctx.get("sample_dat") or "").strip()
+        buffer_dat = str(ctx.get("buffer_dat") or "").strip()
+        if not sample_dat or not buffer_dat:
+            QMessageBox.warning(self, "Subtraction", "Missing sample/buffer curves for the current file.")
+            return
+        # Stop ASAP, close wizard, enqueue high-priority rerun job, then resume.
+        self._executor.cancel_current()
+        try:
+            if self._sub_wizard is not None:
+                self._sub_wizard.close()
+        except Exception:
+            pass
+        job = self._executor.build_rerun_subtraction_job(
+            sample_dat=sample_dat,
+            buffer_dat=buffer_dat,
+            scaling_factor=float(scaling_factor),
+            priority=100,
+        )
+        self._executor.enqueue_job(job)
+        self._executor.resume()
 
     def _path_under_watchdir(self, path: Path) -> bool:
         watch = self._watchdir_resolved
@@ -412,12 +490,12 @@ class LiveviewMainWindow(QMainWindow):
                 continue
             src_r = p.resolve()
             if self._path_under_watchdir(src_r):
-                self._pipeline.enqueue(path=str(src_r), detected_at_monotonic=time.monotonic())
+                self._executor.enqueue_tiff(path=str(src_r), detected_at_monotonic=time.monotonic())
                 continue
             dest = self._watchdir_resolved / src_r.name
             shutil.copy2(src_r, dest)
             # Enqueue immediately; if the watcher also fires for this copy, put_if_absent drops the duplicate.
-            self._pipeline.enqueue(path=str(dest), detected_at_monotonic=time.monotonic())
+            self._executor.enqueue_tiff(path=str(dest), detected_at_monotonic=time.monotonic())
 
     def _on_run_calibration(self) -> None:
         if self._runner.is_running():

@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import sys
+from shutil import which
 from io import StringIO
 from pathlib import Path
 
@@ -35,7 +36,6 @@ from autosaxs.utils import calc_chi2, gaussian_pdf, schultz_pdf
 # -----------------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_DAT = SCRIPT_DIR / "../../temp/260226_to_Konarev/subtracted/sub_Pt_NPs_insitu_110C_00060_sample.dat"
-ATSAS_BIN = os.environ.get("ATSAS_BIN_PREFIX", os.path.expanduser("~/ATSAS-3.2.1-1/bin"))
 MIXTURE_EXE = "mixture"  # or "Mixture" on Windows
 # q: all I/O in nm^-1. Use scale 2 so MIXTURE reads and writes q in 1/nm (best fit in practice).
 Q_SCALE = 2  # 2 = 1/nm
@@ -163,10 +163,8 @@ def run_mixture(work_dir: Path, dat_basename: str, cmd_content: str) -> subproce
     cmd_path = work_dir / "mixture.cmd"
     with open(cmd_path, "w") as f:
         f.write(cmd_content)
-    exe = Path(ATSAS_BIN) / MIXTURE_EXE
-    if not exe.exists():
-        # try without path (in PATH)
-        exe = MIXTURE_EXE
+    exe_path = which(MIXTURE_EXE)
+    exe = exe_path if exe_path else MIXTURE_EXE
     with open(work_dir / "mixture.cmd") as f:
         proc = subprocess.run(
             [str(exe)],

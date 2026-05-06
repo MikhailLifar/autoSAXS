@@ -353,7 +353,7 @@ print(out["integrated_1d"])
 ### CLI usage
 
 ```bash
-autosaxs integrate_proxy raw/sample_01.tif --output-dir integration_proxy --mask mask.msk --npt 1000
+autosaxs integrate-proxy raw/sample_01.tif --output-dir integration_proxy --mask mask.msk --npt 1000
 ```
 
 ---
@@ -373,6 +373,7 @@ or legacy `match_tail`, optionally restricted to a q window (`q_min` / `q_max`).
 - `q_max` (float | None, default `None`): Upper bound of q-range; for `point_match` the match uses this as q intersect (upper edge of the window).
 - `sample_form` / `buffer_form` (str): For `point_match` only — each is `linear`, `Porod`, or `Porod-plus-linear`.
 - `point_match_factor` (float, default `0.995`): For `point_match`, scale satisfies `point_match_factor * I_sample_fit(q_max) = scale * I_buffer_fit(q_max)`.
+- `scaling_factor` (float | None, default `None`): If provided, overrides automatic scaling and uses this factor directly (must be finite and > 0).
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
 Important constraint:
@@ -502,7 +503,7 @@ print(out["plot_2d_png"])
 ### CLI usage
 
 ```bash
-autosaxs plot_2d raw/sample_01.tif --output-dir plots_2d
+autosaxs plot-2d raw/sample_01.tif --output-dir plots_2d
 ```
 
 ---
@@ -546,7 +547,7 @@ print(out["guinier_region_path"])
 ### CLI usage
 
 ```bash
-autosaxs guinier_analysis subtracted/sub_sample_01.dat --output-dir guinier
+autosaxs guinier-analysis subtracted/sub_sample_01.dat --output-dir guinier
 ```
 
 ---
@@ -656,7 +657,7 @@ print(out["best_gnom_out_path"])
 ### CLI usage
 
 ```bash
-autosaxs fit_sizes subtracted/sub_sample_01.dat --output-dir sizes --shape spheres
+autosaxs fit-sizes subtracted/sub_sample_01.dat --output-dir sizes --shape spheres
 ```
 
 ---
@@ -707,7 +708,7 @@ print(out["results_csv_path"])
 ### CLI usage
 
 ```bash
-autosaxs fit_mixture subtracted/sub_sample_01.dat --output-dir mixture --config-path config_autosaxs.yml       --q-min-nm 0.8 --q-max-nm 2.5
+autosaxs fit-mixture subtracted/sub_sample_01.dat --output-dir mixture --config-path config_autosaxs.yml       --q-min-nm 0.8 --q-max-nm 2.5
 ```
 
 ---
@@ -767,6 +768,7 @@ Run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile. If a GNOM o
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where `dammif` outputs are written.
 - `gnom_path` (str | None, default `None`): Optional path to a GNOM `.out` file. If provided, `dammif` uses it.
+- `dammif_reps_num` (int, default `1`): Number of independent DAMMIF runs (replicas) to execute.
 - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
 ### Returns
@@ -784,6 +786,7 @@ out = fit_dammif(
     profile="subtracted/sub_sample_01.dat",
     output_dir="dammif",
     gnom_path="guinier/sample_01_gnom.out",
+    dammif_reps_num=1,
     use_cache=True,
 )
 
@@ -793,7 +796,7 @@ print(out["output_subdir"])
 ### CLI usage
 
 ```bash
-autosaxs fit_dammif subtracted/sub_sample_01.dat --output-dir dammif --gnom-path guinier/sample_01_gnom.out
+autosaxs fit_dammif subtracted/sub_sample_01.dat --output-dir dammif --gnom-path guinier/sample_01_gnom.out --dammif-reps-num 1
 ```
 
 ---

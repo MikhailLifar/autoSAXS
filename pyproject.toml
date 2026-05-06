@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autosaxs"
-version = "2.0.0"
+version = "2.1.0"
 description = "Interactive SAXS pipeline core: calibration, integration, subtraction, ATSAS descriptors, plots, shape fitting, reports"
 requires-python = ">=3.9"
 license = "MIT"
@@ -56,9 +56,11 @@ include = ["autosaxs*", "guisaxs*", "guisaxs_skills*", "guisaxs_liveview*"]
 
 [tool.setuptools.package-data]
 autosaxs = [
-    "config_base.conf",
-    "global/*.yml",
-    "global/templates/*",
-    "prompts/**/*.txt",
-    "pipelines/*.txt",
+    "resources/config_base.conf",
+    "resources/global/*.yml",
+    "resources/global/templates/*",
+    "resources/prompts/**/*.txt",
+    "resources/pipelines/*.txt",
+    "resources/readme/*.md",
+    "resources/ai_skills/*.md",
 ]

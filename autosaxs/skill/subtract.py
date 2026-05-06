@@ -37,6 +37,7 @@ def subtract(
     sample_form: str = "Porod-plus-linear",
     buffer_form: str = "linear",
     point_match_factor: float = 0.995,
+    scaling_factor: Optional[float] = None,
     use_cache: bool = True,
 ) -> Dict[str, Union[str, List[str]]]:
     """
@@ -53,6 +54,7 @@ def subtract(
     - `q_max` (float | None, default `None`): Upper bound of q-range; for `point_match` the match uses this as q intersect (upper edge of the window).
     - `sample_form` / `buffer_form` (str): For `point_match` only — each is `linear`, `Porod`, or `Porod-plus-linear`.
     - `point_match_factor` (float, default `0.995`): For `point_match`, scale satisfies `point_match_factor * I_sample_fit(q_max) = scale * I_buffer_fit(q_max)`.
+    - `scaling_factor` (float | None, default `None`): If provided, overrides automatic scaling and uses this factor directly (must be finite and > 0).
     - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
     Important constraint:
@@ -123,6 +125,7 @@ def subtract(
         use_cache=use_cache,
         method=method_key,
         match_tail_ops=match_tail_ops_out,
+        scaling_factor=scaling_factor,
     )
 
 
@@ -141,6 +144,7 @@ def _subtract_paths(
     sample_index: int = 0,
     method: str = "point_match",
     match_tail_ops: Optional[Dict] = None,
+    scaling_factor: Optional[float] = None,
 ) -> Dict[str, Union[str, List[str]]]:
     _ = config, use_cache, sample_index
     sample_1d = input_paths.get("sample_1d")
@@ -162,6 +166,7 @@ def _subtract_paths(
         dest,
         method=method,
         match_tail_ops=match_tail_ops,
+        scaling_factor=scaling_factor,
     )
     q_sample, I_sample, sigma_sample, _ = read_saxs(sample_1d)
     diff_plot_path = os.path.join(output_dir, f"diff_{base}.png")

@@ -29,9 +29,6 @@ from ..foreign.supervised_ml.whittaker_smooth import whittaker_smooth
 RESOURCES_DIR = os.path.join(_autosaxs_pkg_dir, "resources")
 GLOBALS_DIR = os.path.join(RESOURCES_DIR, "global")
 TEMPLATES_DIR = os.path.join(GLOBALS_DIR, 'templates')
-with open(os.path.join(GLOBALS_DIR, 'env.yml'), 'r') as fread:
-    ENV = yaml.safe_load(fread)
-ATSAS_BIN_PREFIX = os.path.expanduser(str(ENV["ATSAS_BIN_PREFIX"]))
 
 # Pipeline units convention: q in nm^-1 (inverse nanometers), Rg and lengths in nm.
 # PyFAI integrate1d must be called with unit='q_nm^-1'. ATSAS (autorg, datgnom, etc.)

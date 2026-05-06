@@ -25,6 +25,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pytest
+from guisaxs_skills.liveview.jobs import Job, JobStep
+from guisaxs_skills.core.models import RunRequest
+from guisaxs_skills.liveview.executor import LiveviewJobExecutor
+from guisaxs_skills.liveview.state import LiveviewSessionState
 
 _REPOS = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _TESTS_DIR = os.path.join(_REPOS, "tests")
@@ -91,15 +95,19 @@ def _wait_until_app_idle(app: Any, win: Any, timeout_sec: float) -> bool:
         except Exception:
             pass
         try:
-            pipe = getattr(win, "_pipeline", None)
-            if pipe is not None:
-                # no current item and no pending step -> idle between items
-                if getattr(pipe, "_current_item", None) is not None:
+            ex = getattr(win, "_executor", None)
+            if ex is not None:
+                if getattr(ex, "_current_incoming", None) is not None:
                     return False
-                if getattr(pipe, "_pending_step", None) is not None:
+                if getattr(ex, "_current_job", None) is not None:
                     return False
-                q = getattr(pipe, "_queue", None)
-                if q is not None and hasattr(q, "__len__") and len(q) > 0:
+                if getattr(ex, "_pending_step_name", None) is not None:
+                    return False
+                inc = getattr(ex, "_incoming", None)
+                if inc is not None and hasattr(inc, "__len__") and len(inc) > 0:
+                    return False
+                jq = getattr(ex, "_jobs", None)
+                if jq is not None and hasattr(jq, "__len__") and len(jq) > 0:
                     return False
         except Exception:
             pass
@@ -261,6 +269,70 @@ def _set_form_text_field(form: Any, *, name: str, text: str) -> bool:
     except Exception:
         return False
     return False
+
+
+def test_executor_requeues_cancelled_job_before_normal_jobs(tmp_path: Path):
+    """
+    Unit-ish check: when cancel_current() causes a step to fail, the executor requeues the current job
+    with priority between rerun (100) and normal (0), i.e. it should be chosen before normal jobs.
+    """
+
+    class _DummySignal:
+        def connect(self, _fn):
+            return None
+
+    class _DummyRunner:
+        def __init__(self):
+            self.finished = _DummySignal()
+
+        def is_running(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            return None
+
+        def start(self, _req) -> None:
+            return None
+
+    runner = _DummyRunner()
+    state = LiveviewSessionState(watchdir=tmp_path)
+    ex = LiveviewJobExecutor(state=state, runner=runner)  # type: ignore[arg-type]
+
+    current = Job(
+        id="cur",
+        priority=0,
+        steps=[JobStep(name="integrate", request=RunRequest("integrate", [], {}))],
+        context={"tiff_path": str(tmp_path / "a.tif")},
+    )
+    normal = Job(
+        id="norm",
+        priority=0,
+        steps=[JobStep(name="integrate", request=RunRequest("integrate", [], {}))],
+        context={},
+    )
+    rerun = Job(
+        id="rerun",
+        priority=100,
+        steps=[JobStep(name="subtract", request=RunRequest("subtract", [], {}))],
+        context={},
+    )
+
+    ex._current_job = current  # noqa: SLF001
+    ex._pending_step_name = "integrate"  # noqa: SLF001
+    ex._jobs.put(normal)  # noqa: SLF001
+    ex._jobs.put(rerun)  # noqa: SLF001
+
+    ex.cancel_current()
+    from guisaxs_skills.logic.runner_qprocess import RunOutcome
+
+    ex._on_skill_finished(RunOutcome(success=False, exit_code=15, result={}, request=None))  # noqa: SLF001
+
+    j1 = ex._jobs.get_nowait()  # noqa: SLF001
+    assert j1 is not None and j1.id == "rerun"
+    j2 = ex._jobs.get_nowait()  # noqa: SLF001
+    assert j2 is not None and j2.id.startswith("cur:retry:")
+    j3 = ex._jobs.get_nowait()  # noqa: SLF001
+    assert j3 is not None and j3.id == "norm"
 
 
 def _assert_curves_match_validation(*, integrated_path: Path, subtracted_path: Path) -> None:
@@ -517,7 +589,7 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
             except Exception:
                 pass
             try:
-                win._pipeline.stop()  # noqa: SLF001
+                win._executor.stop()  # noqa: SLF001
             except Exception:
                 pass
         except Exception:

@@ -233,6 +233,196 @@ class LogCurvePlot(FigureCanvas):
         self.draw_idle()
         self.setCursor(Qt.PointingHandCursor if (m_s.any() or m_b.any()) else Qt.ArrowCursor)
 
+    def plot_sample_and_scaled_buffer_manual(
+        self,
+        sample_path: str,
+        buffer_path: str,
+        *,
+        scaling_factor: float,
+    ) -> None:
+        """
+        Display-only overlay: sample curve and buffer curve scaled by a user-provided factor.
+        No autosaxs skills are invoked and no files are written.
+        """
+        from autosaxs.core.utils import read_saxs
+
+        try:
+            scale = float(scaling_factor)
+        except (TypeError, ValueError):
+            scale = float("nan")
+        if not np.isfinite(scale) or scale <= 0.0:
+            self.clear()
+            self._ax.set_title("Invalid scaling factor")
+            self.draw_idle()
+            return
+
+        try:
+            q_s, I_s, sig_s, _meta_s = read_saxs(sample_path)
+            q_b, I_b, sig_b, _meta_b = read_saxs(buffer_path)
+            q_s = np.asarray(q_s, dtype=float)
+            I_s = np.asarray(I_s, dtype=float)
+            q_b = np.asarray(q_b, dtype=float)
+            I_b = np.asarray(I_b, dtype=float)
+            sig_s = np.asarray(sig_s, dtype=float) if sig_s is not None else None
+            sig_b = np.asarray(sig_b, dtype=float) if sig_b is not None else None
+        except Exception:
+            self.clear()
+            self._ax.set_title("Could not load sample/buffer curves")
+            self.draw_idle()
+            return
+
+        q = q_s
+        if q_b.size and q_s.size and not np.array_equal(q_b, q_s):
+            I_b = np.interp(q_s, q_b, I_b)
+            if sig_b is not None:
+                sig_b = np.interp(q_s, q_b, sig_b)
+        I_buff_scaled = np.asarray(I_b, dtype=float) * float(scale)
+        sig_buff_scaled = sig_b * float(scale) if sig_b is not None else None
+
+        m_s = np.isfinite(q) & np.isfinite(I_s) & (I_s > 0)
+        m_b = np.isfinite(q) & np.isfinite(I_buff_scaled) & (I_buff_scaled > 0)
+        if sig_s is not None:
+            m_s = m_s & np.isfinite(sig_s) & (sig_s >= 0)
+        if sig_buff_scaled is not None:
+            m_b = m_b & np.isfinite(sig_buff_scaled) & (sig_buff_scaled >= 0)
+
+        self._ax.clear()
+        if m_s.any():
+            qq = q[m_s]
+            ii = I_s[m_s]
+            ss = sig_s[m_s] if sig_s is not None else None
+            if ss is not None:
+                ss = np.minimum(ss, 0.99 * ii)
+                self._ax.errorbar(
+                    qq,
+                    ii,
+                    yerr=ss,
+                    fmt="o",
+                    markersize=2.8,
+                    linewidth=0,
+                    elinewidth=0.7,
+                    capsize=0,
+                    alpha=0.9,
+                    label="sample",
+                )
+            else:
+                self._ax.scatter(qq, ii, s=10, alpha=0.9, label="sample")
+        if m_b.any():
+            qq = q[m_b]
+            ii = I_buff_scaled[m_b]
+            ss = sig_buff_scaled[m_b] if sig_buff_scaled is not None else None
+            if ss is not None:
+                ss = np.minimum(ss, 0.99 * ii)
+                self._ax.errorbar(
+                    qq,
+                    ii,
+                    yerr=ss,
+                    fmt="o",
+                    markersize=2.8,
+                    linewidth=0,
+                    elinewidth=0.7,
+                    capsize=0,
+                    alpha=0.75,
+                    label="buffer (scaled)",
+                )
+            else:
+                self._ax.scatter(qq, ii, s=10, alpha=0.75, label="buffer (scaled)")
+        self._ax.legend(fontsize=8)
+        self._ax.set_title("S + buffer")
+        self._ax.set_xlabel(self._x_label)
+        self._ax.set_ylabel("I (a.u.)")
+        self._ax.set_yscale("log")
+        self._ax.grid(True, alpha=0.2)
+        self.draw_idle()
+        self.setCursor(Qt.PointingHandCursor if (m_s.any() or m_b.any()) else Qt.ArrowCursor)
+
+    def plot_subtracted_preview_manual(
+        self,
+        sample_path: str,
+        buffer_path: str,
+        *,
+        scaling_factor: float,
+    ) -> None:
+        """
+        Display-only subtracted curve preview computed as I_sub = I_sample - scaling_factor * I_buffer.
+        No files are written.
+        """
+        from autosaxs.core.utils import read_saxs
+
+        try:
+            scale = float(scaling_factor)
+        except (TypeError, ValueError):
+            scale = float("nan")
+        if not np.isfinite(scale) or scale <= 0.0:
+            self.clear()
+            self._ax.set_title("Invalid scaling factor")
+            self.draw_idle()
+            return
+
+        try:
+            q_s, I_s, sig_s, _meta_s = read_saxs(sample_path)
+            q_b, I_b, sig_b, _meta_b = read_saxs(buffer_path)
+            q_s = np.asarray(q_s, dtype=float)
+            I_s = np.asarray(I_s, dtype=float)
+            q_b = np.asarray(q_b, dtype=float)
+            I_b = np.asarray(I_b, dtype=float)
+            sig_s = np.asarray(sig_s, dtype=float) if sig_s is not None else None
+            sig_b = np.asarray(sig_b, dtype=float) if sig_b is not None else None
+        except Exception:
+            self.clear()
+            self._ax.set_title("Could not load sample/buffer curves")
+            self.draw_idle()
+            return
+
+        q = q_s
+        if q_b.size and q_s.size and not np.array_equal(q_b, q_s):
+            I_b = np.interp(q_s, q_b, I_b)
+            if sig_b is not None:
+                sig_b = np.interp(q_s, q_b, sig_b)
+        I_sub = np.asarray(I_s, dtype=float) - (np.asarray(I_b, dtype=float) * float(scale))
+
+        sig_sub = None
+        if sig_s is not None and sig_b is not None:
+            try:
+                sig_sub = np.asarray(sig_s, dtype=float) + (np.asarray(sig_b, dtype=float) * float(scale))
+            except Exception:
+                sig_sub = None
+
+        m = np.isfinite(q) & np.isfinite(I_sub) & (I_sub > 0)
+        if sig_sub is not None:
+            m = m & np.isfinite(sig_sub) & (sig_sub >= 0)
+
+        self._ax.clear()
+        if m.any():
+            qq = q[m]
+            ii = I_sub[m]
+            ss = sig_sub[m] if sig_sub is not None else None
+            if ss is not None:
+                ss = np.minimum(ss, 0.99 * ii)
+                self._ax.errorbar(
+                    qq,
+                    ii,
+                    yerr=ss,
+                    fmt="o",
+                    markersize=3.0,
+                    linewidth=0,
+                    elinewidth=0.8,
+                    capsize=0,
+                    alpha=0.9,
+                    label="subtracted",
+                )
+                self._ax.legend(fontsize=8)
+            else:
+                self._ax.scatter(qq, ii, s=10, alpha=0.9, label="subtracted")
+                self._ax.legend(fontsize=8)
+        self._ax.set_title("Sub")
+        self._ax.set_xlabel(self._x_label)
+        self._ax.set_ylabel("I (a.u.)")
+        self._ax.set_yscale("log")
+        self._ax.grid(True, alpha=0.2)
+        self.draw_idle()
+        self.setCursor(Qt.PointingHandCursor if m.any() else Qt.ArrowCursor)
+
 
 class DatCurveViewerDialog(QDialog):
     """

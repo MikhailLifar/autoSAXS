@@ -37,6 +37,7 @@ def fit_dammif(
     output_dir: str = ".",
     *,
     gnom_path: Optional[SingletonPathExpressionArg] = None,
+    dammif_reps_num: int = 1,
     use_cache: bool = True,
 ) -> Dict[str, Union[str, List[str]]]:
     """
@@ -47,6 +48,7 @@ def fit_dammif(
     - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
     - `output_dir` (str, default `.`): Directory where `dammif` outputs are written.
     - `gnom_path` (str | None, default `None`): Optional path to a GNOM `.out` file. If provided, `dammif` uses it.
+    - `dammif_reps_num` (int, default `1`): Number of independent DAMMIF runs (replicas) to execute.
     - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
 
     ### Returns
@@ -64,6 +66,7 @@ def fit_dammif(
         profile="subtracted/sub_sample_01.dat",
         output_dir="dammif",
         gnom_path="guinier/sample_01_gnom.out",
+        dammif_reps_num=1,
         use_cache=True,
     )
 
@@ -73,11 +76,13 @@ def fit_dammif(
     ### CLI usage
 
     ```bash
-    autosaxs fit_dammif subtracted/sub_sample_01.dat --output-dir dammif --gnom-path guinier/sample_01_gnom.out
+    autosaxs fit_dammif subtracted/sub_sample_01.dat --output-dir dammif --gnom-path guinier/sample_01_gnom.out --dammif-reps-num 1
     ```
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
+    if int(dammif_reps_num) < 1:
+        raise ValueError("dammif_reps_num must be >= 1")
     profile = coerce_dat_path_expression(profile)
     expanded_profiles = expand_files_from_unwrapped(profile.unwrap(), kind="1d_dat")
     for p in expanded_profiles:
@@ -92,12 +97,10 @@ def fit_dammif(
     return _fit_dammif_paths(
         input_paths=input_batch[0] if len(input_batch) == 1 else input_batch,
         output_dir=output_dir,
+        dammif_reps_num=int(dammif_reps_num),
         event_bus=bus,
         use_cache=use_cache,
     )
-
-
-DAMMIF_REPS_NUM = 2
 
 
 @apply_batch(stem_from_keys="profile", per_sample_subdir="always")
@@ -109,12 +112,15 @@ DAMMIF_REPS_NUM = 2
 def _fit_dammif_paths(
     input_paths: Dict[str, Union[str, List[str]]],
     output_dir: str,
+    dammif_reps_num: int = 1,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
     use_cache: bool = True,
     sample_index: int = 0,
 ) -> Dict[str, Union[str, List[str]]]:
     _ = config, use_cache, sample_index
+    if int(dammif_reps_num) < 1:
+        raise ValueError("dammif_reps_num must be >= 1")
     profile = input_paths.get("profile")
     gnom_path = input_paths.get("gnom_path") or profile
     if isinstance(profile, list):
@@ -136,7 +142,7 @@ def _fit_dammif_paths(
         event_bus.publish(EventType.MESSAGE, {"text": "DAMMIF fit…"})
     base = _strip_sub_int_prefix(os.path.splitext(os.path.basename(gnom_path))[0])
     os.makedirs(output_dir, exist_ok=True)
-    for i in range(1, int(DAMMIF_REPS_NUM) + 1):
+    for i in range(1, int(dammif_reps_num) + 1):
         # `cwd=output_dir` means DAMMIF prefixes should be relative,
         # otherwise it may attempt to write to output_dir/output_dir/...
         dammif_prefix = f"dammif-{i}"
@@ -160,7 +166,7 @@ def _fit_dammif_paths(
     # If DAMMIF is given a GNOM .out, its .fir contains the exact curve DAMMIF fitted (often scaled/regularized),
     # which may not be on the same intensity scale as the original .dat.
     exp_ref: Optional[tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]] = None
-    for i in range(DAMMIF_REPS_NUM):
+    for i in range(int(dammif_reps_num)):
         fir_path = os.path.join(output_dir, f"dammif-{i+1}.fir")
         cif_path = os.path.join(output_dir, f"dammif-{i+1}-1.cif")
         if not os.path.isfile(fir_path):

@@ -99,7 +99,7 @@ def fit_sizes(
     ### CLI usage
 
     ```bash
-    autosaxs fit_sizes subtracted/sub_sample_01.dat --output-dir sizes --shape spheres
+    autosaxs fit-sizes subtracted/sub_sample_01.dat --output-dir sizes --shape spheres
     ```
     """
     bus = EventBus()

@@ -60,7 +60,7 @@ def guinier_analysis(
     ### CLI usage
 
     ```bash
-    autosaxs guinier_analysis subtracted/sub_sample_01.dat --output-dir guinier
+    autosaxs guinier-analysis subtracted/sub_sample_01.dat --output-dir guinier
     ```
     """
     bus = EventBus()

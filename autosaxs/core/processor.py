@@ -776,14 +776,24 @@ def subtract_buffer(
     buffer_path, src_path, destpath,
     image_path=None, 
     method='match_tail', match_tail_ops=None, 
+    scaling_factor: Optional[float] = None,
     ):
     q_buff, I_buff, sigma_buff, _ = read_saxs(buffer_path)
 
-    scaling_factor = 1.00
+    manual_scale: Optional[float] = None
+    if scaling_factor is not None:
+        try:
+            manual_scale = float(scaling_factor)
+        except (TypeError, ValueError):
+            manual_scale = None
+        if manual_scale is None or not np.isfinite(manual_scale) or manual_scale <= 0.0:
+            raise ValueError("subtract_buffer: scaling_factor must be a finite positive number when provided")
 
     q, I, sigma, _ = read_saxs(src_path)
+    scaling_factor = 1.00 if manual_scale is None else float(manual_scale)
     method_key = str(method).strip().lower().replace("-", "_")
-    if method_key in ('match_tail', 'point_match'):
+    algo_ops = None
+    if manual_scale is None and method_key in ('match_tail', 'point_match'):
         algo_ops = {'q_range_abs': None, 
                     'q_range_rel': (0.8, None), 
                     'approach_factor': 1.00,
@@ -868,6 +878,7 @@ def subtract_buffer(
             'subtract': {
                 'method': method_key,
                 'scaling_factor': float(scaling_factor),
+                'manual_scaling_factor': bool(manual_scale is not None),
                 'match_tail_ops': used_ops,
             },
         },
@@ -1048,7 +1059,7 @@ def subtract_buffer(
 #     )
 
 #     result = subprocess.run(
-#         os.path.join(ATSAS_BIN_PREFIX, 'primus'),
+#         "primus",  # ATSAS executables are expected on PATH
 #         input=primus_script,
 #         text=True,
 #         capture_output=True,

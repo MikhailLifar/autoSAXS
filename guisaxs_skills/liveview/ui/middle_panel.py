@@ -32,6 +32,7 @@ class LiveviewMiddlePanel(QWidget):
     tiff_files_dropped = pyqtSignal(object)  # list[str]
     history_step = pyqtSignal(int)  # -1 = older, +1 = newer
     process_history_file_requested = pyqtSignal()
+    subtraction_wizard_requested = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -41,6 +42,7 @@ class LiveviewMiddlePanel(QWidget):
         self._compare_sample_path = ""
         self._compare_buffer_path = ""
         self._sub_subtract_opts: Dict[str, Any] = {}
+        self._manual_preview_scale: Optional[float] = None
 
         self._nav_frame = QWidget()
         nav_lay = QHBoxLayout(self._nav_frame)
@@ -201,7 +203,7 @@ class LiveviewMiddlePanel(QWidget):
     def _on_mpl_click_open_compare(self, ev: object) -> None:
         if not self._is_left_click_in_axes(ev):
             return
-        self._open_compare_viewer()
+        self.subtraction_wizard_requested.emit()
 
     def _on_mpl_click_open_subtracted(self, ev: object) -> None:
         if not self._is_left_click_in_axes(ev):
@@ -229,6 +231,7 @@ class LiveviewMiddlePanel(QWidget):
         self._compare_buffer_path = ""
         self._current_subtracted_path = ""
         self._sub_subtract_opts = {}
+        self._manual_preview_scale = None
         self._compare_plot.clear()
         self._subtracted_plot.clear()
 
@@ -246,6 +249,7 @@ class LiveviewMiddlePanel(QWidget):
         self._compare_buffer_path = buffer_dat.strip()
         self._current_subtracted_path = subtracted_dat.strip()
         self._sub_subtract_opts = dict(subtract_options or {})
+        self._manual_preview_scale = None
         self._compare_plot.set_x_label("q (nm$^{-1}$)")
         self._subtracted_plot.set_x_label("q (nm$^{-1}$)")
         if self._compare_sample_path and self._compare_buffer_path:
@@ -261,6 +265,27 @@ class LiveviewMiddlePanel(QWidget):
             self._subtracted_plot.plot_dat(self._current_subtracted_path, label="subtracted")
         else:
             self._subtracted_plot.clear()
+
+    def current_subtraction_context(self) -> Dict[str, Any]:
+        """Paths + subtract options for the currently displayed file (state C/CD)."""
+        return {
+            "sample_dat": self._compare_sample_path,
+            "buffer_dat": self._compare_buffer_path,
+            "subtracted_dat": self._current_subtracted_path,
+            "subtract_options": dict(self._sub_subtract_opts or {}),
+        }
+
+    def preview_manual_subtraction_scale(self, scaling_factor: float) -> None:
+        """
+        Update compare + subtracted plots using a manual scaling factor (no file writes).
+        """
+        self._manual_preview_scale = float(scaling_factor)
+        sp = (self._compare_sample_path or "").strip()
+        bp = (self._compare_buffer_path or "").strip()
+        if not sp or not bp:
+            return
+        self._compare_plot.plot_sample_and_scaled_buffer_manual(sp, bp, scaling_factor=self._manual_preview_scale)
+        self._subtracted_plot.plot_subtracted_preview_manual(sp, bp, scaling_factor=self._manual_preview_scale)
 
     def show_image(self, path: str) -> None:
         self._current_image_path = path or ""

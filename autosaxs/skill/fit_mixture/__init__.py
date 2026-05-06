@@ -72,7 +72,7 @@ def fit_mixture(
     ### CLI usage
 
     ```bash
-    autosaxs fit_mixture subtracted/sub_sample_01.dat --output-dir mixture --config-path config_autosaxs.yml \
+    autosaxs fit-mixture subtracted/sub_sample_01.dat --output-dir mixture --config-path config_autosaxs.yml \
       --q-min-nm 0.8 --q-max-nm 2.5
     ```
     """

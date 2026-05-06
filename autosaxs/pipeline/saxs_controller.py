@@ -18,7 +18,6 @@ from ..core.context import Context
 from ..core.event_bus import EventBus, EventType
 from ..core.utils import (
     LATEST_STEPS_PATH,
-    ATSAS_BIN_PREFIX,
     read_saxs,
     calc_chi2,
     read_bodies_cif,

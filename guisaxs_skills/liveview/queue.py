@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Deque, Optional
 
+import heapq
+import itertools
+from typing import List, Tuple
+
+from .jobs import Job
+
 
 @dataclass(frozen=True)
 class QueueItem:
@@ -51,4 +57,32 @@ class FIFOQueue:
 
     def __len__(self) -> int:
         return len(self._q)
+
+
+class JobQueue:
+    """
+    Priority-aware queue for `Job`s.
+
+    Higher `job.priority` runs first. FIFO ordering is preserved among jobs with equal priority.
+    """
+
+    def __init__(self) -> None:
+        self._seq = itertools.count()
+        self._heap: List[Tuple[int, int, Job]] = []
+
+    def clear(self) -> None:
+        self._heap.clear()
+
+    def put(self, job: Job) -> None:
+        pri = int(getattr(job, "priority", 0))
+        heapq.heappush(self._heap, (-pri, next(self._seq), job))
+
+    def get_nowait(self) -> Optional[Job]:
+        if not self._heap:
+            return None
+        _pri, _seq, job = heapq.heappop(self._heap)
+        return job
+
+    def __len__(self) -> int:
+        return len(self._heap)
 

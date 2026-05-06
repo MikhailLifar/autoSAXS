@@ -85,7 +85,7 @@ def integrate_proxy(
     ### CLI usage
 
     ```bash
-    autosaxs integrate_proxy raw/sample_01.tif --output-dir integration_proxy --mask mask.msk --npt 1000
+    autosaxs integrate-proxy raw/sample_01.tif --output-dir integration_proxy --mask mask.msk --npt 1000
     ```
     """
     bus = EventBus()

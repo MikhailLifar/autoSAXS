@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import shutil
 import sys
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, get_args, get_origin, get_type_hints
 
 from ..core.path_expression import ConfigPathExpression, PathExpression, SingletonPathExpression
@@ -134,11 +136,129 @@ def _skill_functions() -> Dict[str, Callable[..., Any]]:
     return dict(skill_mod.list_skills(include_reports=True))
 
 
-def _add_skill_subparser(subparsers: argparse._SubParsersAction, name: str, fn: Callable[..., Any]) -> None:
+def _read_ai_skill_template() -> str:
+    """
+    Load the SKILL.md template shipped with the autosaxs package.
+
+    Uses importlib.resources when available so this works from installed wheels.
+    """
+    try:
+        from importlib.resources import files  # py3.9+
+
+        return (files("autosaxs.resources.ai_skills") / "template.md").read_text(encoding="utf-8")
+    except Exception:
+        # Fallback for non-standard environments (editable installs, etc.)
+        return (Path(__file__).resolve().parents[1] / "resources" / "ai_skills" / "template.md").read_text(
+            encoding="utf-8"
+        )
+
+
+def _read_ai_skills_readme_template() -> str:
+    """
+    Load the skills/README.md template shipped with the autosaxs package.
+    """
+    try:
+        from importlib.resources import files  # py3.9+
+
+        return (files("autosaxs.resources.ai_skills") / "readme_template.md").read_text(encoding="utf-8")
+    except Exception:
+        return (Path(__file__).resolve().parents[1] / "resources" / "ai_skills" / "readme_template.md").read_text(
+            encoding="utf-8"
+        )
+
+
+def _extract_frontmatter_field(md: str, field: str) -> Optional[str]:
+    """
+    Best-effort YAML-frontmatter extraction for single-line `field: value` entries.
+    """
+    lines = (md or "").splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    for i in range(1, min(len(lines), 200)):
+        if lines[i].strip() == "---":
+            break
+        s = lines[i].strip()
+        if s.startswith(field + ":"):
+            return s.split(":", 1)[1].strip()
+    return None
+
+
+def _fill_template(template: str, *, values: Dict[str, str]) -> str:
+    out = template
+    for k, v in values.items():
+        out = out.replace("{{" + k + "}}", v)
+    return out
+
+
+def _skill_to_agent_skill_md(*, name: str, fn: Callable[..., Any]) -> str:
+    """
+    Render a Cursor-style Agent Skill `SKILL.md` from an autosaxs skill docstring.
+
+    The function docstring is treated as the single source of truth.
+    """
+    doc = inspect.getdoc(fn) or ""
+    first_line = ""
+    for line in doc.splitlines():
+        s = line.strip()
+        if s:
+            first_line = s
+            break
+    description = first_line or f"autosaxs skill: {name}"
+    template = _read_ai_skill_template()
+    return _fill_template(
+        template,
+        values={
+            "name": name,
+            "description": description,
+            "command": name,
+            "python_name": name.replace("-", "_"),
+            "docstring": doc.rstrip(),
+        },
+    ).rstrip() + "\n"
+
+
+def _add_get_readme_subparser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "get-readme",
+        help="Generate autosaxs README.md",
+    )
+    p.set_defaults(_autosaxs_internal_cmd="get-readme")
+    p.add_argument(
+        "-o",
+        "--output-dir",
+        dest="output_dir",
+        default=".",
+        help="Directory where README.md will be written (default: current directory)",
+    )
+
+
+def _add_get_skills_subparser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "get-skills",
+        help="Generate Cursor Agent Skills from autosaxs docstrings",
+    )
+    p.set_defaults(_autosaxs_internal_cmd="get-skills")
+    p.add_argument(
+        "-o",
+        "--output-dir",
+        dest="output_dir",
+        default=".",
+        help="Directory where `skills/` will be written (default: current directory)",
+    )
+
+
+def _add_skill_subparser(
+    subparsers: argparse._SubParsersAction,
+    name: str,
+    fn: Callable[..., Any],
+    *,
+    aliases: Optional[List[str]] = None,
+) -> None:
     sig = inspect.signature(fn)
     doc = inspect.getdoc(fn) or ""
     p = subparsers.add_parser(
         name,
+        aliases=aliases or [],
         help=doc.splitlines()[0] if doc else None,
     )
     p.set_defaults(_autosaxs_fn=fn)
@@ -233,9 +353,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="autosaxs")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    _add_get_readme_subparser(subparsers)
+    _add_get_skills_subparser(subparsers)
+
     skills = _skill_functions()
-    for name in sorted(skills):
-        _add_skill_subparser(subparsers, name, skills[name])
+    # Prefer kebab-case commands; keep snake_case as backward-compatible alias.
+    skills_by_cmd: Dict[str, Callable[..., Any]] = {}
+    for snake_name, fn in skills.items():
+        kebab_name = _to_kebab(snake_name)
+        skills_by_cmd[snake_name] = fn
+        skills_by_cmd[kebab_name] = fn
+        if kebab_name == snake_name:
+            _add_skill_subparser(subparsers, kebab_name, fn)
+        else:
+            _add_skill_subparser(subparsers, kebab_name, fn, aliases=[snake_name])
 
     # Support: `autosaxs <subcommand> --description` without requiring positional args.
     # Argparse enforces required positionals before we can inspect flags, so handle this early.
@@ -243,14 +374,81 @@ def main(argv: Optional[List[str]] = None) -> int:
         argv = sys.argv[1:]
     if argv:
         cmd = argv[0]
-        if cmd in skills and "--description" in argv[1:]:
-            raw = getattr(skills[cmd], "__doc__", None) or ""
+        if cmd in skills_by_cmd and "--description" in argv[1:]:
+            raw = getattr(skills_by_cmd[cmd], "__doc__", None) or ""
             sys.stdout.write(raw)
             if raw and not raw.endswith("\n"):
                 sys.stdout.write("\n")
             return 0
 
     args = parser.parse_args(argv)
+
+    internal_cmd = getattr(args, "_autosaxs_internal_cmd", None)
+    if internal_cmd == "get-readme":
+        from ..resources.readme.autosaxs_skills_explained import generate_readme
+
+        out_path = generate_readme(output_dir=getattr(args, "output_dir", "."))
+        print(str(out_path))
+        return 0
+    if internal_cmd == "get-skills":
+        out_dir = Path(getattr(args, "output_dir", "."))
+        skills_dir = out_dir / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        written: List[str] = []
+        for skill_name, fn in _skill_functions().items():
+            folder_name = _to_kebab(skill_name)
+            skill_out_dir = skills_dir / folder_name
+
+            # Rewrite reliably: remove only this per-skill folder (not the parent `skills/`).
+            if skill_out_dir.exists():
+                shutil.rmtree(skill_out_dir)
+            skill_out_dir.mkdir(parents=True, exist_ok=True)
+
+            md = _skill_to_agent_skill_md(name=folder_name, fn=fn)
+            out_md = skill_out_dir / "SKILL.md"
+            out_md.write_text(md, encoding="utf-8")
+            written.append(str(out_md))
+
+        # Generate top-level skills index README.md (includes any pre-existing skills too).
+        try:
+            import autosaxs as _autosaxs_mod
+
+            autosaxs_version = getattr(_autosaxs_mod, "__version__", "unknown")
+        except Exception:
+            autosaxs_version = "unknown"
+
+        skills_list_lines: List[str] = []
+        for child in sorted(skills_dir.iterdir(), key=lambda p: p.name):
+            if not child.is_dir():
+                continue
+            skill_md = child / "SKILL.md"
+            if not skill_md.is_file():
+                continue
+            try:
+                content = skill_md.read_text(encoding="utf-8")
+            except OSError:
+                content = ""
+            desc = _extract_frontmatter_field(content, "description") or ""
+            if desc:
+                skills_list_lines.append(f"- [`{child.name}`]({child.name}/SKILL.md): {desc}")
+            else:
+                skills_list_lines.append(f"- [`{child.name}`]({child.name}/SKILL.md)")
+
+        readme_template = _read_ai_skills_readme_template()
+        readme_text = _fill_template(
+            readme_template,
+            values={
+                "autosaxs_version": str(autosaxs_version),
+                "skills_list": "\n".join(skills_list_lines) if skills_list_lines else "_(no skills found)_",
+            },
+        )
+        (skills_dir / "README.md").write_text(readme_text.rstrip() + "\n", encoding="utf-8")
+
+        for p in sorted(written):
+            print(p)
+        return 0
+
     fn: Callable[..., Any] = getattr(args, "_autosaxs_fn")
 
     # If user provided all required args, allow `--description` too (consistent behavior).

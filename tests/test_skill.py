@@ -105,15 +105,15 @@ def test_check_output_integrity_ok():
 @pytest.mark.parametrize("skill_name,skill_fn", [
     ("calibrate", calibrate),
     ("integrate", integrate),
-    ("integrate_proxy", integrate_proxy),
+    ("integrate-proxy", integrate_proxy),
     ("subtract", subtract),
     ("plot", plot),
-    ("plot_2d", plot_2d),
-    ("guinier_analysis", guinier_analysis),
-    ("fit_distances", fit_distances),
-    ("fit_mixture", fit_mixture),
-    ("fit_bodies", fit_bodies),
-    ("fit_dammif", fit_dammif),
+    ("plot-2d", plot_2d),
+    ("guinier-analysis", guinier_analysis),
+    ("fit-distances", fit_distances),
+    ("fit-mixture", fit_mixture),
+    ("fit-bodies", fit_bodies),
+    ("fit-dammif", fit_dammif),
 ])
 def test_skill_has_standard_docstring(skill_name, skill_fn):
     doc = skill_fn.__doc__
@@ -670,3 +670,10 @@ def test_cli_invocation_smoke(capsys):
         captured = capsys.readouterr().out
         assert "guinier_plot_path=" in captured
         assert "kratky_plot_path=" in captured
+
+        # Kebab-case is the canonical CLI command form for skills.
+        rc = cli_main(["guinier-analysis", "--description"])
+        assert rc == 0
+        captured_desc = capsys.readouterr().out
+        assert "### cli usage" in captured_desc.lower()
+        assert "autosaxs guinier-analysis" in captured_desc
