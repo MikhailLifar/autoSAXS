@@ -49,6 +49,13 @@ See the docstring section **Arguments** below.
 ## Procedure
 
 1. Prepare input paths and choose an `output_dir` (if applicable).
+2. If this skill requires a config file (look for a required argument like `config_path` / `config` in **Arguments** below) and you do not have one yet, generate the default config into your working directory:
+
+```bash
+/path/to/myenv/bin/autosaxs get-default-config -o /path/to/directory
+```
+
+Then use the created `config_base.conf` (or a copy of it) as the config input path and edit it if your setup requires changes.
 2. Run **`/path/to/myenv/bin/autosaxs {{command}} …`** (or `autosaxs {{command}} …` when the right env is active), or call the Python function.
 3. Use the returned/written output paths.
 
@@ -61,6 +68,7 @@ See the docstring section **Returns** below.
 - **`autosaxs` is always tied to a Python environment** — see **Critical: `autosaxs` is a Python package** above before running anything.
 - When in doubt (CI, fresh terminals, mixed conda/system shells), **always use the full path:** **`<path-to-env>/bin/autosaxs {{command}} …`**.
 - If you know the correct env is active on `PATH`, **`autosaxs {{command}} …`** is fine.
+- If the skill requires a config path (e.g. `config_path` / `config`) and no config file exists yet, run **`autosaxs get-default-config -o <dir>`** to materialize the bundled default config (`config_base.conf`) into a real file, then pass that path to the skill.
 - Prefer the Python API (`autosaxs.skill.{{python_name}}`) for scripting or tight integration inside Python.
 
 ## Autosaxs skill docstring
