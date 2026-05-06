@@ -247,6 +247,33 @@ def _add_get_skills_subparser(subparsers: argparse._SubParsersAction) -> None:
     )
 
 
+def _add_get_default_config_subparser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "get-default-config",
+        help="Copy bundled config_base.conf into a directory",
+    )
+    p.set_defaults(_autosaxs_internal_cmd="get-default-config")
+    p.add_argument(
+        "-o",
+        "--output-dir",
+        dest="output_dir",
+        default=".",
+        help="Directory where config_base.conf will be written (default: current directory)",
+    )
+
+
+def _read_default_config_base_bytes() -> bytes:
+    """
+    Load resources/config_base.conf from the installed package or the source tree.
+    """
+    try:
+        from importlib.resources import files
+
+        return (files("autosaxs.resources") / "config_base.conf").read_bytes()
+    except Exception:
+        return (Path(__file__).resolve().parents[1] / "resources" / "config_base.conf").read_bytes()
+
+
 def _add_skill_subparser(
     subparsers: argparse._SubParsersAction,
     name: str,
@@ -355,6 +382,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     _add_get_readme_subparser(subparsers)
     _add_get_skills_subparser(subparsers)
+    _add_get_default_config_subparser(subparsers)
 
     skills = _skill_functions()
     # Prefer kebab-case commands; keep snake_case as backward-compatible alias.
@@ -389,6 +417,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         out_path = generate_readme(output_dir=getattr(args, "output_dir", "."))
         print(str(out_path))
+        return 0
+    if internal_cmd == "get-default-config":
+        out_dir = Path(getattr(args, "output_dir", ".")).resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        dest = out_dir / "config_base.conf"
+        dest.write_bytes(_read_default_config_base_bytes())
+        print(str(dest))
         return 0
     if internal_cmd == "get-skills":
         out_dir = Path(getattr(args, "output_dir", "."))

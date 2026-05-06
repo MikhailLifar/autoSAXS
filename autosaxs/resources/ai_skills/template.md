@@ -15,7 +15,6 @@ This skill wraps the `autosaxs {{command}}` CLI command / `autosaxs.skill.{{pyth
 ## When to use me
 
 - You want to run `autosaxs {{command}}` on real data.
-- You want the canonical usage/arguments directly from the implementation docstring.
 
 ## Do NOT use me when
 

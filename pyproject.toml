@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autosaxs"
-version = "2.1.0"
+version = "2.1.1"
 description = "Interactive SAXS pipeline core: calibration, integration, subtraction, ATSAS descriptors, plots, shape fitting, reports"
 requires-python = ">=3.9"
 license = "MIT"

@@ -48,6 +48,18 @@ Then check the CLI:
 autosaxs --help
 ```
 
+Helper subcommands ship files from the package into a directory of your choice:
+
+- `autosaxs get-readme` — write the generated skills README (`README.md`) into `--output-dir`
+- `autosaxs get-skills` — write Cursor Agent Skills (`skills/`) from skill docstrings into `--output-dir`
+- `autosaxs get-default-config` — copy the bundled default `config_base.conf` into `--output-dir`
+
+Example:
+
+```bash
+autosaxs get-default-config -o .
+```
+
 #### GUI-enabled apps (`guisaxs-skills`, `guisaxs-liveview`)
 
 Install with GUI extras (adds `customtkinter` and `tkinterdnd2`):
