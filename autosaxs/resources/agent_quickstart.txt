@@ -1,0 +1,23 @@
+Agent / assistant quick-start
+==============================
+After installation, nothing in your workspace explains autosaxs by default. Use this CLI to
+pull the bundled reference material and defaults into files you can read.
+
+autosaxs runs from the SAME Python environment where the package was installed: prefer
+  /path/to/env/bin/autosaxs ...
+when PATH might point at a different interpreter.
+
+Shipped commands (no input data required)
+-----------------------------------------
+  get-readme -o <dir>          Write README.md (generated skills documentation + usage).
+  get-skills -o <dir>          Write skills/ with one SKILL.md per skill (IDE agents).
+  get-default-config -o <dir>  Copy bundled config_base.conf into <dir>. This command is crucial since config file is strictly required for some skills.
+
+Suggested first steps for an agent
+----------------------------------
+  1. autosaxs get-readme -o .
+  2. autosaxs get-default-config -o .
+  3. autosaxs get-skills -o .          (optional, for Cursor-style skills)
+  4. autosaxs <subcommand> --help       processing skills: calibrate, integrate, subtract, ...
+
+Every processing subcommand also accepts --description (full docstring, no args required).
