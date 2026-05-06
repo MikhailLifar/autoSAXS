@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .core.utils import calc_chi2, gaussian_pdf, schultz_pdf
+from ...core.utils import calc_chi2, gaussian_pdf, schultz_pdf
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -31,7 +31,7 @@ LOG_I_CLIP = -7.0
 def _load_curve(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Load q, intensity, sigma from a subtracted .dat (YAML+CSV or plain CSV)."""
     path = Path(path)
-    from .core.utils import read_data
+    from ...core.utils import read_data
     df, _, _ = read_data(str(path))
     q = df["q"].to_numpy().astype(np.float64)
     I = df["intensity"].to_numpy().astype(np.float64)

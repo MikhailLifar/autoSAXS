@@ -268,6 +268,65 @@ def _shape_to_system(shape: str) -> int:
     raise ValueError(f"fit_sizes: unknown shape={shape!r}; expected 'spheres', 'rods', or 'ellipsoids'")
 
 
+def _estimate_rg_nm_from_lowq_intervals(
+    q_nm: np.ndarray,
+    I: np.ndarray,
+    *,
+    q_max_nm: float = 1.0,
+    window_points: int = 5,
+) -> List[float]:
+    """
+    Last-resort Rg estimator using short Guinier fits over low-q intervals.
+
+    For each contiguous window of `window_points` points within q <= q_max_nm,
+    fit ln(I) vs q^2 by least squares. Guinier: ln(I) = ln(I0) - (Rg^2 / 3) * q^2,
+    therefore slope = -(Rg^2 / 3). We keep only windows with a negative slope.
+
+    Returns a list of candidate Rg values (nm). Empty list means no usable intervals.
+    """
+    q_nm = np.asarray(q_nm, dtype=float)
+    I = np.asarray(I, dtype=float)
+    if q_nm.ndim != 1 or I.ndim != 1 or len(q_nm) != len(I):
+        return []
+    if len(q_nm) < window_points:
+        return []
+
+    # Consider only low-q points; keep original order (assumed ascending in typical data).
+    mask = np.isfinite(q_nm) & np.isfinite(I) & (q_nm >= 0) & (q_nm <= float(q_max_nm)) & (I > 0)
+    q = q_nm[mask]
+    y = np.log(I[mask])
+    if len(q) < window_points:
+        return []
+
+    q2 = q * q
+    rgs: List[float] = []
+    for i in range(0, len(q2) - window_points + 1):
+        xw = q2[i : i + window_points]
+        yw = y[i : i + window_points]
+        if not (np.all(np.isfinite(xw)) and np.all(np.isfinite(yw))):
+            continue
+        # Need variation in x to fit a slope.
+        if float(np.max(xw) - np.min(xw)) <= 0:
+            continue
+        try:
+            slope, _intercept = np.polyfit(xw, yw, deg=1)
+        except Exception:
+            continue
+        if not np.isfinite(slope):
+            continue
+        # Guinier expects negative slope.
+        if slope >= 0:
+            continue
+        rg2 = -3.0 * float(slope)
+        if rg2 <= 0 or not np.isfinite(rg2):
+            continue
+        rg = float(np.sqrt(rg2))
+        if np.isfinite(rg) and rg > 0:
+            rgs.append(rg)
+
+    return rgs
+
+
 def _run_gnom_once(
     *,
     atsas_dat_path: str,
@@ -408,13 +467,29 @@ def _fit_sizes_paths(
                 EventType.MESSAGE,
                 {"text": "fit_sizes: AUTORG failed or unparsable; using Guinier fallback."},
             )
+    rg_range_nm: Optional[tuple[float, float]] = None
     if rg_nm is None:
         gr = find_guinier_region(q_nm, I, sigma=sigma)
         if gr is None:
-            raise RuntimeError(
-                "fit_sizes: Rg is unknown (no rg_nm, AUTORG failed, and Guinier region search failed)."
-            )
-        rg_nm = float(gr["rg"])
+            # Third-line fallback: short Guinier fits over low-q windows to get an Rg range.
+            rgs = _estimate_rg_nm_from_lowq_intervals(q_nm, I, q_max_nm=1.0, window_points=5)
+            if not rgs:
+                raise RuntimeError(
+                    "fit_sizes: Rg is unknown (no rg_nm, AUTORG failed, and Guinier region search failed, "
+                    "and low-q interval fallback found no usable Guinier windows)."
+                )
+            rg_min = float(np.nanmin(rgs))
+            rg_max = float(np.nanmax(rgs))
+            # Store range for later rmax probing; pick a representative Rg for summaries.
+            rg_range_nm = (rg_min, rg_max)
+            rg_nm = float(np.nanmedian(rgs))
+            if event_bus:
+                event_bus.publish(
+                    EventType.MESSAGE,
+                    {"text": f"fit_sizes: fallback Rg range from low-q windows: [{rg_min:.4g}, {rg_max:.4g}] nm"},
+                )
+        else:
+            rg_nm = float(gr["rg"])
 
     if rmax_nm is not None and rmax_nm <= 0:
         raise ValueError(f"fit_sizes: rmax_nm must be > 0; got {rmax_nm}")
@@ -428,14 +503,22 @@ def _fit_sizes_paths(
     if rmax_nm is not None:
         candidates_rmax = [float(rmax_nm)]
     else:
-        rg = float(rg_nm)
-        if system == 1:
-            # For spheres, R ~ 1.29*Rg (uniform sphere). Probe a wider interval to be robust.
-            factors = np.linspace(1.5, 3.0, 16)
+        # If we have an Rg range from the low-q interval fallback, probe rmax over that range.
+        # Spec: linspace(0.5*Rg_min, 3*Rg_max, 25).
+        if rg_range_nm is not None:
+            rg_min, rg_max = rg_range_nm
+            lo = max(1e-6, 0.5 * float(rg_min))
+            hi = max(lo * 1.01, 3.0 * float(rg_max))
+            candidates_rmax = [float(x) for x in np.linspace(lo, hi, 25)]
         else:
-            # For long cylinders, length distribution is more weakly constrained; probe wider.
-            factors = np.linspace(2.0, 6.0, 21)
-        candidates_rmax = [float(rg * f) for f in factors]
+            rg = float(rg_nm)
+            if system == 1:
+                # For spheres, R ~ 1.29*Rg (uniform sphere). Probe a wider interval to be robust.
+                factors = np.linspace(1.5, 3.0, 16)
+            else:
+                # For long cylinders, length distribution is more weakly constrained; probe wider.
+                factors = np.linspace(2.0, 6.0, 21)
+            candidates_rmax = [float(rg * f) for f in factors]
 
     gnom_out_paths: List[str] = []
     failures: List[Dict[str, Any]] = []

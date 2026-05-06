@@ -33,6 +33,7 @@ from autosaxs.skill.calibrate import calibrate
 from autosaxs.skill.fit_bodies import fit_bodies
 from autosaxs.skill.fit_dammif import fit_dammif
 from autosaxs.skill.fit_distances import fit_distances
+from autosaxs.skill.fit_sizes import fit_sizes
 from autosaxs.skill.fit_mixture import fit_mixture
 from autosaxs.skill.guinier_analysis import guinier_analysis
 from autosaxs.skill.integrate import integrate
@@ -526,6 +527,249 @@ def test_fit_mixture_raises_without_profile():
             use_cache=False,
         )
 
+
+def test_fit_mixture_contract_with_mock_mixture(monkeypatch):
+    """
+    Contract test without requiring ATSAS MIXTURE executable.
+
+    We monkeypatch the internal MIXTURE runner to write minimal `.fit` and `mixture.log`
+    outputs expected by the parser/plotting code.
+    """
+    import subprocess as _sp
+
+    def _fake_run_mixture(work_dir: Path, dat_basename: str, cmd_content: str) -> _sp.CompletedProcess:
+        _ = cmd_content
+        work_dir.mkdir(parents=True, exist_ok=True)
+        fit_path = work_dir / dat_basename.replace(".dat", ".fit")
+        log_path = work_dir / "mixture.log"
+
+        # The parser treats the file as numeric (q, I_exp, I_fit) and converts q by *10.
+        q_nm = np.linspace(0.1, 2.0, 30)
+        q_A = q_nm / 10.0
+        I_exp = np.exp(-q_nm**2) + 0.05
+        I_fit = I_exp * 0.98
+        sigma = 0.03 * np.abs(I_exp)
+        with open(fit_path, "w") as f:
+            for i in range(len(q_A)):
+                f.write(f"{q_A[i]}\t{I_exp[i]}\t{I_fit[i]}\t{sigma[i]}\n")
+
+        # Minimal sphere lines (matched by regex r"^\\dSPH$") with >= 6 floats.
+        log_path.write_text(
+            "\n".join(
+                [
+                    "1SPH 0.50 0 0 50.0 0 5.0",
+                    "Produced function minimum is equal to 1.234",
+                    "",
+                ]
+            )
+        )
+        return _sp.CompletedProcess(args=["mixture"], returncode=0, stdout="Produced function minimum is equal to 1.234", stderr="")
+
+    monkeypatch.setattr("autosaxs.skill.fit_mixture.mixture._run_mixture", _fake_run_mixture)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.1, 2.0, 40)
+        I = np.exp(-q**2) + 0.02
+        sigma = 0.03 * np.abs(I)
+        profile_path = os.path.join(tmp, "subtracted.dat")
+        write_saxs(profile_path, q, I, sigma, {"type": "subtracted"})
+
+        cfg_path = os.path.join(tmp, "config.yml")
+        Path(cfg_path).write_text(
+            "\n".join(
+                [
+                    "mixture:",
+                    "  maxit: 5",
+                    "  r_min: 10.0",
+                    "  r_max: 80.0",
+                    "  poly_min: 0.5",
+                    "  poly_max: 10.0",
+                    "  max_nph: 1",
+                    "",
+                ]
+            )
+        )
+
+        out_dir = os.path.join(tmp, "mixture_out")
+        result = fit_mixture(profile_path, output_dir=out_dir, config_path=cfg_path, use_cache=False)
+
+        for key in ("output_subdir", "comparison_path", "distributions_path", "results_csv_path"):
+            assert key in result, f"fit_mixture must return {key}"
+            assert os.path.isfile(str(result[key])) or os.path.isdir(str(result[key])), f"{key} must exist"
+
+        # The skill returns per-sample output_subdir; CSV should exist and be non-empty.
+        csv_path = str(result["results_csv_path"])
+        assert os.path.getsize(csv_path) > 0
+
+
+# ---------------------------------------------------------------------------
+# fit_sizes: AUTORG failure fallback
+# ---------------------------------------------------------------------------
+def test_fit_sizes_falls_back_when_autorg_has_no_rg(monkeypatch):
+    """
+    If AUTORG returns a result object but does not provide a usable Rg,
+    fit_sizes must fall back to Guinier region estimation for rg_nm.
+    """
+    import subprocess as _sp
+    import yaml as _yaml
+    import importlib as _importlib
+
+    # IMPORTANT: autosaxs.skill exposes `fit_sizes` as a function attribute, which can shadow
+    # the module name in dotted monkeypatch paths. Patch the real module object directly.
+    _fit_sizes_mod = _importlib.import_module("autosaxs.skill.fit_sizes")
+
+    # AUTORG "succeeds" but provides no Rg.
+    monkeypatch.setattr(_fit_sizes_mod, "run_autorg_atsas", lambda *_args, **_kwargs: {"first_point_1based": 1})
+
+    # Guinier fallback provides Rg in nm.
+    monkeypatch.setattr(_fit_sizes_mod, "find_guinier_region", lambda *_args, **_kwargs: {"rg": 2.5})
+
+    def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
+        _ = capture_output, text, timeout, kwargs
+        exe = cmd[0] if cmd else ""
+        if exe != "gnom":
+            return _sp.CompletedProcess(args=cmd, returncode=1, stdout="", stderr="unexpected exe")
+        assert cwd is not None
+        out_idx = cmd.index("-o")
+        out_arg = cmd[out_idx + 1]
+        out_path = Path(cwd) / out_arg
+
+        # Minimal valid GNOM .out content:
+        # - Total Estimate line
+        # - an "EXP ERROR" header + numeric table (>= 2 rows)
+        # - a D(R) block with >= 8 monotonic rows
+        out_path.write_text(
+            "\n".join(
+                [
+                    "GNOM OUTPUT (fake)",
+                    "Total Estimate = 0.90",
+                    "",
+                    "S EXP ERROR JREG",
+                    "0.10  1.0  0.1  0.95",
+                    "0.20  0.8  0.1  0.78",
+                    "",
+                    "R      D(R)    Err",
+                    "0.0    0.0     0.0",
+                    "1.0    0.1     0.0",
+                    "2.0    0.2     0.0",
+                    "3.0    0.3     0.0",
+                    "4.0    0.2     0.0",
+                    "5.0    0.1     0.0",
+                    "6.0    0.0     0.0",
+                    "7.0    0.0     0.0",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(_fit_sizes_mod.subprocess, "run", _fake_run)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.1, 2.0, 40)
+        I = np.exp(-q**2) + 0.02
+        sigma = 0.03 * np.abs(I)
+        profile_path = os.path.join(tmp, "profile.dat")
+        write_saxs(profile_path, q, I, sigma, {})
+
+        out_dir = os.path.join(tmp, "sizes")
+        out = fit_sizes(profile_path, output_dir=out_dir, use_cache=False, rmax_nm=10.0)
+
+        assert os.path.isfile(str(out["best_gnom_out_path"]))
+        assert os.path.isfile(str(out["best_summary_path"]))
+
+        summary = _yaml.safe_load(Path(str(out["best_summary_path"])).read_text(encoding="utf-8"))
+        assert summary["selected"]["rg_nm"] == pytest.approx(2.5)
+
+
+def test_fit_sizes_uses_interval_rg_fallback_when_autorg_and_guinier_fail(monkeypatch):
+    """
+    If AUTORG fails and the standard Guinier region search fails, fit_sizes should estimate
+    an Rg range from low-q 5-point windows (q<=1 nm^-1) and probe GNOM rmax over:
+      linspace(0.5*Rg_min, 3*Rg_max, 25)
+    selecting the best fit, without persisting intermediate candidate outputs.
+    """
+    import importlib as _importlib
+    import subprocess as _sp
+    import yaml as _yaml
+
+    _fit_sizes_mod = _importlib.import_module("autosaxs.skill.fit_sizes")
+
+    # Force both AUTORG and standard Guinier to "fail".
+    monkeypatch.setattr(_fit_sizes_mod, "run_autorg_atsas", lambda *_a, **_k: None)
+    monkeypatch.setattr(_fit_sizes_mod, "find_guinier_region", lambda *_a, **_k: None)
+
+    def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
+        _ = capture_output, text, timeout, kwargs
+        exe = cmd[0] if cmd else ""
+        if exe != "gnom":
+            return _sp.CompletedProcess(args=cmd, returncode=1, stdout="", stderr="unexpected exe")
+        assert cwd is not None
+        # Extract rmax from "--rmax=..."
+        rmax = None
+        for a in cmd:
+            s = str(a)
+            if s.startswith("--rmax="):
+                rmax = float(s.split("=", 1)[1])
+                break
+        assert rmax is not None
+        out_idx = cmd.index("-o")
+        out_arg = cmd[out_idx + 1]
+        out_path = Path(cwd) / out_arg
+
+        # Make Total Estimate increase with rmax so the selector picks the largest rmax.
+        te = min(0.99, 0.10 + 0.01 * float(rmax))
+        out_path.write_text(
+            "\n".join(
+                [
+                    "GNOM OUTPUT (fake)",
+                    f"Total Estimate = {te:.3f}",
+                    "",
+                    "S EXP ERROR JREG",
+                    "0.10  1.0  0.1  0.95",
+                    "0.20  0.8  0.1  0.78",
+                    "",
+                    "R      D(R)    Err",
+                    "0.0    0.0     0.0",
+                    "1.0    0.1     0.0",
+                    "2.0    0.2     0.0",
+                    "3.0    0.3     0.0",
+                    "4.0    0.2     0.0",
+                    "5.0    0.1     0.0",
+                    "6.0    0.0     0.0",
+                    "7.0    0.0     0.0",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(_fit_sizes_mod.subprocess, "run", _fake_run)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # Build a curve with enough low-q points (<=1) to form multiple 5-point windows.
+        q = np.linspace(0.05, 2.0, 80)
+        I = np.exp(-q**2) + 0.05
+        sigma = 0.02 * np.abs(I)
+        profile_path = os.path.join(tmp, "profile.dat")
+        write_saxs(profile_path, q, I, sigma, {})
+
+        out_dir = os.path.join(tmp, "sizes")
+        out = fit_sizes(profile_path, output_dir=out_dir, use_cache=False)
+        assert os.path.isfile(str(out["best_gnom_out_path"]))
+
+        # Intermediate eval outputs use a gnom_eval_*.out temp file and are deleted;
+        # only the final selected GNOM .out should remain besides the symlink.
+        sample_out_dir = str(out["output_subdir"])
+        outs = [p for p in os.listdir(sample_out_dir) if p.endswith(".out")]
+        assert any(p.startswith("gnom_system_") for p in outs)
+        assert not any(p.startswith("gnom_eval_") for p in outs)
+
+        summary = _yaml.safe_load(Path(str(out["best_summary_path"])).read_text(encoding="utf-8"))
+        # Sanity: the selected rmax should be within the probed range and positive.
+        assert float(summary["selected"]["rmax_nm"]) > 0
 
 # ---------------------------------------------------------------------------
 # fit_bodies / fit_dammif: contract (require profile)
