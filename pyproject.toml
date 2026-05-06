@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "autosaxs"
 version = "2.1.1"
-description = "Interactive SAXS pipeline core: calibration, integration, subtraction, ATSAS descriptors, plots, shape fitting, reports"
+description = "Interactive SAXS pipeline core: calibration, integration, subtraction, ATSAS descriptors, plots, shape fitting, reports. After install, run `autosaxs --help`: epilog lists get-readme, get-skills, get-default-config (export docs and default config into your workspace)."
 requires-python = ">=3.9"
 license = "MIT"
 authors = []
@@ -56,6 +56,7 @@ include = ["autosaxs*", "guisaxs*", "guisaxs_skills*", "guisaxs_liveview*"]
 
 [tool.setuptools.package-data]
 autosaxs = [
+    "resources/agent_quickstart.txt",
     "resources/config_base.conf",
     "resources/global/*.yml",
     "resources/global/templates/*",

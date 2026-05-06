@@ -262,6 +262,19 @@ def _add_get_default_config_subparser(subparsers: argparse._SubParsersAction) ->
     )
 
 
+def _read_agent_quickstart_epilog() -> str:
+    """
+    Text appended to top-level ``autosaxs --help`` so agents see how to export README, skills, and config.
+    """
+    try:
+        from importlib.resources import files
+
+        return (files("autosaxs.resources") / "agent_quickstart.txt").read_text(encoding="utf-8").rstrip()
+    except Exception:
+        p = Path(__file__).resolve().parents[1] / "resources" / "agent_quickstart.txt"
+        return p.read_text(encoding="utf-8").rstrip()
+
+
 def _read_default_config_base_bytes() -> bytes:
     """
     Load resources/config_base.conf from the installed package or the source tree.
@@ -377,7 +390,15 @@ def _add_skill_subparser(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(prog="autosaxs")
+    parser = argparse.ArgumentParser(
+        prog="autosaxs",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "SAXS pipeline: processing skills plus helpers that write README, IDE skills, and "
+            "default config into your workspace (see epilog)."
+        ),
+        epilog=_read_agent_quickstart_epilog(),
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     _add_get_readme_subparser(subparsers)
