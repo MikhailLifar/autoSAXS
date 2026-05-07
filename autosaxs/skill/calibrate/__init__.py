@@ -33,10 +33,10 @@ def calibrate(
     mask: Optional[SingletonMaskPathExpressionArg] = None,
     mask_mode: str = "f",
     calibrant: str = "AgBh",
-    use_cache: bool = True,
+    use_cache: bool = False,
 ) -> Dict[str, str]:
     """
-    Calibrate detector geometry using a calibration image and a config (ring-analysis + geometry refinement). This is a prerequisite for `integrate`.
+    SAXS / small-angle x-ray scattering: calibrate detector geometry using a calibration image and a config (ring-analysis + geometry refinement). This is a prerequisite for `integrate` (azimuthal integration).
 
     ### Arguments
 
@@ -46,7 +46,7 @@ def calibrate(
     - `mask` (str | None, default `None`): Optional path to a mask used during ring analysis. Supports .txt (NuPy format), .msk (Fit2d)
     - `mask_mode` (str, default `"f"`): Mask mode selector. One of `f/from_file`, `a/auto`, `c/combined`.
     - `calibrant` (str, default `"AgBh"`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`).
-    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+    - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     Important constraints:
 
@@ -74,7 +74,7 @@ def calibrate(
         mask="mask.msk",
         mask_mode="f",
         calibrant="AgBh",
-        use_cache=True,
+        use_cache=False,
     )
 
     print(out["integrator_dir"])
@@ -129,7 +129,7 @@ def _calibrate_paths(
     output_dir: str,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
     sample_index: int = 0,
     mask_mode: str = "f",
     calibrant: str = "AgBh",

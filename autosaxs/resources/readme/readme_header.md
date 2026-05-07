@@ -23,7 +23,7 @@ Its main goal is to make common SAXS processing steps **scriptable, cacheable, a
 
 - **One public API for everything (“skills”)**: user-facing operations are implemented as Python functions with stable signatures in the `autosaxs.skill` package (`repos/autosaxs/skill/`). The CLI dispatches subcommands to those functions by introspecting signatures and docstrings.
 - **Path expressions instead of “single file only”**: most skills accept a file/dir/glob expression and expand it in a consistent way (directories expand non-recursively; empty expansion is an error).
-- **Cache-by-default**: when `use_cache=True`, skills may reuse outputs via a hidden cache file under the output directory (intended for fast re-runs during interactive work).
+- **Optional caching**: by default, skills run with `use_cache=False`. When `use_cache=True`, skills may reuse outputs via a hidden cache file under the output directory (intended for fast re-runs during interactive work).
 - **External science stack integration**: `pyFAI` is used for calibration/integration; several downstream steps rely on **ATSAS** being installed (see below).
 
 ### Requirements (ATSAS)
@@ -123,7 +123,7 @@ The GUI has automated “headless” tests that drive the real UI (no pixel asse
 
 - Select a skill in the catalog (e.g. `calibrate`, `integrate`, `subtract`, `fit_distances`, …)
 - Provide required positional inputs in `Inputs` (supports drag & drop / browse / manual path expressions)
-- Adjust `Options` (notably `output_dir` and `use_cache`)
+- Adjust `Options` (notably `output_dir` and `use_cache`; caching is opt-in)
 - Click **Run** and follow logs
 - Inspect produced paths in the right-side `Artifacts` list and click for previews
 
@@ -204,7 +204,7 @@ The `autosaxs` command dispatches subcommands to the corresponding skill functio
 
 - Run a skill from the CLI as `autosaxs <command> ...`.
 - Every skill supports `--output-dir <path>` (maps to the skill's `output_dir` argument, default: `.`).
-- Every skill supports caching by default; use `--no-cache` to disable it (maps to `use_cache=False` in Python).
+- Every skill supports caching; use `--cache` to enable it (maps to `use_cache=True` in Python). Use `--no-cache` to explicitly disable it.
 - Positional arguments in the CLI match the skill signature order.
 - Keyword options use `--kebab-case` names (underscores become `-`).
 
@@ -220,7 +220,7 @@ Most skills take a **path expression** rather than a strict “single file”:
 
 Note: `autosaxs integrate` accepts either a single path expression **or** multiple image paths on the CLI (the CLI passes a list; the skill normalizes it).
 
-### Caching (enabled by default)
+### Caching (opt-in)
 
 - When `use_cache=True`, a skill may write/read a hidden `.cache` YAML file inside its output directory.
 - Re-running with the same inputs and relevant options can reuse previously generated output paths if the files still exist and are recent enough (output-integrity check).

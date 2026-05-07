@@ -151,10 +151,10 @@ def report_individual(
     output_dir: str = ".",
     *,
     output_path: Optional[str] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
 ) -> Dict[str, Any]:
     """
-    Build a per-sample PDF report from an existing pipeline directory. The skill scans `directory` for paths matching the provided `basename` and then assembles the report sections.
+    SAXS / small-angle x-ray scattering: build a per-sample PDF report from an existing pipeline directory (SAXS report / plots + tables). The skill scans `directory` for paths matching the provided `basename` and then assembles the report sections.
 
     ### Arguments
 
@@ -162,7 +162,7 @@ def report_individual(
     - `basename` (str): Sample identifier used to match intermediate artifacts within `directory`.
     - `output_dir` (str, default `.`): Directory where the PDF report is written.
     - `output_path` (str | None, default `None`): Optional explicit output PDF path. If not provided, defaults to `<output_dir>/<basename>_report.pdf`.
-    - `use_cache` (bool, default `True`): Present for CLI parity; report generation does not use caching.
+    - `use_cache` (bool, default `False`): Present for CLI parity; report generation does not use caching.
 
     ### Returns
 

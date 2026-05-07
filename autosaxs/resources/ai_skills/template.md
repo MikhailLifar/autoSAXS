@@ -1,11 +1,6 @@
 ---
 name: {{name}}
 description: {{description}}
-license: MIT
-compatibility: opencode
-metadata:
-  tool: autosaxs
-  command: autosaxs {{command}}
 ---
 
 ## Critical: `autosaxs` is a Python package
@@ -25,8 +20,6 @@ autosaxs {{command}} ...
 ```
 
 **What does not work:** `python -m autosaxs …` — the package has no top-level `__main__.py`. Do not try to substitute other `-m` module paths here; **use `<env>/bin/autosaxs` instead.**
-
-Do **not** insert a stray `-m` between `autosaxs` and the subcommand (e.g. `autosaxs -m {{command}}`); the subcommand name comes immediately after the launcher: `autosaxs {{command}} …`.
 
 If you see **`autosaxs: command not found`** (or similar), the agent **must not** treat this as a broken skill: call **`/path/to/the/environment/bin/autosaxs`** (resolve the env where `autosaxs` is installed). Never invent a fake `autosaxs` binary path.
 
@@ -56,8 +49,8 @@ See the docstring section **Arguments** below.
 ```
 
 Then use the created `config_base.conf` (or a copy of it) as the config input path and edit it if your setup requires changes.
-2. Run **`/path/to/myenv/bin/autosaxs {{command}} …`** (or `autosaxs {{command}} …` when the right env is active), or call the Python function.
-3. Use the returned/written output paths.
+3. Run **`/path/to/myenv/bin/autosaxs {{command}} …`** (or `autosaxs {{command}} …` when the right env is active), or call the Python function.
+4. Use the returned/written output paths.
 
 ## Output requirements
 

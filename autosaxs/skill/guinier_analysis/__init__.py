@@ -20,10 +20,10 @@ def guinier_analysis(
     profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
-    use_cache: bool = True,
+    use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Run Guinier analysis on a 1D profile (including multiple strategies such as first-interval fits and an adaptive choice). The skill writes:
+    SAXS / small-angle x-ray scattering: run Guinier analysis on a 1D profile (Rg, I(0); multiple strategies such as first-interval fits and an adaptive choice). The skill writes:
 
     - a text results file
     - an ATSAS-format `.dat` file for downstream tools
@@ -33,7 +33,7 @@ def guinier_analysis(
 
     - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
     - `output_dir` (str, default `.`): Directory where analysis outputs are written.
-    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+    - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Returns
 
@@ -51,7 +51,7 @@ def guinier_analysis(
     out = guinier_analysis(
         profile="subtracted/sub_sample_01.dat",
         output_dir="guinier",
-        use_cache=True,
+        use_cache=False,
     )
 
     print(out["guinier_region_path"])
@@ -90,7 +90,7 @@ def _guinier_analysis_paths(
     output_dir: str,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
     sample_index: int = 0,
 ) -> Dict[str, Union[str, List[str]]]:
     _ = config, use_cache, sample_index

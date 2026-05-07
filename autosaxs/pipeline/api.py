@@ -32,7 +32,7 @@ def _wrap_handler(bus: EventBus, callback):
     return handler
 
 
-def fast_first_processing(directory: str, steps=None, mask_choice=None, fast_forward: bool = True):
+def fast_first_processing(directory: str, steps=None, mask_choice=None, fast_forward: bool = False):
     """Run pipeline with configurable steps (§3.2.1).
     directory: working directory; required files must exist there.
     steps: list of step names (e.g. ["calibration", "integration"]). Default: calibration, integration, subtraction, simple_analysis, plots.
@@ -92,7 +92,7 @@ def fast_first_processing(directory: str, steps=None, mask_choice=None, fast_for
     return controller.pipeline_interactive(fast_forward=fast_forward)
 
 
-def slow_second_processing(directory: str, selected_profiles: list):
+def slow_second_processing(directory: str, selected_profiles: list, fast_forward: bool = False):
     """Run pipeline with steps mixture, polydispfit, bodies, dammif (§3.2.2). simple_analysis and plots are in fast first processing.
     directory: working directory (assumes calibration, integration, subtraction already done).
     selected_profiles: list of file names from the subtracted subdirectory to process (e.g. ["sub_foo.dat", "sub_bar.dat"]).
@@ -151,4 +151,4 @@ def slow_second_processing(directory: str, selected_profiles: list):
     event_bus = EventBus()
     _connect(event_bus)
     controller = Controller(event_bus, viewer.PLTViewer())
-    return controller.pipeline_interactive(fast_forward=True)
+    return controller.pipeline_interactive(fast_forward=fast_forward)

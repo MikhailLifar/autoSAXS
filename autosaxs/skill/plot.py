@@ -27,10 +27,10 @@ def plot(
     *,
     guinier_q_min: Optional[float] = None,
     guinier_q_max: Optional[float] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Generate standard plots for a 1D curve:
+    SAXS / small-angle x-ray scattering: generate standard diagnostic plots for a 1D curve (Guinier, Kratky, log-log):
 
     - Guinier plot (log(I) vs q^2)
     - Kratky plot (I*q^2 vs q)
@@ -44,7 +44,7 @@ def plot(
     - `output_dir` (str, default `.`): Directory where plot files are written.
     - `guinier_q_min` (float | None, default `None`): Lower q bound for selecting Guinier range (enables `guinier_dat_path`).
     - `guinier_q_max` (float | None, default `None`): Upper q bound for selecting Guinier range.
-    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+    - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     Important constraint:
 
@@ -69,7 +69,7 @@ def plot(
         output_dir="plots",
         guinier_q_min=0.01,
         guinier_q_max=0.05,
-        use_cache=True,
+        use_cache=False,
     )
 
     print(out["guinier_dat_path"])
@@ -114,7 +114,7 @@ def _plot_paths(
     output_dir: str,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
     sample_index: int = 0,
     guinier_region: Optional[tuple] = None,
 ) -> Dict[str, Union[str, List[str]]]:

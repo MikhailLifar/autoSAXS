@@ -43,10 +43,10 @@ def fit_sizes(
     last: Optional[int] = None,
     alpha: Optional[float] = 0.0,
     nr: Optional[int] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Run ATSAS GNOM (system=1/5) to obtain a size distribution function \(D(R)\) for a polydisperse system from a 1D SAXS curve.
+    SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a size distribution function \(D(R)\) for a polydisperse system from a 1D SAXS curve (polydispersity; spheres/rods).
 
     ### Arguments
 
@@ -64,7 +64,7 @@ def fit_sizes(
     - `first`/`last` (int | None): GNOM `--first`/`--last` data-point indices (1-based).
     - `alpha` (float | None, default `0.0`): GNOM `--alpha`. Use 0.0 (default) for automatic alpha search.
     - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
-    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+    - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Returns
 
@@ -90,7 +90,7 @@ def fit_sizes(
         profile="subtracted/sub_sample_01.dat",
         output_dir="sizes",
         shape="spheres",
-        use_cache=True,
+        use_cache=False,
     )
 
     print(out["best_gnom_out_path"])
@@ -409,7 +409,7 @@ def _fit_sizes_paths(
     nr: Optional[int] = None,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
     sample_index: int = 0,
 ) -> Dict[str, Union[str, List[str]]]:
     _ = config, use_cache, sample_index

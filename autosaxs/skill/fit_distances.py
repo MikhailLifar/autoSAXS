@@ -38,10 +38,10 @@ def fit_distances(
     first: Optional[int] = None,
     last: Optional[int] = None,
     smooth: Optional[float] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Run ATSAS DATGNOM to obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve.
+    SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve (real-space distance distribution).
 
     ### Arguments
 
@@ -51,7 +51,7 @@ def fit_distances(
     - `first` (int | None, default `None`): DATGNOM `--first`. If omitted, taken from AUTORG Guinier interval when possible. If set with `last`, runs one fit. If set alone, `last` is auto-searched unless AUTORG succeeded and `last` is omitted (then DATGNOM runs without `--last`). If omitted and AUTORG fails or gives no interval, `first` is auto-searched.
     - `last` (int | None, default `None`): DATGNOM `--last`. Same pairing rules as `first`; if set alone, `first` is auto-searched. Omitted with successful AUTORG implies a single DATGNOM run without `--last`.
     - `smooth` (float | None, default `None`): DATGNOM `--smooth`. If set, that value is used and smoothness is not searched. If omitted during auto-search, trials use smoothness `2.0`. In full manual mode (`first` and `last` both set), omitted means do not pass `--smooth`.
-    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+    - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Returns
 
@@ -75,7 +75,7 @@ def fit_distances(
     out = fit_distances(
         profile="subtracted/sub_sample_01.dat",
         output_dir="distances",
-        use_cache=True,
+        use_cache=False,
     )
 
     print(out["best_gnom_out_path"])
@@ -410,7 +410,7 @@ def _fit_distances_paths(
     smooth: Optional[float] = None,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
     sample_index: int = 0,
 ) -> Dict[str, Union[str, List[str]]]:
     _ = config, use_cache, sample_index

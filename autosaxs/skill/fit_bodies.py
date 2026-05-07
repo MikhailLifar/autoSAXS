@@ -49,10 +49,10 @@ def fit_bodies(
     shapes: Optional[List[str]] = None,
     first: Optional[int] = None,
     last: Optional[int] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Run ATSAS `bodies` fits for multiple candidate shapes on a 1D profile, exporting fit files (FIR, PNG, YAML, CSV) and a comparison figure.
+    SAXS / small-angle x-ray scattering: run ATSAS `bodies` shape fitting for multiple candidate shapes on a 1D profile, exporting fit files (FIR, PNG, YAML, CSV) and a comparison figure.
 
     ### Arguments
 
@@ -61,7 +61,7 @@ def fit_bodies(
     - `shapes` (list[str] | None, default `None`): Subset of body model names to fit (`BODIES_SHAPES_LIST`). `None` or empty means fit **all** models (single `bodies` invocation). A non-empty list runs `bodies --body=...` per shape.
     - `first` (int | None, default `None`): Passed to `bodies` as `--first` (1-based data point index). Omitted when `None`.
     - `last` (int | None, default `None`): Passed to `bodies` as `--last` (1-based data point index). Omitted when `None`.
-    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+    - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Returns
 
@@ -82,7 +82,7 @@ def fit_bodies(
         shapes=["cylinder", "ellipsoid"],
         first=10,
         last=120,
-        use_cache=True,
+        use_cache=False,
     )
 
     print(out["output_subdir"])
@@ -156,13 +156,14 @@ def _slice_exp_dat_columns(
     path_keys_for_hash=["profile"],
     kwargs_for_hash_keys=["shapes", "first", "last"],
     include_config_in_hash=False,
+    warn_if_no_cache=True,
 )
 def _fit_bodies_paths(
     input_paths: Dict[str, Union[str, List[str]]],
     output_dir: str,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
     sample_index: int = 0,
     shapes: Optional[List[str]] = None,
     first: Optional[int] = None,

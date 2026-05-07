@@ -29,10 +29,10 @@ def integrate(
     output_dir: str = ".",
     *,
     npt: int = 1000,
-    use_cache: bool = True,
+    use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Integrate 2D SAXS images to 1D curves (q, I, sigma) using a calibrated integrator produced by `calibrate`.
+    SAXS / small-angle x-ray scattering: integrate 2D SAXS images to 1D curves (q, I, sigma) using a calibrated integrator produced by `calibrate` (azimuthal integration; q-space).
 
     ### Arguments
 
@@ -44,7 +44,7 @@ def integrate(
     - `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`).
     - `output_dir` (str, default `.`): Directory where integrated curves are written.
     - `npt` (int, default `1000`): Number of points in the output q grid.
-    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+    - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Returns
 
@@ -62,7 +62,7 @@ def integrate(
         integrator_dir="calibration/integrator",
         output_dir="integration",
         npt=1000,
-        use_cache=True,
+        use_cache=False,
     )
 
     print(out["integrated_1d"])
@@ -101,7 +101,7 @@ def _integrate_paths(
     output_dir: str,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
     sample_index: int = 0,
     npt: int = 1000,
 ) -> Dict[str, Union[str, List[str]]]:

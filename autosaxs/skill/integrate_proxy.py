@@ -35,10 +35,10 @@ def integrate_proxy(
     cy: Optional[float] = None,
     cx: Optional[float] = None,
     npt: int = 1000,
-    use_cache: bool = True,
+    use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Integrate 2D TIFF image(s) to a 1D curve **without detector calibration**, using radial averaging in pixel-radius space.
+    SAXS / small-angle x-ray scattering: integrate 2D TIFF image(s) to a 1D curve **without detector calibration**, using radial averaging in pixel-radius space (quick-look / debugging; not q-calibrated).
 
     This is intended for quick-look / debugging when you don’t have a calibrated integrator yet. The output `.dat` stores metadata indicating the x-axis is `r_px` (pixels), not physical q.
 
@@ -53,7 +53,7 @@ def integrate_proxy(
     - `cy` (float | None, default `None`): Optional beam center y in pixels. Must be set together with `cx`.
     - `cx` (float | None, default `None`): Optional beam center x in pixels. Must be set together with `cy`.
     - `npt` (int, default `1000`): Number of points in the output x grid.
-    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+    - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     Notes:
 
@@ -76,7 +76,7 @@ def integrate_proxy(
         output_dir="integration_proxy",
         mask="mask.msk",
         npt=1000,
-        use_cache=True,
+        use_cache=False,
     )
 
     print(out["integrated_1d"])
@@ -311,7 +311,7 @@ def _integrate_proxy_paths(
     output_dir: str,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
     sample_index: int = 0,
     cy: Optional[float] = None,
     cx: Optional[float] = None,

@@ -23,16 +23,16 @@ def plot_2d(
     image: TiffPathExpressionArg,
     output_dir: str = ".",
     *,
-    use_cache: bool = True,
+    use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Render one 2D SAXS TIFF image (or all `.tif` images in a directory) to PNG using log-intensity scaling.
+    SAXS / small-angle x-ray scattering: render 2D SAXS TIFF image(s) to PNG using log-intensity scaling (2D detector view).
 
     ### Arguments
 
     - `image` (str): 2D path expression (file/dir/glob). Directories expand to `*.tif` (non-recursive).
     - `output_dir` (str, default `.`): Directory where PNG(s) are written.
-    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+    - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Returns
 
@@ -48,7 +48,7 @@ def plot_2d(
     out = plot_2d(
         image="raw/sample_01.tif",
         output_dir="plots_2d",
-        use_cache=True,
+        use_cache=False,
     )
 
     print(out["plot_2d_png"])
@@ -62,8 +62,8 @@ def plot_2d(
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
-    image = coerce_path_expression(image)
-    expanded_images = expand_files_from_unwrapped(image.unwrap(), kind="2d_tif")
+    image_expr = coerce_path_expression(image)
+    expanded_images = expand_files_from_unwrapped(image_expr.unwrap(), kind="2d_tif")
     for p in expanded_images:
         if Path(p).suffix.lower() != ".tif":
             raise ValueError("plot_2d input files must have .tif extension")
@@ -87,7 +87,7 @@ def _plot_2d_paths(
     output_dir: str,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
     sample_index: int = 0,
 ) -> Dict[str, Union[str, List[str]]]:
     _ = config, use_cache, sample_index

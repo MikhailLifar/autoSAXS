@@ -205,7 +205,7 @@ Note: `autosaxs integrate` accepts either a single path expression **or** multip
 
 ## `calibrate`
 
-Calibrate detector geometry using a calibration image and a config (ring-analysis + geometry refinement). This is a prerequisite for `integrate`.
+SAXS / small-angle x-ray scattering: calibrate detector geometry using a calibration image and a config (ring-analysis + geometry refinement). This is a prerequisite for `integrate` (azimuthal integration).
 
 ### Arguments
 
@@ -215,7 +215,7 @@ Calibrate detector geometry using a calibration image and a config (ring-analysi
 - `mask` (str | None, default `None`): Optional path to a mask used during ring analysis. Supports .txt (NuPy format), .msk (Fit2d)
 - `mask_mode` (str, default `"f"`): Mask mode selector. One of `f/from_file`, `a/auto`, `c/combined`.
 - `calibrant` (str, default `"AgBh"`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`).
-- `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 Important constraints:
 
@@ -243,7 +243,7 @@ out = calibrate(
     mask="mask.msk",
     mask_mode="f",
     calibrant="AgBh",
-    use_cache=True,
+    use_cache=False,
 )
 
 print(out["integrator_dir"])
@@ -260,7 +260,7 @@ autosaxs calibrate AgBh.tif config_autocalib.yml --output-dir calibration --mask
 
 ## `integrate`
 
-Integrate 2D SAXS images to 1D curves (q, I, sigma) using a calibrated integrator produced by `calibrate`.
+SAXS / small-angle x-ray scattering: integrate 2D SAXS images to 1D curves (q, I, sigma) using a calibrated integrator produced by `calibrate` (azimuthal integration; q-space).
 
 ### Arguments
 
@@ -272,7 +272,7 @@ Integrate 2D SAXS images to 1D curves (q, I, sigma) using a calibrated integrato
 - `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`).
 - `output_dir` (str, default `.`): Directory where integrated curves are written.
 - `npt` (int, default `1000`): Number of points in the output q grid.
-- `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
 
@@ -290,7 +290,7 @@ out = integrate(
     integrator_dir="calibration/integrator",
     output_dir="integration",
     npt=1000,
-    use_cache=True,
+    use_cache=False,
 )
 
 print(out["integrated_1d"])
@@ -306,7 +306,7 @@ autosaxs integrate "/data/sample_01.tif, /data/sample_02.tif" calibration/integr
 
 ## `integrate_proxy`
 
-Integrate 2D TIFF image(s) to a 1D curve **without detector calibration**, using radial averaging in pixel-radius space.
+SAXS / small-angle x-ray scattering: integrate 2D TIFF image(s) to a 1D curve **without detector calibration**, using radial averaging in pixel-radius space (quick-look / debugging; not q-calibrated).
 
 This is intended for quick-look / debugging when you don’t have a calibrated integrator yet. The output `.dat` stores metadata indicating the x-axis is `r_px` (pixels), not physical q.
 
@@ -321,7 +321,7 @@ This is intended for quick-look / debugging when you don’t have a calibrated i
 - `cy` (float | None, default `None`): Optional beam center y in pixels. Must be set together with `cx`.
 - `cx` (float | None, default `None`): Optional beam center x in pixels. Must be set together with `cy`.
 - `npt` (int, default `1000`): Number of points in the output x grid.
-- `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 Notes:
 
@@ -344,7 +344,7 @@ out = integrate_proxy(
     output_dir="integration_proxy",
     mask="mask.msk",
     npt=1000,
-    use_cache=True,
+    use_cache=False,
 )
 
 print(out["integrated_1d"])
@@ -360,7 +360,7 @@ autosaxs integrate-proxy raw/sample_01.tif --output-dir integration_proxy --mask
 
 ## `subtract`
 
-Subtract a buffer curve from a sample 1D profile. Scaling uses either `point_match` (default)
+SAXS / small-angle x-ray scattering: subtract a buffer curve from a sample 1D profile (background subtraction). Scaling uses either `point_match` (default)
 or legacy `match_tail`, optionally restricted to a q window (`q_min` / `q_max`).
 
 ### Arguments
@@ -374,7 +374,7 @@ or legacy `match_tail`, optionally restricted to a q window (`q_min` / `q_max`).
 - `sample_form` / `buffer_form` (str): For `point_match` only — each is `linear`, `Porod`, or `Porod-plus-linear`.
 - `point_match_factor` (float, default `0.995`): For `point_match`, scale satisfies `point_match_factor * I_sample_fit(q_max) = scale * I_buffer_fit(q_max)`.
 - `scaling_factor` (float | None, default `None`): If provided, overrides automatic scaling and uses this factor directly (must be finite and > 0).
-- `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 Important constraint:
 
@@ -401,7 +401,7 @@ out = subtract(
     method="point_match",
     q_min=4.0,
     q_max=6.0,
-    use_cache=True,
+    use_cache=False,
 )
 
 print(out["subtracted_1d"])
@@ -417,7 +417,7 @@ autosaxs subtract integration/int_sample_01.dat integration/int_buffer.dat      
 
 ## `plot`
 
-Generate standard plots for a 1D curve:
+SAXS / small-angle x-ray scattering: generate standard diagnostic plots for a 1D curve (Guinier, Kratky, log-log):
 
 - Guinier plot (log(I) vs q^2)
 - Kratky plot (I*q^2 vs q)
@@ -431,7 +431,7 @@ Also writes a Guinier `.dat` file (ln(I) vs q²) used downstream.
 - `output_dir` (str, default `.`): Directory where plot files are written.
 - `guinier_q_min` (float | None, default `None`): Lower q bound for selecting Guinier range (enables `guinier_dat_path`).
 - `guinier_q_max` (float | None, default `None`): Upper q bound for selecting Guinier range.
-- `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 Important constraint:
 
@@ -456,7 +456,7 @@ out = plot(
     output_dir="plots",
     guinier_q_min=0.01,
     guinier_q_max=0.05,
-    use_cache=True,
+    use_cache=False,
 )
 
 print(out["guinier_dat_path"])
@@ -472,13 +472,13 @@ autosaxs plot subtracted/sub_sample_01.dat --output-dir plots --guinier-q-min 0.
 
 ## `plot_2d`
 
-Render one 2D SAXS TIFF image (or all `.tif` images in a directory) to PNG using log-intensity scaling.
+SAXS / small-angle x-ray scattering: render 2D SAXS TIFF image(s) to PNG using log-intensity scaling (2D detector view).
 
 ### Arguments
 
 - `image` (str): 2D path expression (file/dir/glob). Directories expand to `*.tif` (non-recursive).
 - `output_dir` (str, default `.`): Directory where PNG(s) are written.
-- `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
 
@@ -494,7 +494,7 @@ from autosaxs.skill import plot_2d
 out = plot_2d(
     image="raw/sample_01.tif",
     output_dir="plots_2d",
-    use_cache=True,
+    use_cache=False,
 )
 
 print(out["plot_2d_png"])
@@ -510,7 +510,7 @@ autosaxs plot-2d raw/sample_01.tif --output-dir plots_2d
 
 ## `guinier_analysis`
 
-Run Guinier analysis on a 1D profile (including multiple strategies such as first-interval fits and an adaptive choice). The skill writes:
+SAXS / small-angle x-ray scattering: run Guinier analysis on a 1D profile (Rg, I(0); multiple strategies such as first-interval fits and an adaptive choice). The skill writes:
 
 - a text results file
 - an ATSAS-format `.dat` file for downstream tools
@@ -520,7 +520,7 @@ Run Guinier analysis on a 1D profile (including multiple strategies such as firs
 
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where analysis outputs are written.
-- `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
 
@@ -538,7 +538,7 @@ from autosaxs.skill import guinier_analysis
 out = guinier_analysis(
     profile="subtracted/sub_sample_01.dat",
     output_dir="guinier",
-    use_cache=True,
+    use_cache=False,
 )
 
 print(out["guinier_region_path"])
@@ -554,7 +554,7 @@ autosaxs guinier-analysis subtracted/sub_sample_01.dat --output-dir guinier
 
 ## `fit_distances`
 
-Run ATSAS DATGNOM to obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve.
+SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve (real-space distance distribution).
 
 ### Arguments
 
@@ -564,7 +564,7 @@ Run ATSAS DATGNOM to obtain a pair distance distribution function \(p(r)\) for a
 - `first` (int | None, default `None`): DATGNOM `--first`. If omitted, taken from AUTORG Guinier interval when possible. If set with `last`, runs one fit. If set alone, `last` is auto-searched unless AUTORG succeeded and `last` is omitted (then DATGNOM runs without `--last`). If omitted and AUTORG fails or gives no interval, `first` is auto-searched.
 - `last` (int | None, default `None`): DATGNOM `--last`. Same pairing rules as `first`; if set alone, `first` is auto-searched. Omitted with successful AUTORG implies a single DATGNOM run without `--last`.
 - `smooth` (float | None, default `None`): DATGNOM `--smooth`. If set, that value is used and smoothness is not searched. If omitted during auto-search, trials use smoothness `2.0`. In full manual mode (`first` and `last` both set), omitted means do not pass `--smooth`.
-- `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
 
@@ -588,7 +588,7 @@ from autosaxs.skill import fit_distances
 out = fit_distances(
     profile="subtracted/sub_sample_01.dat",
     output_dir="distances",
-    use_cache=True,
+    use_cache=False,
 )
 
 print(out["best_gnom_out_path"])
@@ -604,7 +604,7 @@ autosaxs fit_distances subtracted/sub_sample_01.dat --output-dir distances
 
 ## `fit_sizes`
 
-Run ATSAS GNOM (system=1/5) to obtain a size distribution function \(D(R)\) for a polydisperse system from a 1D SAXS curve.
+SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a size distribution function \(D(R)\) for a polydisperse system from a 1D SAXS curve (polydispersity; spheres/rods).
 
 ### Arguments
 
@@ -622,7 +622,7 @@ Run ATSAS GNOM (system=1/5) to obtain a size distribution function \(D(R)\) for 
 - `first`/`last` (int | None): GNOM `--first`/`--last` data-point indices (1-based).
 - `alpha` (float | None, default `0.0`): GNOM `--alpha`. Use 0.0 (default) for automatic alpha search.
 - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
-- `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
 
@@ -648,7 +648,7 @@ out = fit_sizes(
     profile="subtracted/sub_sample_01.dat",
     output_dir="sizes",
     shape="spheres",
-    use_cache=True,
+    use_cache=False,
 )
 
 print(out["best_gnom_out_path"])
@@ -664,7 +664,11 @@ autosaxs fit-sizes subtracted/sub_sample_01.dat --output-dir sizes --shape spher
 
 ## `fit_mixture`
 
-Run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and write a comparison plot, size distribution plot, and results CSV.
+SAXS / small-angle x-ray scattering: run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and write a comparison plot, size distribution plot, and results CSV (mixture / multi-population size distributions).
+
+Prerequisites:
+
+- Requires the ATSAS `mixture` executable to be available on `PATH` (this skill shells out to `mixture`).
 
 ### Arguments
 
@@ -673,7 +677,7 @@ Run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and wri
 - `config_path` (str | None, default `None`): Path to the autosaxs YAML config (must include a `mixture` section). Required for this skill.
 - `q_min_nm` (float | None, default `None`): Optional q minimum bound (nm^-1) for the fitting range.
 - `q_max_nm` (float | None, default `None`): Optional q maximum bound (nm^-1) for the fitting range.
-- `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 Important constraint:
 
@@ -684,7 +688,8 @@ Important constraint:
 `dict[str, str]` with:
 
 - `output_subdir`: The subdirectory that contains MIXTURE outputs.
-- `comparison_path`: Path to the MIXTURE comparison plot.
+- `comparison_path`: Path to the MIXTURE comparison plot (linear y).
+- `comparison_log_path`: Path to the MIXTURE comparison plot (log y).
 - `distributions_path`: Path to the MIXTURE size distributions plot.
 - `results_csv_path`: Path to the MIXTURE results CSV.
 
@@ -699,7 +704,7 @@ out = fit_mixture(
     config_path="config_autosaxs.yml",
     q_min_nm=0.8,
     q_max_nm=2.5,
-    use_cache=True,
+    use_cache=False,
 )
 
 print(out["results_csv_path"])
@@ -715,7 +720,7 @@ autosaxs fit-mixture subtracted/sub_sample_01.dat --output-dir mixture --config-
 
 ## `fit_bodies`
 
-Run ATSAS `bodies` fits for multiple candidate shapes on a 1D profile, exporting fit files (FIR, PNG, YAML, CSV) and a comparison figure.
+SAXS / small-angle x-ray scattering: run ATSAS `bodies` shape fitting for multiple candidate shapes on a 1D profile, exporting fit files (FIR, PNG, YAML, CSV) and a comparison figure.
 
 ### Arguments
 
@@ -724,7 +729,7 @@ Run ATSAS `bodies` fits for multiple candidate shapes on a 1D profile, exporting
 - `shapes` (list[str] | None, default `None`): Subset of body model names to fit (`BODIES_SHAPES_LIST`). `None` or empty means fit **all** models (single `bodies` invocation). A non-empty list runs `bodies --body=...` per shape.
 - `first` (int | None, default `None`): Passed to `bodies` as `--first` (1-based data point index). Omitted when `None`.
 - `last` (int | None, default `None`): Passed to `bodies` as `--last` (1-based data point index). Omitted when `None`.
-- `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
 
@@ -745,7 +750,7 @@ out = fit_bodies(
     shapes=["cylinder", "ellipsoid"],
     first=10,
     last=120,
-    use_cache=True,
+    use_cache=False,
 )
 
 print(out["output_subdir"])
@@ -761,7 +766,7 @@ autosaxs fit_bodies subtracted/sub_sample_01.dat --output-dir bodies --shapes cy
 
 ## `fit_dammif`
 
-Run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile. If a GNOM output file is available, you can provide it; otherwise the profile is used.
+SAXS / small-angle x-ray scattering: run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile (shape reconstruction / bead model). If a GNOM output file is available, you can provide it; otherwise the profile is used.
 
 ### Arguments
 
@@ -769,7 +774,7 @@ Run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile. If a GNOM o
 - `output_dir` (str, default `.`): Directory where `dammif` outputs are written.
 - `gnom_path` (str | None, default `None`): Optional path to a GNOM `.out` file. If provided, `dammif` uses it.
 - `dammif_reps_num` (int, default `1`): Number of independent DAMMIF runs (replicas) to execute.
-- `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
 
@@ -787,7 +792,7 @@ out = fit_dammif(
     output_dir="dammif",
     gnom_path="guinier/sample_01_gnom.out",
     dammif_reps_num=1,
-    use_cache=True,
+    use_cache=False,
 )
 
 print(out["output_subdir"])
@@ -803,7 +808,7 @@ autosaxs fit_dammif subtracted/sub_sample_01.dat --output-dir dammif --gnom-path
 
 ## `report_individual`
 
-Build a per-sample PDF report from an existing pipeline directory. The skill scans `directory` for paths matching the provided `basename` and then assembles the report sections.
+SAXS / small-angle x-ray scattering: build a per-sample PDF report from an existing pipeline directory (SAXS report / plots + tables). The skill scans `directory` for paths matching the provided `basename` and then assembles the report sections.
 
 ### Arguments
 
@@ -811,7 +816,7 @@ Build a per-sample PDF report from an existing pipeline directory. The skill sca
 - `basename` (str): Sample identifier used to match intermediate artifacts within `directory`.
 - `output_dir` (str, default `.`): Directory where the PDF report is written.
 - `output_path` (str | None, default `None`): Optional explicit output PDF path. If not provided, defaults to `<output_dir>/<basename>_report.pdf`.
-- `use_cache` (bool, default `True`): Present for CLI parity; report generation does not use caching.
+- `use_cache` (bool, default `False`): Present for CLI parity; report generation does not use caching.
 
 ### Returns
 
@@ -843,14 +848,14 @@ autosaxs report_individual pipeline_out sample_01 --output-dir reports
 
 ## `report_summary`
 
-Build a summary PDF report for all samples found inside an existing pipeline directory. The skill discovers samples and combines plots/tables where data exists.
+SAXS / small-angle x-ray scattering: build a summary PDF report for all samples found inside an existing pipeline directory (batch report / overview). The skill discovers samples and combines plots/tables where data exists.
 
 ### Arguments
 
 - `directory` (str): Path to the existing pipeline output directory.
 - `output_dir` (str, default `.`): Directory where the summary PDF is written.
 - `output_path` (str | None, default `None`): Optional explicit output PDF path. If not provided, defaults to `<output_dir>/summary_report.pdf`.
-- `use_cache` (bool, default `True`): Present for CLI parity; report generation does not use caching.
+- `use_cache` (bool, default `False`): Present for CLI parity; report generation does not use caching.
 
 ### Returns
 

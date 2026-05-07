@@ -25,10 +25,14 @@ def fit_mixture(
     config_path: Optional[ConfigPathExpressionArg] = None,
     q_min_nm: Optional[float] = None,
     q_max_nm: Optional[float] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and write a comparison plot, size distribution plot, and results CSV.
+    SAXS / small-angle x-ray scattering: run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and write a comparison plot, size distribution plot, and results CSV (mixture / multi-population size distributions).
+
+    Prerequisites:
+
+    - Requires the ATSAS `mixture` executable to be available on `PATH` (this skill shells out to `mixture`).
 
     ### Arguments
 
@@ -37,7 +41,7 @@ def fit_mixture(
     - `config_path` (str | None, default `None`): Path to the autosaxs YAML config (must include a `mixture` section). Required for this skill.
     - `q_min_nm` (float | None, default `None`): Optional q minimum bound (nm^-1) for the fitting range.
     - `q_max_nm` (float | None, default `None`): Optional q maximum bound (nm^-1) for the fitting range.
-    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+    - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     Important constraint:
 
@@ -48,7 +52,8 @@ def fit_mixture(
     `dict[str, str]` with:
 
     - `output_subdir`: The subdirectory that contains MIXTURE outputs.
-    - `comparison_path`: Path to the MIXTURE comparison plot.
+    - `comparison_path`: Path to the MIXTURE comparison plot (linear y).
+    - `comparison_log_path`: Path to the MIXTURE comparison plot (log y).
     - `distributions_path`: Path to the MIXTURE size distributions plot.
     - `results_csv_path`: Path to the MIXTURE results CSV.
 
@@ -63,7 +68,7 @@ def fit_mixture(
         config_path="config_autosaxs.yml",
         q_min_nm=0.8,
         q_max_nm=2.5,
-        use_cache=True,
+        use_cache=False,
     )
 
     print(out["results_csv_path"])
@@ -109,13 +114,14 @@ def fit_mixture(
     path_keys_for_hash=["profile", "config_path"],
     kwargs_for_hash_keys=["q_range_nm"],
     include_config_in_hash=False,
+    warn_if_no_cache=True,
 )
 def _fit_mixture_paths(
     input_paths: Dict[str, Union[str, List[str]]],
     output_dir: str,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
     sample_index: int = 0,
     q_range_nm: Optional[tuple] = None,
 ) -> Dict[str, Union[str, List[str]]]:
@@ -147,6 +153,14 @@ def _fit_mixture_paths(
     if missing:
         raise ValueError(f"fit_mixture requires config['mixture'] keys: {missing}")
 
+    # Allow config to define a default q-range when CLI args are not provided.
+    if q_range_nm is None:
+        cfg_qr = mixture_cfg.get("q_range_nm")
+        if isinstance(cfg_qr, (list, tuple)) and len(cfg_qr) == 2 and cfg_qr[0] is None and cfg_qr[1] is not None:
+            q_range_nm = (None, float(cfg_qr[1]))
+        elif isinstance(cfg_qr, (list, tuple)) and len(cfg_qr) == 2 and cfg_qr[0] is not None and cfg_qr[1] is not None:
+            q_range_nm = (float(cfg_qr[0]), float(cfg_qr[1]))
+
     if event_bus:
         event_bus.publish(EventType.MESSAGE, {"text": "MIXTURE fit…"})
     result = _fit_mixtures(
@@ -166,6 +180,7 @@ def _fit_mixture_paths(
     return {
         "output_subdir": result["output_subdir"],
         "comparison_path": result["comparison_path"],
+        "comparison_log_path": result.get("comparison_log_path", ""),
         "distributions_path": result["distributions_path"],
         "results_csv_path": result["results_csv_path"],
     }

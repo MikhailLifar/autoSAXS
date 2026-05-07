@@ -177,6 +177,7 @@ def run_with_cache(
     kwargs_for_hash: Optional[Dict[str, Any]] = None,
     kwargs_for_hash_keys: Optional[List[str]] = None,
     include_config_in_hash: bool = True,
+    warn_if_no_cache: bool = False,
 ) -> Callable[[Callable[..., Dict[str, Union[str, List[str]]]]], Callable[..., Dict[str, Union[str, List[str]]]]]:
     """
     Decorator for skills: adds cache logic. Cache is a list of records (hash, finish_date, output_paths).
@@ -197,12 +198,21 @@ def run_with_cache(
             output_dir: str,
             config: Optional[Dict] = None,
             event_bus: Optional[EventBus] = None,
-            use_cache: bool = True,
+            use_cache: bool = False,
             **kwargs: Any,
         ) -> Dict[str, Union[str, List[str]]]:
             # When caching is disabled, do not pay the cost of hashing inputs (may read large files)
             # and do not read/write any cache state.
             if not use_cache:
+                if warn_if_no_cache:
+                    msg = (
+                        f"{skill_impl.__name__}: running without cache; this may take a long time. "
+                        "Re-run with caching enabled if you plan to iterate."
+                    )
+                    if event_bus:
+                        event_bus.publish(EventType.MESSAGE, {"text": f"WARNING: {msg}"})
+                    else:
+                        print(f"[cache] WARNING: {msg}")
                 return skill_impl(
                     input_paths,
                     output_dir,
@@ -355,7 +365,7 @@ def apply_batch(
             output_dir: str,
             config: Optional[Dict] = None,
             event_bus: Optional[EventBus] = None,
-            use_cache: bool = True,
+            use_cache: bool = False,
             single_output_dir_override: bool = single_output_dir,
             stem_from_keys_override: Optional[Union[str, List[str]]] = stem_from_keys,
             per_sample_subdir_override: Literal["always", "never"] = per_sample_subdir,

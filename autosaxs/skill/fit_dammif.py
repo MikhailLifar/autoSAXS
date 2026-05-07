@@ -38,10 +38,10 @@ def fit_dammif(
     *,
     gnom_path: Optional[SingletonPathExpressionArg] = None,
     dammif_reps_num: int = 1,
-    use_cache: bool = True,
+    use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile. If a GNOM output file is available, you can provide it; otherwise the profile is used.
+    SAXS / small-angle x-ray scattering: run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile (shape reconstruction / bead model). If a GNOM output file is available, you can provide it; otherwise the profile is used.
 
     ### Arguments
 
@@ -49,7 +49,7 @@ def fit_dammif(
     - `output_dir` (str, default `.`): Directory where `dammif` outputs are written.
     - `gnom_path` (str | None, default `None`): Optional path to a GNOM `.out` file. If provided, `dammif` uses it.
     - `dammif_reps_num` (int, default `1`): Number of independent DAMMIF runs (replicas) to execute.
-    - `use_cache` (bool, default `True`): Enable/disable caching for this skill run.
+    - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Returns
 
@@ -67,7 +67,7 @@ def fit_dammif(
         output_dir="dammif",
         gnom_path="guinier/sample_01_gnom.out",
         dammif_reps_num=1,
-        use_cache=True,
+        use_cache=False,
     )
 
     print(out["output_subdir"])
@@ -108,6 +108,7 @@ def fit_dammif(
     path_keys_for_hash=["profile", "gnom_path"],
     kwargs_for_hash=None,
     include_config_in_hash=False,
+    warn_if_no_cache=True,
 )
 def _fit_dammif_paths(
     input_paths: Dict[str, Union[str, List[str]]],
@@ -115,7 +116,7 @@ def _fit_dammif_paths(
     dammif_reps_num: int = 1,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
     sample_index: int = 0,
 ) -> Dict[str, Union[str, List[str]]]:
     _ = config, use_cache, sample_index

@@ -47,7 +47,10 @@ def _write_atsas_dat(path: Path, q: np.ndarray, I: np.ndarray, sigma: np.ndarray
 
 
 def _sphere_block(vol, vol_lo, vol_hi, rout, rout_lo, rout_hi, poly, poly_lo, poly_hi, dist_type, rhs_lo, rhs_hi) -> list[str]:
-    rhs_init = 0.5 * (rhs_lo + rhs_hi)
+    # Important: ensure physically consistent start for structure-factor radius:
+    # start with Rhs >= Rout (+ margin). Otherwise multi-phase fits with global bounds
+    # can start at an invalid point (Rhs < Rout) and get stuck in a bad basin.
+    rhs_init = max(0.5 * (rhs_lo + rhs_hi), float(rout) + RHS_MARGIN, float(rhs_lo))
     lines = [
         "SPHERE",
         f"  {vol:.4f}  {vol_lo:.2f}  {vol_hi:.2f}    !! volume fraction",
@@ -76,13 +79,23 @@ def _build_mixture_cmd(
     poly_max: float,
 ) -> str:
     dist_name = "Gauss" if dist_type == 1 else "Schultz"
-    vols = np.ones(n_phases) / n_phases
-    # Evenly spaced initial radii inside [r_min, r_max].
-    # For n_phases=1 this yields the midpoint.
-    r_centers = np.linspace(r_min, r_max, n_phases + 2)[1:-1]
+    # Non-uniform initial volumes to break symmetry in global-bounds fits.
+    # Deterministic pattern (no RNG) so runs are reproducible.
+    w = np.exp(-0.9 * np.arange(n_phases, dtype=float))
+    vols = w / np.sum(w)
+    # Local-window initialization (historically stable): start radii inside the bounds
+    # and allow each phase to refine in a ±25 Å window.
+    r_min_f, r_max_f = float(r_min), float(r_max)
+    poly_min_f, poly_max_f = float(poly_min), float(poly_max)
+    r_centers = np.linspace(r_min_f + 10.0, r_max_f - 20.0, n_phases)
+    # Small deterministic per-phase jitter to avoid symmetric starting points under global bounds.
+    # Keep jitter modest so we don't start on/near bounds.
+    jitter_step = min(15.0, max(5.0, 0.10 * (r_max_f - r_min_f)))
+    jitter = (np.arange(n_phases, dtype=float) - 0.5 * (n_phases - 1)) * jitter_step
+    r_centers = np.clip(r_centers + jitter, r_min_f + 1.0, r_max_f - 1.0)
     # poly_init = 0.5 * (poly_min + poly_max)
     # poly_init = 130.0
-    poly_init = 5.0
+    poly_base = 5.0
     lines = [
         "i                        !! init",
         "!!!!!!!!!!!!!!!!!!       !! init",
@@ -94,10 +107,18 @@ def _build_mixture_cmd(
         f"{SYSTEM_CONCENTRATION}                     !! system concentration",
     ]
     for k in range(n_phases):
-        v, r = vols[k], r_centers[k]
-        # Use global radius bounds for every phase (no local ±25 Å window).
-        r_lo, r_hi = float(r_min), float(r_max)
-        rhs_lo, rhs_hi = r_lo + RHS_MARGIN, r_hi + 30
+        v, r = vols[k], float(r_centers[k])
+        # Global radius bounds for every phase (no local ±25 Å window).
+        r_lo, r_hi = r_min_f, r_max_f
+        # Keep per-phase hard-sphere lower bound consistent with current phase radius.
+        rhs_lo, rhs_hi = max(r_lo + RHS_MARGIN, float(r) + RHS_MARGIN), r_hi + 30
+        # Strongly non-uniform starting polydispersity per phase (still within global bounds).
+        # Use a geometric ladder to cover narrow→broad.
+        if n_phases == 1:
+            poly_init = float(np.clip(poly_base, poly_min_f, poly_max_f))
+        else:
+            t = k / (n_phases - 1)
+            poly_init = float(np.clip(poly_min_f * (poly_max_f / poly_min_f) ** t, poly_min_f, poly_max_f))
         lines.extend(
             _sphere_block(
                 v,
@@ -416,7 +437,7 @@ def fit_mixtures(
     q_range_nm: (q_min, q_max) in nm⁻¹ to use for fitting; None = use full q range. Only data in this range
         is passed to MIXTURE; comparison plot shows full experiment and fits over the fit range.
 
-    Returns dict with keys: output_subdir (path), best_label, BIC_log, comparison_path, distributions_path, results_csv_path;
+    Returns dict with keys: output_subdir (path), best_label, BIC_log, comparison_path, comparison_log_path, distributions_path, results_csv_path;
     or None on failure.
     """
     output_dir = Path(output_dir)
@@ -443,6 +464,7 @@ def fit_mixtures(
             "best_label": best_label,
             "BIC_log": bic_log,
             "comparison_path": str(comparison_path),
+            "comparison_log_path": str(comparison_log_path),
             "distributions_path": str(distributions_path),
             "results_csv_path": str(results_csv_path),
         }
@@ -450,6 +472,10 @@ def fit_mixtures(
     q_full, I_full, sigma_full = _load_curve(profile_path)
     if q_range_nm is not None:
         q_min, q_max = q_range_nm
+        if q_min is None:
+            q_min = float(np.nanmin(q_full))
+        if q_max is None:
+            q_max = float(np.nanmax(q_full))
         mask = (q_full >= q_min) & (q_full <= q_max)
         q, I, sigma = q_full[mask], I_full[mask], sigma_full[mask]
         if len(q) < 2:
@@ -517,6 +543,7 @@ def fit_mixtures(
         "best_label": best["label"],
         "BIC_log": best.get("BIC_log", np.nan),
         "comparison_path": str(comparison_path),
+        "comparison_log_path": str(comparison_log_path),
         "distributions_path": str(distributions_path),
         "results_csv_path": str(results_csv_path),
     }

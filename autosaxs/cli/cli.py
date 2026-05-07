@@ -338,8 +338,11 @@ def _add_skill_subparser(
             opt_name = f"--{_to_kebab(param.name)}"
 
             if param.name == "use_cache" and isinstance(param.default, bool):
-                # Spec: --no-cache disables caching (use_cache=False)
-                p.add_argument("--no-cache", dest="use_cache", action="store_false", help="Disable caching")
+                # Caching is opt-in; expose both flags explicitly.
+                g = p.add_mutually_exclusive_group()
+                g.add_argument("--cache", dest="use_cache", action="store_true", help="Enable caching")
+                g.add_argument("--no-cache", dest="use_cache", action="store_false", help="Disable caching")
+                p.set_defaults(use_cache=param.default)
                 continue
             if param.name == "output_dir":
                 p.add_argument("--output-dir", dest="output_dir", default=param.default, help="Output directory")

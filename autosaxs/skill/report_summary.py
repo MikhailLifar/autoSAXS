@@ -95,17 +95,17 @@ def report_summary(
     output_dir: str = ".",
     *,
     output_path: Optional[str] = None,
-    use_cache: bool = True,
+    use_cache: bool = False,
 ) -> Dict[str, Any]:
     """
-    Build a summary PDF report for all samples found inside an existing pipeline directory. The skill discovers samples and combines plots/tables where data exists.
+    SAXS / small-angle x-ray scattering: build a summary PDF report for all samples found inside an existing pipeline directory (batch report / overview). The skill discovers samples and combines plots/tables where data exists.
 
     ### Arguments
 
     - `directory` (str): Path to the existing pipeline output directory.
     - `output_dir` (str, default `.`): Directory where the summary PDF is written.
     - `output_path` (str | None, default `None`): Optional explicit output PDF path. If not provided, defaults to `<output_dir>/summary_report.pdf`.
-    - `use_cache` (bool, default `True`): Present for CLI parity; report generation does not use caching.
+    - `use_cache` (bool, default `False`): Present for CLI parity; report generation does not use caching.
 
     ### Returns
 

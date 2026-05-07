@@ -1106,6 +1106,7 @@ class Controller:
                             mixture_results_by_idx[i] = {
                                 'output_subdir': os_sub,
                                 'comparison_path': out_mixture.get('comparison_path'),
+                                'comparison_log_path': out_mixture.get('comparison_log_path'),
                                 'distributions_path': out_mixture.get('distributions_path'),
                                 'results_csv_path': out_mixture.get('results_csv_path'),
                             }
