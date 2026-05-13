@@ -136,35 +136,28 @@ def _skill_functions() -> Dict[str, Callable[..., Any]]:
     return dict(skill_mod.list_skills(include_reports=True))
 
 
-def _read_ai_skill_template() -> str:
-    """
-    Load the SKILL.md template shipped with the autosaxs package.
-
-    Uses importlib.resources when available so this works from installed wheels.
-    """
+def _read_subskill_ai_skill_template() -> str:
+    """Leaf SKILL.md template (nested under ``saxs-processing/``), includes ``catalog-hidden``."""
     try:
-        from importlib.resources import files  # py3.9+
+        from importlib.resources import files
 
-        return (files("autosaxs.resources.ai_skills") / "template.md").read_text(encoding="utf-8")
+        return (files("autosaxs.resources.ai_skills") / "subskill_template.md").read_text(encoding="utf-8")
     except Exception:
-        # Fallback for non-standard environments (editable installs, etc.)
-        return (Path(__file__).resolve().parents[1] / "resources" / "ai_skills" / "template.md").read_text(
-            encoding="utf-8"
-        )
+        return (
+            Path(__file__).resolve().parents[1] / "resources" / "ai_skills" / "subskill_template.md"
+        ).read_text(encoding="utf-8")
 
 
-def _read_ai_skills_readme_template() -> str:
-    """
-    Load the skills/README.md template shipped with the autosaxs package.
-    """
+def _read_router_skill_template() -> str:
+    """Top-level router SKILL.md for the ``saxs-processing`` bundle."""
     try:
-        from importlib.resources import files  # py3.9+
+        from importlib.resources import files
 
-        return (files("autosaxs.resources.ai_skills") / "readme_template.md").read_text(encoding="utf-8")
+        return (files("autosaxs.resources.ai_skills") / "router_template.md").read_text(encoding="utf-8")
     except Exception:
-        return (Path(__file__).resolve().parents[1] / "resources" / "ai_skills" / "readme_template.md").read_text(
-            encoding="utf-8"
-        )
+        return (
+            Path(__file__).resolve().parents[1] / "resources" / "ai_skills" / "router_template.md"
+        ).read_text(encoding="utf-8")
 
 
 def _extract_frontmatter_field(md: str, field: str) -> Optional[str]:
@@ -190,6 +183,51 @@ def _fill_template(template: str, *, values: Dict[str, str]) -> str:
     return out
 
 
+def _doc_first_non_empty_line(fn: Callable[..., Any]) -> str:
+    doc = inspect.getdoc(fn) or ""
+    for line in doc.splitlines():
+        s = line.strip()
+        if s:
+            return s
+    return ""
+
+
+def _sanitize_router_hint(s: str) -> str:
+    """Keep router bullets readable when docstrings contain Markdown."""
+    s = s.replace("`", "'")
+    s = s.replace("**", "")
+    s = s.replace("*", "")
+    return s
+
+
+def _routing_summary_line(fn: Callable[..., Any], *, max_len: int = 280) -> str:
+    s = _doc_first_non_empty_line(fn)
+    if not s:
+        return "this autosaxs skill"
+    if len(s) > max_len:
+        s = s[: max_len - 3].rstrip() + "..."
+    return _sanitize_router_hint(s)
+
+
+def _router_skill_md(skill_fns: Dict[str, Callable[..., Any]], *, autosaxs_version: str) -> str:
+    """
+    Build ``<output-dir>/saxs-processing/SKILL.md`` — SAXS orchestrator over ``saxs-processing/<kebab>/SKILL.md`` leaves.
+    """
+    catalog_lines: List[str] = []
+    for skill_name, fn in skill_fns.items():
+        kebab = _to_kebab(skill_name)
+        teaser = _routing_summary_line(fn)
+        catalog_lines.append(f"- **`saxs-processing/{kebab}`** (`autosaxs {kebab}`) — {teaser}")
+    template = _read_router_skill_template()
+    return _fill_template(
+        template,
+        values={
+            "subskill_catalog": "\n".join(catalog_lines),
+            "autosaxs_version": str(autosaxs_version),
+        },
+    ).rstrip() + "\n"
+
+
 def _skill_to_agent_skill_md(*, name: str, fn: Callable[..., Any]) -> str:
     """
     Render a Cursor-style Agent Skill `SKILL.md` from an autosaxs skill docstring.
@@ -197,14 +235,9 @@ def _skill_to_agent_skill_md(*, name: str, fn: Callable[..., Any]) -> str:
     The function docstring is treated as the single source of truth.
     """
     doc = inspect.getdoc(fn) or ""
-    first_line = ""
-    for line in doc.splitlines():
-        s = line.strip()
-        if s:
-            first_line = s
-            break
+    first_line = _doc_first_non_empty_line(fn)
     description = first_line or f"autosaxs skill: {name}"
-    template = _read_ai_skill_template()
+    template = _read_subskill_ai_skill_template()
     return _fill_template(
         template,
         values={
@@ -235,7 +268,7 @@ def _add_get_readme_subparser(subparsers: argparse._SubParsersAction) -> None:
 def _add_get_skills_subparser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "get-skills",
-        help="Generate Cursor Agent Skills from autosaxs docstrings",
+        help="Generate Cursor Agent Skills under saxs-processing/ (orchestrator + nested leaves)",
     )
     p.set_defaults(_autosaxs_internal_cmd="get-skills")
     p.add_argument(
@@ -243,7 +276,7 @@ def _add_get_skills_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--output-dir",
         dest="output_dir",
         default=".",
-        help="Directory where `skills/` will be written (default: current directory)",
+        help="Parent directory for `saxs-processing/`; that folder is replaced entirely each run (default: current directory)",
     )
 
 
@@ -451,25 +484,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     if internal_cmd == "get-skills":
         out_dir = Path(getattr(args, "output_dir", "."))
-        skills_dir = out_dir / "skills"
-        skills_dir.mkdir(parents=True, exist_ok=True)
+        bundle = out_dir / "saxs-processing"
+        if bundle.exists():
+            shutil.rmtree(bundle)
+        bundle.mkdir(parents=True, exist_ok=True)
+
+        skill_fns = _skill_functions()
 
         written: List[str] = []
-        for skill_name, fn in _skill_functions().items():
+        for skill_name, fn in skill_fns.items():
             folder_name = _to_kebab(skill_name)
-            skill_out_dir = skills_dir / folder_name
-
-            # Rewrite reliably: remove only this per-skill folder (not the parent `skills/`).
-            if skill_out_dir.exists():
-                shutil.rmtree(skill_out_dir)
+            skill_out_dir = bundle / folder_name
             skill_out_dir.mkdir(parents=True, exist_ok=True)
-
             md = _skill_to_agent_skill_md(name=folder_name, fn=fn)
             out_md = skill_out_dir / "SKILL.md"
             out_md.write_text(md, encoding="utf-8")
             written.append(str(out_md))
 
-        # Generate top-level skills index README.md (includes any pre-existing skills too).
         try:
             import autosaxs as _autosaxs_mod
 
@@ -477,32 +508,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         except Exception:
             autosaxs_version = "unknown"
 
-        skills_list_lines: List[str] = []
-        for child in sorted(skills_dir.iterdir(), key=lambda p: p.name):
-            if not child.is_dir():
-                continue
-            skill_md = child / "SKILL.md"
-            if not skill_md.is_file():
-                continue
-            try:
-                content = skill_md.read_text(encoding="utf-8")
-            except OSError:
-                content = ""
-            desc = _extract_frontmatter_field(content, "description") or ""
-            if desc:
-                skills_list_lines.append(f"- [`{child.name}`]({child.name}/SKILL.md): {desc}")
-            else:
-                skills_list_lines.append(f"- [`{child.name}`]({child.name}/SKILL.md)")
-
-        readme_template = _read_ai_skills_readme_template()
-        readme_text = _fill_template(
-            readme_template,
-            values={
-                "autosaxs_version": str(autosaxs_version),
-                "skills_list": "\n".join(skills_list_lines) if skills_list_lines else "_(no skills found)_",
-            },
-        )
-        (skills_dir / "README.md").write_text(readme_text.rstrip() + "\n", encoding="utf-8")
+        router_md_path = bundle / "SKILL.md"
+        router_md_path.write_text(_router_skill_md(skill_fns, autosaxs_version=autosaxs_version), encoding="utf-8")
+        written.append(str(router_md_path))
 
         for p in sorted(written):
             print(p)

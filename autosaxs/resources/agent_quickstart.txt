@@ -10,7 +10,7 @@ when PATH might point at a different interpreter.
 Shipped commands (no input data required)
 -----------------------------------------
   get-readme -o <dir>          Write README.md (generated skills documentation + usage).
-  get-skills -o <dir>          Write skills/ with one SKILL.md per skill (IDE agents).
+  get-skills -o <dir>          Replace dir/saxs-processing/ entirely (orchestrator + leaf SKILL.md files).
   get-default-config -o <dir>  Copy bundled config_base.conf into <dir>. This command is crucial since config file is strictly required for some skills.
 
 Suggested first steps for an agent

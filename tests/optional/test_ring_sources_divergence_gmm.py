@@ -13,8 +13,8 @@ REPOS_DIR = WORKSPACE_ROOT / "repos"
 if str(REPOS_DIR) not in sys.path:
     sys.path.insert(0, str(REPOS_DIR))
 
-from autosaxs.autocalib import autocalib_ring_analysis, ring_analysis  # noqa: E402,F401
-from autosaxs.utils import read_from_tiff  # noqa: E402
+from autosaxs.skill.calibrate.autocalib import autocalib_ring_analysis, ring_analysis  # noqa: E402,F401
+from autosaxs.core.utils import read_from_tiff  # noqa: E402
 
 
 def main() -> int:

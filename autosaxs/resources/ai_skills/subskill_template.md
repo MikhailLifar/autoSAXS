@@ -1,7 +1,10 @@
 ---
 name: {{name}}
 description: {{description}}
+catalog-hidden: true
 ---
+
+# `autosaxs {{command}}` (subskill)
 
 ## Critical: `autosaxs` is a Python package
 
@@ -30,10 +33,6 @@ This skill wraps the `autosaxs {{command}}` CLI command / `autosaxs.skill.{{pyth
 ## When to use me
 
 - You want to run `autosaxs {{command}}` on real data.
-
-## Do NOT use me when
-
-- You want a multi-step workflow; compose multiple autosaxs skills instead.
 
 ## Required inputs
 
@@ -67,4 +66,3 @@ See the docstring section **Returns** below.
 ## Autosaxs skill docstring
 
 {{docstring}}
-

@@ -16,10 +16,10 @@ WORKSPACE_ROOT = Path("/home/mikl/KurchatovCoop")
 REPOS_DIR = WORKSPACE_ROOT / "repos"
 sys.path.insert(0, str(REPOS_DIR))
 
-from autosaxs.processor import autocalib as autosaxs_autocalib  # noqa: E402
-from autosaxs.utils import load_config  # noqa: E402
-from autosaxs.viewer import PLTViewer  # noqa: E402
-from autosaxs.autocalib import autocalib_ring_analysis  # noqa: E402
+from autosaxs.core.processor import autocalib as autosaxs_autocalib  # noqa: E402
+from autosaxs.core.utils import load_config  # noqa: E402
+from autosaxs.core.viewer import PLTViewer  # noqa: E402
+from autosaxs.skill.calibrate.autocalib import autocalib_ring_analysis  # noqa: E402
 
 
 def _safe_float(x: Any) -> Optional[float]:
