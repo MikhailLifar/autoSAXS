@@ -1,5 +1,5 @@
 # autosaxs: interactive SAXS pipeline core (controller, processor, skill, utils, guinier, event_bus, cli, viewer, context, gui, gui_interface, api, polydispfit, report)
-__version__ = "2.4.0"
+__version__ = "2.4.1"
 import re
 import subprocess
 import warnings
