@@ -177,6 +177,37 @@ def _fit_mixture_paths(
     )
     if result is None:
         raise RuntimeError("fit_mixture failed")
+    from autosaxs.core.report_fragments import write_skill_report_fragments
+    from autosaxs.core.utils import _strip_sub_int_prefix as _strip_base
+
+    obase = _strip_base(os.path.splitext(os.path.basename(profile))[0])
+    dest_dir = str(result["output_subdir"])
+    comp = os.path.basename(result["comparison_path"])
+    dist = os.path.basename(result["distributions_path"])
+    csvb = os.path.basename(result["results_csv_path"])
+    md_parts = [
+        "### MIXTURE (multi-phase spheres)\n",
+        f"Best model: **{result.get('best_label', '')}**; BIC_log = {result.get('BIC_log')}\n",
+        f"![Comparison I(q)]({comp})\n",
+        f"![Size distributions]({dist})\n",
+    ]
+    summary_refs = [
+        {
+            "role": "mixture_scores_preview",
+            "path": csvb,
+            "format": "csv",
+            "row": 0,
+            "columns": ["label", "BIC_log", "n_phases"],
+        },
+        {"role": "mixture_comparison_png", "path": comp, "format": "png"},
+    ]
+    write_skill_report_fragments(
+        dest_dir,
+        obase,
+        "fit_mixture",
+        "".join(md_parts),
+        summary_references=summary_refs,
+    )
     return {
         "output_subdir": result["output_subdir"],
         "comparison_path": result["comparison_path"],

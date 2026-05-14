@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://autosaxs.local/schemas/report_summary.schema.json",
+  "title": "autosaxs_report_summary",
+  "type": "object",
+  "required": ["skill_id", "schema_version", "order", "references"],
+  "properties": {
+    "skill_id": { "type": "string", "minLength": 1 },
+    "schema_version": { "type": "integer", "minimum": 1 },
+    "basename": { "type": ["string", "null"], "description": "Sample stem; null for global steps (e.g. calibrate)." },
+    "order": { "type": "integer", "description": "Sort key when merging fragments for summary assembly." },
+    "references": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["role", "path", "format"],
+        "properties": {
+          "role": { "type": "string", "minLength": 1 },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Path relative to the directory containing this YAML file."
+          },
+          "format": {
+            "type": "string",
+            "enum": ["dat", "csv", "saxs_dat", "generic_table", "text", "png", "other"]
+          },
+          "columns": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "For tabular files: column names to include (first data row after header unless row is set)."
+          },
+          "row": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Zero-based data row index after the header row for CSV/table reads."
+          },
+          "cell": {
+            "type": "object",
+            "required": ["row", "column"],
+            "properties": {
+              "row": { "type": "integer", "minimum": 0, "description": "Data row after header (0 = first data row)." },
+              "column": { "type": "string", "minLength": 1, "description": "Column name from header." }
+            },
+            "additionalProperties": false
+          },
+          "units": { "type": "string" },
+          "display_name": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

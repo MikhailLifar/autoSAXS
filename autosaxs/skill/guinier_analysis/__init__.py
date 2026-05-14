@@ -191,5 +191,37 @@ def _guinier_analysis_paths(
     with open(guinier_region_path, "w") as f:
         yaml.dump(guinier_region or {}, f, default_flow_style=False)
 
+    from autosaxs.core.report_fragments import write_skill_report_fragments
+
+    rg_nm = None
+    if isinstance(guinier_region, dict) and guinier_region.get("rg") is not None:
+        try:
+            rg_nm = float(guinier_region["rg"])
+        except (TypeError, ValueError):
+            rg_nm = None
+    rg_txt = f"{rg_nm:.4f} nm" if rg_nm is not None else "N/A"
+    md_lines = [
+        "### Guinier analysis\n",
+        f"Rg ≈ **{rg_txt}**.\n",
+    ]
+    summary_refs = [
+        {"role": "guinier_results", "path": os.path.basename(results_path), "format": "text"},
+    ]
+    if rg_nm is not None:
+        summary_refs.append(
+            {
+                "role": "rg_nm",
+                "path": os.path.basename(results_path),
+                "format": "text",
+                "display_name": "Rg (nm)",
+            }
+        )
+    write_skill_report_fragments(
+        output_dir,
+        base,
+        "guinier_analysis",
+        "".join(md_lines),
+        summary_references=summary_refs,
+    )
     return {"results_path": results_path, "atsas_dat_path": atsas_dat_path, "guinier_region_path": guinier_region_path}
 

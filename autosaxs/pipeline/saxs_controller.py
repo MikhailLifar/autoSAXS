@@ -1185,6 +1185,15 @@ class Controller:
                 except Exception as e:
                     self._send_message(f"report (individual) failed for {basename}: {e}")
 
+            if selected_order:
+                try:
+                    skill.report_summary(
+                        directory,
+                        output_path=os.path.join(directory, 'reports', 'summary_report.pdf'),
+                    )
+                except Exception as e:
+                    self._send_message(f"report (summary) after advanced steps failed: {e}")
+
             context.extend_paths('profile', profile_paths)
 
             upload_more = self._request_choice(

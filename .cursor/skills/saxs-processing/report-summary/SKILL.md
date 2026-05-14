@@ -1,6 +1,6 @@
 ---
 name: report-summary
-description: SAXS / small-angle x-ray scattering: build a summary PDF report for all samples found inside an existing pipeline directory (batch report / overview). The skill discovers samples and combines plots/tables where data exists.
+description: SAXS / small-angle x-ray scattering: build a summary report for all samples in a pipeline directory.
 catalog-hidden: true
 ---
 
@@ -65,20 +65,27 @@ See the docstring section **Returns** below.
 
 ## Autosaxs skill docstring
 
-SAXS / small-angle x-ray scattering: build a summary PDF report for all samples found inside an existing pipeline directory (batch report / overview). The skill discovers samples and combines plots/tables where data exists.
+SAXS / small-angle x-ray scattering: build a summary report for all samples in a pipeline directory.
+
+Merges decentralized ``*_report_summary.yaml`` files into Markdown under
+``<directory>/reports/summary_assembled_report.md`` and renders the PDF with **ReportLab**
+from that Markdown.
 
 ### Arguments
 
 - `directory` (str): Path to the existing pipeline output directory.
-- `output_dir` (str, default `.`): Directory where the summary PDF is written.
-- `output_path` (str | None, default `None`): Optional explicit output PDF path. If not provided, defaults to `<output_dir>/summary_report.pdf`.
-- `use_cache` (bool, default `False`): Present for CLI parity; report generation does not use caching.
+- `output_dir` (str, default `.`): Unused for default paths; outputs go under ``<directory>/reports/``.
+- `output_path` (str | None, default `None`): Output PDF path; default ``<directory>/reports/summary_report.pdf``.
+- `output_md_path` (str | None, default `None`): Output path for merged summary Markdown.
+- `write_pdf` (bool, default `True`): Whether to emit a PDF.
+- `use_cache` (bool, default `False`): Present for CLI parity; unused.
 
 ### Returns
 
 `dict[str, Any]` with:
 
-- `report_pdf_path`: Path to the generated summary PDF.
+- `report_pdf_path`: Path to the generated PDF when requested.
+- `assembled_summary_md_path`: Merged Markdown path.
 
 ### Python usage
 
@@ -96,5 +103,5 @@ print(out["report_pdf_path"])
 ### CLI usage
 
 ```bash
-autosaxs report_summary pipeline_out --output-dir reports
+autosaxs report-summary pipeline_out --output-dir reports
 ```

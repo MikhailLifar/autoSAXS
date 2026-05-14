@@ -677,7 +677,7 @@ def _fit_sizes_paths(
             fit_vs_exp_png_error = "could not parse I(q) table from .out"
         else:
             q, I_exp, _sigma_arr, I_fit = parsed
-            fit_vs_exp_png_path = os.path.join(output_dir, f"{base}_fit_sizes_fits.png")
+            fit_vs_exp_png_path = os.path.join(output_dir, f"{base}_fit_sizes_best_fit.png")
             fig, ax = plt.subplots(figsize=(7, 4))
             ax.plot(q, I_exp, lw=3, label="exp")
             ax.plot(q, I_fit, lw=2, label="fit")
@@ -804,6 +804,26 @@ def _fit_sizes_paths(
     }
     with open(best_summary_path, "w") as f:
         yaml.dump(summary, f, default_flow_style=False)
+
+    from autosaxs.core.report_fragments import write_skill_report_fragments
+
+    md_parts = [f"### GNOM size distribution (fit_sizes, shape={shape})\n"]
+    if fit_vs_exp_png_path and os.path.isfile(fit_vs_exp_png_path):
+        md_parts.append(f"![Selected GNOM fit vs data]({os.path.basename(fit_vs_exp_png_path)})\n")
+    if best_dr_png_path and os.path.isfile(best_dr_png_path):
+        md_parts.append(f"![D(R)]({os.path.basename(best_dr_png_path)})\n")
+    summary_refs = [
+        {"role": "fit_sizes_summary", "path": os.path.basename(best_summary_path), "format": "text"},
+    ]
+    if dr_csv_path and os.path.isfile(dr_csv_path):
+        summary_refs.append({"role": "dr_csv", "path": os.path.basename(dr_csv_path), "format": "csv", "row": 0})
+    write_skill_report_fragments(
+        output_dir,
+        base,
+        "fit_sizes",
+        "".join(md_parts),
+        summary_references=summary_refs,
+    )
 
     return {
         "output_subdir": output_dir,

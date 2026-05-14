@@ -13,7 +13,10 @@ from .deps import (
     integrate_2d_to_1d,
     read_from_tiff,
     run_with_cache,
+    _strip_sub_int_prefix,
 )
+from autosaxs.core.report_fragments import write_skill_report_fragments
+
 from .common import (
     TiffPathExpressionArg,
     SingletonPathExpressionArg,
@@ -127,5 +130,20 @@ def _integrate_paths(
         dest = os.path.join(output_dir, f"int_{base}.dat")
         _q, _I, _sigma = integrate_2d_to_1d(integrator, data, npt=npt, destpath=dest)
         integrated.append(dest)
+        frag_base = _strip_sub_int_prefix(os.path.splitext(os.path.basename(im_path))[0])
+        md_lines = [
+            "### Azimuthal integration\n",
+            f"Radial grid: **{npt}** points.\n",
+        ]
+        summary_refs = [
+            {"role": "integrated_curve", "path": os.path.basename(dest), "format": "saxs_dat"},
+        ]
+        write_skill_report_fragments(
+            output_dir,
+            frag_base,
+            "integrate",
+            "".join(md_lines),
+            summary_references=summary_refs,
+        )
     return {"integrated_1d": integrated}
 

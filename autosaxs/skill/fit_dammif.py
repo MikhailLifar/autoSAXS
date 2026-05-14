@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -246,5 +246,31 @@ def _fit_dammif_paths(
                 legend=True,
                 plotFilePath=dammif_fits_png,
             )
+    from autosaxs.core.report_fragments import write_skill_report_fragments
+
+    md_parts = ["### ATSAS DAMMIF\n"]
+    if os.path.isfile(dammif_fits_png):
+        md_parts.append(f"![Fits comparison]({os.path.basename(dammif_fits_png)})\n")
+    summary_refs_d: List[Dict[str, Any]] = []
+    if os.path.isfile(dammif_fits_yml):
+        summary_refs_d.append({"role": "dammif_fits_yml", "path": os.path.basename(dammif_fits_yml), "format": "text"})
+    if os.path.isfile(dammif_fits_csv):
+        summary_refs_d.append(
+            {
+                "role": "dammif_fits_csv_preview",
+                "path": os.path.basename(dammif_fits_csv),
+                "format": "csv",
+                "row": 0,
+                "columns": ["q", "exp"],
+            }
+        )
+    write_skill_report_fragments(
+        output_dir,
+        base,
+        "fit_dammif",
+        "".join(md_parts),
+        summary_references=summary_refs_d or None,
+        write_summary_yaml=bool(summary_refs_d),
+    )
     return {"output_subdir": output_dir}
 

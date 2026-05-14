@@ -17,6 +17,7 @@ from .deps import (
     read_from_tiff,
     run_with_cache,
     write_saxs,
+    _strip_sub_int_prefix,
 )
 from .common import (
     SingletonMaskPathExpressionArg,
@@ -392,6 +393,21 @@ def _integrate_proxy_paths(
             "center_y_px": center_y,
             "center_x_px": center_x,
         },
+    )
+    from autosaxs.core.report_fragments import write_skill_report_fragments
+
+    frag_base = _strip_sub_int_prefix(base)
+    md_lines = [
+        "### Integrate proxy (radial average)\n",
+        f"![Center estimation]({os.path.basename(center_plot_path)})\n",
+    ]
+    summary_refs = [{"role": "integrated_proxy_curve", "path": os.path.basename(dest), "format": "saxs_dat"}]
+    write_skill_report_fragments(
+        output_dir,
+        frag_base,
+        "integrate_proxy",
+        "".join(md_lines),
+        summary_references=summary_refs,
     )
     return {"integrated_1d": dest}
 

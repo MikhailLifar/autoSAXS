@@ -199,6 +199,24 @@ def _calibrate_paths(
         show_duration=None,
         plotFilePath=calibration_mask_path,
     )
+    from autosaxs.core.report_fragments import write_skill_report_fragments
+
+    calib_base = stem
+    md_lines = [
+        "### Detector calibration\n",
+        f"![Calibration curve]({os.path.relpath(calibration_curve_plot_path, output_dir).replace(os.sep, '/')})\n",
+        f"![Calibration mask]({os.path.relpath(calibration_mask_path, output_dir).replace(os.sep, '/')})\n",
+    ]
+    summary_refs = [
+        {"role": "refined_geometry", "path": os.path.basename(refined_path), "format": "text"},
+    ]
+    write_skill_report_fragments(
+        output_dir,
+        calib_base,
+        "calibrate",
+        "".join(md_lines),
+        summary_references=summary_refs,
+    )
     return {
         "integrator_dir": integrator_dir,
         "refined_path": refined_path,

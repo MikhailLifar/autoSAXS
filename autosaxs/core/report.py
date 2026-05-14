@@ -4,8 +4,10 @@ Builds a single PDF from a report-data dictionary; only sections for which data 
 See pipeline_interactive_spec.md §6 Report.
 """
 import os
+import re
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple
+from xml.sax.saxutils import escape as xml_escape
 
 import yaml
 from reportlab.lib import colors
@@ -737,3 +739,167 @@ def build_summary_report_pdf(summary_data: Dict[str, Any], output_path: str) -> 
             os.unlink(p)
         except Exception:
             pass
+
+
+_RE_MD_IMG = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+
+
+def _paragraph_from_plain(text: str, style: Any) -> Paragraph:
+    t = xml_escape(text.strip())
+    return Paragraph(t.replace("\n", "<br/>"), style)
+
+
+def _is_md_table_separator_row(cells: List[str]) -> bool:
+    if not cells:
+        return False
+    for c in cells:
+        s = (c or "").strip().replace(" ", "")
+        if not re.fullmatch(r":?-{3,}:?", s):
+            return False
+    return True
+
+
+def build_pdf_from_assembled_markdown(
+    md_text: str,
+    output_path: str,
+    *,
+    markdown_base_dir: Optional[str] = None,
+) -> None:
+    """
+    Render assembled Markdown (headings, paragraphs, ``![alt](path)`` images, pipe tables) to a PDF using ReportLab.
+
+    Relative image paths are resolved against ``markdown_base_dir`` when provided (typically the directory
+    containing the assembled ``.md`` file).
+    """
+    styles = getSampleStyleSheet()
+    story: list = []
+    body_style = styles["Normal"]
+    h1_style = styles["Heading1"]
+    h2_style = styles["Heading2"]
+    h3_style = styles["Heading3"]
+    small = ParagraphStyle(name="MdSmall", parent=body_style, fontSize=8, leading=10)
+    lines = md_text.splitlines()
+    i = 0
+    buf: List[str] = []
+
+    def flush_buf() -> None:
+        nonlocal buf
+        if not buf:
+            return
+        text = "\n".join(buf).strip()
+        buf = []
+        if not text:
+            return
+        story.append(_paragraph_from_plain(text, body_style))
+        story.append(Spacer(1, 0.2 * cm))
+
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped:
+            flush_buf()
+            i += 1
+            continue
+        if stripped == "---":
+            flush_buf()
+            story.append(Spacer(1, 0.3 * cm))
+            i += 1
+            continue
+        if stripped.startswith("|") and "|" in stripped[1:]:
+            flush_buf()
+            table_lines: List[str] = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                table_lines.append(lines[i].strip())
+                i += 1
+            rows_raw = []
+            for ln in table_lines:
+                s = ln.strip()
+                if s.startswith("|"):
+                    s = s[1:]
+                if s.endswith("|"):
+                    s = s[:-1]
+                rows_raw.append([c.strip() for c in s.split("|")])
+            rows_data: List[List[str]] = []
+            for row in rows_raw:
+                if not row:
+                    continue
+                if _is_md_table_separator_row(row):
+                    continue
+                rows_data.append(row)
+            if rows_data:
+                rp_rows: List[List[Paragraph]] = []
+                for row in rows_data:
+                    rp_rows.append([Paragraph(xml_escape(c or ""), small) for c in row])
+                ncols = max(len(r) for r in rows_data)
+                col_w = (14 * cm) / max(ncols, 1)
+                t = Table(rp_rows, colWidths=[col_w] * ncols)
+                t.setStyle(
+                    TableStyle(
+                        [
+                            ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+                            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                        ]
+                    )
+                )
+                story.append(t)
+                story.append(Spacer(1, 0.3 * cm))
+            continue
+        if stripped.startswith("### "):
+            flush_buf()
+            story.append(Paragraph(xml_escape(stripped[4:].strip()), h3_style))
+            story.append(Spacer(1, 0.2 * cm))
+            i += 1
+            continue
+        if stripped.startswith("## "):
+            flush_buf()
+            story.append(Paragraph(xml_escape(stripped[3:].strip()), h2_style))
+            story.append(Spacer(1, 0.25 * cm))
+            i += 1
+            continue
+        if stripped.startswith("# "):
+            flush_buf()
+            story.append(Paragraph(xml_escape(stripped[2:].strip()), h1_style))
+            story.append(Spacer(1, 0.3 * cm))
+            i += 1
+            continue
+        if "![" in stripped:
+            flush_buf()
+            pos = 0
+            for m in _RE_MD_IMG.finditer(stripped):
+                before = stripped[pos : m.start()].strip()
+                if before:
+                    story.append(_paragraph_from_plain(before, body_style))
+                img_path = m.group(2).strip().strip('"').strip("'")
+                if img_path and not os.path.isabs(img_path) and markdown_base_dir:
+                    img_path = os.path.normpath(os.path.join(markdown_base_dir, img_path))
+                if img_path and os.path.isfile(img_path):
+                    try:
+                        img = Image(img_path, width=REPORT_IMAGE_WIDTH, height=REPORT_IMAGE_WIDTH * 0.6)
+                        story.append(img)
+                        story.append(Spacer(1, 0.3 * cm))
+                    except Exception:
+                        story.append(Paragraph("(image render error)", body_style))
+                else:
+                    story.append(Paragraph("(missing image)", body_style))
+                pos = m.end()
+            tail = stripped[pos:].strip()
+            if tail:
+                story.append(_paragraph_from_plain(tail, body_style))
+            i += 1
+            continue
+        buf.append(line)
+        i += 1
+    flush_buf()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    doc = SimpleDocTemplate(
+        output_path,
+        pagesize=A4,
+        rightMargin=1.5 * cm,
+        leftMargin=1.5 * cm,
+        topMargin=1.5 * cm,
+        bottomMargin=1.5 * cm,
+    )
+    if not story:
+        story.append(Paragraph("(empty report)", body_style))
+    doc.build(story)

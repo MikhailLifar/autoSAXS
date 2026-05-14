@@ -1085,6 +1085,31 @@ def _fit_distances_paths(
     with open(best_summary_path, "w") as f:
         yaml.dump(summary, f, default_flow_style=False)
 
+    from autosaxs.core.report_fragments import write_skill_report_fragments
+
+    md_parts = ["### DATGNOM / p(r) (fit_distances)\n"]
+    if fit_vs_exp_png_path and os.path.isfile(fit_vs_exp_png_path):
+        md_parts.append(f"![Fit vs experiment]({os.path.basename(fit_vs_exp_png_path)})\n")
+    if best_pr_png_path and os.path.isfile(best_pr_png_path):
+        md_parts.append(f"![p(r)]({os.path.basename(best_pr_png_path)})\n")
+    summary_refs = [
+        {"role": "fit_distances_summary", "path": os.path.basename(best_summary_path), "format": "text"},
+        {
+            "role": "fit_distances_scores",
+            "path": os.path.basename(fits_csv_path),
+            "format": "csv",
+            "row": 0,
+            "columns": ["rmax_nm", "total_estimate", "ok"],
+        },
+    ]
+    write_skill_report_fragments(
+        output_dir,
+        base,
+        "fit_distances",
+        "".join(md_parts),
+        summary_references=summary_refs,
+    )
+
     return {
         "output_subdir": output_dir,
         "gnom_out_paths": gnom_out_paths,

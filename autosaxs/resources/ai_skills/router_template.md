@@ -38,6 +38,11 @@ The purpose and use-cases for each subskill can be derived from its **descriptio
 - State the sequence as explicit steps: **order → subskill path → rationale → what is still unknown or assumed**.
 - After a step completes, **revisit the plan** before pulling in additional leaf skills.
 
+## Reports (fragment contract)
+
+- Processing skills write per-sample ``{basename}_report_individual.md`` and optional ``{basename}_report_summary.yaml`` next to their outputs (paths inside those files are relative to that directory).
+- ``report-individual`` merges all ``*_report_individual.md`` under the pipeline root for a basename; ``report-summary`` merges all ``*_report_summary.yaml``. PDFs are built with **ReportLab** from the merged Markdown.
+
 ## Inputs and outputs (orchestrator level)
 - **Execution is strict only where the leaf says so:** when you actually run a subskill, follow its `SKILL.md` for required arguments, configs, and environment rules.
 

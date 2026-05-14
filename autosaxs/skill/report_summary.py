@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, List
 
 from .common import SingletonPathExpressionArg, coerce_singleton_path_expression
 from ..core.utils import _strip_sub_int_prefix, _parse_descriptors_from_results
+from ..core.report_fragments import assemble_summary_markdown
 
 
 def collect_summary_data_from_directory(directory: str) -> Dict[str, Any]:
@@ -19,11 +20,10 @@ def collect_summary_data_from_directory(directory: str) -> Dict[str, Any]:
     samples: List[Dict[str, Any]] = []
     seen_bases: set = set()
 
-    # Discover basenames from subtracted .dat files (sub_<base>.dat)
     if os.path.isdir(subtracted_dir):
         for name in os.listdir(subtracted_dir):
             if name.endswith(".dat") and name.startswith("sub_"):
-                base = _strip_sub_int_prefix(name[:-4])  # stem without .dat, then strip sub_/int_
+                base = _strip_sub_int_prefix(name[:-4])
                 if base in seen_bases:
                     continue
                 seen_bases.add(base)
@@ -56,7 +56,6 @@ def collect_summary_data_from_directory(directory: str) -> Dict[str, Any]:
                 samples.append(entry)
 
     if not samples:
-        # Fallback: any .dat in subtracted
         for name in sorted(os.listdir(subtracted_dir) if os.path.isdir(subtracted_dir) else []):
             if name.endswith(".dat"):
                 stem = name[:-4]
@@ -70,24 +69,38 @@ def collect_summary_data_from_directory(directory: str) -> Dict[str, Any]:
     return {"samples": samples}
 
 
-def write_summary_report_pdf(
+def write_summary_report_from_fragments(
     directory: str,
-    output_path: Optional[str] = None,
-) -> str:
-    """
-    Collect summary data from directory, build summary PDF, write to output_path.
-    If output_path is None, uses directory/reports/summary_report.pdf.
-    Returns the path to the written PDF.
-    """
-    from ..core.report import build_summary_report_pdf
+    *,
+    output_md_path: Optional[str] = None,
+    output_pdf_path: Optional[str] = None,
+    write_pdf: bool = True,
+) -> Dict[str, Any]:
+    """Merge ``*_report_summary.yaml`` into Markdown and build PDF with ReportLab."""
+    from ..core.report import build_pdf_from_assembled_markdown
 
     reports_dir = os.path.join(directory, "reports")
-    if output_path is None:
-        output_path = os.path.join(reports_dir, "summary_report.pdf")
     os.makedirs(reports_dir, exist_ok=True)
-    summary_data = collect_summary_data_from_directory(directory)
-    build_summary_report_pdf(summary_data, output_path)
-    return output_path
+    if output_md_path is None:
+        output_md_path = os.path.join(reports_dir, "summary_assembled_report.md")
+    md_dir = os.path.dirname(os.path.abspath(output_md_path)) or "."
+    md_text = assemble_summary_markdown(directory, markdown_output_dir=md_dir)
+    os.makedirs(os.path.dirname(output_md_path) or ".", exist_ok=True)
+    with open(output_md_path, "w", encoding="utf-8") as f:
+        f.write(md_text)
+
+    pdf_path_out: Optional[str] = None
+    if write_pdf and output_pdf_path is not None:
+        os.makedirs(os.path.dirname(output_pdf_path) or ".", exist_ok=True)
+        build_pdf_from_assembled_markdown(
+            md_text, output_pdf_path, markdown_base_dir=os.path.dirname(os.path.abspath(output_md_path))
+        )
+        pdf_path_out = output_pdf_path
+
+    return {
+        "assembled_summary_md_path": output_md_path,
+        "report_pdf_path": pdf_path_out,
+    }
 
 
 def report_summary(
@@ -95,23 +108,32 @@ def report_summary(
     output_dir: str = ".",
     *,
     output_path: Optional[str] = None,
+    output_md_path: Optional[str] = None,
+    write_pdf: bool = True,
     use_cache: bool = False,
 ) -> Dict[str, Any]:
     """
-    SAXS / small-angle x-ray scattering: build a summary PDF report for all samples found inside an existing pipeline directory (batch report / overview). The skill discovers samples and combines plots/tables where data exists.
+    SAXS / small-angle x-ray scattering: build a summary report for all samples in a pipeline directory.
+
+    Merges decentralized ``*_report_summary.yaml`` files into Markdown under
+    ``<directory>/reports/summary_assembled_report.md`` and renders the PDF with **ReportLab**
+    from that Markdown.
 
     ### Arguments
 
     - `directory` (str): Path to the existing pipeline output directory.
-    - `output_dir` (str, default `.`): Directory where the summary PDF is written.
-    - `output_path` (str | None, default `None`): Optional explicit output PDF path. If not provided, defaults to `<output_dir>/summary_report.pdf`.
-    - `use_cache` (bool, default `False`): Present for CLI parity; report generation does not use caching.
+    - `output_dir` (str, default `.`): Unused for default paths; outputs go under ``<directory>/reports/``.
+    - `output_path` (str | None, default `None`): Output PDF path; default ``<directory>/reports/summary_report.pdf``.
+    - `output_md_path` (str | None, default `None`): Output path for merged summary Markdown.
+    - `write_pdf` (bool, default `True`): Whether to emit a PDF.
+    - `use_cache` (bool, default `False`): Present for CLI parity; unused.
 
     ### Returns
 
     `dict[str, Any]` with:
 
-    - `report_pdf_path`: Path to the generated summary PDF.
+    - `report_pdf_path`: Path to the generated PDF when requested.
+    - `assembled_summary_md_path`: Merged Markdown path.
 
     ### Python usage
 
@@ -129,14 +151,21 @@ def report_summary(
     ### CLI usage
 
     ```bash
-    autosaxs report_summary pipeline_out --output-dir reports
+    autosaxs report-summary pipeline_out --output-dir reports
     ```
     """
-    _ = use_cache  # report generation does not use caching; kept for CLI parity
+    _ = use_cache, output_dir
     directory = coerce_singleton_path_expression(directory)
     directory_path = directory.unwrap()[0]
-    if output_path is None:
-        output_path = os.path.join(output_dir, "summary_report.pdf")
-    path = write_summary_report_pdf(directory_path, output_path=output_path)
-    return {"report_pdf_path": path}
 
+    reports_dir = os.path.join(directory_path, "reports")
+    pdf_target = output_path if output_path is not None else os.path.join(reports_dir, "summary_report.pdf")
+    md_target = output_md_path
+    if md_target is None:
+        md_target = os.path.join(reports_dir, "summary_assembled_report.md")
+    return write_summary_report_from_fragments(
+        directory_path,
+        output_md_path=md_target,
+        output_pdf_path=pdf_target if write_pdf else None,
+        write_pdf=write_pdf,
+    )

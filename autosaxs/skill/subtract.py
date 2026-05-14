@@ -208,6 +208,25 @@ def _subtract_paths(
         plotFilePath=sub_plot_path,
         save=False,
     )
+    from autosaxs.core.report_fragments import write_skill_report_fragments
+
+    md_lines = [
+        "### Buffer subtraction\n",
+        f"Scaling method: **{method}**.\n",
+        f"![Difference sample vs scaled buffer]({os.path.basename(diff_plot_path)})\n",
+        f"![Difference log scale]({os.path.basename(diff_log_plot_path)})\n",
+        f"![Subtracted curve]({os.path.basename(sub_plot_path)})\n",
+    ]
+    summary_refs = [
+        {"role": "subtracted_curve", "path": os.path.basename(dest), "format": "saxs_dat", "display_name": "subtracted"},
+    ]
+    write_skill_report_fragments(
+        output_dir,
+        base,
+        "subtract",
+        "".join(md_lines),
+        summary_references=summary_refs,
+    )
     return {
         "subtracted_1d": dest,
         "diff_plot_path": diff_plot_path,

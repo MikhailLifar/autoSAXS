@@ -174,6 +174,24 @@ def _plot_paths(
         legend=True,
         plotFilePath=loglog_plot_path,
     )
+    from autosaxs.core.report_fragments import write_skill_report_fragments
+
+    md_lines = [
+        "### Diagnostic 1D plots\n",
+        f"![Guinier]({os.path.basename(guinier_plot_path)})\n",
+        f"![Kratky]({os.path.basename(kratky_plot_path)})\n",
+        f"![Log-log]({os.path.basename(loglog_plot_path)})\n",
+    ]
+    summary_refs = [
+        {"role": "guinier_dat", "path": os.path.basename(guinier_dat_path), "format": "dat"},
+    ]
+    write_skill_report_fragments(
+        output_dir,
+        base,
+        "plot",
+        "".join(md_lines),
+        summary_references=summary_refs,
+    )
     return {
         "guinier_plot_path": guinier_plot_path,
         "kratky_plot_path": kratky_plot_path,

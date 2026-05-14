@@ -114,5 +114,18 @@ def _plot_2d_paths(
     fig.savefig(plot_2d_png)
     plt.close(fig)
 
+    from autosaxs.core.report_fragments import write_skill_report_fragments
+
+    md_lines = [
+        "### 2D detector view\n",
+        f"![2D log intensity]({os.path.basename(plot_2d_png)})\n",
+    ]
+    write_skill_report_fragments(
+        output_dir,
+        base,
+        "plot_2d",
+        "".join(md_lines),
+        summary_references=[{"role": "plot_2d_png", "path": os.path.basename(plot_2d_png), "format": "png"}],
+    )
     return {"plot_2d_png": plot_2d_png}
 

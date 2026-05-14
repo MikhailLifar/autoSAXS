@@ -1,6 +1,6 @@
 ---
 name: report-individual
-description: SAXS / small-angle x-ray scattering: build a per-sample PDF report from an existing pipeline directory (SAXS report / plots + tables). The skill scans `directory` for paths matching the provided `basename` and then assembles the report sections.
+description: SAXS / small-angle x-ray scattering: build a per-sample report from an existing pipeline directory.
 catalog-hidden: true
 ---
 
@@ -65,21 +65,29 @@ See the docstring section **Returns** below.
 
 ## Autosaxs skill docstring
 
-SAXS / small-angle x-ray scattering: build a per-sample PDF report from an existing pipeline directory (SAXS report / plots + tables). The skill scans `directory` for paths matching the provided `basename` and then assembles the report sections.
+SAXS / small-angle x-ray scattering: build a per-sample report from an existing pipeline directory.
+
+Assembles decentralized ``*_report_individual.md`` fragments, writes
+``<pipeline>/reports/<basename>_assembled_report.md``, and builds the PDF with **ReportLab**
+from that Markdown (headings, text, images, simple tables).
 
 ### Arguments
 
 - `directory` (str): Path to the existing pipeline output directory (the place where intermediate results live).
 - `basename` (str): Sample identifier used to match intermediate artifacts within `directory`.
-- `output_dir` (str, default `.`): Directory where the PDF report is written.
-- `output_path` (str | None, default `None`): Optional explicit output PDF path. If not provided, defaults to `<output_dir>/<basename>_report.pdf`.
-- `use_cache` (bool, default `False`): Present for CLI parity; report generation does not use caching.
+- `output_dir` (str, default `.`): Unused for default paths; PDF/MD default to ``<directory>/reports/``.
+- `output_path` (str | None, default `None`): Output PDF path; default ``<directory>/reports/<basename>_report.pdf``.
+- `output_md_path` (str | None, default `None`): Optional path for merged Markdown.
+- `write_pdf` (bool, default `True`): Whether to emit a PDF.
+- `use_cache` (bool, default `False`): Present for CLI parity; unused.
 
 ### Returns
 
 `dict[str, Any]` with:
 
-- `report_pdf_path`: Path to the generated PDF.
+- `report_pdf_path`: Path to the generated PDF when ``write_pdf`` is True.
+- `assembled_report_md_path`: Path to merged Markdown.
+- `fragments_found`: Number of fragment files merged.
 
 ### Python usage
 
@@ -98,5 +106,5 @@ print(out["report_pdf_path"])
 ### CLI usage
 
 ```bash
-autosaxs report_individual pipeline_out sample_01 --output-dir reports
+autosaxs report-individual pipeline_out sample_01 --output-dir reports
 ```

@@ -420,7 +420,7 @@ def run_guinier_analysis(
         - 'chosen_Rg', 'chosen_I0', 'chosen_quality', 'chosen_n_points', 'chosen_interval'
         - 'chosen_validation_r2', 'classification'
     """
-    from .core.utils import write_saxs_atsas_format
+    from autosaxs.core.utils import write_saxs_atsas_format
 
     q = np.asarray(q, dtype=float)
     I = np.asarray(I, dtype=float)
