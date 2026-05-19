@@ -11,13 +11,18 @@ import numpy as np
 
 
 # --- Constants ---
-ADAPTIVE_QRG_MAX = 1.35
-ADAPTIVE_R2_MIN = 0.88
 GUINIER_QRG_VALIDATION_K = 1.0
 GUINIER_VALIDATION_MIN_POINTS = 2
-ADAPTIVE_VALIDATION_MIN_POINTS = 4
 GUINIER_CLASSIFICATION_R2_MIN = 0.85
 GUINIER_UPTURN_DOWNTURN_FRACTION = 0.85
+
+# Adaptive Guinier enumeration / selection
+ADAPTIVE_N_MIN = 4
+ADAPTIVE_MAX_PTS = 80
+ADAPTIVE_I_START_Q_MAX_NM = 1.0
+ADAPTIVE_I_START_INDEX_MAX = 50
+ADAPTIVE_SELECTION_R2_MIN = 0.5
+ADAPTIVE_VALIDATED_STRONG_R2 = 0.85
 
 
 def parse_autorg_output(text: str, q: np.ndarray) -> Optional[Dict[str, Any]]:
@@ -49,7 +54,12 @@ def parse_autorg_output(text: str, q: np.ndarray) -> Optional[Dict[str, Any]]:
     mpts = re.search(r"Points\s+(\d+)\s+to\s+(\d+)\s+\((\d+)\s+total\)", text)
 
     autorg_i0 = float(mi0.group(1)) if mi0 else None
-    autorg_quality = float(mq.group(1)) if mq else None
+    autorg_quality: Optional[float] = None
+    if mq:
+        try:
+            autorg_quality = float(mq.group(1))
+        except ValueError:
+            autorg_quality = None
     autorg_n_pts = int(mpts.group(3)) if mpts else None
 
     q_min_autorg: Optional[float] = None
@@ -236,24 +246,29 @@ def _guinier_fit_n_points(
     }
 
 
-def _fit_guinier_interval(
+def _fit_guinier_interval_raw(
     q: np.ndarray,
     I: np.ndarray,
     sigma: Optional[np.ndarray],
     i_start: int,
     n_pts: int,
-    qrg_max: float,
-    r2_min: float,
-) -> Optional[Dict]:
+    *,
+    require_negative_slope: bool = True,
+) -> Optional[Dict[str, Any]]:
     """
-    Fit Guinier on q[i_start : i_start + n_pts]. Returns dict with rg, i0, q_min, q_max,
-    r_squared, n_points, sigma_rg, sigma_i0; or None if fit invalid or filters not passed.
+    Fit Guinier on q[i_start : i_start + n_pts] without q·Rg or R² gates.
+
+    Returns dict with rg, i0, q_min, q_max, r_squared (interval R²), n_points,
+    sigma_rg, sigma_i0, i_start; or None if polyfit fails or I≤0 in window.
+    If require_negative_slope is False, Rg uses |slope| when slope ≥ 0 (degenerate fallback).
     """
     n = len(q)
     if i_start + n_pts > n:
         return None
     q_sub = q[i_start : i_start + n_pts]
     I_sub = I[i_start : i_start + n_pts]
+    if np.any(I_sub <= 0):
+        return None
     sig_sub = sigma[i_start : i_start + n_pts] if sigma is not None else None
     x = q_sub ** 2
     y = np.log(I_sub)
@@ -269,20 +284,23 @@ def _fit_guinier_interval(
     except Exception:
         return None
     slope, intercept = coeffs[0], coeffs[1]
-    if slope >= 0:
+    if require_negative_slope and slope >= 0:
         return None
-    rg = np.sqrt(-3.0 * slope)
-    i0 = np.exp(intercept)
-    if q_sub[-1] * rg > qrg_max:
+    if slope < 0:
+        rg = float(np.sqrt(-3.0 * slope))
+    else:
+        rg = float(np.sqrt(3.0 * abs(slope)))
+    i0 = float(np.exp(intercept))
+    if rg <= 0 or i0 <= 0 or not np.isfinite(rg) or not np.isfinite(i0):
         return None
     y_fit = intercept + slope * x
     ss_res = np.sum((y - y_fit) ** 2)
     ss_tot = np.sum((y - np.mean(y)) ** 2)
-    r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
-    if r2 < r2_min:
-        return None
+    r2 = float(1.0 - (ss_res / ss_tot)) if ss_tot > 0 else 0.0
     dof = n_pts - 2
-    if dof > 0 and ss_res >= 0:
+    sigma_rg: float = np.nan
+    sigma_i0: float = np.nan
+    if dof > 0 and ss_res >= 0 and slope < 0:
         res_var = ss_res / dof
         x_mean = np.mean(x)
         sxx = np.sum((x - x_mean) ** 2)
@@ -291,19 +309,289 @@ def _fit_guinier_interval(
             var_intercept = res_var * (1.0 / n_pts + x_mean ** 2 / sxx)
             sigma_rg = 0.5 * (3.0 / rg) * (var_slope ** 0.5) if slope != 0 else np.nan
             sigma_i0 = i0 * (var_intercept ** 0.5)
-        else:
-            sigma_rg = sigma_i0 = np.nan
-    else:
-        sigma_rg = sigma_i0 = np.nan
     return {
-        'rg': float(rg),
-        'i0': float(i0),
-        'q_min': float(q_sub[0]),
-        'q_max': float(q_sub[-1]),
-        'r_squared': float(r2),
-        'n_points': n_pts,
-        'sigma_rg': float(sigma_rg) if not np.isnan(sigma_rg) else None,
-        'sigma_i0': float(sigma_i0) if not np.isnan(sigma_i0) else None,
+        "rg": rg,
+        "i0": i0,
+        "q_min": float(q_sub[0]),
+        "q_max": float(q_sub[-1]),
+        "r_squared": r2,
+        "interval_r2": r2,
+        "n_points": n_pts,
+        "i_start": i_start,
+        "sigma_rg": float(sigma_rg) if not np.isnan(sigma_rg) else None,
+        "sigma_i0": float(sigma_i0) if not np.isnan(sigma_i0) else None,
+    }
+
+
+def _fit_guinier_interval(
+    q: np.ndarray,
+    I: np.ndarray,
+    sigma: Optional[np.ndarray],
+    i_start: int,
+    n_pts: int,
+    qrg_max: float,
+    r2_min: float,
+) -> Optional[Dict]:
+    """
+    Fit Guinier on q[i_start : i_start + n_pts]. Returns dict with rg, i0, q_min, q_max,
+    r_squared, n_points, sigma_rg, sigma_i0; or None if fit invalid or filters not passed.
+    """
+    cand = _fit_guinier_interval_raw(q, I, sigma, i_start, n_pts)
+    if cand is None:
+        return None
+    if cand["q_max"] * cand["rg"] > qrg_max:
+        return None
+    if cand["r_squared"] < r2_min:
+        return None
+    out = dict(cand)
+    out.pop("interval_r2", None)
+    out.pop("i_start", None)
+    return out
+
+
+def _validation_r2_or_nan(
+    q: np.ndarray,
+    I: np.ndarray,
+    Rg: float,
+    I0: float,
+    k: float = GUINIER_QRG_VALIDATION_K,
+) -> float:
+    """validation_r2 on [q_max/2, q_max]; NaN if fewer than GUINIER_VALIDATION_MIN_POINTS in band."""
+    val = _validation_r2_guinier(
+        q, I, Rg, I0, k=k, min_pts=GUINIER_VALIDATION_MIN_POINTS
+    )
+    if val is None:
+        return float("nan")
+    return float(val)
+
+
+def _adaptive_i_start_allowed(q: np.ndarray, i_start: int) -> bool:
+    return float(q[i_start]) < ADAPTIVE_I_START_Q_MAX_NM or i_start < ADAPTIVE_I_START_INDEX_MAX
+
+
+def _enumerate_adaptive_candidates(
+    q: np.ndarray,
+    I: np.ndarray,
+    sigma: Optional[np.ndarray] = None,
+    *,
+    n_min: int = ADAPTIVE_N_MIN,
+    max_pts: int = ADAPTIVE_MAX_PTS,
+) -> List[Dict[str, Any]]:
+    """All Guinier fits for constrained i_start and n_pts in [n_min, min(max_pts, n-i_start)]."""
+    q = np.asarray(q, dtype=float)
+    I = np.asarray(I, dtype=float)
+    if sigma is not None:
+        sigma = np.asarray(sigma, dtype=float)
+    valid = I > 0
+    if np.sum(valid) < n_min:
+        return []
+    q, I = q[valid], I[valid]
+    if sigma is not None:
+        sigma = sigma[valid]
+    n = len(q)
+    candidates: List[Dict[str, Any]] = []
+    for i_start in range(0, max(0, n - n_min + 1)):
+        if not _adaptive_i_start_allowed(q, i_start):
+            continue
+        for n_pts in range(n_min, min(max_pts, n - i_start) + 1):
+            fit = _fit_guinier_interval_raw(q, I, sigma, i_start, n_pts)
+            if fit is None:
+                continue
+            fit = dict(fit)
+            fit["validation_r2"] = _validation_r2_or_nan(q, I, fit["rg"], fit["i0"])
+            candidates.append(fit)
+    return candidates
+
+
+def _candidate_tie_key(c: Dict[str, Any]) -> Tuple[float, int, int, float]:
+    """Tie-break: larger n_pts, smaller i_start, smaller q_min."""
+    return (c["n_points"], -c["i_start"], -c["q_min"])
+
+
+def _select_adaptive_candidate(
+    candidates: List[Dict[str, Any]],
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    """
+    Pick winner per adaptive spec. Returns (candidate, selection_mode).
+    selection_mode: validation_r2 | interval_r2 | best_available
+    """
+    if not candidates:
+        return None, "best_available"
+
+    def key_validation(c: Dict[str, Any]) -> Tuple[float, float, int, int, float]:
+        return (c["validation_r2"], *_candidate_tie_key(c))
+
+    def key_interval(c: Dict[str, Any]) -> Tuple[float, float, int, int, float]:
+        return (c["interval_r2"], *_candidate_tie_key(c))
+
+    def combined_metric(c: Dict[str, Any]) -> float:
+        v = c["validation_r2"]
+        if np.isnan(v):
+            return float(c["interval_r2"])
+        return float(max(v, c["interval_r2"]))
+
+    def key_combined(c: Dict[str, Any]) -> Tuple[float, float, int, int, float]:
+        return (combined_metric(c), *_candidate_tie_key(c))
+
+    with_finite_val = [c for c in candidates if not np.isnan(c["validation_r2"])]
+    if with_finite_val:
+        max_val = max(c["validation_r2"] for c in with_finite_val)
+        if max_val >= ADAPTIVE_SELECTION_R2_MIN:
+            return max(with_finite_val, key=key_validation), "validation_r2"
+
+    max_interval = max(c["interval_r2"] for c in candidates)
+    if max_interval >= ADAPTIVE_SELECTION_R2_MIN:
+        return max(candidates, key=key_interval), "interval_r2"
+
+    return max(candidates, key=key_combined), "best_available"
+
+
+def _quality_class_from_selection(
+    selection_mode: str,
+    validation_r2: float,
+    interval_r2: float,
+    *,
+    degenerate: bool = False,
+) -> str:
+    if degenerate:
+        return "degenerate"
+    if selection_mode == "validation_r2":
+        if not np.isnan(validation_r2) and validation_r2 >= ADAPTIVE_VALIDATED_STRONG_R2:
+            return "validated_strong"
+        return "validated"
+    if selection_mode == "interval_r2":
+        return "interval_only"
+    return "weak"
+
+
+def _degenerate_adaptive_fallback(
+    q: np.ndarray,
+    I: np.ndarray,
+    sigma: Optional[np.ndarray],
+    *,
+    n_min: int = ADAPTIVE_N_MIN,
+) -> Dict[str, Any]:
+    """Always produce a minimal adaptive result when enumeration finds no physical fits."""
+    q = np.asarray(q, dtype=float)
+    I = np.asarray(I, dtype=float)
+    valid = I > 0
+    if np.sum(valid) < n_min:
+        raise ValueError(
+            f"guinier adaptive: need at least {n_min} points with I>0, got {int(np.sum(valid))}"
+        )
+    q, I = q[valid], I[valid]
+    if sigma is not None:
+        sigma = np.asarray(sigma, dtype=float)[valid]
+
+    res = _guinier_fit_n_points(q, I, n_min)
+    if res is not None:
+        rg = float(res["Rg"])
+        i0 = float(res["I0"])
+        q_min, q_max = res["guinier_interval"]
+        interval_r2 = float(res["fit_quality"])
+    else:
+        fit = _fit_guinier_interval_raw(
+            q, I, sigma, 0, n_min, require_negative_slope=False
+        )
+        if fit is None:
+            raise ValueError("guinier adaptive: degenerate fallback could not fit data")
+        rg = fit["rg"]
+        i0 = fit["i0"]
+        q_min, q_max = fit["q_min"], fit["q_max"]
+        interval_r2 = fit["interval_r2"]
+
+    val_r2 = _validation_r2_or_nan(q, I, rg, i0)
+    return {
+        "rg": rg,
+        "i0": i0,
+        "q_min": float(q_min),
+        "q_max": float(q_max),
+        "n_points": n_min,
+        "i_start": 0,
+        "interval_r2": interval_r2,
+        "validation_r2": val_r2,
+        "r_squared": interval_r2,
+        "sigma_rg": None,
+        "sigma_i0": None,
+        "rg_min": rg,
+        "rg_max": rg,
+        "selection_mode": "best_available",
+        "quality_class": "degenerate",
+        "fit_quality": interval_r2 if np.isnan(val_r2) else float(max(val_r2, interval_r2)),
+        "n_candidates": 0,
+        "degenerate": True,
+    }
+
+
+def run_adaptive_guinier(
+    q: np.ndarray,
+    I: np.ndarray,
+    sigma: Optional[np.ndarray] = None,
+) -> Dict[str, Any]:
+    """
+    Adaptive Guinier: constrained sliding windows, min/max Rg span, validation-first selection.
+
+    Always returns rg, interval, fit_quality, quality_class, classification, rg_min, rg_max.
+    """
+    q = np.asarray(q, dtype=float)
+    I = np.asarray(I, dtype=float)
+    if sigma is not None:
+        sigma = np.asarray(sigma, dtype=float)
+
+    candidates = _enumerate_adaptive_candidates(q, I, sigma)
+    degenerate = False
+
+    if candidates:
+        rg_min = float(min(c["rg"] for c in candidates))
+        rg_max = float(max(c["rg"] for c in candidates))
+        chosen, selection_mode = _select_adaptive_candidate(candidates)
+        assert chosen is not None
+    else:
+        degenerate = True
+        fb = _degenerate_adaptive_fallback(q, I, sigma)
+        chosen = fb
+        selection_mode = fb["selection_mode"]
+        rg_min = fb["rg_min"]
+        rg_max = fb["rg_max"]
+        candidates = []
+
+    rg = chosen["rg"]
+    i0 = chosen["i0"]
+    val_r2 = chosen.get("validation_r2", float("nan"))
+    interval_r2 = chosen.get("interval_r2", chosen.get("r_squared", 0.0))
+    if isinstance(val_r2, float) and np.isnan(val_r2):
+        val_r2_out: Optional[float] = None
+    else:
+        val_r2_out = float(val_r2)
+
+    if selection_mode == "validation_r2" and not np.isnan(val_r2):
+        fit_quality = float(val_r2)
+    else:
+        fit_quality = float(interval_r2)
+
+    quality_class = _quality_class_from_selection(
+        selection_mode, float(val_r2) if not np.isnan(val_r2) else float("nan"), float(interval_r2),
+        degenerate=degenerate,
+    )
+    classification = _classification_guinier(q, I, rg, i0)
+
+    return {
+        "Rg": rg,
+        "I0": i0,
+        "n_points": chosen["n_points"],
+        "fit_quality": fit_quality,
+        "guinier_interval": (chosen["q_min"], chosen["q_max"]),
+        "interval_r2": float(interval_r2),
+        "validation_r2": val_r2_out,
+        "sigma_rg": chosen.get("sigma_rg"),
+        "sigma_i0": chosen.get("sigma_i0"),
+        "rg_min": rg_min,
+        "rg_max": rg_max,
+        "selection_mode": selection_mode,
+        "quality_class": quality_class,
+        "classification": classification,
+        "n_candidates": len(candidates),
+        "i_start": chosen.get("i_start"),
     }
 
 
@@ -395,13 +683,7 @@ def run_guinier_analysis(
     """
     Run Guinier analyses (first5, first10, autorg, adaptive) and return a unified result dict.
 
-    The final answer is always the adaptive method: sliding-window Guinier fits (n_min=4)
-    with filters q*Rg <= qrg_max and fit R² >= r2_min; among candidates passing both,
-    the one with the best validation R² on [q_max/2, q_max] (q_max = k/Rg, k=1) is chosen,
-    with at least 4 points required in the validation interval.
-
-    Classification (for the chosen approximation, in [0, q_max/2]):
-      "linear" | "upturn" | "downturn" | "chaotic".
+    The final answer is always the adaptive method (see :func:`run_adaptive_guinier`).
 
     Parameters
     ----------
@@ -416,9 +698,9 @@ def run_guinier_analysis(
     dict
         Keys:
         - 'first5', 'first10', 'autorg', 'adaptive': per-method results.
-        - 'chosen': always 'adaptive' when adaptive result is present.
+        - 'chosen': always 'adaptive'.
         - 'chosen_Rg', 'chosen_I0', 'chosen_quality', 'chosen_n_points', 'chosen_interval'
-        - 'chosen_validation_r2', 'classification'
+        - 'chosen_validation_r2', 'classification', 'quality_class', 'rg_min', 'rg_max'
     """
     from autosaxs.core.utils import write_saxs_atsas_format
 
@@ -440,6 +722,10 @@ def run_guinier_analysis(
         'chosen_interval': None,
         'chosen_validation_r2': None,
         'classification': None,
+        'quality_class': None,
+        'selection_mode': None,
+        'rg_min': None,
+        'rg_max': None,
     }
 
     # --- 1. Fit first 5 points ---
@@ -486,40 +772,12 @@ def run_guinier_analysis(
                 except OSError:
                     pass
 
-    # --- 4. Adaptive: sliding-window fits, select by best validation R² on [q_max/2, q_max] ---
-    candidates = get_guinier_candidates(
-        q, I, sigma=sigma,
-        n_min=4,
-        qrg_max=ADAPTIVE_QRG_MAX,
-        r2_min=ADAPTIVE_R2_MIN,
-        max_pts=80,
-        try_sliding=True,
-    )
-    best_adaptive = None
-    best_val_r2 = None
-    for cand in candidates:
-        rg, i0 = cand['rg'], cand['i0']
-        if rg is None or i0 is None or i0 <= 0:
-            continue
-        val_r2 = _validation_r2_guinier(
-            q, I, rg, i0, k=GUINIER_QRG_VALIDATION_K, min_pts=ADAPTIVE_VALIDATION_MIN_POINTS
-        )
-        if val_r2 is not None and (best_val_r2 is None or val_r2 > best_val_r2):
-            best_val_r2 = val_r2
-            best_adaptive = cand
-    if best_adaptive is not None:
-        out['adaptive'] = {
-            'Rg': best_adaptive['rg'],
-            'I0': best_adaptive['i0'],
-            'n_points': best_adaptive['n_points'],
-            'fit_quality': best_adaptive['r_squared'],
-            'guinier_interval': (best_adaptive['q_min'], best_adaptive['q_max']),
-            'sigma_rg': best_adaptive.get('sigma_rg'),
-            'sigma_i0': best_adaptive.get('sigma_i0'),
-            'validation_r2': best_val_r2,
-        }
+    # --- 4. Adaptive (rewritten selection; always returns) ---
+    try:
+        out['adaptive'] = run_adaptive_guinier(q, I, sigma=sigma)
+    except ValueError:
+        out['adaptive'] = None
 
-    # --- Final answer: always adaptive when available ---
     if out['adaptive'] is not None:
         r = out['adaptive']
         out['chosen'] = 'adaptive'
@@ -529,11 +787,10 @@ def run_guinier_analysis(
         out['chosen_n_points'] = r.get('n_points')
         out['chosen_interval'] = r.get('guinier_interval')
         out['chosen_validation_r2'] = r.get('validation_r2')
-        rg_ch = out['chosen_Rg']
-        i0_ch = out['chosen_I0']
-        if rg_ch is not None and i0_ch is not None:
-            out['classification'] = _classification_guinier(q, I, rg_ch, i0_ch)
-        else:
-            out['classification'] = None
+        out['classification'] = r.get('classification')
+        out['quality_class'] = r.get('quality_class')
+        out['selection_mode'] = r.get('selection_mode')
+        out['rg_min'] = r.get('rg_min')
+        out['rg_max'] = r.get('rg_max')
 
     return out

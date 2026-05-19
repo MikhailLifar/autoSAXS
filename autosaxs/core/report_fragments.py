@@ -36,7 +36,7 @@ SKILL_DEFAULT_ORDER: Dict[str, int] = {
     "integrate": 20,
     "subtract": 30,
     "plot": 40,
-    "guinier_analysis": 41,
+    "fit_guinier": 41,
     "fit_distances": 42,
     "fit_sizes": 43,
     "fit_mixture": 50,

@@ -508,13 +508,14 @@ autosaxs plot-2d raw/sample_01.tif --output-dir plots_2d
 
 ---
 
-## `guinier_analysis`
+## `fit_guinier`
 
-SAXS / small-angle x-ray scattering: run Guinier analysis on a 1D profile (Rg, I(0); multiple strategies such as first-interval fits and an adaptive choice). The skill writes:
+SAXS / small-angle x-ray scattering: fit the Guinier region on a 1D profile (adaptive Rg, I(0), Rg span). Writes:
 
 - a text results file
 - an ATSAS-format `.dat` file for downstream tools
 - a YAML file describing the chosen Guinier region parameters
+- a Guinier plot (ln I vs q²) with error bars and the chosen fit line
 
 ### Arguments
 
@@ -529,13 +530,14 @@ SAXS / small-angle x-ray scattering: run Guinier analysis on a 1D profile (Rg, I
 - `results_path`: Path to the results text file.
 - `atsas_dat_path`: Path to the ATSAS-format `.dat` file.
 - `guinier_region_path`: Path to the chosen Guinier region YAML.
+- `guinier_plot_path`: Path to the Guinier fit PNG.
 
 ### Python usage
 
 ```python
-from autosaxs.skill import guinier_analysis
+from autosaxs.skill import fit_guinier
 
-out = guinier_analysis(
+out = fit_guinier(
     profile="subtracted/sub_sample_01.dat",
     output_dir="guinier",
     use_cache=False,
@@ -547,7 +549,7 @@ print(out["guinier_region_path"])
 ### CLI usage
 
 ```bash
-autosaxs guinier-analysis subtracted/sub_sample_01.dat --output-dir guinier
+autosaxs fit-guinier subtracted/sub_sample_01.dat --output-dir guinier
 ```
 
 ---
@@ -560,10 +562,10 @@ SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance
 
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where the GNOM outputs are written (one subdirectory per input profile).
-- `rg_nm` (float | None, default `None`): Expected Rg in nm. If omitted, taken from AUTORG when possible, else from Guinier search.
-- `first` (int | None, default `None`): DATGNOM `--first`. If omitted, taken from AUTORG Guinier interval when possible. If set with `last`, runs one fit. If set alone, `last` is auto-searched unless AUTORG succeeded and `last` is omitted (then DATGNOM runs without `--last`). If omitted and AUTORG fails or gives no interval, `first` is auto-searched.
-- `last` (int | None, default `None`): DATGNOM `--last`. Same pairing rules as `first`; if set alone, `first` is auto-searched. Omitted with successful AUTORG implies a single DATGNOM run without `--last`.
-- `smooth` (float | None, default `None`): DATGNOM `--smooth`. If set, that value is used and smoothness is not searched. If omitted during auto-search, trials use smoothness `2.0`. In full manual mode (`first` and `last` both set), omitted means do not pass `--smooth`.
+- `rg_nm` (float | None, default `None`): Expected Rg in nm. If omitted, run in-process Guinier analysis (`fit_guinier`) for an Rg span, then 1D optimize Rg in `[0, 1.5 × rg_max]` (30 s max) scoring each DATGNOM trial as Total Estimate − neg_frac.
+- `first` (int | None, default `None`): DATGNOM `--first` (1-based point index). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
+- `last` (int | None, default `None`): DATGNOM `--last`. If omitted, `--last` is not passed to DATGNOM.
+- `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
@@ -615,12 +617,13 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a siz
     - `rods`: GNOM `--system=5` (length distribution for long cylinders). Requires `rad56_nm` (cylinder radius).
     - `ellipsoids`: accepted for API compatibility but **not supported by GNOM command-line** (GNOM system 2 is
       interactive-only). The skill will raise a clear error if selected.
-- `rg_nm` (float | None): Expected Rg in nm; if omitted, inferred by AUTORG when possible, else via Guinier fit.
-- `rmin_nm` (float | None, default `0.0`): GNOM `--rmin` (nm). If None, GNOM default is used.
-- `rmax_nm` (float | None): GNOM `--rmax` (nm). Required by GNOM; if omitted, the skill searches candidates.
+- `rg_nm` (float | None): Optional metadata only (not passed to GNOM); recorded in outputs if set.
+- `rmin_nm` (float | None): GNOM `--rmin` (nm). If omitted, not passed to GNOM.
+- `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, optimized in `[ε, 3 × rg_max]` from in-process `fit_guinier` (30 s max), scoring each trial as Total Estimate − neg_frac.
 - `rad56_nm` (float | None): GNOM `--rad56` for `shape=rods` (nm cylinder radius). Ignored for spheres.
-- `first`/`last` (int | None): GNOM `--first`/`--last` data-point indices (1-based).
-- `alpha` (float | None, default `0.0`): GNOM `--alpha`. Use 0.0 (default) for automatic alpha search.
+- `first` (int | None): GNOM `--first` (1-based). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
+- `last` (int | None): GNOM `--last`. If omitted, not passed to GNOM.
+- `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
 - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
@@ -727,7 +730,7 @@ SAXS / small-angle x-ray scattering: run ATSAS `bodies` shape fitting for multip
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where `bodies` outputs are written.
 - `shapes` (list[str] | None, default `None`): Subset of body model names to fit (`BODIES_SHAPES_LIST`). `None` or empty means fit **all** models (single `bodies` invocation). A non-empty list runs `bodies --body=...` per shape.
-- `first` (int | None, default `None`): Passed to `bodies` as `--first` (1-based data point index). Omitted when `None`.
+- `first` (int | None, default `None`): Passed to `bodies` as `--first` (1-based data point index). If omitted, taken from the low-q end of the Guinier interval from in-process `fit_guinier`.
 - `last` (int | None, default `None`): Passed to `bodies` as `--last` (1-based data point index). Omitted when `None`.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 

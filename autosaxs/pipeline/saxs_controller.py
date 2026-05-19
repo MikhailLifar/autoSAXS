@@ -11,7 +11,7 @@ import warnings
 import yaml
 
 from ..core.processor import *
-from ..skill.guinier_analysis.guinier import run_guinier_analysis
+from ..skill.fit_guinier.guinier import run_guinier_analysis
 from .cli_interface import PipelineInterrupt
 from ..core.viewer import *
 from ..core.context import Context

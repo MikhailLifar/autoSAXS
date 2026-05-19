@@ -312,6 +312,80 @@ class PLTViewer(Viewer):
             PLTViewer.show(show_duration)
         else:
             plt.close(fig)
+
+    @staticmethod
+    def view_guinier_fit(
+        q: np.ndarray,
+        I: np.ndarray,
+        *,
+        rg_nm: float,
+        i0: float,
+        sigma: Optional[np.ndarray] = None,
+        q_min: Optional[float] = None,
+        q_max: Optional[float] = None,
+        title: str = "Guinier fit",
+        plotFilePath: Optional[str] = None,
+        show_duration: Optional[float] = None,
+    ) -> Tuple[plt.Figure, plt.Axes]:
+        """
+        Guinier plot: ln(I) vs q² with optional error bars (σ_I propagated as σ_lnI ≈ σ/I),
+        plus the chosen Guinier approximation as a line on [q_min, q_max].
+        """
+        q = np.asarray(q, dtype=float)
+        I = np.asarray(I, dtype=float)
+        mask = np.isfinite(q) & np.isfinite(I) & (I > 0)
+        q2 = q ** 2
+        y = np.log(I)
+        yerr: Optional[np.ndarray] = None
+        if sigma is not None:
+            sigma = np.asarray(sigma, dtype=float)
+            yerr = np.full_like(y, np.nan)
+            good = mask & np.isfinite(sigma) & (sigma > 0)
+            yerr[good] = sigma[good] / I[good]
+
+        fig, ax = plt.subplots(figsize=(8, 5))
+        if yerr is not None:
+            ax.errorbar(
+                q2[mask],
+                y[mask],
+                yerr=yerr[mask],
+                fmt="o",
+                ms=4,
+                capsize=2,
+                label="data",
+                color="#1f77b4",
+                elinewidth=1,
+            )
+        else:
+            ax.scatter(q2[mask], y[mask], s=20, label="data", color="#1f77b4")
+
+        if q_min is not None and q_max is not None and q_max > q_min:
+            q_line = np.linspace(float(q_min), float(q_max), 200)
+        else:
+            q_line = q[mask]
+        if len(q_line) > 0 and rg_nm > 0 and i0 > 0:
+            q2_line = q_line ** 2
+            y_line = np.log(i0) - (rg_nm ** 2 / 3.0) * q2_line
+            ax.plot(
+                q2_line,
+                y_line,
+                "r-",
+                lw=2,
+                label=f"Guinier fit (Rg={rg_nm:.3g} nm)",
+            )
+
+        ax.set_xlabel(r"$q^2$ (nm$^{-2}$)")
+        ax.set_ylabel(r"$\ln(I)$ (a.u.)")
+        ax.set_title(title)
+        ax.legend(loc="best")
+        ax.grid(True, alpha=0.3)
+        if plotFilePath is not None:
+            fig.savefig(plotFilePath, bbox_inches="tight")
+        if show_duration is not None:
+            PLTViewer.show(show_duration)
+        elif plotFilePath is not None:
+            plt.close(fig)
+        return fig, ax
     
     @staticmethod
     def plot_structure_and_scattering(atoms, q, I, sigma, I_fit, fig_axs=None,

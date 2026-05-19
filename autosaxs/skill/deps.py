@@ -24,7 +24,7 @@ from .skill_wrap import (  # noqa: F401
 
 # Core algorithms / processing
 from .calibrate.autocalib import autocalib_ring_analysis  # noqa: F401
-from .guinier_analysis.guinier import run_guinier_analysis  # noqa: F401
+from .fit_guinier.guinier import run_guinier_analysis  # noqa: F401
 from ..core.processor import (  # noqa: F401
     IntegratorExtended,
     integrate_2d_to_1d,

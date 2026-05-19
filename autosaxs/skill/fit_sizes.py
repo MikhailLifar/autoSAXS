@@ -6,8 +6,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import matplotlib
 
@@ -27,7 +28,8 @@ from .deps import (
     run_with_cache,
     write_saxs_atsas_format,
 )
-from .guinier_analysis.guinier import find_guinier_region, run_autorg_atsas
+from .fit_distances import _candidate_score
+from .fit_guinier.guinier import run_guinier_analysis
 
 
 def fit_sizes(
@@ -36,12 +38,12 @@ def fit_sizes(
     *,
     shape: str = "spheres",
     rg_nm: Optional[float] = None,
-    rmin_nm: Optional[float] = 0.0,
+    rmin_nm: Optional[float] = None,
     rmax_nm: Optional[float] = None,
     rad56_nm: Optional[float] = None,
     first: Optional[int] = None,
     last: Optional[int] = None,
-    alpha: Optional[float] = 0.0,
+    alpha: Optional[float] = None,
     nr: Optional[int] = None,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
@@ -57,12 +59,13 @@ def fit_sizes(
         - `rods`: GNOM `--system=5` (length distribution for long cylinders). Requires `rad56_nm` (cylinder radius).
         - `ellipsoids`: accepted for API compatibility but **not supported by GNOM command-line** (GNOM system 2 is
           interactive-only). The skill will raise a clear error if selected.
-    - `rg_nm` (float | None): Expected Rg in nm; if omitted, inferred by AUTORG when possible, else via Guinier fit.
-    - `rmin_nm` (float | None, default `0.0`): GNOM `--rmin` (nm). If None, GNOM default is used.
-    - `rmax_nm` (float | None): GNOM `--rmax` (nm). Required by GNOM; if omitted, the skill searches candidates.
+    - `rg_nm` (float | None): Optional metadata only (not passed to GNOM); recorded in outputs if set.
+    - `rmin_nm` (float | None): GNOM `--rmin` (nm). If omitted, not passed to GNOM.
+    - `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, optimized in `[ε, 3 × rg_max]` from in-process `fit_guinier` (30 s max), scoring each trial as Total Estimate − neg_frac.
     - `rad56_nm` (float | None): GNOM `--rad56` for `shape=rods` (nm cylinder radius). Ignored for spheres.
-    - `first`/`last` (int | None): GNOM `--first`/`--last` data-point indices (1-based).
-    - `alpha` (float | None, default `0.0`): GNOM `--alpha`. Use 0.0 (default) for automatic alpha search.
+    - `first` (int | None): GNOM `--first` (1-based). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
+    - `last` (int | None): GNOM `--last`. If omitted, not passed to GNOM.
+    - `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
     - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
@@ -268,65 +271,6 @@ def _shape_to_system(shape: str) -> int:
     raise ValueError(f"fit_sizes: unknown shape={shape!r}; expected 'spheres', 'rods', or 'ellipsoids'")
 
 
-def _estimate_rg_nm_from_lowq_intervals(
-    q_nm: np.ndarray,
-    I: np.ndarray,
-    *,
-    q_max_nm: float = 1.0,
-    window_points: int = 5,
-) -> List[float]:
-    """
-    Last-resort Rg estimator using short Guinier fits over low-q intervals.
-
-    For each contiguous window of `window_points` points within q <= q_max_nm,
-    fit ln(I) vs q^2 by least squares. Guinier: ln(I) = ln(I0) - (Rg^2 / 3) * q^2,
-    therefore slope = -(Rg^2 / 3). We keep only windows with a negative slope.
-
-    Returns a list of candidate Rg values (nm). Empty list means no usable intervals.
-    """
-    q_nm = np.asarray(q_nm, dtype=float)
-    I = np.asarray(I, dtype=float)
-    if q_nm.ndim != 1 or I.ndim != 1 or len(q_nm) != len(I):
-        return []
-    if len(q_nm) < window_points:
-        return []
-
-    # Consider only low-q points; keep original order (assumed ascending in typical data).
-    mask = np.isfinite(q_nm) & np.isfinite(I) & (q_nm >= 0) & (q_nm <= float(q_max_nm)) & (I > 0)
-    q = q_nm[mask]
-    y = np.log(I[mask])
-    if len(q) < window_points:
-        return []
-
-    q2 = q * q
-    rgs: List[float] = []
-    for i in range(0, len(q2) - window_points + 1):
-        xw = q2[i : i + window_points]
-        yw = y[i : i + window_points]
-        if not (np.all(np.isfinite(xw)) and np.all(np.isfinite(yw))):
-            continue
-        # Need variation in x to fit a slope.
-        if float(np.max(xw) - np.min(xw)) <= 0:
-            continue
-        try:
-            slope, _intercept = np.polyfit(xw, yw, deg=1)
-        except Exception:
-            continue
-        if not np.isfinite(slope):
-            continue
-        # Guinier expects negative slope.
-        if slope >= 0:
-            continue
-        rg2 = -3.0 * float(slope)
-        if rg2 <= 0 or not np.isfinite(rg2):
-            continue
-        rg = float(np.sqrt(rg2))
-        if np.isfinite(rg) and rg > 0:
-            rgs.append(rg)
-
-    return rgs
-
-
 def _run_gnom_once(
     *,
     atsas_dat_path: str,
@@ -388,6 +332,229 @@ def _run_gnom_once(
     return True, int(proc.returncode), (proc.stderr or "")[:2000], out_text
 
 
+def _is_suspicious_candidate(c: Dict[str, Any]) -> bool:
+    return bool(c.get("suspicious"))
+
+
+def _guinier_from_profile(
+    q_nm: np.ndarray,
+    I: np.ndarray,
+    sigma: Optional[np.ndarray],
+    atsas_dat_path: str,
+) -> Dict[str, Any]:
+    """In-process fit_guinier (run_guinier_analysis) for Rg span and Guinier interval."""
+    results = run_guinier_analysis(q_nm, I, sigma, atsas_dat_path=atsas_dat_path)
+    if results.get("chosen") is None:
+        raise RuntimeError(
+            "fit_sizes: fit_guinier (Guinier analysis) did not return a chosen result; "
+            "cannot derive rmax span or --first."
+        )
+    ch_int = results.get("chosen_interval")
+    return {
+        "rg": results.get("chosen_Rg"),
+        "rg_min": results.get("rg_min"),
+        "rg_max": results.get("rg_max"),
+        "q_min": ch_int[0] if ch_int else None,
+        "q_max": ch_int[1] if ch_int else None,
+        "chosen_interval": ch_int,
+        "quality_class": results.get("quality_class"),
+    }
+
+
+def _q_to_first_point_1based(q_nm: np.ndarray, q_target: float) -> int:
+    q_nm = np.asarray(q_nm, dtype=float)
+    if not np.isfinite(q_target):
+        raise ValueError("fit_sizes: Guinier q_min is not finite")
+    idx = int(np.argmin(np.abs(q_nm - float(q_target))))
+    return idx + 1
+
+
+def _candidate_from_gnom_out(
+    out_text: str,
+    *,
+    shape: str,
+    system: int,
+    rmax_nm: float,
+    rmin_nm: Optional[float],
+    rad56_nm: Optional[float],
+    first: Optional[int],
+    last: Optional[int],
+    alpha: Optional[float],
+    nr: Optional[int],
+    out_path: str,
+    rc: int,
+    stderr: str,
+    intermediate: bool,
+) -> Dict[str, Any]:
+    total = _parse_gnom_total_estimate(out_text)
+    suspicious = bool(re.search(r"SUSPICIOUS", out_text or "", flags=re.IGNORECASE))
+    dr = _parse_gnom_dr_table(out_text)
+    diag: Dict[str, Any] = {
+        "total_estimate": total,
+        "parse_dr_ok": dr is not None,
+    }
+    if dr is not None:
+        _r, d = dr
+        d_arr = np.asarray(d, dtype=float)
+        if d_arr.size > 0 and np.any(np.isfinite(d_arr)):
+            diag["neg_frac"] = float(np.mean(d_arr < 0.0))
+    cand: Dict[str, Any] = {
+        "shape": shape,
+        "system": int(system),
+        "rmin_nm": rmin_nm,
+        "rmax_nm": float(rmax_nm),
+        "rad56_nm": rad56_nm,
+        "first": int(first) if first is not None else None,
+        "last": int(last) if last is not None else None,
+        "alpha": alpha,
+        "nr": nr,
+        "suspicious": suspicious,
+        "out_path": out_path,
+        "intermediate": bool(intermediate),
+        "ok": True,
+        "returncode": int(rc),
+        "stderr": stderr,
+        **diag,
+    }
+    cand["score"] = _candidate_score(cand)
+    return cand
+
+
+def _trial_better(
+    sc: float,
+    susp: bool,
+    best_score: float,
+    best_rmax: Optional[float],
+    best_suspicious: bool,
+) -> bool:
+    if best_rmax is None:
+        return True
+    if susp and not best_suspicious:
+        return False
+    if not susp and best_suspicious:
+        return True
+    return sc > best_score
+
+
+def _optimize_rmax_nm(
+    *,
+    atsas_dat_path: str,
+    output_dir: str,
+    system: int,
+    shape: str,
+    rg_max_nm: float,
+    rmin_nm: Optional[float],
+    rad56_nm: Optional[float],
+    first: Optional[int],
+    last: Optional[int],
+    alpha: Optional[float],
+    nr: Optional[int],
+    eval_tmp_path: str,
+    timeout_s: float = 30.0,
+    event_bus: Optional[EventBus] = None,
+) -> Tuple[float, List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Bounded 1D search for rmax in (rmax_lo, 3 * rg_max_nm], maximizing TE − neg_frac."""
+    from scipy.optimize import minimize_scalar
+
+    rg_max_nm = float(rg_max_nm)
+    if rg_max_nm <= 0 or not np.isfinite(rg_max_nm):
+        raise ValueError(f"fit_sizes: invalid rg_max from fit_guinier: {rg_max_nm}")
+
+    rmax_lo = 1e-6
+    rmax_hi = 3.0 * rg_max_nm
+    t0 = time.monotonic()
+    trials: List[Dict[str, Any]] = []
+    failures: List[Dict[str, Any]] = []
+    best_score = float("-inf")
+    best_rmax: Optional[float] = None
+    best_suspicious = False
+
+    def objective(rmax: float) -> float:
+        nonlocal best_score, best_rmax, best_suspicious
+        if time.monotonic() - t0 > timeout_s:
+            return 1e10
+        rm = float(max(rmax_lo, min(float(rmax), rmax_hi)))
+        ok, rc, stderr, out_text = _run_gnom_once(
+            atsas_dat_path=atsas_dat_path,
+            output_dir=output_dir,
+            system=system,
+            rmin_nm=rmin_nm,
+            rmax_nm=rm,
+            rad56_nm=rad56_nm,
+            first=first,
+            last=last,
+            alpha=alpha,
+            nr=nr,
+            out_path=eval_tmp_path,
+        )
+        if not ok:
+            failures.append(
+                {
+                    "rmax_nm": rm,
+                    "ok": False,
+                    "returncode": int(rc),
+                    "stderr": stderr,
+                }
+            )
+            if event_bus:
+                event_bus.publish(
+                    EventType.MESSAGE,
+                    {"text": f"GNOM (fit_sizes): rmax trial failed at rmax={rm:.4g} nm (rc={rc})."},
+                )
+            return 1e10
+        cand = _candidate_from_gnom_out(
+            out_text,
+            shape=shape,
+            system=system,
+            rmax_nm=rm,
+            rmin_nm=rmin_nm,
+            rad56_nm=rad56_nm,
+            first=first,
+            last=last,
+            alpha=alpha,
+            nr=nr,
+            out_path="",
+            rc=rc,
+            stderr=stderr,
+            intermediate=True,
+        )
+        trials.append(cand)
+        sc = float(cand["score"])
+        susp = _is_suspicious_candidate(cand)
+        if _trial_better(sc, susp, best_score, best_rmax, best_suspicious):
+            best_score = sc
+            best_rmax = rm
+            best_suspicious = susp
+        return -sc
+
+    if event_bus:
+        event_bus.publish(
+            EventType.MESSAGE,
+            {
+                "text": (
+                    f"GNOM (fit_sizes): optimizing rmax in [{rmax_lo:.4g}, {rmax_hi:.4g}] nm "
+                    f"(30 s max)…"
+                ),
+            },
+        )
+
+    try:
+        minimize_scalar(
+            objective,
+            bounds=(rmax_lo, rmax_hi),
+            method="bounded",
+            options={"maxiter": 40},
+        )
+    except Exception:
+        pass
+
+    if best_rmax is None:
+        raise RuntimeError(
+            "fit_sizes: rmax optimization produced no successful GNOM trial within 30 s."
+        )
+    return float(best_rmax), trials, failures
+
+
 @apply_batch(stem_from_keys="profile", per_sample_subdir="always")
 @run_with_cache(
     path_keys_for_hash=["profile"],
@@ -400,12 +567,12 @@ def _fit_sizes_paths(
     output_dir: str,
     shape: str = "spheres",
     rg_nm: Optional[float] = None,
-    rmin_nm: Optional[float] = 0.0,
+    rmin_nm: Optional[float] = None,
     rmax_nm: Optional[float] = None,
     rad56_nm: Optional[float] = None,
     first: Optional[int] = None,
     last: Optional[int] = None,
-    alpha: Optional[float] = 0.0,
+    alpha: Optional[float] = None,
     nr: Optional[int] = None,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
@@ -441,175 +608,113 @@ def _fit_sizes_paths(
 
     user_rg_nm = rg_nm
     user_first = first
-    need_autorg = (rg_nm is None) or (first is None)
-    autorg_result: Optional[Dict[str, Any]] = None
-    if need_autorg:
-        if event_bus:
-            event_bus.publish(EventType.MESSAGE, {"text": "fit_sizes: running AUTORG…"})
-        autorg_result = run_autorg_atsas(atsas_dat_path, q_nm)
-        if autorg_result is not None:
-            if rg_nm is None:
-                try:
-                    rg_nm = float(autorg_result["Rg"])
-                except Exception:
-                    rg_nm = None
-            if first is None:
-                fp = autorg_result.get("first_point_1based")
-                if fp is not None:
-                    try:
-                        first = int(fp)
-                    except Exception:
-                        first = None
-            if event_bus and (rg_nm is not None or first is not None):
-                event_bus.publish(EventType.MESSAGE, {"text": "fit_sizes: AUTORG succeeded."})
-        elif event_bus:
-            event_bus.publish(
-                EventType.MESSAGE,
-                {"text": "fit_sizes: AUTORG failed or unparsable; using Guinier fallback."},
-            )
-    rg_range_nm: Optional[tuple[float, float]] = None
-    if rg_nm is None:
-        gr = find_guinier_region(q_nm, I, sigma=sigma)
-        if gr is None:
-            # Third-line fallback: short Guinier fits over low-q windows to get an Rg range.
-            rgs = _estimate_rg_nm_from_lowq_intervals(q_nm, I, q_max_nm=1.0, window_points=5)
-            if not rgs:
-                raise RuntimeError(
-                    "fit_sizes: Rg is unknown (no rg_nm, AUTORG failed, and Guinier region search failed, "
-                    "and low-q interval fallback found no usable Guinier windows)."
-                )
-            rg_min = float(np.nanmin(rgs))
-            rg_max = float(np.nanmax(rgs))
-            # Store range for later rmax probing; pick a representative Rg for summaries.
-            rg_range_nm = (rg_min, rg_max)
-            rg_nm = float(np.nanmedian(rgs))
-            if event_bus:
-                event_bus.publish(
-                    EventType.MESSAGE,
-                    {"text": f"fit_sizes: fallback Rg range from low-q windows: [{rg_min:.4g}, {rg_max:.4g}] nm"},
-                )
-        else:
-            rg_nm = float(gr["rg"])
+    user_rmax_nm = rmax_nm
+    n_pts = int(len(q_nm))
 
-    if rmax_nm is not None and rmax_nm <= 0:
-        raise ValueError(f"fit_sizes: rmax_nm must be > 0; got {rmax_nm}")
+    need_guinier = (user_first is None) or (user_rmax_nm is None)
+    guinier_info: Optional[Dict[str, Any]] = None
+    if need_guinier:
+        if event_bus:
+            event_bus.publish(EventType.MESSAGE, {"text": "fit_sizes: running fit_guinier (in-process)…"})
+        guinier_info = _guinier_from_profile(q_nm, I, sigma, atsas_dat_path)
+        if event_bus:
+            event_bus.publish(EventType.MESSAGE, {"text": "fit_sizes: fit_guinier completed."})
+
+    if user_first is not None:
+        first_pt = int(user_first)
+    else:
+        if guinier_info is None or guinier_info.get("q_min") is None:
+            raise RuntimeError("fit_sizes: cannot derive --first without fit_guinier q_min.")
+        first_pt = _q_to_first_point_1based(q_nm, float(guinier_info["q_min"]))
+
+    last_pt: Optional[int] = int(last) if last is not None else None
+    if first_pt < 1 or first_pt >= n_pts:
+        raise ValueError(
+            f"fit_sizes: require 1 <= first < n_points ({n_pts}); got first={first_pt}",
+        )
+    if last_pt is not None:
+        if last_pt < 1 or last_pt > n_pts or first_pt >= last_pt:
+            raise ValueError(
+                f"fit_sizes: require 1 <= first < last <= n_points ({n_pts}); "
+                f"got first={first_pt}, last={last_pt}",
+            )
+
     if rmin_nm is not None and rmin_nm < 0:
         raise ValueError(f"fit_sizes: rmin_nm must be >= 0; got {rmin_nm}")
-    if rmax_nm is not None and rmin_nm is not None and rmin_nm >= rmax_nm:
-        raise ValueError(f"fit_sizes: require rmin_nm < rmax_nm; got rmin_nm={rmin_nm}, rmax_nm={rmax_nm}")
-
-    # If rmax is not specified, probe a small set of plausible values based on Rg.
-    candidates_rmax: List[float]
-    if rmax_nm is not None:
-        candidates_rmax = [float(rmax_nm)]
-    else:
-        # If we have an Rg range from the low-q interval fallback, probe rmax over that range.
-        # Spec: linspace(0.5*Rg_min, 3*Rg_max, 25).
-        if rg_range_nm is not None:
-            rg_min, rg_max = rg_range_nm
-            lo = max(1e-6, 0.5 * float(rg_min))
-            hi = max(lo * 1.01, 3.0 * float(rg_max))
-            candidates_rmax = [float(x) for x in np.linspace(lo, hi, 25)]
-        else:
-            rg = float(rg_nm)
-            if system == 1:
-                # For spheres, R ~ 1.29*Rg (uniform sphere). Probe a wider interval to be robust.
-                factors = np.linspace(1.5, 3.0, 16)
-            else:
-                # For long cylinders, length distribution is more weakly constrained; probe wider.
-                factors = np.linspace(2.0, 6.0, 21)
-            candidates_rmax = [float(rg * f) for f in factors]
+    if user_rmax_nm is not None and user_rmax_nm <= 0:
+        raise ValueError(f"fit_sizes: rmax_nm must be > 0; got {user_rmax_nm}")
+    if user_rmax_nm is not None and rmin_nm is not None and rmin_nm >= user_rmax_nm:
+        raise ValueError(
+            f"fit_sizes: require rmin_nm < rmax_nm; got rmin_nm={rmin_nm}, rmax_nm={user_rmax_nm}",
+        )
 
     gnom_out_paths: List[str] = []
     failures: List[Dict[str, Any]] = []
-    scored: List[Dict[str, Any]] = []
+    candidates: List[Dict[str, Any]] = []
+    rmax_trials: List[Dict[str, Any]] = []
 
-    for rm in candidates_rmax:
-        # Evaluate candidates using a temporary .out (do not persist intermediate tries).
+    eval_tmp_path: Optional[str] = None
+    if user_rmax_nm is None:
         try:
-            tmp = tempfile.NamedTemporaryFile(
+            with tempfile.NamedTemporaryFile(
                 mode="w",
                 delete=False,
                 dir=output_dir,
                 prefix="gnom_eval_",
                 suffix=".out",
-            )
-            eval_tmp_name = tmp.name
-            tmp.close()
+            ) as tf:
+                eval_tmp_path = tf.name
         except OSError as e:
             raise RuntimeError(f"fit_sizes: failed to create temporary GNOM output file: {e}")
-        if event_bus:
-            event_bus.publish(
-                EventType.MESSAGE,
-                {"text": f"GNOM (fit_sizes): running system={system} rmax={rm:.4f} nm…"},
-            )
-        ok, rc, stderr, out_text = _run_gnom_once(
+        assert guinier_info is not None
+        best_rmax_nm, rmax_trials, rmax_failures = _optimize_rmax_nm(
             atsas_dat_path=atsas_dat_path,
             output_dir=output_dir,
             system=system,
+            shape=shape,
+            rg_max_nm=float(guinier_info["rg_max"]),
             rmin_nm=rmin_nm,
-            rmax_nm=rm,
             rad56_nm=rad56_nm,
-            first=first,
-            last=last,
+            first=first_pt,
+            last=last_pt,
             alpha=alpha,
             nr=nr,
-            out_path=eval_tmp_name,
+            eval_tmp_path=eval_tmp_path,
+            timeout_s=30.0,
+            event_bus=event_bus,
         )
-        try:
-            os.remove(eval_tmp_name)
-        except OSError:
-            pass
-        if not ok:
-            failures.append({"rmax_nm": rm, "rc": rc, "stderr": stderr})
-            continue
-        te = _parse_gnom_total_estimate(out_text)
-        dr = _parse_gnom_dr_table(out_text)
-        scored.append(
+        failures.extend(rmax_failures)
+        candidates.extend(rmax_trials)
+    else:
+        best_rmax_nm = float(user_rmax_nm)
+
+    if rmin_nm is not None and rmin_nm >= best_rmax_nm:
+        raise ValueError(
+            f"fit_sizes: require rmin_nm < rmax_nm; got rmin_nm={rmin_nm}, rmax_nm={best_rmax_nm}",
+        )
+
+    if event_bus:
+        last_msg = f" --last={last_pt}" if last_pt is not None else " (no --last)"
+        event_bus.publish(
+            EventType.MESSAGE,
             {
-                "ok": True,
-                "system": system,
-                "shape": shape,
-                "rg_nm": float(rg_nm),
-                "rmin_nm": rmin_nm,
-                "rmax_nm": rm,
-                "rad56_nm": rad56_nm,
-                "first": first,
-                "last": last,
-                "alpha": alpha,
-                "nr": nr,
-                "total_estimate": te,
-                "parse_dr_ok": dr is not None,
-            }
+                "text": (
+                    f"GNOM (fit_sizes): final run system={system} --first={first_pt}{last_msg} "
+                    f"rmax={best_rmax_nm:.4f} nm…"
+                ),
+            },
         )
 
-    if not scored:
-        msg = "fit_sizes failed: GNOM produced no successful candidates"
-        if failures:
-            msg += f"\nLast failure: {failures[-1]}"
-        raise RuntimeError(msg)
-
-    def _score_key(c: Dict[str, Any]) -> tuple:
-        te = c.get("total_estimate")
-        te_v = float(te) if te is not None else -1.0
-        parse_ok = bool(c.get("parse_dr_ok"))
-        # prefer parseable D(R) tables, then higher Total Estimate
-        return (1 if parse_ok else 0, te_v)
-
-    best = sorted(scored, key=_score_key, reverse=True)[0]
-    best_rmax_nm = float(best["rmax_nm"])
-
-    # Persist ONLY the final best .out.
     best_gnom_out_path = os.path.join(output_dir, f"gnom_system_{system}_rmax_{best_rmax_nm:.4f}.out")
-    ok, rc, stderr, _out_text_final = _run_gnom_once(
+    ok, rc, stderr, out_text_final = _run_gnom_once(
         atsas_dat_path=atsas_dat_path,
         output_dir=output_dir,
         system=system,
         rmin_nm=rmin_nm,
         rmax_nm=best_rmax_nm,
         rad56_nm=rad56_nm,
-        first=first,
-        last=last,
+        first=first_pt,
+        last=last_pt,
         alpha=alpha,
         nr=nr,
         out_path=best_gnom_out_path,
@@ -617,6 +722,29 @@ def _fit_sizes_paths(
     if not ok:
         raise RuntimeError(f"fit_sizes failed: final GNOM run exited with code {rc}\n{stderr}")
     gnom_out_paths = [best_gnom_out_path]
+    best = _candidate_from_gnom_out(
+        out_text_final,
+        shape=shape,
+        system=system,
+        rmax_nm=best_rmax_nm,
+        rmin_nm=rmin_nm,
+        rad56_nm=rad56_nm,
+        first=first_pt,
+        last=last_pt,
+        alpha=alpha,
+        nr=nr,
+        out_path=best_gnom_out_path,
+        rc=rc,
+        stderr=stderr,
+        intermediate=False,
+    )
+    candidates.append(best)
+
+    if eval_tmp_path:
+        try:
+            os.remove(eval_tmp_path)
+        except OSError:
+            pass
 
     # Stable symlink to best .out (best effort)
     best_link_path = os.path.join(output_dir, f"{base}_gnom_sizes.out")
@@ -635,7 +763,6 @@ def _fit_sizes_paths(
             [
                 "shape",
                 "system",
-                "rg_nm",
                 "rmin_nm",
                 "rmax_nm",
                 "rad56_nm",
@@ -644,16 +771,19 @@ def _fit_sizes_paths(
                 "alpha",
                 "nr",
                 "total_estimate",
+                "neg_frac",
+                "score",
                 "parse_dr_ok",
+                "suspicious",
+                "intermediate",
                 "out_path",
             ]
         )
-        for c in scored:
+        for c in candidates:
             w.writerow(
                 [
                     c.get("shape"),
                     c.get("system"),
-                    c.get("rg_nm"),
                     c.get("rmin_nm"),
                     c.get("rmax_nm"),
                     c.get("rad56_nm"),
@@ -662,7 +792,11 @@ def _fit_sizes_paths(
                     c.get("alpha"),
                     c.get("nr"),
                     c.get("total_estimate"),
+                    c.get("neg_frac"),
+                    c.get("score"),
                     bool(c.get("parse_dr_ok")),
+                    bool(c.get("suspicious")),
+                    bool(c.get("intermediate")),
                     c.get("out_path"),
                 ]
             )
@@ -753,23 +887,43 @@ def _fit_sizes_paths(
             )
 
     fit_params_path = os.path.join(output_dir, f"{base}_fit_sizes_fit_params.yml")
-    fit_params_doc = {
+    fit_params_doc: Dict[str, Any] = {
         "shape": shape,
         "system": int(system),
-        "rg_nm": float(rg_nm),
         "rmin_nm": rmin_nm,
         "rmax_nm": best_rmax_nm,
         "rad56_nm": rad56_nm,
-        "first": first,
-        "last": last,
+        "first": first_pt,
+        "last": last_pt,
         "alpha": alpha,
         "nr": nr,
     }
+    if user_rg_nm is not None:
+        fit_params_doc["rg_nm"] = float(user_rg_nm)
     with open(fit_params_path, "w") as fp:
         yaml.dump(fit_params_doc, fp, default_flow_style=False)
 
-    rg_param_src = "user" if user_rg_nm is not None else ("autorg" if need_autorg and autorg_result is not None else "guinier")
-    first_param_src = "user" if user_first is not None else ("autorg" if need_autorg and autorg_result is not None else "unset")
+    if user_rmax_nm is not None:
+        rmax_param_src = "user"
+    else:
+        rmax_param_src = "rmax_optimization"
+
+    if user_first is not None:
+        first_param_src = "user"
+    else:
+        first_param_src = "fit_guinier"
+
+    guinier_summary: Optional[Dict[str, Any]] = None
+    if need_guinier and guinier_info is not None:
+        guinier_summary = {
+            "rg": guinier_info.get("rg"),
+            "rg_min": guinier_info.get("rg_min"),
+            "rg_max": guinier_info.get("rg_max"),
+            "q_min": guinier_info.get("q_min"),
+            "q_max": guinier_info.get("q_max"),
+            "chosen_interval": guinier_info.get("chosen_interval"),
+            "quality_class": guinier_info.get("quality_class"),
+        }
 
     best_summary_path = os.path.join(output_dir, f"{base}_fit_sizes_best.yml")
     summary = {
@@ -777,22 +931,28 @@ def _fit_sizes_paths(
         "atsas_dat_path": atsas_dat_path,
         "unit_note": "Input profile assumed q in nm^-1; GNOM uses the same units on the command line, therefore R is in nm.",
         "fit_params_path": fit_params_path,
-        "fit_param_sources": {"rg_nm": rg_param_src, "first": first_param_src},
+        "fit_param_sources": {
+            "rmax_nm": rmax_param_src,
+            "first": first_param_src,
+        },
+        "fit_guinier": guinier_summary,
+        "rmax_optimization_trials": rmax_trials if user_rmax_nm is None else None,
         "selected": {
             "shape": shape,
             "system": int(system),
-            "rg_nm": float(rg_nm),
             "rmin_nm": rmin_nm,
             "rmax_nm": best_rmax_nm,
             "rad56_nm": rad56_nm,
-            "first": first,
-            "last": last,
+            "first": first_pt,
+            "last": last_pt,
             "alpha": alpha,
             "nr": nr,
             "total_estimate": best.get("total_estimate"),
+            "neg_frac": best.get("neg_frac"),
+            "score": best.get("score"),
             "out_path": best_gnom_out_path,
         },
-        "candidates": scored,
+        "candidates": candidates,
         "failures": failures,
         "best_symlink_out_path": best_link_path,
         "fits_csv_path": fits_csv_path,

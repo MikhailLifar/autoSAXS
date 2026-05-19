@@ -18,8 +18,11 @@ from .deps import (
     _strip_sub_int_prefix,
     apply_batch,
     calc_chi2,
-    read_saxs,
+    ensure_q_nm,
+    load_saxs_1d_any,
+    run_guinier_analysis,
     run_with_cache,
+    write_saxs_atsas_format,
 )
 from .common import DatPathExpressionArg, coerce_dat_path_expression, expand_files_from_unwrapped
 
@@ -59,7 +62,7 @@ def fit_bodies(
     - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
     - `output_dir` (str, default `.`): Directory where `bodies` outputs are written.
     - `shapes` (list[str] | None, default `None`): Subset of body model names to fit (`BODIES_SHAPES_LIST`). `None` or empty means fit **all** models (single `bodies` invocation). A non-empty list runs `bodies --body=...` per shape.
-    - `first` (int | None, default `None`): Passed to `bodies` as `--first` (1-based data point index). Omitted when `None`.
+    - `first` (int | None, default `None`): Passed to `bodies` as `--first` (1-based data point index). If omitted, taken from the low-q end of the Guinier interval from in-process `fit_guinier`.
     - `last` (int | None, default `None`): Passed to `bodies` as `--last` (1-based data point index). Omitted when `None`.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
@@ -128,6 +131,39 @@ BODIES_SHAPES_LIST = [
 ]
 
 
+def _guinier_from_profile(
+    q_nm: np.ndarray,
+    I: np.ndarray,
+    sigma: Optional[np.ndarray],
+    atsas_dat_path: str,
+) -> Dict[str, Any]:
+    """In-process fit_guinier for Guinier interval (used to derive ``--first``)."""
+    results = run_guinier_analysis(q_nm, I, sigma, atsas_dat_path=atsas_dat_path)
+    if results.get("chosen") is None:
+        raise RuntimeError(
+            "fit_bodies: fit_guinier (Guinier analysis) did not return a chosen result; "
+            "cannot derive --first."
+        )
+    ch_int = results.get("chosen_interval")
+    return {
+        "rg": results.get("chosen_Rg"),
+        "rg_min": results.get("rg_min"),
+        "rg_max": results.get("rg_max"),
+        "q_min": ch_int[0] if ch_int else None,
+        "q_max": ch_int[1] if ch_int else None,
+        "chosen_interval": ch_int,
+        "quality_class": results.get("quality_class"),
+    }
+
+
+def _q_to_first_point_1based(q_nm: np.ndarray, q_target: float) -> int:
+    q_nm = np.asarray(q_nm, dtype=float)
+    if not np.isfinite(q_target):
+        raise ValueError("fit_bodies: Guinier q_min is not finite")
+    idx = int(np.argmin(np.abs(q_nm - float(q_target))))
+    return idx + 1
+
+
 def _slice_exp_dat_columns(
     q: np.ndarray,
     I: np.ndarray,
@@ -185,6 +221,39 @@ def _fit_bodies_paths(
         event_bus.publish(EventType.MESSAGE, {"text": "BODIES fit…"})
     base = _strip_sub_int_prefix(os.path.splitext(os.path.basename(profile))[0])
     os.makedirs(output_dir, exist_ok=True)
+
+    user_first = first
+    q_nm, I, sigma = load_saxs_1d_any(profile)
+    q_nm, I, sigma = ensure_q_nm(q_nm, I, sigma)
+    n_pts = int(len(q_nm))
+
+    guinier_info: Optional[Dict[str, Any]] = None
+    if user_first is None:
+        if event_bus:
+            event_bus.publish(EventType.MESSAGE, {"text": "fit_bodies: running fit_guinier (in-process)…"})
+        atsas_dat_path = os.path.join(output_dir, f"{base}_atsas.dat")
+        write_saxs_atsas_format(atsas_dat_path, q_nm, I, sigma)
+        guinier_info = _guinier_from_profile(q_nm, I, sigma, atsas_dat_path)
+        if event_bus:
+            event_bus.publish(EventType.MESSAGE, {"text": "fit_bodies: fit_guinier completed."})
+        if guinier_info.get("q_min") is None:
+            raise RuntimeError("fit_bodies: cannot derive --first without fit_guinier q_min.")
+        first_pt = _q_to_first_point_1based(q_nm, float(guinier_info["q_min"]))
+    else:
+        first_pt = int(user_first)
+
+    last_pt: Optional[int] = int(last) if last is not None else None
+    if first_pt < 1 or first_pt >= n_pts:
+        raise ValueError(
+            f"fit_bodies: require 1 <= first < n_points ({n_pts}); got first={first_pt}",
+        )
+    if last_pt is not None:
+        if last_pt < 1 or last_pt > n_pts or first_pt >= last_pt:
+            raise ValueError(
+                f"fit_bodies: require 1 <= first < last <= n_points ({n_pts}); "
+                f"got first={first_pt}, last={last_pt}",
+            )
+
     # ``cwd=output_dir`` means BODIES ``--prefix`` must be relative (basename only), same as DAMMIF:
     # an absolute prefix under ``output_dir`` can make ATSAS write under output_dir/output_dir/… so
     # ``bodies_fit-<shape>.fir`` is not found next to the skill’s expected paths.
@@ -206,10 +275,9 @@ def _fit_bodies_paths(
         cmd: List[str] = ["bodies", f"--prefix={bodies_prefix}"]
         if body is not None:
             cmd.append(f"--body={body}")
-        if first is not None:
-            cmd.append(f"--first={int(first)}")
-        if last is not None:
-            cmd.append(f"--last={int(last)}")
+        cmd.append(f"--first={int(first_pt)}")
+        if last_pt is not None:
+            cmd.append(f"--last={int(last_pt)}")
         cmd.append(profile)
         return cmd
 
@@ -249,8 +317,7 @@ def _fit_bodies_paths(
                     )
                 continue
 
-    q_raw, I_raw, sigma_raw, _meta = read_saxs(profile)
-    q_exp, I_exp, sigma_exp = _slice_exp_dat_columns(q_raw, I_raw, sigma_raw, first, last)
+    q_exp, I_exp, sigma_exp = _slice_exp_dat_columns(q_nm, I, sigma, first_pt, last_pt)
     fits_data = []
     to_plot = []
     for shape in shapes_to_scan:
@@ -289,6 +356,27 @@ def _fit_bodies_paths(
     bodies_fits_yml = os.path.join(output_dir, "bodies_fits.yml")
     bodies_fits_csv = os.path.join(output_dir, "bodies_fits.csv")
     bodies_fits_png = os.path.join(output_dir, f"{base}_fits.png")
+    fit_params_path = os.path.join(output_dir, f"{base}_fit_bodies_fit_params.yml")
+    fit_params_doc: Dict[str, Any] = {
+        "first": int(first_pt),
+        "last": last_pt,
+        "fit_param_sources": {
+            "first": "user" if user_first is not None else "fit_guinier",
+        },
+    }
+    if guinier_info is not None:
+        fit_params_doc["fit_guinier"] = {
+            "rg": guinier_info.get("rg"),
+            "rg_min": guinier_info.get("rg_min"),
+            "rg_max": guinier_info.get("rg_max"),
+            "q_min": guinier_info.get("q_min"),
+            "q_max": guinier_info.get("q_max"),
+            "chosen_interval": guinier_info.get("chosen_interval"),
+            "quality_class": guinier_info.get("quality_class"),
+        }
+    with open(fit_params_path, "w") as fp:
+        yaml.dump(fit_params_doc, fp, default_flow_style=False)
+
     if fits_data:
         fits_yml = {s: {**p, "chi2": float(c)} for s, p, c, _q, _i in fits_data}
         with open(bodies_fits_yml, "w") as f:
