@@ -70,11 +70,11 @@ SAXS / small-angle x-ray scattering: calibrate detector geometry using a calibra
 ### Arguments
 
 - `calib_image` (str): Path to the calibration image (e.g. TIFF) used for ring analysis.
-- `config_path` (str): Path to the autosaxs calibration config file. The config must include data required by the ring analysis and detector geometry refinement.
 - `output_dir` (str, default `.`): Directory where results are written.
+- `config_path` (str | None, default `None`): Optional path to a YAML config file with a `calibrate` section. When omitted, bundled defaults from the installed `autosaxs` package are used.
 - `mask` (str | None, default `None`): Optional path to a mask used during ring analysis. Supports .txt (NuPy format), .msk (Fit2d)
-- `mask_mode` (str, default `"f"`): Mask mode selector. One of `f/from_file`, `a/auto`, `c/combined`.
-- `calibrant` (str, default `"AgBh"`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`).
+- `mask_mode` (str | None, default `None`): Mask mode selector (`f`/`from_file`, `a`/`auto`, `c`/`combined`). Defaults come from config when omitted.
+- `calibrant` (str | None, default `None`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`). Defaults come from config when omitted.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 Important constraints:
@@ -98,11 +98,9 @@ from autosaxs.skill import calibrate
 
 out = calibrate(
     calib_image="AgBh.tif",
-    config_path="config_autocalib.yml",
     output_dir="calibration",
     mask="mask.msk",
     mask_mode="f",
-    calibrant="AgBh",
     use_cache=False,
 )
 
@@ -113,5 +111,6 @@ print(out["refined_path"])
 ### CLI usage
 
 ```bash
-autosaxs calibrate AgBh.tif config_autocalib.yml --output-dir calibration --mask mask.msk
+autosaxs calibrate AgBh.tif --output-dir calibration --mask mask.msk
+autosaxs calibrate AgBh.tif --conf my_config.conf --output-dir calibration
 ```

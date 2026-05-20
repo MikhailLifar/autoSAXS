@@ -18,6 +18,7 @@ from .deps import (
 from autosaxs.core.report_fragments import write_skill_report_fragments
 
 from .common import (
+    ConfigPathExpressionArg,
     TiffPathExpressionArg,
     SingletonPathExpressionArg,
     coerce_path_expression,
@@ -31,6 +32,7 @@ def integrate(
     integrator_dir: SingletonPathExpressionArg,
     output_dir: str = ".",
     *,
+    config_path: Optional[ConfigPathExpressionArg] = None,
     npt: int = 1000,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:

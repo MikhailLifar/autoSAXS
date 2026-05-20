@@ -84,7 +84,12 @@ class CalibrationWizardDialog(QDialog):
                 saved_state=None,
             )
             _force_no_cache_and_fixed_output(self._form, outdir=str(out))
-            lay.addWidget(QLabel("Calibrate integrator (outputs go to calibration/)."))
+            lay.addWidget(
+                QLabel(
+                    "Calibrate integrator (outputs go to calibration/). "
+                    "config_path is optional — leave empty to use bundled autosaxs defaults."
+                )
+            )
             lay.addWidget(self._form, 1)
             lay.addWidget(self._controls)
             self._btn_reset = QPushButton("Reset")

@@ -424,8 +424,6 @@ def session_hint_for_positional_path(
     """Resolve a positional parameter default from global hints (skill-specific mapping)."""
     if skill_name == "calibrate" and param_name == "calib_image":
         return _dir_hint_if_exists(hints.two_d_tif_dir, workdir)
-    if skill_name == "calibrate" and param_name == "config_path":
-        return _file_hint_if_exists(hints.config_file_path, workdir)
     if skill_name == "integrate" and param_name == "images":
         return _dir_hint_if_exists(hints.two_d_tif_dir, workdir)
     if skill_name == "integrate_proxy" and param_name == "image":

@@ -76,12 +76,13 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a siz
     - `rods`: GNOM `--system=5` (length distribution for long cylinders). Requires `rad56_nm` (cylinder radius).
     - `ellipsoids`: accepted for API compatibility but **not supported by GNOM command-line** (GNOM system 2 is
       interactive-only). The skill will raise a clear error if selected.
-- `rg_nm` (float | None): Expected Rg in nm; if omitted, inferred by AUTORG when possible, else via Guinier fit.
-- `rmin_nm` (float | None, default `0.0`): GNOM `--rmin` (nm). If None, GNOM default is used.
-- `rmax_nm` (float | None): GNOM `--rmax` (nm). Required by GNOM; if omitted, the skill searches candidates.
+- `rg_nm` (float | None): Optional metadata only (not passed to GNOM); recorded in outputs if set.
+- `rmin_nm` (float | None): GNOM `--rmin` (nm). If omitted, not passed to GNOM.
+- `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, optimized in `[ε, 3 × rg_max]` from in-process `fit_guinier` (30 s max), scoring each trial as Total Estimate − neg_frac.
 - `rad56_nm` (float | None): GNOM `--rad56` for `shape=rods` (nm cylinder radius). Ignored for spheres.
-- `first`/`last` (int | None): GNOM `--first`/`--last` data-point indices (1-based).
-- `alpha` (float | None, default `0.0`): GNOM `--alpha`. Use 0.0 (default) for automatic alpha search.
+- `first` (int | None): GNOM `--first` (1-based). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
+- `last` (int | None): GNOM `--last`. If omitted, not passed to GNOM.
+- `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
 - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 

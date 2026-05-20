@@ -18,12 +18,18 @@ from .deps import (
     subtract_buffer,
 )
 from .common import (
+    ConfigPathExpressionArg,
     DatPathExpressionArg,
     SingletonDatPathExpressionArg,
     coerce_dat_path_expression,
     coerce_singleton_dat_path_expression,
     expand_files_from_unwrapped,
 )
+from .config import merge_skill_params, resolve_optional_config_path
+
+
+def _resolve_config_path(config_path: Optional[ConfigPathExpressionArg]) -> Optional[str]:
+    return resolve_optional_config_path(config_path)
 
 
 def subtract(
@@ -31,12 +37,13 @@ def subtract(
     buffer_1d: SingletonDatPathExpressionArg,
     output_dir: str = ".",
     *,
-    method: str = "point_match",
+    config_path: Optional[ConfigPathExpressionArg] = None,
+    method: Optional[str] = None,
     q_min: Optional[float] = None,
     q_max: Optional[float] = None,
-    sample_form: str = "Porod-plus-linear",
-    buffer_form: str = "linear",
-    point_match_factor: float = 0.995,
+    sample_form: Optional[str] = None,
+    buffer_form: Optional[str] = None,
+    point_match_factor: Optional[float] = None,
     scaling_factor: Optional[float] = None,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
@@ -49,11 +56,12 @@ def subtract(
     - `sample_1d` (str): Sample path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
     - `buffer_1d` (str): Path to the buffer 1D `.dat` curve (must be an existing file).
     - `output_dir` (str, default `.`): Directory where subtraction outputs are written.
-    - `method` (str, default `"point_match"`): `point_match` or `match_tail`.
-    - `q_min` (float | None, default `None`): Lower bound of q-range for fitting/scaling.
+    - `config_path` (str | None, default `None`): Optional path to a YAML config file with a `subtract` section. When omitted, bundled defaults apply for method/forms; q-window keys come from CLI or user file only.
+    - `method` (str | None, default `None`): `point_match` or `match_tail`. Defaults from bundled config when omitted.
+    - `q_min` (float | None, default `None`): Lower bound of q-range (CLI or user config; not in bundled template).
     - `q_max` (float | None, default `None`): Upper bound of q-range; for `point_match` the match uses this as q intersect (upper edge of the window).
-    - `sample_form` / `buffer_form` (str): For `point_match` only — each is `linear`, `Porod`, or `Porod-plus-linear`.
-    - `point_match_factor` (float, default `0.995`): For `point_match`, scale satisfies `point_match_factor * I_sample_fit(q_max) = scale * I_buffer_fit(q_max)`.
+    - `sample_form` / `buffer_form` (str | None): For `point_match` only — each is `linear`, `Porod`, or `Porod-plus-linear`.
+    - `point_match_factor` (float | None, default `None`): For `point_match`, scale satisfies `point_match_factor * I_sample_fit(q_max) = scale * I_buffer_fit(q_max)`.
     - `scaling_factor` (float | None, default `None`): If provided, overrides automatic scaling and uses this factor directly (must be finite and > 0).
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
@@ -95,16 +103,34 @@ def subtract(
       --output-dir subtracted --method point_match --q-min 4.0 --q-max 6.0
     ```
     """
-    method_key = str(method).strip().lower().replace("-", "_")
+    cfg_path = _resolve_config_path(config_path)
+    merged = merge_skill_params(
+        "subtract",
+        config_path=cfg_path,
+        method=method,
+        q_min=q_min,
+        q_max=q_max,
+        sample_form=sample_form,
+        buffer_form=buffer_form,
+        point_match_factor=point_match_factor,
+        scaling_factor=scaling_factor,
+    )
+    method_eff = str(merged.get("method", "point_match")).strip().lower().replace("-", "_")
+    q_min_eff = merged.get("q_min", q_min)
+    q_max_eff = merged.get("q_max", q_max)
+    sample_form_eff = merged.get("sample_form", "Porod-plus-linear")
+    buffer_form_eff = merged.get("buffer_form", "linear")
+    point_match_factor_eff = float(merged.get("point_match_factor", 0.995))
+    scaling_factor_eff = merged.get("scaling_factor", scaling_factor)
     match_tail_ops: Dict = {}
-    if q_min is not None or q_max is not None:
-        if q_min is None:
+    if q_min_eff is not None or q_max_eff is not None:
+        if q_min_eff is None:
             raise ValueError("subtract: q_min must be set when q_max is set")
-        match_tail_ops["q_range_abs"] = (q_min, q_max)
-    if method_key == "point_match":
-        match_tail_ops["sample_form"] = sample_form
-        match_tail_ops["buffer_form"] = buffer_form
-        match_tail_ops["point_match_factor"] = point_match_factor
+        match_tail_ops["q_range_abs"] = (q_min_eff, q_max_eff)
+    if method_eff == "point_match":
+        match_tail_ops["sample_form"] = sample_form_eff
+        match_tail_ops["buffer_form"] = buffer_form_eff
+        match_tail_ops["point_match_factor"] = point_match_factor_eff
     match_tail_ops_out: Optional[Dict] = match_tail_ops if match_tail_ops else None
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
@@ -123,9 +149,9 @@ def subtract(
         output_dir=output_dir,
         event_bus=bus,
         use_cache=use_cache,
-        method=method_key,
+        method=method_eff,
         match_tail_ops=match_tail_ops_out,
-        scaling_factor=scaling_factor,
+        scaling_factor=scaling_factor_eff,
     )
 
 

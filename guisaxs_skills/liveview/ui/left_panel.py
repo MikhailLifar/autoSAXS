@@ -229,6 +229,7 @@ class LiveviewLeftPanel(QWidget):
             opts = (st.get("options") or {}).copy()
             opts.pop("output_dir", None)
             opts.pop("use_cache", None)
+            opts = _sanitize_subtract_options(opts)
             buffer_path = Path(buffer_text).expanduser()
             buffer_path = buffer_path.resolve() if buffer_path.is_absolute() else (self._state.watchdir / buffer_path).resolve()
             if not buffer_path.exists():
@@ -244,6 +245,22 @@ class LiveviewLeftPanel(QWidget):
             self.subtract_config_changed.emit()
         except Exception as e:
             QMessageBox.critical(self._buf_wizard or self, "Cannot apply buffer", str(e))
+
+
+def _sanitize_subtract_options(opts: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop empty GUI form values so autosaxs bundled defaults apply."""
+    out: Dict[str, Any] = {}
+    for key, value in (opts or {}).items():
+        if key == "config_path":
+            if isinstance(value, dict):
+                if not str(value.get("text") or "").strip():
+                    continue
+            elif isinstance(value, str) and not value.strip():
+                continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        out[key] = value
+    return out
 
 
 def _extract_pathfield_text(state_obj: Optional[dict]) -> str:

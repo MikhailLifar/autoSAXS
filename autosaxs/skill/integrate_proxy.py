@@ -20,6 +20,7 @@ from .deps import (
     _strip_sub_int_prefix,
 )
 from .common import (
+    ConfigPathExpressionArg,
     SingletonMaskPathExpressionArg,
     TiffPathExpressionArg,
     coerce_optional_singleton_path_expression,
@@ -32,6 +33,7 @@ def integrate_proxy(
     image: TiffPathExpressionArg,
     output_dir: str = ".",
     *,
+    config_path: Optional[ConfigPathExpressionArg] = None,
     mask: Optional[SingletonMaskPathExpressionArg] = None,
     cy: Optional[float] = None,
     cx: Optional[float] = None,

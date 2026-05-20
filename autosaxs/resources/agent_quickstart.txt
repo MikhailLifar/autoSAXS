@@ -11,12 +11,12 @@ Shipped commands (no input data required)
 -----------------------------------------
   get-readme -o <dir>          Write README.md (generated skills documentation + usage).
   get-skills -o <dir>          Replace dir/saxs-processing/ entirely (orchestrator + leaf SKILL.md files).
-  get-default-config -o <dir>  Copy bundled config_base.conf into <dir>. This command is crucial since config file is strictly required for some skills.
+  get-default-config -o <dir>  Copy bundled config_base.conf into <dir> (skill-keyed YAML template for overrides).
 
 Suggested first steps for an agent
 ----------------------------------
   1. autosaxs get-readme -o .
-  2. autosaxs get-default-config -o .
+  2. autosaxs get-default-config -o .   (optional: edit config_base.conf, pass --conf to skills)
   3. autosaxs get-skills -o .          (optional, for Cursor-style skills)
   4. autosaxs <subcommand> --help       processing skills: calibrate, integrate, subtract, ...
 

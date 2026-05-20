@@ -42,6 +42,7 @@ from autosaxs.skill.plot import plot
 from autosaxs.skill.plot_2d import plot_2d
 from autosaxs.skill.subtract import subtract
 from autosaxs.core.utils import read_saxs, write_saxs, write_data
+from autosaxs.skill.config import merge_skill_params
 
 
 # ---------------------------------------------------------------------------
@@ -380,11 +381,28 @@ def test_integrate_proxy_with_mask(monkeypatch):
 # ---------------------------------------------------------------------------
 # calibrate: contract (requires config and calib image; skip if no data)
 # ---------------------------------------------------------------------------
+def test_merge_skill_params_precedence():
+    bundled = {"subtract": {"method": "point_match", "point_match_factor": 0.995}}
+    with tempfile.TemporaryDirectory() as tmp:
+        user_path = os.path.join(tmp, "user.conf")
+        Path(user_path).write_text("subtract:\n  q_min: 5.0\n  q_max: 6.0\n")
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("autosaxs.skill.config.load_default_config", lambda: bundled)
+            merged = merge_skill_params(
+                "subtract",
+                config_path=user_path,
+                method="match_tail",
+            )
+        assert merged["method"] == "match_tail"
+        assert merged["q_min"] == 5.0
+        assert merged["q_max"] == 6.0
+        assert merged["point_match_factor"] == 0.995
+
+
 def test_calibrate_raises_without_calib_image():
     with pytest.raises((FileNotFoundError, ValueError)):
         calibrate(
             calib_image="",
-            config_path="",
             output_dir=tempfile.mkdtemp(),
             use_cache=False,
         )
@@ -394,7 +412,6 @@ def test_calibrate_rejects_unknown_calibrant():
     with pytest.raises(ValueError, match="Unknown calibrant"):
         calibrate(
             calib_image="",
-            config_path="",
             output_dir=tempfile.mkdtemp(),
             calibrant="not_a_real_calibrant",
             use_cache=False,
@@ -404,14 +421,11 @@ def test_calibrate_rejects_unknown_calibrant():
 def test_calibrate_requires_mask_for_default_from_file_mode():
     with tempfile.TemporaryDirectory() as tmp:
         calib_path = os.path.join(tmp, "calib.tif")
-        cfg_path = os.path.join(tmp, "config.conf")
         Path(calib_path).write_bytes(b"dummy")
-        Path(cfg_path).write_text("dummy: true")
 
         with pytest.raises(ValueError, match="mask path is required"):
             calibrate(
                 calib_image=calib_path,
-                config_path=cfg_path,
                 output_dir=os.path.join(tmp, "out"),
                 use_cache=False,
             )
@@ -420,13 +434,14 @@ def test_calibrate_requires_mask_for_default_from_file_mode():
 def test_calibrate_default_mask_mode_is_from_file(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         calib_path = os.path.join(tmp, "calib.tif")
-        cfg_path = os.path.join(tmp, "config.conf")
         mask_path = os.path.join(tmp, "mask.npy")
         Path(calib_path).write_bytes(b"dummy")
-        Path(cfg_path).write_text("dummy: true")
         np.save(mask_path, np.zeros((4, 4), dtype=bool))
 
-        monkeypatch.setattr("autosaxs.skill.calibrate.load_config", lambda _: {"calibrant_name": "AgBh"})
+        monkeypatch.setattr(
+            "autosaxs.skill.calibrate.merge_skill_params",
+            lambda *_a, **_k: {"calibrant": "AgBh", "mask_mode": "f", "ring_analysis": {}, "detector_geometry": {}},
+        )
 
         class _DummyIntegrator:
             mask = None
@@ -449,7 +464,6 @@ def test_calibrate_default_mask_mode_is_from_file(monkeypatch):
 
         out = calibrate(
             calib_image=calib_path,
-            config_path=cfg_path,
             output_dir=os.path.join(tmp, "out"),
             mask=mask_path,
             use_cache=False,
@@ -460,16 +474,24 @@ def test_calibrate_default_mask_mode_is_from_file(monkeypatch):
 def test_calibrate_always_overrides_config_calibrant(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         calib_path = os.path.join(tmp, "calib.tif")
-        cfg_path = os.path.join(tmp, "config.conf")
         mask_path = os.path.join(tmp, "mask.npy")
         Path(calib_path).write_bytes(b"dummy")
-        Path(cfg_path).write_text("dummy: true")
         np.save(mask_path, np.zeros((4, 4), dtype=bool))
 
-        # Use two distinct known names to ensure override is visible.
         requested_calibrant = "AgBh"
 
-        monkeypatch.setattr("autosaxs.skill.calibrate.load_config", lambda _: {"calibrant_name": "Si"})
+        def _fake_merge(_skill, *, config_path=None, **kwargs):
+            merged = {
+                "calibrant": "Si",
+                "mask_mode": "f",
+                "ring_analysis": {},
+                "detector_geometry": {},
+            }
+            if kwargs.get("calibrant") is not None:
+                merged["calibrant"] = kwargs["calibrant"]
+            return merged
+
+        monkeypatch.setattr("autosaxs.skill.calibrate.merge_skill_params", _fake_merge)
 
         class _DummyIntegrator:
             mask = None
@@ -493,7 +515,6 @@ def test_calibrate_always_overrides_config_calibrant(monkeypatch):
 
         out = calibrate(
             calib_image=calib_path,
-            config_path=cfg_path,
             output_dir=os.path.join(tmp, "out"),
             mask=mask_path,
             calibrant=requested_calibrant,
@@ -578,12 +599,12 @@ def test_fit_mixture_contract_with_mock_mixture(monkeypatch):
         Path(cfg_path).write_text(
             "\n".join(
                 [
-                    "mixture:",
+                    "fit_mixture:",
                     "  maxit: 5",
-                    "  r_min: 10.0",
-                    "  r_max: 80.0",
-                    "  poly_min: 0.5",
-                    "  poly_max: 10.0",
+                    "  r_min: 0.1",
+                    "  r_max: 8.0",
+                    "  poly_min: 0.05",
+                    "  poly_max: 4.0",
                     "  max_nph: 1",
                     "",
                 ]
@@ -600,6 +621,97 @@ def test_fit_mixture_contract_with_mock_mixture(monkeypatch):
         # The skill returns per-sample output_subdir; CSV should exist and be non-empty.
         csv_path = str(result["results_csv_path"])
         assert os.path.getsize(csv_path) > 0
+
+
+def test_fit_mixture_without_config_path_uses_bundled_defaults(monkeypatch):
+    import subprocess as _sp
+
+    def _fake_run_mixture(work_dir: Path, dat_basename: str, cmd_content: str) -> _sp.CompletedProcess:
+        _ = cmd_content
+        work_dir.mkdir(parents=True, exist_ok=True)
+        fit_path = work_dir / dat_basename.replace(".dat", ".fit")
+        log_path = work_dir / "mixture.log"
+        q_nm = np.linspace(0.1, 2.0, 30)
+        q_A = q_nm / 10.0
+        I_exp = np.exp(-q_nm**2) + 0.05
+        I_fit = I_exp * 0.98
+        sigma = 0.03 * np.abs(I_exp)
+        with open(fit_path, "w") as f:
+            for i in range(len(q_A)):
+                f.write(f"{q_A[i]}\t{I_exp[i]}\t{I_fit[i]}\t{sigma[i]}\n")
+        log_path.write_text(
+            "1SPH 0.50 0 0 50.0 0 5.0\nProduced function minimum is equal to 1.234\n"
+        )
+        return _sp.CompletedProcess(args=["mixture"], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("autosaxs.skill.fit_mixture.mixture._run_mixture", _fake_run_mixture)
+    monkeypatch.setattr(
+        "autosaxs.skill.fit_mixture._rmax_nm_from_fit_sizes",
+        lambda profile, output_dir, event_bus: 12.0,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.1, 2.0, 40)
+        I = np.exp(-q**2) + 0.02
+        sigma = 0.03 * np.abs(I)
+        profile_path = os.path.join(tmp, "subtracted.dat")
+        write_saxs(profile_path, q, I, sigma, {"type": "subtracted"})
+        out_dir = os.path.join(tmp, "mixture_out")
+        result = fit_mixture(profile_path, output_dir=out_dir, use_cache=False)
+        assert os.path.isfile(str(result["results_csv_path"]))
+
+
+def test_fit_mixture_radius_params_use_nm_externally():
+    from autosaxs.skill.fit_mixture import _resolve_mixture_radius_params
+
+    params = _resolve_mixture_radius_params(
+        profile="dummy.dat",
+        output_dir="/tmp",
+        event_bus=None,
+        user_r_max=8.0,
+        user_r_min=0.1,
+        user_poly_min=0.05,
+        user_poly_max=4.0,
+    )
+    assert params["r_max"] == pytest.approx(80.0)
+    assert params["r_min"] == pytest.approx(1.0)
+    assert params["poly_min"] == pytest.approx(0.5)
+    assert params["poly_max"] == pytest.approx(40.0)
+
+
+def test_subtract_applies_bundled_defaults_without_q_window(monkeypatch):
+    captured = {}
+
+    def _fake_subtract_paths(input_paths, output_dir, match_tail_ops=None, method=None, **kwargs):
+        captured["method"] = method
+        captured["match_tail_ops"] = match_tail_ops
+        return {
+            "subtracted_1d": os.path.join(output_dir, "sub_x.dat"),
+            "diff_plot_path": os.path.join(output_dir, "diff_x.png"),
+            "diff_log_plot_path": os.path.join(output_dir, "diff_log_x.png"),
+            "sub_plot_path": os.path.join(output_dir, "sub_x.png"),
+        }
+
+    monkeypatch.setattr("autosaxs.skill.subtract._subtract_paths", _fake_subtract_paths)
+    monkeypatch.setattr(
+        "autosaxs.skill.subtract.merge_skill_params",
+        lambda *_a, **_k: {
+            "method": "point_match",
+            "sample_form": "Porod-plus-linear",
+            "buffer_form": "linear",
+            "point_match_factor": 0.995,
+        },
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        sample = os.path.join(tmp, "s.dat")
+        buff = os.path.join(tmp, "b.dat")
+        write_saxs(sample, [1.0, 2.0], [1.0, 1.0], [0.1, 0.1], {})
+        write_saxs(buff, [1.0, 2.0], [0.5, 0.5], [0.1, 0.1], {})
+        subtract(sample, buff, output_dir=os.path.join(tmp, "out"), use_cache=False)
+        assert captured["method"] == "point_match"
+        assert captured["match_tail_ops"] is not None
+        assert "q_range_abs" not in captured["match_tail_ops"]
 
 
 # ---------------------------------------------------------------------------
@@ -858,6 +970,94 @@ def test_fit_dammif_raises_without_profile():
             output_dir=tempfile.mkdtemp(),
             use_cache=False,
         )
+
+
+def test_fit_dammif_calls_fit_distances_when_gnom_omitted(monkeypatch):
+    import subprocess as _sp
+
+    fit_distances_calls = []
+    dammif_gnom_args = []
+
+    def _fake_gnom_from_distances(profile, output_dir, event_bus):
+        fit_distances_calls.append((profile, output_dir))
+        os.makedirs(output_dir, exist_ok=True)
+        gnom_path = os.path.join(output_dir, "fake_gnom.out")
+        Path(gnom_path).write_text(
+            "DATGNOM OUTPUT (fake)\nReal space range: 0.0000 to 35.0000\nTotal Estimate = 0.85\n"
+        )
+        return gnom_path
+
+    monkeypatch.setattr(
+        "autosaxs.skill.fit_dammif._gnom_path_from_fit_distances",
+        _fake_gnom_from_distances,
+    )
+
+    def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
+        _ = capture_output, text, timeout, kwargs
+        assert (cmd[0] if cmd else "") == "dammif"
+        dammif_gnom_args.append(str(cmd[-1]))
+        prefix = next(a.split("=", 1)[1] for a in cmd if str(a).startswith("--prefix="))
+        fir = os.path.join(cwd or ".", f"{prefix}.fir")
+        with open(fir, "w") as f:
+            f.write("s Exp iExp Err iFit\n")
+            for i in range(10):
+                q = 0.1 * (i + 1)
+                f.write(f"{q}\t1.0\t0.1\t0.95\n")
+        return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("autosaxs.skill.fit_dammif.subprocess.run", _fake_run)
+    monkeypatch.setattr("autosaxs.skill.fit_dammif.PLTViewer.view_curves", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "autosaxs.skill.fit_dammif.PLTViewer.plot_3d_views_and_scattering",
+        lambda *a, **k: None,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.05, 2.0, 60)
+        I = np.exp(-q**2) + 0.01
+        profile_path = os.path.join(tmp, "profile.dat")
+        write_saxs(profile_path, q, I, 0.02 * I, {})
+        out_dir = os.path.join(tmp, "dammif")
+        result = fit_dammif(profile_path, output_dir=out_dir, use_cache=False)
+        assert len(fit_distances_calls) == 1
+        assert fit_distances_calls[0][0] == os.path.normpath(os.path.abspath(profile_path))
+        assert len(dammif_gnom_args) == 1
+        assert os.path.isabs(dammif_gnom_args[0])
+        assert dammif_gnom_args[0].endswith("fake_gnom.out")
+        assert os.path.isdir(str(result["output_subdir"]))
+
+
+def test_fit_dammif_skips_fit_distances_when_gnom_provided(monkeypatch):
+    import subprocess as _sp
+
+    def _guard(*_a, **_k):
+        raise AssertionError("fit_distances should not run when gnom_path is set")
+
+    monkeypatch.setattr("autosaxs.skill.fit_dammif._gnom_path_from_fit_distances", _guard)
+
+    def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
+        _ = capture_output, text, timeout, kwargs
+        assert (cmd[0] if cmd else "") == "dammif"
+        prefix = next(a.split("=", 1)[1] for a in cmd if str(a).startswith("--prefix="))
+        fir = os.path.join(cwd or ".", f"{prefix}.fir")
+        with open(fir, "w") as f:
+            f.write("s Exp iExp Err iFit\n")
+            for i in range(10):
+                q = 0.1 * (i + 1)
+                f.write(f"{q}\t1.0\t0.1\t0.95\n")
+        return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("autosaxs.skill.fit_dammif.subprocess.run", _fake_run)
+    monkeypatch.setattr("autosaxs.skill.fit_dammif.PLTViewer.view_curves", lambda *a, **k: None)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.05, 2.0, 60)
+        profile_path = os.path.join(tmp, "profile.dat")
+        write_saxs(profile_path, q, np.exp(-q**2), 0.02, {})
+        gnom_path = os.path.join(tmp, "provided_gnom.out")
+        Path(gnom_path).write_text("DATGNOM OUTPUT\n")
+        out_dir = os.path.join(tmp, "dammif")
+        fit_dammif(profile_path, output_dir=out_dir, gnom_path=gnom_path, use_cache=False)
 
 
 def test_fit_distances_contract(monkeypatch):

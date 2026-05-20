@@ -444,35 +444,28 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
         form = wiz._form  # noqa: SLF001
 
         calib = Path(VALIDATION_RAW) / "AgBh700_96.9_calib.tif"
-        cfg = Path(VALIDATION_DIR) / "config.conf"
         mask = Path(VALIDATION_DIR) / "mask_fti2d_1225.msk"
-        for p in (calib, cfg, mask):
+        for p in (calib, mask):
             assert p.is_file(), f"Missing validation fixture: {p}"
 
-        # Setting the calib image should auto-fill config + mask.
+        # Setting the calib image may auto-fill mask; config_path stays empty (bundled defaults).
         assert _set_pathfield_text_by_label(form, label="calib_image", text=str(calib))
-        # Force the same refresh logic as a real user edit would trigger.
         try:
             getattr(form, "_on_primary_path_expression_changed")()  # type: ignore[attr-defined]
         except Exception:
             pass
         _wait_until(
             app,
-            lambda: Path(_get_pathfield_text_by_label(form, label="config_path")).name == "config.conf",
-            2.0,
-            step_sec=0.05,
-        )
-        _wait_until(
-            app,
             lambda: bool(_get_pathfield_text_by_label(form, label="mask")),
             2.0,
             step_sec=0.05,
         )
-        # Assert smart defaults guessed both config+mask; then force explicit values for determinism.
-        assert Path(_get_pathfield_text_by_label(form, label="config_path")).name == "config.conf"
         assert _get_pathfield_text_by_label(form, label="mask"), "Mask path was not auto-filled"
-        assert _set_pathfield_text_by_label(form, label="config_path", text=str(cfg))
         assert _set_pathfield_text_by_label(form, label="mask", text=str(mask))
+        # Nearby config.conf may be suggested; clear config_path to run on bundled autosaxs defaults.
+        if _get_pathfield_text_by_label(form, label="config_path").strip():
+            assert _set_pathfield_text_by_label(form, label="config_path", text="")
+        assert not _get_pathfield_text_by_label(form, label="config_path").strip()
 
         QTest.mouseClick(wiz._controls.run_button, Qt.LeftButton)  # noqa: SLF001
 
@@ -508,19 +501,25 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
 
         # subtract positional params are (sample_1d, buffer_1d); sample_1d row is hidden/disabled.
         assert _set_pathfield_text_by_label(bform, label="buffer_1d", text=str(int_buf))
-        # Match validation baseline subtraction window from validation/config.conf (sub.q_range_abs).
+        # Match validation baseline subtraction window from validation/config.conf (subtract.q_min/q_max).
         try:
             import yaml
 
             cfg_data = yaml.safe_load(Path(VALIDATION_DIR, "config.conf").read_text(encoding="utf-8"))
-            sub = (cfg_data or {}).get("sub") if isinstance(cfg_data, dict) else None
-            qra = sub.get("q_range_abs") if isinstance(sub, dict) else None
-            q_min = float(qra[0]) if isinstance(qra, list) and len(qra) == 2 and qra[0] is not None else None
-            q_max = float(qra[1]) if isinstance(qra, list) and len(qra) == 2 and qra[1] is not None else None
+            sub = (cfg_data or {}).get("subtract") if isinstance(cfg_data, dict) else None
+            if isinstance(sub, dict):
+                q_min = sub.get("q_min")
+                q_max = sub.get("q_max")
+                if q_min is not None:
+                    q_min = float(q_min)
+                if q_max is not None:
+                    q_max = float(q_max)
+            else:
+                q_min = q_max = None
         except Exception:
             q_min = 4.5
             q_max = 5.5
-        assert q_min is not None and q_max is not None, "config.conf sub.q_range_abs must provide [q_min, q_max]"
+        assert q_min is not None and q_max is not None, "config.conf subtract.q_min/q_max must be set"
         assert _set_form_text_field(bform, name="q_min", text=str(q_min))
         assert _set_form_text_field(bform, name="q_max", text=str(q_max))
         QTest.mouseClick(bw._apply, Qt.LeftButton)  # noqa: SLF001

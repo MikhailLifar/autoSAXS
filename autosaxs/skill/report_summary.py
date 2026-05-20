@@ -3,7 +3,11 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional, List
 
-from .common import SingletonPathExpressionArg, coerce_singleton_path_expression
+from .common import (
+    ConfigPathExpressionArg,
+    SingletonPathExpressionArg,
+    coerce_singleton_path_expression,
+)
 from ..core.utils import _strip_sub_int_prefix, _parse_descriptors_from_results
 from ..core.report_fragments import assemble_summary_markdown
 
@@ -107,6 +111,7 @@ def report_summary(
     directory: SingletonPathExpressionArg,
     output_dir: str = ".",
     *,
+    config_path: Optional[ConfigPathExpressionArg] = None,
     output_path: Optional[str] = None,
     output_md_path: Optional[str] = None,
     write_pdf: bool = True,

@@ -18,13 +18,19 @@ from .deps import (
     run_with_cache,
     write_data,
 )
-from .common import DatPathExpressionArg, coerce_dat_path_expression, expand_files_from_unwrapped
+from .common import (
+    ConfigPathExpressionArg,
+    DatPathExpressionArg,
+    coerce_dat_path_expression,
+    expand_files_from_unwrapped,
+)
 
 
 def plot(
     profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
+    config_path: Optional[ConfigPathExpressionArg] = None,
     guinier_q_min: Optional[float] = None,
     guinier_q_max: Optional[float] = None,
     use_cache: bool = False,

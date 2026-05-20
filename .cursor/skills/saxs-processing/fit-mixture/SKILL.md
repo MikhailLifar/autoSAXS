@@ -75,9 +75,13 @@ Prerequisites:
 
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where the MIXTURE outputs are written.
-- `config_path` (str | None, default `None`): Path to the autosaxs YAML config (must include a `mixture` section). Required for this skill.
-- `q_min_nm` (float | None, default `None`): Optional q minimum bound (nm^-1) for the fitting range.
-- `q_max_nm` (float | None, default `None`): Optional q maximum bound (nm^-1) for the fitting range.
+- `config_path` (str | None, default `None`): Optional path to a YAML config file with a `fit_mixture` section. When omitted, bundled defaults apply.
+- `q_min_nm` / `q_max_nm` (float | None): Optional q bounds (nm^-1); set via CLI or user config (not in bundled template).
+- `maxit`, `max_nph`: MIXTURE parameters; defaults from bundled `fit_mixture` section when omitted.
+- `r_min` (float | None): MIXTURE minimum radius (nm). If omitted, defaults to `0.1`. Converted to Å internally for ATSAS MIXTURE.
+- `r_max` (float | None): MIXTURE maximum radius (nm). If omitted, defaults to `rmax_nm` from in-process `fit_sizes`.
+- `poly_min` (float | None): MIXTURE minimum polydispersity (nm). If omitted, defaults to `0.05`.
+- `poly_max` (float | None): MIXTURE maximum polydispersity (nm). If omitted, defaults to `0.5 × r_max`.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 Important constraint:
@@ -102,7 +106,6 @@ from autosaxs.skill import fit_mixture
 out = fit_mixture(
     profile="subtracted/sub_sample_01.dat",
     output_dir="mixture",
-    config_path="config_autosaxs.yml",
     q_min_nm=0.8,
     q_max_nm=2.5,
     use_cache=False,
@@ -114,5 +117,5 @@ print(out["results_csv_path"])
 ### CLI usage
 
 ```bash
-autosaxs fit-mixture subtracted/sub_sample_01.dat --output-dir mixture --config-path config_autosaxs.yml       --q-min-nm 0.8 --q-max-nm 2.5
+autosaxs fit-mixture subtracted/sub_sample_01.dat --output-dir mixture --q-min-nm 0.8 --q-max-nm 2.5
 ```

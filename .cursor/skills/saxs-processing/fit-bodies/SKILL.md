@@ -71,8 +71,9 @@ SAXS / small-angle x-ray scattering: run ATSAS `bodies` shape fitting for multip
 
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where `bodies` outputs are written.
+- `config_path` (str | None, default `None`): Optional YAML config path for CLI parity; this skill does not read a `fit_bodies` section (no bundled defaults).
 - `shapes` (list[str] | None, default `None`): Subset of body model names to fit (`BODIES_SHAPES_LIST`). `None` or empty means fit **all** models (single `bodies` invocation). A non-empty list runs `bodies --body=...` per shape.
-- `first` (int | None, default `None`): Passed to `bodies` as `--first` (1-based data point index). Omitted when `None`.
+- `first` (int | None, default `None`): Passed to `bodies` as `--first` (1-based data point index). If omitted, taken from the low-q end of the Guinier interval from in-process `fit_guinier`.
 - `last` (int | None, default `None`): Passed to `bodies` as `--last` (1-based data point index). Omitted when `None`.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
@@ -82,7 +83,7 @@ SAXS / small-angle x-ray scattering: run ATSAS `bodies` shape fitting for multip
 
 - `output_subdir`: Directory containing the exported `bodies` fit artifacts.
 
-The directory typically contains multiple per-shape FIT files plus aggregated `bodies_fits.yml` and `bodies_fits.csv` if any shapes successfully fit.
+The directory typically contains multiple per-shape FIT files plus aggregated `bodies_fits.yml` and `bodies_fits.csv` if any shapes successfully fit. Each fitted shape also gets `{shape}_pr.dat` and `{shape}_pr.png` (GNOM-style p(r) from the voxel DAM used for 3D views, via Monte Carlo bead-pair sampling).
 
 ### Python usage
 

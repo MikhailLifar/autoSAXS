@@ -16,13 +16,19 @@ from .deps import (
     read_from_tiff,
     run_with_cache,
 )
-from .common import TiffPathExpressionArg, coerce_path_expression, expand_files_from_unwrapped
+from .common import (
+    ConfigPathExpressionArg,
+    TiffPathExpressionArg,
+    coerce_path_expression,
+    expand_files_from_unwrapped,
+)
 
 
 def plot_2d(
     image: TiffPathExpressionArg,
     output_dir: str = ".",
     *,
+    config_path: Optional[ConfigPathExpressionArg] = None,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """

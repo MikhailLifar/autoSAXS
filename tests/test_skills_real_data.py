@@ -5,7 +5,7 @@ compare integrated 1D curves to reference .chi, subtracted curves to reference s
 Prerequisites:
   - Run scripts/setup_validation_data.py once to create validation/ and copy/rename data.
   - validation/ must contain raw/*_calib.tif, raw/*_buffer.tif, raw/*_sample.tif,
-    reference/*.chi, reference_subtracted/sub_*.dat, and config.conf. Place a mask file (e.g. mask*.msk) in validation/.
+    reference/*.chi, reference_subtracted/sub_*.dat, config.conf (skill-keyed YAML), and a mask file (e.g. mask*.msk).
 
 Metric: int_{q0}^{qmax} 2 * |I1(q) - I2(q)| / (|I1(q)|*|I2(q)| + eps)
 
@@ -21,7 +21,6 @@ import glob
 import re
 import csv
 import shutil
-from typing import Any, cast
 import pytest
 import numpy as np
 import matplotlib
@@ -33,11 +32,21 @@ _REPOS = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _REPOS not in sys.path:
     sys.path.insert(0, _REPOS)
 
-from autosaxs import api
-from autosaxs.core.utils import read_saxs, read_chi, read_reference_sub_dat, integration_comparison_metric
+from autosaxs.core.utils import (
+    integration_comparison_metric,
+    map_sample_files_to_buffer_files,
+    read_chi,
+    read_reference_sub_dat,
+    read_saxs,
+)
+from autosaxs.skill.calibrate import calibrate
+from autosaxs.skill.integrate import integrate
+from autosaxs.skill.subtract import subtract
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(_REPOS, ".."))
 VALIDATION_DIR = os.path.join(WORKSPACE_ROOT, "validation")
+RAW_DIR = os.path.join(VALIDATION_DIR, "raw")
+CONFIG_PATH = os.path.join(VALIDATION_DIR, "config.conf")
 AVERAGED_DIR = os.path.join(VALIDATION_DIR, "averaged")
 SUBTRACTED_DIR = os.path.join(VALIDATION_DIR, "subtracted")
 REFERENCE_DIR = os.path.join(VALIDATION_DIR, "reference")
@@ -204,16 +213,96 @@ def _pipeline_sub_path_for_sample_basename(sample_basename: str) -> str:
     return path if os.path.isfile(path) else ""
 
 
-def run_calibration_integration_subtraction(mask_choice="f"):
-    """Run pipeline with calibration, integration, and subtraction steps.
-    mask_choice: 'f' = from file (use validation/mask*), 'c' = combine with automask, 'a' = automask only.
-    """
-    cast(Any, api).fast_first_processing(
-        VALIDATION_DIR,
-        steps=["calibration", "integration", "subtraction"],
-        mask_choice=mask_choice,
-        fast_forward=False,
+def _validation_calib_tif() -> str:
+    paths = sorted(glob.glob(os.path.join(RAW_DIR, "*_calib.tif")))
+    if not paths:
+        raise FileNotFoundError(f"No calibration TIFF in {RAW_DIR}")
+    return paths[0]
+
+
+def _validation_mask_path() -> str:
+    paths = sorted(
+        p
+        for p in glob.glob(os.path.join(VALIDATION_DIR, "mask*"))
+        if os.path.isfile(p)
     )
+    if not paths:
+        raise FileNotFoundError(f"No mask file matching mask* in {VALIDATION_DIR}")
+    return paths[0]
+
+
+_MASK_MODE_BY_CHOICE = {"f": "from_file", "c": "combined", "a": "auto"}
+
+
+def run_calibration_integration_subtraction(mask_choice="f", *, run_subtraction: bool = True):
+    """Run calibrate → integrate → subtract via skills (no interactive pipeline).
+
+    mask_choice: 'f' = from file (validation/mask*), 'c' = combine with automask, 'a' = automask only.
+    """
+    if mask_choice not in _MASK_MODE_BY_CHOICE:
+        raise ValueError(f"mask_choice must be one of {sorted(_MASK_MODE_BY_CHOICE)}; got {mask_choice!r}")
+
+    calib_image = _validation_calib_tif()
+    mask_mode = _MASK_MODE_BY_CHOICE[mask_choice]
+    mask_path = _validation_mask_path() if mask_choice in ("f", "c") else None
+
+    out_cal = calibrate(
+        calib_image,
+        VALIDATION_DIR,
+        config_path=CONFIG_PATH,
+        mask=mask_path,
+        mask_mode=mask_mode,
+        use_cache=False,
+    )
+    integrator_dir = out_cal["integrator_dir"]
+
+    buffer_paths = sorted(glob.glob(os.path.join(RAW_DIR, "*_buffer.tif")))
+    sample_paths = sorted(glob.glob(os.path.join(RAW_DIR, "*_sample.tif")))
+    os.makedirs(AVERAGED_DIR, exist_ok=True)
+
+    if buffer_paths:
+        integrate(
+            buffer_paths,
+            integrator_dir,
+            AVERAGED_DIR,
+            config_path=CONFIG_PATH,
+            use_cache=False,
+        )
+    if sample_paths:
+        integrate(
+            sample_paths,
+            integrator_dir,
+            AVERAGED_DIR,
+            config_path=CONFIG_PATH,
+            use_cache=False,
+        )
+
+    if not run_subtraction:
+        return
+
+    buffer_1d = sorted(glob.glob(os.path.join(AVERAGED_DIR, "int_*_buffer.dat")))
+    sample_1d = sorted(glob.glob(os.path.join(AVERAGED_DIR, "int_*_sample.dat")))
+    if not sample_1d:
+        raise FileNotFoundError(f"No integrated sample curves in {AVERAGED_DIR}")
+
+    alignment = map_sample_files_to_buffer_files(sample_1d, buffer_1d)
+    if alignment["overlapped"] or alignment["not_paired"]:
+        overlap_str = "\n".join([", ".join(p) for p in alignment["overlapped"]])
+        not_paired_str = "\n".join(alignment["not_paired"])
+        raise RuntimeError(
+            "Buffer-sample alignment failed for validation 1D curves.\n"
+            f"Overlapped: {overlap_str}\nNot paired: {not_paired_str}"
+        )
+
+    os.makedirs(SUBTRACTED_DIR, exist_ok=True)
+    for sample_path, buffer_path in alignment["aligned_pairs"]:
+        subtract(
+            sample_path,
+            buffer_path,
+            SUBTRACTED_DIR,
+            config_path=CONFIG_PATH,
+            use_cache=False,
+        )
 
 
 def _plot_comparison(q_ref, I_ref, q_pipe, I_pipe, metric, base, ref_label, pipe_label, out_dir, log_scale=True):
@@ -329,11 +418,11 @@ def compare_and_plot_subtracted():
 
 
 def test_calib_integration_validation():
-    """Pytest entry: run pipeline (calib+integration) and compare to reference .chi."""
+    """Pytest entry: run calibrate+integrate and compare to reference .chi."""
     _reset_validation_plots_dir()
     _reset_validation_plots_subdir("integrated")
     old_int = _read_metrics_csv(METRICS_INTEGRATED_CSV)
-    run_calibration_integration_subtraction()
+    run_calibration_integration_subtraction(run_subtraction=False)
     results_int, metrics_rows = compare_and_plot_integrated()
     assert len(results_int) > 0, "No pipeline outputs could be matched to reference .chi files"
     ok = _compare_metrics(old_int, metrics_rows, label="Integrated")
@@ -345,7 +434,7 @@ def test_calib_integration_validation():
 
 
 def test_calib_integration_subtraction_validation():
-    """Pytest entry: run pipeline (calib+integration+subtraction) and compare to reference sub_*.dat."""
+    """Pytest entry: run calibrate+integrate+subtract and compare to reference sub_*.dat."""
     _reset_validation_plots_dir()
     _reset_validation_plots_subdir("subtracted")
     old_sub = _read_metrics_csv(METRICS_SUBTRACTED_CSV)

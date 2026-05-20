@@ -11,6 +11,11 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from autosaxs.core.pddf import (
+    pddf_from_bodies_shape,
+    save_pddf_dat,
+    save_pddf_png,
+)
 from .deps import (
     EventBus,
     EventType,
@@ -24,7 +29,12 @@ from .deps import (
     run_with_cache,
     write_saxs_atsas_format,
 )
-from .common import DatPathExpressionArg, coerce_dat_path_expression, expand_files_from_unwrapped
+from .common import (
+    ConfigPathExpressionArg,
+    DatPathExpressionArg,
+    coerce_dat_path_expression,
+    expand_files_from_unwrapped,
+)
 
 
 def _write_bodies_invoke_log(output_dir: str, commands: List[List[str]]) -> None:
@@ -49,6 +59,7 @@ def fit_bodies(
     profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
+    config_path: Optional[ConfigPathExpressionArg] = None,
     shapes: Optional[List[str]] = None,
     first: Optional[int] = None,
     last: Optional[int] = None,
@@ -61,6 +72,7 @@ def fit_bodies(
 
     - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
     - `output_dir` (str, default `.`): Directory where `bodies` outputs are written.
+    - `config_path` (str | None, default `None`): Optional YAML config path for CLI parity; this skill does not read a `fit_bodies` section (no bundled defaults).
     - `shapes` (list[str] | None, default `None`): Subset of body model names to fit (`BODIES_SHAPES_LIST`). `None` or empty means fit **all** models (single `bodies` invocation). A non-empty list runs `bodies --body=...` per shape.
     - `first` (int | None, default `None`): Passed to `bodies` as `--first` (1-based data point index). If omitted, taken from the low-q end of the Guinier interval from in-process `fit_guinier`.
     - `last` (int | None, default `None`): Passed to `bodies` as `--last` (1-based data point index). Omitted when `None`.
@@ -72,7 +84,7 @@ def fit_bodies(
 
     - `output_subdir`: Directory containing the exported `bodies` fit artifacts.
 
-    The directory typically contains multiple per-shape FIT files plus aggregated `bodies_fits.yml` and `bodies_fits.csv` if any shapes successfully fit.
+    The directory typically contains multiple per-shape FIT files plus aggregated `bodies_fits.yml` and `bodies_fits.csv` if any shapes successfully fit. Each fitted shape also gets `{shape}_pr.dat` and `{shape}_pr.png` (GNOM-style p(r) from the voxel DAM used for 3D views, via Monte Carlo bead-pair sampling).
 
     ### Python usage
 
@@ -97,6 +109,10 @@ def fit_bodies(
     autosaxs fit_bodies subtracted/sub_sample_01.dat --output-dir bodies --shapes cylinder ellipsoid --first 10 --last 120
     ```
     """
+    _ = config_path
+    shapes_norm: Optional[List[str]] = None
+    if shapes:
+        shapes_norm = list(shapes)
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
     profile = coerce_dat_path_expression(profile)
@@ -105,9 +121,6 @@ def fit_bodies(
         if Path(p).suffix.lower() != ".dat":
             raise ValueError("fit_bodies input files must have .dat extension")
     input_batch = [{"profile": p} for p in expanded_profiles]
-    shapes_norm: Optional[List[str]] = None
-    if shapes:
-        shapes_norm = list(shapes)
     return _fit_bodies_paths(
         input_paths=input_batch[0] if len(input_batch) == 1 else input_batch,
         output_dir=output_dir,
@@ -353,6 +366,22 @@ def _fit_bodies_paths(
             I_fit_interp,
             plotFilePath=os.path.join(output_dir, f"{shape}_view.png"),
         )
+        if params_dict:
+            try:
+                r_pr, p_pr = pddf_from_bodies_shape(shape, params_dict)
+                save_pddf_dat(os.path.join(output_dir, f"{shape}_pr.dat"), r_pr, p_pr)
+                save_pddf_png(
+                    os.path.join(output_dir, f"{shape}_pr.png"),
+                    r_pr,
+                    p_pr,
+                    title=f"BODIES {shape} p(r)",
+                )
+            except Exception as exc:
+                if event_bus:
+                    event_bus.publish(
+                        EventType.MESSAGE,
+                        {"text": f"fit_bodies: p(r) not written for {shape!r} ({exc})"},
+                    )
     bodies_fits_yml = os.path.join(output_dir, "bodies_fits.yml")
     bodies_fits_csv = os.path.join(output_dir, "bodies_fits.csv")
     bodies_fits_png = os.path.join(output_dir, f"{base}_fits.png")

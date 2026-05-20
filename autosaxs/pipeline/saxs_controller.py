@@ -722,11 +722,13 @@ class Controller:
                 if mask_path:
                     context.append_path('calib_mask', mask_path)
             if calibrant_path:
+                mask_mode = context["mask_config", "mode"]
                 out_cal = calibrate(
                     calibrant_path,
-                    config_path,
                     directory,
+                    config_path=config_path,
                     mask=mask_path,
+                    mask_mode=mask_mode,
                     use_cache=fast_forward,
                 )
                 integrator_dir = out_cal['integrator_dir']

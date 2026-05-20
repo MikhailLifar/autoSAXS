@@ -52,7 +52,7 @@ Helper subcommands ship files from the package into a directory of your choice:
 
 - `autosaxs get-readme` — write the generated skills README (`README.md`) into `--output-dir`
 - `autosaxs get-skills` — replace the entire `saxs-processing/` directory under `--output-dir`, then write a SAXS orchestrator `SKILL.md` plus nested leaf `SKILL.md` files (from skill docstrings); subskills are indexed in the orchestrator file
-- `autosaxs get-default-config` — copy the bundled default `config_base.conf` into `--output-dir`
+- `autosaxs get-default-config` — copy the bundled default `config_base.conf` (skill-keyed YAML) into `--output-dir` for optional overrides; skills use bundled defaults when `--conf` is omitted
 
 Example:
 

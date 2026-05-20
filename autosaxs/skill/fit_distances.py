@@ -27,7 +27,12 @@ from .deps import (
     run_with_cache,
     write_saxs_atsas_format,
 )
-from .common import DatPathExpressionArg, coerce_dat_path_expression, expand_files_from_unwrapped
+from .common import (
+    ConfigPathExpressionArg,
+    DatPathExpressionArg,
+    coerce_dat_path_expression,
+    expand_files_from_unwrapped,
+)
 from .fit_guinier.guinier import run_guinier_analysis
 
 
@@ -35,6 +40,7 @@ def fit_distances(
     profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
+    config_path: Optional[ConfigPathExpressionArg] = None,
     rg_nm: Optional[float] = None,
     first: Optional[int] = None,
     last: Optional[int] = None,

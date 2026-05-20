@@ -210,11 +210,11 @@ SAXS / small-angle x-ray scattering: calibrate detector geometry using a calibra
 ### Arguments
 
 - `calib_image` (str): Path to the calibration image (e.g. TIFF) used for ring analysis.
-- `config_path` (str): Path to the autosaxs calibration config file. The config must include data required by the ring analysis and detector geometry refinement.
 - `output_dir` (str, default `.`): Directory where results are written.
+- `config_path` (str | None, default `None`): Optional path to a YAML config file with a `calibrate` section. When omitted, bundled defaults from the installed `autosaxs` package are used.
 - `mask` (str | None, default `None`): Optional path to a mask used during ring analysis. Supports .txt (NuPy format), .msk (Fit2d)
-- `mask_mode` (str, default `"f"`): Mask mode selector. One of `f/from_file`, `a/auto`, `c/combined`.
-- `calibrant` (str, default `"AgBh"`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`).
+- `mask_mode` (str | None, default `None`): Mask mode selector (`f`/`from_file`, `a`/`auto`, `c`/`combined`). Defaults come from config when omitted.
+- `calibrant` (str | None, default `None`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`). Defaults come from config when omitted.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 Important constraints:
@@ -238,11 +238,9 @@ from autosaxs.skill import calibrate
 
 out = calibrate(
     calib_image="AgBh.tif",
-    config_path="config_autocalib.yml",
     output_dir="calibration",
     mask="mask.msk",
     mask_mode="f",
-    calibrant="AgBh",
     use_cache=False,
 )
 
@@ -253,7 +251,8 @@ print(out["refined_path"])
 ### CLI usage
 
 ```bash
-autosaxs calibrate AgBh.tif config_autocalib.yml --output-dir calibration --mask mask.msk
+autosaxs calibrate AgBh.tif --output-dir calibration --mask mask.msk
+autosaxs calibrate AgBh.tif --conf my_config.conf --output-dir calibration
 ```
 
 ---
@@ -368,11 +367,12 @@ or legacy `match_tail`, optionally restricted to a q window (`q_min` / `q_max`).
 - `sample_1d` (str): Sample path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `buffer_1d` (str): Path to the buffer 1D `.dat` curve (must be an existing file).
 - `output_dir` (str, default `.`): Directory where subtraction outputs are written.
-- `method` (str, default `"point_match"`): `point_match` or `match_tail`.
-- `q_min` (float | None, default `None`): Lower bound of q-range for fitting/scaling.
+- `config_path` (str | None, default `None`): Optional path to a YAML config file with a `subtract` section. When omitted, bundled defaults apply for method/forms; q-window keys come from CLI or user file only.
+- `method` (str | None, default `None`): `point_match` or `match_tail`. Defaults from bundled config when omitted.
+- `q_min` (float | None, default `None`): Lower bound of q-range (CLI or user config; not in bundled template).
 - `q_max` (float | None, default `None`): Upper bound of q-range; for `point_match` the match uses this as q intersect (upper edge of the window).
-- `sample_form` / `buffer_form` (str): For `point_match` only — each is `linear`, `Porod`, or `Porod-plus-linear`.
-- `point_match_factor` (float, default `0.995`): For `point_match`, scale satisfies `point_match_factor * I_sample_fit(q_max) = scale * I_buffer_fit(q_max)`.
+- `sample_form` / `buffer_form` (str | None): For `point_match` only — each is `linear`, `Porod`, or `Porod-plus-linear`.
+- `point_match_factor` (float | None, default `None`): For `point_match`, scale satisfies `point_match_factor * I_sample_fit(q_max) = scale * I_buffer_fit(q_max)`.
 - `scaling_factor` (float | None, default `None`): If provided, overrides automatic scaling and uses this factor directly (must be finite and > 0).
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
@@ -677,9 +677,13 @@ Prerequisites:
 
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where the MIXTURE outputs are written.
-- `config_path` (str | None, default `None`): Path to the autosaxs YAML config (must include a `mixture` section). Required for this skill.
-- `q_min_nm` (float | None, default `None`): Optional q minimum bound (nm^-1) for the fitting range.
-- `q_max_nm` (float | None, default `None`): Optional q maximum bound (nm^-1) for the fitting range.
+- `config_path` (str | None, default `None`): Optional path to a YAML config file with a `fit_mixture` section. When omitted, bundled defaults apply.
+- `q_min_nm` / `q_max_nm` (float | None): Optional q bounds (nm^-1); set via CLI or user config (not in bundled template).
+- `maxit`, `max_nph`: MIXTURE parameters; defaults from bundled `fit_mixture` section when omitted.
+- `r_min` (float | None): MIXTURE minimum radius (nm). If omitted, defaults to `0.1`. Converted to Å internally for ATSAS MIXTURE.
+- `r_max` (float | None): MIXTURE maximum radius (nm). If omitted, defaults to `rmax_nm` from in-process `fit_sizes`.
+- `poly_min` (float | None): MIXTURE minimum polydispersity (nm). If omitted, defaults to `0.05`.
+- `poly_max` (float | None): MIXTURE maximum polydispersity (nm). If omitted, defaults to `0.5 × r_max`.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 Important constraint:
@@ -704,7 +708,6 @@ from autosaxs.skill import fit_mixture
 out = fit_mixture(
     profile="subtracted/sub_sample_01.dat",
     output_dir="mixture",
-    config_path="config_autosaxs.yml",
     q_min_nm=0.8,
     q_max_nm=2.5,
     use_cache=False,
@@ -716,7 +719,7 @@ print(out["results_csv_path"])
 ### CLI usage
 
 ```bash
-autosaxs fit-mixture subtracted/sub_sample_01.dat --output-dir mixture --config-path config_autosaxs.yml       --q-min-nm 0.8 --q-max-nm 2.5
+autosaxs fit-mixture subtracted/sub_sample_01.dat --output-dir mixture --q-min-nm 0.8 --q-max-nm 2.5
 ```
 
 ---
@@ -729,6 +732,7 @@ SAXS / small-angle x-ray scattering: run ATSAS `bodies` shape fitting for multip
 
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where `bodies` outputs are written.
+- `config_path` (str | None, default `None`): Optional YAML config path for CLI parity; this skill does not read a `fit_bodies` section (no bundled defaults).
 - `shapes` (list[str] | None, default `None`): Subset of body model names to fit (`BODIES_SHAPES_LIST`). `None` or empty means fit **all** models (single `bodies` invocation). A non-empty list runs `bodies --body=...` per shape.
 - `first` (int | None, default `None`): Passed to `bodies` as `--first` (1-based data point index). If omitted, taken from the low-q end of the Guinier interval from in-process `fit_guinier`.
 - `last` (int | None, default `None`): Passed to `bodies` as `--last` (1-based data point index). Omitted when `None`.
@@ -740,7 +744,7 @@ SAXS / small-angle x-ray scattering: run ATSAS `bodies` shape fitting for multip
 
 - `output_subdir`: Directory containing the exported `bodies` fit artifacts.
 
-The directory typically contains multiple per-shape FIT files plus aggregated `bodies_fits.yml` and `bodies_fits.csv` if any shapes successfully fit.
+The directory typically contains multiple per-shape FIT files plus aggregated `bodies_fits.yml` and `bodies_fits.csv` if any shapes successfully fit. Each fitted shape also gets `{shape}_pr.dat` and `{shape}_pr.png` (GNOM-style p(r) from the voxel DAM used for 3D views, via Monte Carlo bead-pair sampling).
 
 ### Python usage
 
@@ -769,13 +773,13 @@ autosaxs fit_bodies subtracted/sub_sample_01.dat --output-dir bodies --shapes cy
 
 ## `fit_dammif`
 
-SAXS / small-angle x-ray scattering: run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile (shape reconstruction / bead model). If a GNOM output file is available, you can provide it; otherwise the profile is used.
+SAXS / small-angle x-ray scattering: run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile (shape reconstruction / bead model). When no GNOM `.out` is supplied, `fit_distances` is run in-process to obtain one.
 
 ### Arguments
 
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where `dammif` outputs are written.
-- `gnom_path` (str | None, default `None`): Optional path to a GNOM `.out` file. If provided, `dammif` uses it.
+- `gnom_path` (str | None, default `None`): Optional path to a GNOM/DATGNOM `.out` file for DAMMIF. If omitted, `fit_distances` is run in-process on `profile` and its `best_gnom_out_path` is used.
 - `dammif_reps_num` (int, default `1`): Number of independent DAMMIF runs (replicas) to execute.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
@@ -783,7 +787,7 @@ SAXS / small-angle x-ray scattering: run ATSAS `dammif` (ab initio shape reconst
 
 `dict[str, str]` with:
 
-- `output_subdir`: Directory containing `dammif` fit artifacts (FIR/CIF and summary files).
+- `output_subdir`: Directory containing `dammif` fit artifacts (FIR/CIF and summary files). Each replica also gets `{rep}_pr.dat` and `{rep}_pr.png` (GNOM-style p(r) from DAM bead pairs via Monte Carlo).
 
 ### Python usage
 
@@ -804,7 +808,7 @@ print(out["output_subdir"])
 ### CLI usage
 
 ```bash
-autosaxs fit_dammif subtracted/sub_sample_01.dat --output-dir dammif --gnom-path guinier/sample_01_gnom.out --dammif-reps-num 1
+autosaxs fit-dammif subtracted/sub_sample_01.dat --output-dir dammif --dammif-reps-num 1
 ```
 
 ---

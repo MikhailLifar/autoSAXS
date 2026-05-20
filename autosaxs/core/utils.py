@@ -1179,6 +1179,39 @@ def calculate_atoms_density_and_isosurface(
     return density, isosurface_level, min_coords, max_coords
 
 
+def bodies_shape_to_dam_atoms(
+    shape_tuple: Tuple[str, Dict[str, float]],
+    *,
+    grid_size: int = 64,
+) -> Atoms:
+    """
+    Voxel DAM for an ATSAS BODIES shape: dummy atoms at interior grid nodes.
+
+    Uses the same density grid as ``calculate_shape_density_and_isosurface`` / 3D views.
+    """
+    density, isosurface_level, min_coords, max_coords = calculate_shape_density_and_isosurface(
+        shape_tuple,
+        grid_size=int(grid_size),
+    )
+    level = float(isosurface_level)
+    inside = density >= level
+    if not np.any(inside):
+        raise ValueError("bodies_shape_to_dam_atoms: empty shape indicator grid")
+    steps = (np.asarray(max_coords, dtype=float) - np.asarray(min_coords, dtype=float)) / max(
+        int(grid_size) - 1,
+        1,
+    )
+    ii, jj, kk = np.nonzero(inside)
+    coords = np.column_stack(
+        [
+            min_coords[0] + ii.astype(float) * steps[0],
+            min_coords[1] + jj.astype(float) * steps[1],
+            min_coords[2] + kk.astype(float) * steps[2],
+        ]
+    )
+    return Atoms(["C"] * int(coords.shape[0]), positions=coords)
+
+
 def _point_in_cylinder(x: np.ndarray, y: np.ndarray, z: np.ndarray, r: float, h: float) -> np.ndarray:
     """Check if points are inside a cylinder (radius r, height h along z-axis, centered at origin)."""
     r_xy = np.sqrt(x**2 + y**2)

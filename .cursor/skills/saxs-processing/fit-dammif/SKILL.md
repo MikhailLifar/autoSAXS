@@ -1,6 +1,6 @@
 ---
 name: fit-dammif
-description: SAXS / small-angle x-ray scattering: run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile (shape reconstruction / bead model). If a GNOM output file is available, you can provide it; otherwise the profile is used.
+description: SAXS / small-angle x-ray scattering: run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile (shape reconstruction / bead model). When no GNOM `.out` is supplied, `fit_distances` is run in-process to obtain one.
 catalog-hidden: true
 ---
 
@@ -65,13 +65,13 @@ See the docstring section **Returns** below.
 
 ## Autosaxs skill docstring
 
-SAXS / small-angle x-ray scattering: run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile (shape reconstruction / bead model). If a GNOM output file is available, you can provide it; otherwise the profile is used.
+SAXS / small-angle x-ray scattering: run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile (shape reconstruction / bead model). When no GNOM `.out` is supplied, `fit_distances` is run in-process to obtain one.
 
 ### Arguments
 
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where `dammif` outputs are written.
-- `gnom_path` (str | None, default `None`): Optional path to a GNOM `.out` file. If provided, `dammif` uses it.
+- `gnom_path` (str | None, default `None`): Optional path to a GNOM/DATGNOM `.out` file for DAMMIF. If omitted, `fit_distances` is run in-process on `profile` and its `best_gnom_out_path` is used.
 - `dammif_reps_num` (int, default `1`): Number of independent DAMMIF runs (replicas) to execute.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
@@ -79,7 +79,7 @@ SAXS / small-angle x-ray scattering: run ATSAS `dammif` (ab initio shape reconst
 
 `dict[str, str]` with:
 
-- `output_subdir`: Directory containing `dammif` fit artifacts (FIR/CIF and summary files).
+- `output_subdir`: Directory containing `dammif` fit artifacts (FIR/CIF and summary files). Each replica also gets `{rep}_pr.dat` and `{rep}_pr.png` (GNOM-style p(r) from DAM bead pairs via Monte Carlo).
 
 ### Python usage
 
@@ -100,5 +100,5 @@ print(out["output_subdir"])
 ### CLI usage
 
 ```bash
-autosaxs fit_dammif subtracted/sub_sample_01.dat --output-dir dammif --gnom-path guinier/sample_01_gnom.out --dammif-reps-num 1
+autosaxs fit-dammif subtracted/sub_sample_01.dat --output-dir dammif --dammif-reps-num 1
 ```

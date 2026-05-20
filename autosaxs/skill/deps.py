@@ -31,6 +31,21 @@ from ..core.processor import (  # noqa: F401
     subtract_buffer,
 )
 
+# Skill-keyed config
+from .config import (  # noqa: F401
+    load_config_file,
+    load_default_config,
+    merge_skill_params,
+    skill_section,
+)
+
+# Skill-keyed config
+from .config import (  # noqa: F401
+    load_default_config,
+    merge_skill_params,
+    skill_section,
+)
+
 # IO + misc helpers
 from ..core.utils import (  # noqa: F401
     calc_chi2,

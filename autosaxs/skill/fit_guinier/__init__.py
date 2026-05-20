@@ -12,7 +12,12 @@ from autosaxs.core.event_bus import EventBus, EventType
 from autosaxs.core.utils import ensure_q_nm, load_saxs_1d_any, write_saxs_atsas_format
 from autosaxs.core.viewer import PLTViewer
 
-from ..common import DatPathExpressionArg, coerce_dat_path_expression, expand_files_from_unwrapped
+from ..common import (
+    ConfigPathExpressionArg,
+    DatPathExpressionArg,
+    coerce_dat_path_expression,
+    expand_files_from_unwrapped,
+)
 from ..skill_wrap import _strip_sub_int_prefix, apply_batch, run_with_cache
 from .guinier import run_guinier_analysis
 
@@ -21,6 +26,7 @@ def fit_guinier(
     profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
+    config_path: Optional[ConfigPathExpressionArg] = None,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """

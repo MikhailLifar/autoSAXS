@@ -17,7 +17,12 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 import yaml
 
-from .common import DatPathExpressionArg, coerce_dat_path_expression, expand_files_from_unwrapped
+from .common import (
+    ConfigPathExpressionArg,
+    DatPathExpressionArg,
+    coerce_dat_path_expression,
+    expand_files_from_unwrapped,
+)
 from .deps import (
     EventBus,
     EventType,
@@ -36,6 +41,7 @@ def fit_sizes(
     profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
+    config_path: Optional[ConfigPathExpressionArg] = None,
     shape: str = "spheres",
     rg_nm: Optional[float] = None,
     rmin_nm: Optional[float] = None,

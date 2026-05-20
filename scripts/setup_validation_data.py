@@ -6,7 +6,7 @@ to follow pipeline conventions:
   - *_ihs\\d+_*.tif (no 'b') -> raw/*_sample.tif
   - *.chi -> reference/ (same basename, for validation)
   - sub_\\d+.dat -> reference_subtracted/ (reference subtracted 1D curves; metadata gives sample/buffer .chi)
-  - config.conf copied from debug/protein_v0_interactive (or similar)
+  - config.conf copied from repos/resources/validation_config.conf (skill-keyed YAML)
   - Mask: place a file matching mask* (e.g. mask_fti2d_1225.msk) in validation/ for calibration.
 """
 import re
@@ -15,11 +15,11 @@ import os
 
 SUB_DAT_PATTERN = re.compile(r"^sub_\d+\.dat$")
 
-# Paths relative to workspace root (KurchatovCoop)
-WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+WORKSPACE_ROOT = os.path.abspath(os.path.join(REPO_DIR, ".."))
 SOURCE_DIR = os.path.join(WORKSPACE_ROOT, "data", "ihs", "06-06-2025", "cell")
 VALIDATION_DIR = os.path.join(WORKSPACE_ROOT, "validation")
-CONFIG_SOURCE = os.path.join(WORKSPACE_ROOT, "debug", "protein_v0_interactive", "config.conf")
+CONFIG_SOURCE = os.path.join(REPO_DIR, "resources", "validation_config.conf")
 
 CALIB_PATTERN = re.compile(r"^(.+)_AgBh\d+_(.+)\.tif$")
 BUFFER_PATTERN = re.compile(r"^(.+_ihs\d+)b_(.+)\.tif$")

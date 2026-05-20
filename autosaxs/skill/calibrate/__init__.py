@@ -10,29 +10,32 @@ import yaml
 from pyFAI.calibrant import ALL_CALIBRANTS
 
 from autosaxs.core.event_bus import EventBus, EventType
-from autosaxs.core.utils import load_config
 from autosaxs.core.viewer import PLTViewer
 
+from ..config import merge_skill_params, resolve_optional_config_path
 from ..skill_wrap import apply_batch, run_with_cache
 from .autocalib import autocalib_ring_analysis
 from ..common import (
     ConfigPathExpressionArg,
     SingletonMaskPathExpressionArg,
     SingletonTiffPathExpressionArg,
-    coerce_config_path_expression,
     coerce_optional_singleton_path_expression,
     coerce_singleton_tiff_path_expression,
 )
 
 
+def _resolve_config_path(config_path: Optional[ConfigPathExpressionArg]) -> Optional[str]:
+    return resolve_optional_config_path(config_path)
+
+
 def calibrate(
     calib_image: SingletonTiffPathExpressionArg,
-    config_path: ConfigPathExpressionArg,
     output_dir: str = ".",
     *,
+    config_path: Optional[ConfigPathExpressionArg] = None,
     mask: Optional[SingletonMaskPathExpressionArg] = None,
-    mask_mode: str = "f",
-    calibrant: str = "AgBh",
+    mask_mode: Optional[str] = None,
+    calibrant: Optional[str] = None,
     use_cache: bool = False,
 ) -> Dict[str, str]:
     """
@@ -41,11 +44,11 @@ def calibrate(
     ### Arguments
 
     - `calib_image` (str): Path to the calibration image (e.g. TIFF) used for ring analysis.
-    - `config_path` (str): Path to the autosaxs calibration config file. The config must include data required by the ring analysis and detector geometry refinement.
     - `output_dir` (str, default `.`): Directory where results are written.
+    - `config_path` (str | None, default `None`): Optional path to a YAML config file with a `calibrate` section. When omitted, bundled defaults from the installed `autosaxs` package are used.
     - `mask` (str | None, default `None`): Optional path to a mask used during ring analysis. Supports .txt (NuPy format), .msk (Fit2d)
-    - `mask_mode` (str, default `"f"`): Mask mode selector. One of `f/from_file`, `a/auto`, `c/combined`.
-    - `calibrant` (str, default `"AgBh"`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`).
+    - `mask_mode` (str | None, default `None`): Mask mode selector (`f`/`from_file`, `a`/`auto`, `c`/`combined`). Defaults come from config when omitted.
+    - `calibrant` (str | None, default `None`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`). Defaults come from config when omitted.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     Important constraints:
@@ -69,11 +72,9 @@ def calibrate(
 
     out = calibrate(
         calib_image="AgBh.tif",
-        config_path="config_autocalib.yml",
         output_dir="calibration",
         mask="mask.msk",
         mask_mode="f",
-        calibrant="AgBh",
         use_cache=False,
     )
 
@@ -84,25 +85,33 @@ def calibrate(
     ### CLI usage
 
     ```bash
-    autosaxs calibrate AgBh.tif config_autocalib.yml --output-dir calibration --mask mask.msk
+    autosaxs calibrate AgBh.tif --output-dir calibration --mask mask.msk
+    autosaxs calibrate AgBh.tif --conf my_config.conf --output-dir calibration
     ```
     """
-    if calibrant not in ALL_CALIBRANTS:
+    cfg_path = _resolve_config_path(config_path)
+    merged = merge_skill_params(
+        "calibrate",
+        config_path=cfg_path,
+        mask_mode=mask_mode,
+        calibrant=calibrant,
+    )
+    calibrant_eff = merged.get("calibrant", "AgBh")
+    if calibrant_eff not in ALL_CALIBRANTS:
         raise ValueError(
-            f"Unknown calibrant '{calibrant}'. "
+            f"Unknown calibrant '{calibrant_eff}'. "
             f"Expected one of pyFAI.calibrant.ALL_CALIBRANTS: {sorted(ALL_CALIBRANTS.keys())}"
         )
+    mask_mode_eff = merged.get("mask_mode", "f")
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
     calib_image = coerce_singleton_tiff_path_expression(calib_image)
-    config_path = coerce_config_path_expression(config_path)
     mask_expr = coerce_optional_singleton_path_expression(mask)
     imgs = calib_image.unwrap()
-    cfg = config_path.unwrap()[0]
     mask_path = mask_expr.unwrap()[0] if mask_expr is not None else None
     input_batch: List[Dict[str, Union[str, List[str]]]] = []
     for im in imgs:
-        inp: Dict[str, Union[str, List[str]]] = {"calib_image": im, "config": cfg}
+        inp: Dict[str, Union[str, List[str]]] = {"calib_image": im}
         if mask_path is not None:
             inp["mask"] = mask_path
         input_batch.append(inp)
@@ -111,18 +120,19 @@ def calibrate(
     return _calibrate_paths(
         input_paths=input_paths,
         output_dir=output_dir,
+        config=merged,
         event_bus=bus,
         use_cache=use_cache,
-        mask_mode=mask_mode,
-        calibrant=calibrant,
+        mask_mode=mask_mode_eff,
+        calibrant=calibrant_eff,
     )  # type: ignore[return-value]
 
 
 @apply_batch(stem_from_keys="calib_image", per_sample_subdir="never")
 @run_with_cache(
-    path_keys_for_hash=["calib_image", "config", "mask"],
+    path_keys_for_hash=["calib_image", "mask"],
     kwargs_for_hash_keys=["calibrant", "mask_mode"],
-    include_config_in_hash=False,
+    include_config_in_hash=True,
 )
 def _calibrate_paths(
     input_paths: Dict[str, Union[str, List[str]]],
@@ -140,12 +150,8 @@ def _calibrate_paths(
         calib_image = calib_image[0] if calib_image else None
     if not calib_image or not os.path.isfile(calib_image):
         raise FileNotFoundError("calibrate requires input_paths['calib_image']")
-    cfg = config
-    if cfg is None and input_paths.get("config"):
-        cfg_path = input_paths["config"] if isinstance(input_paths["config"], str) else input_paths["config"][0]
-        cfg = load_config(cfg_path)
-    if not cfg:
-        raise ValueError("calibrate requires config (in-memory or path in input_paths['config'])")
+    if not config:
+        raise ValueError("calibrate requires config (merged calibrate section)")
     mask_mode_map = {
         "a": "auto",
         "f": "from_file",
@@ -161,7 +167,9 @@ def _calibrate_paths(
             f"Unknown calibrant '{calibrant}'. "
             f"Expected one of pyFAI.calibrant.ALL_CALIBRANTS: {sorted(ALL_CALIBRANTS.keys())}"
         )
-    cfg = dict(cfg)
+    cfg = dict(config)
+    for key in ("mask_mode", "calibrant"):
+        cfg.pop(key, None)
     cfg["calibrant_name"] = calibrant
     cfg_mask_config = dict(cfg.get("mask_config") or {})
     cfg_mask_config["mode"] = mask_mode_map[mask_mode]
@@ -224,4 +232,3 @@ def _calibrate_paths(
         "calibration_curve_plot_path": calibration_curve_plot_path,
         "calibration_mask_path": calibration_mask_path,
     }
-

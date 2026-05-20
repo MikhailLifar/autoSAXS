@@ -250,6 +250,14 @@ class SkillForm(QWidget):
                                 mpath = find_mask_near(ad)
                                 if mpath:
                                     val = str(mpath.resolve())
+                if val is None and opt.name == "config_path" and meta.name == "calibrate":
+                    calib_w = self._pos_widgets[0] if meta.positional_params else None
+                    calib_txt = calib_w.text() if isinstance(calib_w, PathField) else ""
+                    ad = anchor_for_calibrate_config(saved_pos, calib_txt, workdir)
+                    if ad:
+                        cfg = find_config_conf_near(ad)
+                        if cfg:
+                            val = str(cfg.resolve())
                 if val is None and opt.name == "config_path" and meta.name == "fit_mixture":
                     prof_w = self._pos_widgets[0] if meta.positional_params else None
                     profile_txt = prof_w.text() if isinstance(prof_w, PathField) else ""
@@ -290,14 +298,6 @@ class SkillForm(QWidget):
                 found = find_integrator_dir_near(ad)
                 if found:
                     return str(found)
-            return None
-        if skill_name == "calibrate" and param_name == "config_path":
-            calib_txt = resolved_prefix[0] if resolved_prefix else ""
-            ad = anchor_for_calibrate_config(saved_pos, calib_txt, workdir)
-            if ad:
-                cfg = find_config_conf_near(ad)
-                if cfg:
-                    return str(cfg)
             return None
         if skill_name == "subtract" and param_name == "buffer_1d":
             sample_txt = resolved_prefix[0] if resolved_prefix else ""
@@ -421,7 +421,7 @@ class SkillForm(QWidget):
         cfg = find_config_conf_near(ad)
         if cfg is not None:
             self._hints.config_file_path = str(cfg.resolve())
-            w_cfg = self._pos_widgets[1]
+            w_cfg = self._opt_fields.get("config_path")
             if isinstance(w_cfg, PathField):
                 w_cfg.set_text(str(cfg.resolve()))
         mpath = find_mask_near(ad)
@@ -587,7 +587,10 @@ class SkillForm(QWidget):
         options: Dict[str, Any] = {}
         for k, w in self._opt_fields.items():
             if isinstance(w, PathField):
-                options[k] = normalize_pathish(w.text())
+                raw = normalize_pathish(w.text())
+                if not str(raw).strip():
+                    continue
+                options[k] = raw
             elif isinstance(w, QCheckBox):
                 options[k] = w.isChecked()
             elif isinstance(w, QLineEdit):

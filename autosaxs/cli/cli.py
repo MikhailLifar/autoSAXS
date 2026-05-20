@@ -380,6 +380,15 @@ def _add_skill_subparser(
             if param.name == "output_dir":
                 p.add_argument("--output-dir", dest="output_dir", default=param.default, help="Output directory")
                 continue
+            if param.name == "config_path":
+                p.add_argument(
+                    "--config-path",
+                    "--conf",
+                    dest="config_path",
+                    default=param.default,
+                    help="Optional YAML config file (skill-keyed sections); bundled defaults apply when omitted",
+                )
+                continue
 
             ann = type_hints.get(param.name, param.annotation)
 

@@ -10,6 +10,11 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from autosaxs.core.pddf import (
+    pddf_from_dammif_atoms,
+    save_pddf_dat,
+    save_pddf_png,
+)
 from .deps import (
     EventBus,
     EventType,
@@ -24,6 +29,7 @@ from .deps import (
     run_with_cache,
 )
 from .common import (
+    ConfigPathExpressionArg,
     DatPathExpressionArg,
     SingletonPathExpressionArg,
     coerce_dat_path_expression,
@@ -36,18 +42,19 @@ def fit_dammif(
     profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
+    config_path: Optional[ConfigPathExpressionArg] = None,
     gnom_path: Optional[SingletonPathExpressionArg] = None,
     dammif_reps_num: int = 1,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    SAXS / small-angle x-ray scattering: run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile (shape reconstruction / bead model). If a GNOM output file is available, you can provide it; otherwise the profile is used.
+    SAXS / small-angle x-ray scattering: run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile (shape reconstruction / bead model). When no GNOM `.out` is supplied, `fit_distances` is run in-process to obtain one.
 
     ### Arguments
 
     - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
     - `output_dir` (str, default `.`): Directory where `dammif` outputs are written.
-    - `gnom_path` (str | None, default `None`): Optional path to a GNOM `.out` file. If provided, `dammif` uses it.
+    - `gnom_path` (str | None, default `None`): Optional path to a GNOM/DATGNOM `.out` file for DAMMIF. If omitted, `fit_distances` is run in-process on `profile` and its `best_gnom_out_path` is used.
     - `dammif_reps_num` (int, default `1`): Number of independent DAMMIF runs (replicas) to execute.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
@@ -55,7 +62,7 @@ def fit_dammif(
 
     `dict[str, str]` with:
 
-    - `output_subdir`: Directory containing `dammif` fit artifacts (FIR/CIF and summary files).
+    - `output_subdir`: Directory containing `dammif` fit artifacts (FIR/CIF and summary files). Each replica also gets `{rep}_pr.dat` and `{rep}_pr.png` (GNOM-style p(r) from DAM bead pairs via Monte Carlo).
 
     ### Python usage
 
@@ -76,7 +83,7 @@ def fit_dammif(
     ### CLI usage
 
     ```bash
-    autosaxs fit_dammif subtracted/sub_sample_01.dat --output-dir dammif --gnom-path guinier/sample_01_gnom.out --dammif-reps-num 1
+    autosaxs fit-dammif subtracted/sub_sample_01.dat --output-dir dammif --dammif-reps-num 1
     ```
     """
     bus = EventBus()
@@ -103,6 +110,42 @@ def fit_dammif(
     )
 
 
+def _gnom_path_from_fit_distances(
+    profile: str,
+    output_dir: str,
+    event_bus: Optional[EventBus],
+) -> str:
+    """Run fit_distances in-process and return the selected DATGNOM ``.out`` path."""
+    from .fit_distances import _fit_distances_paths
+
+    distances_dir = os.path.join(output_dir, "_fit_distances_for_dammif")
+    if event_bus:
+        event_bus.publish(EventType.MESSAGE, {"text": "fit_dammif: running fit_distances (in-process)…"})
+    result = _fit_distances_paths(
+        input_paths={"profile": profile},
+        output_dir=distances_dir,
+        rg_nm=None,
+        first=None,
+        last=None,
+        smooth=None,
+        event_bus=event_bus,
+        use_cache=False,
+        per_sample_subdir_override="never",
+    )
+    gnom_path = result.get("best_gnom_out_path")
+    if not gnom_path or not os.path.isfile(str(gnom_path)):
+        raise RuntimeError("fit_dammif: fit_distances did not produce best_gnom_out_path; cannot run DAMMIF.")
+    gnom_path = os.path.normpath(os.path.abspath(os.path.expanduser(str(gnom_path))))
+    if not os.path.isfile(gnom_path):
+        raise RuntimeError(f"fit_dammif: GNOM .out not found after resolve: {gnom_path}")
+    if event_bus:
+        event_bus.publish(
+            EventType.MESSAGE,
+            {"text": f"fit_dammif: fit_distances completed (gnom={os.path.basename(str(gnom_path))})."},
+        )
+    return str(gnom_path)
+
+
 @apply_batch(stem_from_keys="profile", per_sample_subdir="always")
 @run_with_cache(
     path_keys_for_hash=["profile", "gnom_path"],
@@ -123,20 +166,22 @@ def _fit_dammif_paths(
     if int(dammif_reps_num) < 1:
         raise ValueError("dammif_reps_num must be >= 1")
     profile = input_paths.get("profile")
-    gnom_path = input_paths.get("gnom_path") or profile
+    user_gnom_path = input_paths.get("gnom_path")
     if isinstance(profile, list):
         profile = profile[0] if profile else None
-    if isinstance(gnom_path, list):
-        gnom_path = gnom_path[0] if gnom_path else None
-    gnom_path = os.path.expanduser(str(gnom_path)) if gnom_path else gnom_path
+    if isinstance(user_gnom_path, list):
+        user_gnom_path = user_gnom_path[0] if user_gnom_path else None
     if profile is not None:
         profile = os.path.expanduser(str(profile))
-    if not gnom_path or not os.path.isfile(gnom_path):
-        raise FileNotFoundError("fit_dammif requires input_paths['profile'] or input_paths['gnom_path']")
-    # DAMMIF runs with cwd=output_dir; pass absolute paths into ATSAS (same issue as fit_bodies).
-    gnom_path = os.path.normpath(os.path.abspath(gnom_path))
-    if profile:
-        profile = os.path.normpath(os.path.abspath(profile))
+    if not profile or not os.path.isfile(profile):
+        raise FileNotFoundError("fit_dammif requires input_paths['profile']")
+
+    profile = os.path.normpath(os.path.abspath(profile))
+    if user_gnom_path:
+        gnom_path = os.path.normpath(os.path.abspath(os.path.expanduser(str(user_gnom_path))))
+    else:
+        gnom_path = _gnom_path_from_fit_distances(profile, output_dir, event_bus)
+
     if not os.path.isfile(gnom_path):
         raise FileNotFoundError(f"fit_dammif gnom_path not found after resolve: {gnom_path}")
     if event_bus:
@@ -210,6 +255,21 @@ def _fit_dammif_paths(
                 I_fit_interp,
                 plotFilePath=os.path.join(output_dir, f"{rep_tag}_view.png"),
             )
+            try:
+                r_pr, p_pr = pddf_from_dammif_atoms(atoms)
+                save_pddf_dat(os.path.join(output_dir, f"{rep_tag}_pr.dat"), r_pr, p_pr)
+                save_pddf_png(
+                    os.path.join(output_dir, f"{rep_tag}_pr.png"),
+                    r_pr,
+                    p_pr,
+                    title=f"DAMMIF {rep_tag} p(r)",
+                )
+            except Exception as exc:
+                if event_bus:
+                    event_bus.publish(
+                        EventType.MESSAGE,
+                        {"text": f"fit_dammif: p(r) not written for {rep_tag!r} ({exc})"},
+                    )
     dammif_fits_yml = os.path.join(output_dir, "dammif_fits.yml")
     dammif_fits_csv = os.path.join(output_dir, "dammif_fits.csv")
     dammif_fits_png = os.path.join(output_dir, f"{base}_fits.png")

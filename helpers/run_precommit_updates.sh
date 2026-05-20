@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_DIR="/home/mikl/KurchatovCoop/repos"
 PY="/home/mikl/.conda/envs/LLMAssistant/bin/python"
 PIP="/home/mikl/.conda/envs/LLMAssistant/bin/pip"
+AUTOSAXS="/home/mikl/.conda/envs/LLMAssistant/bin/autosaxs"
 
 REQUESTED_VERSION="${1:-}"
 
@@ -42,9 +43,15 @@ echo "autosaxs version is now ${NEW_VERSION}"
 step "Re-install autosaxs editable with GUI extra"
 "${PIP}" install -e "${REPO_DIR}[gui]"
 
+step "Update Cursor skills (repo)"
+"${AUTOSAXS}" get-skills -o "${REPO_DIR}/.cursor/skills"
+
+step "Update Cursor skills (user)"
+"${AUTOSAXS}" get-skills -o "${HOME}/.cursor/skills"
+
 step "Verify reinstall + version"
 "${PY}" -c "import autosaxs; print(autosaxs.__version__)"
-/home/mikl/.conda/envs/LLMAssistant/bin/autosaxs --help >/dev/null
+"${AUTOSAXS}" --help >/dev/null
 
 step "Pre-commit updates OK (version ${NEW_VERSION})"
 echo "${NEW_VERSION}"
