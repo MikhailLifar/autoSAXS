@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -209,6 +210,137 @@ def _routing_summary_line(fn: Callable[..., Any], *, max_len: int = 280) -> str:
     return _sanitize_router_hint(s)
 
 
+_ROUTER_IO_HELPERS: Tuple[str, ...] = (
+    "read_saxs",
+    "load_saxs_1d_any",
+    "write_saxs",
+    "write_saxs_atsas_format",
+    "parse_gnom_out",
+    "read_data",
+    "write_data",
+)
+
+
+def _format_type_annotation(ann: Any) -> str:
+    """Compact display name for signatures in generated router SKILL.md."""
+    if ann is inspect.Parameter.empty:
+        return ""
+    if ann is type(None):
+        return "None"
+    if isinstance(ann, str):
+        return ann
+    origin = get_origin(ann)
+    if origin is Union:
+        args = get_args(ann)
+        non_none = [a for a in args if a is not type(None)]
+        if len(non_none) == 1 and type(None) in args:
+            return f"Optional[{_format_type_annotation(non_none[0])}]"
+        return "Union[" + ", ".join(_format_type_annotation(a) for a in args) + "]"
+    if origin in (tuple, Tuple):
+        args = get_args(ann)
+        if args:
+            inner = ", ".join(_format_type_annotation(a) for a in args)
+            return f"Tuple[{inner}]"
+        return "tuple"
+    if origin in (dict, Dict):
+        key_t, val_t = get_args(ann)
+        return f"Dict[{_format_type_annotation(key_t)}, {_format_type_annotation(val_t)}]"
+    if origin in (list, List):
+        (item_t,) = get_args(ann)
+        return f"List[{_format_type_annotation(item_t)}]"
+    mod = getattr(ann, "__module__", "") or ""
+    name = getattr(ann, "__name__", str(ann))
+    if "." in name:
+        name = name.rsplit(".", 1)[-1]
+    if name in ("Any", "Optional", "Union", "Tuple", "List", "Dict"):
+        return name
+    if name == "DataFrame" or "pandas" in mod:
+        return "pd.DataFrame"
+    if mod == "numpy" or name == "ndarray":
+        return "np.ndarray"
+    if mod.startswith("typing."):
+        return name
+    if mod in ("builtins", ""):
+        return name
+    return f"{mod.split('.')[-1]}.{name}"
+
+
+def _returns_hint_from_docstring(doc: str) -> Optional[str]:
+    """Best-effort return description from a function docstring."""
+    lines = (doc or "").splitlines()
+    in_returns = False
+    for line in lines:
+        if re.match(r"^\s*Returns?:\s*$", line, flags=re.IGNORECASE):
+            in_returns = True
+            continue
+        m = re.match(r"^\s*Returns?:\s*(.+)$", line, flags=re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        if in_returns:
+            s = line.strip()
+            if not s:
+                continue
+            m2 = re.match(r"^(tuple|dict|list):\s*(.+)$", s, flags=re.IGNORECASE)
+            if m2:
+                kind = m2.group(1).lower()
+                payload = m2.group(2).strip()
+                if kind == "tuple":
+                    return f"({payload.strip('()')})"
+                return payload
+            if not s[0].isupper() or "(" in s:
+                return s
+            break
+    return None
+
+
+def _io_helper_signature_line(fn: Callable[..., Any]) -> str:
+    """One-line callable signature for router documentation."""
+    try:
+        hints = get_type_hints(fn)
+    except Exception:
+        hints = {}
+    sig = inspect.signature(fn)
+    parts: List[str] = []
+    for param in sig.parameters.values():
+        ann = hints.get(param.name, param.annotation)
+        if ann is not inspect.Parameter.empty:
+            segment = f"{param.name}: {_format_type_annotation(ann)}"
+        else:
+            segment = param.name
+        if param.default is not inspect.Parameter.empty:
+            if param.default is None:
+                segment += " = None"
+            elif isinstance(param.default, str):
+                segment += f' = "{param.default}"'
+            else:
+                segment += f" = {param.default!r}"
+        parts.append(segment)
+    param_str = ", ".join(parts)
+    ret_ann = hints.get("return", sig.return_annotation)
+    if ret_ann is not inspect.Signature.empty and ret_ann is not None:
+        ret = _format_type_annotation(ret_ann)
+    else:
+        ret = _returns_hint_from_docstring(inspect.getdoc(fn) or "")
+    if ret:
+        return f"{fn.__name__}({param_str}) -> {ret}"
+    return f"{fn.__name__}({param_str})"
+
+
+def _io_helpers_catalog() -> str:
+    """Markdown bullets for autosaxs.core.utils I/O helpers (signatures from inspect)."""
+    from ..core import utils as core_utils
+
+    lines: List[str] = []
+    for name in _ROUTER_IO_HELPERS:
+        fn = getattr(core_utils, name, None)
+        if fn is None or not callable(fn):
+            continue
+        sig_line = _io_helper_signature_line(fn)
+        summary = _sanitize_router_hint(_doc_first_non_empty_line(fn) or name)
+        lines.append(f"- `{sig_line}` — {summary}")
+    return "\n".join(lines)
+
+
 def _router_skill_md(skill_fns: Dict[str, Callable[..., Any]], *, autosaxs_version: str) -> str:
     """
     Build ``<output-dir>/saxs-processing/SKILL.md`` — SAXS orchestrator over ``saxs-processing/<kebab>/SKILL.md`` leaves.
@@ -223,6 +355,7 @@ def _router_skill_md(skill_fns: Dict[str, Callable[..., Any]], *, autosaxs_versi
         template,
         values={
             "subskill_catalog": "\n".join(catalog_lines),
+            "io_helpers_catalog": _io_helpers_catalog(),
             "autosaxs_version": str(autosaxs_version),
         },
     ).rstrip() + "\n"

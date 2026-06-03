@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from PyQt5.QtGui import QColor, QFont, QPalette
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QStyleFactory
 
 
 def apply_style(app: QApplication) -> None:
     """
     Apply a modern, readable theme (dark-ish neutral + blue accent) and a slightly larger font.
     """
+    # Fusion respects palette + stylesheet on all platforms; the Windows native style
+    # often keeps pale widget backgrounds while still using our light Text color.
+    if "Fusion" in QStyleFactory.keys():
+        app.setStyle("Fusion")
+
     font = QFont()
     font.setPointSize(11)
     app.setFont(font)
@@ -35,14 +40,42 @@ def apply_style(app: QApplication) -> None:
 
         QSplitter::handle { background: #0f151d; }
 
-        QLineEdit, QTextEdit, QPlainTextEdit {
+        QLineEdit, QTextEdit, QPlainTextEdit,
+        QComboBox, QSpinBox, QDoubleSpinBox {
             background: #0f151d;
             border: 1px solid #2a3646;
             border-radius: 8px;
             padding: 6px;
             color: #e7eef6;
             selection-background-color: #4c8dff;
+            selection-color: #ffffff;
         }
+
+        QComboBox::drop-down {
+            border: 0;
+            width: 24px;
+        }
+        QComboBox QAbstractItemView {
+            background-color: #0f151d;
+            color: #e7eef6;
+            border: 1px solid #2a3646;
+            selection-background-color: #4c8dff;
+            selection-color: #ffffff;
+            outline: 0;
+        }
+
+        QSpinBox::up-button, QSpinBox::down-button,
+        QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+            background: #182232;
+            border: 0;
+            width: 18px;
+        }
+        QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+        QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
+            background: #1b2a3d;
+        }
+
+        QCheckBox { color: #e7eef6; spacing: 6px; }
 
         QGroupBox {
             border: 1px solid #2a3646;

@@ -1,0 +1,88 @@
+---
+description: Write durable learnings to .cursor/suggestions/ (rules, skills, commands); never auto-promote to real config.
+alwaysApply: true
+---
+
+# Agent suggestions (self-learning inbox)
+
+You improve by **proposing**, not by editing User (or Project) Cursor rules, skills, or commands directly. The human promotes what matters.
+
+## Where to write
+
+Under the project:
+
+```
+.cursor/suggestions/
+  rules/      — behavior, conventions, when/how to work
+  skills/     — multi-step workflows, domain procedures
+  commands/   — shell/CLI, Cursor commands, tool invocation patterns
+```
+
+Create or update a `.md` file there. Use a short kebab-case slug (`wrong-python-env.md`). One topic per file.
+
+## File format
+
+```markdown
+# Observation
+What happened (correction, failure, pattern).
+
+# Proposed change
+Concrete text or action to adopt. Say if it should become a **global User Rule**, **project rule**, **personal skill** (`~/.cursor/skills/`), **project skill** (`.cursor/skills/`), or **Cursor command** — the human decides scope.
+```
+
+No frontmatter. Keep it short; extra detail is fine when the case is subtle.
+
+## When to write (do write)
+
+**Explicit signals**
+- User says remember, always, never, from now on, you were wrong, don’t do that again, or asks to capture a lesson.
+- User rejects your approach and gives a different one that would help in future sessions.
+
+**Corrections and gaps**
+- You violated or missed an existing User Rule or project rule; user fixed it — capture the gap so the inbox reflects reality.
+- Same class of mistake twice in one session, or user notes you did it before.
+- You assumed something about the repo/stack/env and were wrong.
+
+**Tooling and execution**
+- Command failed and the fix is reusable—not a one-off typo.
+
+**Workflow and skills**
+- Wrong step order, skipped step, or wrong subskill for the task; user corrects the pipeline.
+- A workflow should be a skill but isn’t documented; existing skill is incomplete or misleading.
+- Heavy steering through a multi-step task — end with one suggestion summarizing the durable workflow lesson.
+
+**Conventions and process**
+- Repo convention you missed (naming, tests, spec workflow, commit style beyond existing rules).
+- Spec/design disagreement resolved — record the decision for later agents.
+- Communication or output preference stated as lasting (format, language, “don’t code unless asked” clashes).
+
+**Near-misses worth keeping**
+- Almost committed secrets, ran/attempted destructive command, used wrong branch—if the lesson generalizes.
+
+**After exploration**
+- You discover a stable “how this project works” fact that isn’t in rules/skills and would save future sessions—file under `rules/` or `skills/` as appropriate.
+
+## When not to write
+- One-off typo or single-file fix with no general lesson.
+- Episodic facts: this sample, this path, this ticket, this branch name for today only.
+- Already covered by an existing rule/skill—unless the existing text is wrong; then propose an **edit** in Proposed change.
+- Duplicate: search `.cursor/suggestions/<folder>/` for the same topic; update that file instead of adding another.
+- Pure praise or “looks good” with nothing to change.
+
+## Which folder
+
+| Folder | Use for |
+|--------|---------|
+| `rules/` | Agent behavior, coding standards, review habits, when to ask vs act, project conventions |
+| `skills/` | End-to-end procedures (e.g. SAXS pipeline order), when to open which SKILL.md, domain playbooks |
+| `commands/` | Exact invocations: `autosaxs …`, conda python path, gh/git, make/test commands, Cursor slash commands |
+
+When unsure, prefer `rules/` for “always/never” and `skills/` for “steps to accomplish X”.
+
+## Boundaries
+- Do not load or summarize the whole suggestions tree every chat—only when writing, deduping, or user asks.
+- Do not put secrets in suggestions (tokens, passwords, API keys); use placeholders in Observation.
+- When you create or update a suggestion file, tell the user in chat with the path (e.g. `.cursor/suggestions/rules/foo.md`). No need to announce every internal consideration.
+
+## Optional end-of-session
+If the session had corrections or repeated steering and nothing was filed yet, add one short suggestion capturing the main durable lesson before finishing.

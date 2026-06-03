@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -30,6 +29,7 @@ from .deps import (
     apply_batch,
     ensure_q_nm,
     load_saxs_1d_any,
+    parse_gnom_out,
     run_with_cache,
     write_saxs_atsas_format,
 )
@@ -134,135 +134,6 @@ def fit_sizes(
         event_bus=bus,
         use_cache=use_cache,
     )
-
-
-def _parse_gnom_total_estimate(out_text: str) -> Optional[float]:
-    patterns = [
-        r"Total\s+Estimate\s*[:=]\s*([0-9]*\.?[0-9]+)",
-        r"TOTAL\s+ESTIMATE\s*[:=]\s*([0-9]*\.?[0-9]+)",
-        r"\bTOTAL\b\s*[:=]\s*([0-9]*\.?[0-9]+)",
-    ]
-    for pat in patterns:
-        m = re.search(pat, out_text or "", flags=re.IGNORECASE)
-        if m:
-            try:
-                return float(m.group(1))
-            except ValueError:
-                continue
-    return None
-
-
-def _parse_out_iq_table(
-    out_text: str,
-) -> Optional[tuple[np.ndarray, np.ndarray, Optional[np.ndarray], np.ndarray]]:
-    """
-    Parse the experimental/scattering section from an ATSAS .out file.
-    Returns (q, I_exp, sigma(optional), I_fit_or_reg_or_lastcol).
-    """
-    lines = (out_text or "").splitlines()
-    header_idx: Optional[int] = None
-    for i, ln in enumerate(lines):
-        s = ln.strip().upper()
-        if ("EXP" in s or "EXPER" in s) and ("ERROR" in s or "ERR" in s) and ("S" in s or "Q" in s):
-            header_idx = i
-            break
-    start = header_idx + 1 if header_idx is not None else 0
-
-    rows: List[List[float]] = []
-    for ln in lines[start:]:
-        st = ln.strip()
-        if not st:
-            if rows:
-                break
-            continue
-        parts = re.split(r"[,\s]+", st)
-        if len(parts) < 3:
-            if rows:
-                break
-            continue
-        try:
-            vals = [float(x) for x in parts]
-        except ValueError:
-            if rows:
-                break
-            continue
-        rows.append(vals)
-
-    if not rows:
-        return None
-    arr = np.array([r + [np.nan] * (max(len(x) for x in rows) - len(r)) for r in rows], dtype=float)
-    ncol = int(arr.shape[1])
-    if ncol < 3:
-        return None
-    q = arr[:, 0]
-    I_exp = arr[:, 1]
-    sigma: Optional[np.ndarray] = None
-    if ncol >= 4 and np.any(np.isfinite(arr[:, 2])):
-        sigma = arr[:, 2]
-    # pick last finite numeric column as "fit" (often Ireg/Jreg depending on GNOM version)
-    I_fit: Optional[np.ndarray] = None
-    for j in range(ncol - 1, 1, -1):
-        cand = arr[:, j]
-        if np.any(np.isfinite(cand)):
-            I_fit = cand
-            break
-    if I_fit is None:
-        return None
-    return (q.astype(float), I_exp.astype(float), sigma.astype(float) if sigma is not None else None, I_fit.astype(float))
-
-
-def _parse_gnom_dr_table(out_text: str) -> Optional[tuple[np.ndarray, np.ndarray]]:
-    """
-    Parse D(R) table from GNOM output (.out).
-
-    GNOM prints the recovered distribution in 3 columns; for polydisperse systems this corresponds
-    to the size/volume/length distribution (often named D(R) in docs).
-    """
-    lines = (out_text or "").splitlines()
-    blocks: List[List[tuple[float, float, float]]] = []
-    cur: List[tuple[float, float, float]] = []
-    for ln in lines:
-        s = ln.strip()
-        if not s:
-            if cur:
-                blocks.append(cur)
-                cur = []
-            continue
-        parts = re.split(r"[,\s]+", s)
-        if len(parts) < 3:
-            if cur:
-                blocks.append(cur)
-                cur = []
-            continue
-        try:
-            a, b, c = float(parts[0]), float(parts[1]), float(parts[2])
-        except ValueError:
-            if cur:
-                blocks.append(cur)
-                cur = []
-            continue
-        # Heuristic: if a 4th column is numeric, treat as not-a-distribution block and cut.
-        if len(parts) > 3:
-            try:
-                _ = float(parts[3])
-                if cur:
-                    blocks.append(cur)
-                    cur = []
-                continue
-            except ValueError:
-                pass
-        cur.append((a, b, c))
-    if cur:
-        blocks.append(cur)
-    if not blocks:
-        return None
-    for blk in reversed(blocks):
-        if len(blk) >= 8:
-            r = np.asarray([x[0] for x in blk], dtype=float)
-            d = np.asarray([x[1] for x in blk], dtype=float)
-            if np.all(np.diff(r) >= 0):
-                return r, d
-    return None
 
 
 def _shape_to_system(shape: str) -> int:
@@ -392,9 +263,10 @@ def _candidate_from_gnom_out(
     stderr: str,
     intermediate: bool,
 ) -> Dict[str, Any]:
-    total = _parse_gnom_total_estimate(out_text)
-    suspicious = bool(re.search(r"SUSPICIOUS", out_text or "", flags=re.IGNORECASE))
-    dr = _parse_gnom_dr_table(out_text)
+    parsed = parse_gnom_out(out_text)
+    total = parsed.get("total_estimate")
+    suspicious = bool(parsed.get("suspicious"))
+    dr = parsed.get("distribution")
     diag: Dict[str, Any] = {
         "total_estimate": total,
         "parse_dr_ok": dr is not None,
@@ -812,11 +684,12 @@ def _fit_sizes_paths(
     fit_vs_exp_png_error: Optional[str] = None
     try:
         out_text_best = Path(best_gnom_out_path).read_text(errors="replace")
-        parsed = _parse_out_iq_table(out_text_best)
-        if parsed is None:
+        parsed = parse_gnom_out(out_text_best)
+        iq_table = parsed.get("iq_table")
+        if iq_table is None:
             fit_vs_exp_png_error = "could not parse I(q) table from .out"
         else:
-            q, I_exp, _sigma_arr, I_fit = parsed
+            q, I_exp, _sigma_arr, I_fit = iq_table
             fit_vs_exp_png_path = os.path.join(output_dir, f"{base}_fit_sizes_best_fit.png")
             fig, ax = plt.subplots(figsize=(7, 4))
             ax.plot(q, I_exp, lw=3, label="exp")
@@ -853,7 +726,7 @@ def _fit_sizes_paths(
     dr_csv_path: Optional[str] = None
     try:
         out_text_best = Path(best_gnom_out_path).read_text(errors="replace")
-        dr = _parse_gnom_dr_table(out_text_best)
+        dr = parse_gnom_out(out_text_best).get("distribution")
         if dr is None:
             best_dr_png_error = "could not parse D(R) table from best .out"
         else:

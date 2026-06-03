@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -24,6 +23,7 @@ from .deps import (
     apply_batch,
     ensure_q_nm,
     load_saxs_1d_any,
+    parse_gnom_out,
     run_with_cache,
     write_saxs_atsas_format,
 )
@@ -114,85 +114,6 @@ def fit_distances(
     )
 
 
-def _parse_gnom_total_estimate(out_text: str) -> Optional[float]:
-    patterns = [
-        r"Total\s+Estimate\s*[:=]\s*([0-9]*\.?[0-9]+)",
-        r"TOTAL\s+ESTIMATE\s*[:=]\s*([0-9]*\.?[0-9]+)",
-        r"\bTOTAL\b\s*[:=]\s*([0-9]*\.?[0-9]+)",
-    ]
-    for pat in patterns:
-        m = re.search(pat, out_text, flags=re.IGNORECASE)
-        if m:
-            try:
-                return float(m.group(1))
-            except ValueError:
-                continue
-    return None
-
-
-def _parse_gnom_pr_table(out_text: str) -> Optional[tuple[np.ndarray, np.ndarray]]:
-    lines = (out_text or "").splitlines()
-    blocks: List[List[tuple[float, float, float]]] = []
-    cur: List[tuple[float, float, float]] = []
-    for ln in lines:
-        s = ln.strip()
-        if not s:
-            if cur:
-                blocks.append(cur)
-                cur = []
-            continue
-        parts = re.split(r"[,\s]+", s)
-        if len(parts) < 3:
-            if cur:
-                blocks.append(cur)
-                cur = []
-            continue
-        try:
-            a, b, c = float(parts[0]), float(parts[1]), float(parts[2])
-        except ValueError:
-            if cur:
-                blocks.append(cur)
-                cur = []
-            continue
-        if len(parts) > 3:
-            try:
-                _ = float(parts[3])
-                if cur:
-                    blocks.append(cur)
-                    cur = []
-                continue
-            except ValueError:
-                pass
-        cur.append((a, b, c))
-    if cur:
-        blocks.append(cur)
-    if not blocks:
-        return None
-    for blk in reversed(blocks):
-        if len(blk) >= 8:
-            r = np.asarray([x[0] for x in blk], dtype=float)
-            p = np.asarray([x[1] for x in blk], dtype=float)
-            if np.all(np.diff(r) >= 0):
-                return r, p
-    return None
-
-
-def _parse_out_real_space_rmax(out_text: str) -> Optional[float]:
-    """
-    Parse DATGNOM/GNOM reported real-space maximum from the configuration/results header.
-
-    Expected line shape:
-      Real space range: 0.0000 to 56.0700
-    """
-    m = re.search(r"Real\s+space\s+range:\s*[0-9]*\.?[0-9]+\s*to\s*([0-9]*\.?[0-9]+)", out_text or "")
-    if not m:
-        return None
-    try:
-        return float(m.group(1))
-    except ValueError:
-        return None
-
-
 def _pr_metrics(r: np.ndarray, p: np.ndarray) -> Dict[str, Any]:
     """
     Compute a few descriptive metrics for p(r) without defining any composite score.
@@ -224,8 +145,9 @@ def _summarize_out_quality(out_text: str) -> Dict[str, Any]:
 
     IMPORTANT: This skill does not compute or use any custom composite score.
     """
-    total = _parse_gnom_total_estimate(out_text)
-    pr = _parse_gnom_pr_table(out_text)
+    parsed = parse_gnom_out(out_text)
+    total = parsed.get("total_estimate")
+    pr = parsed.get("distribution")
     diag: Dict[str, Any] = {"total_estimate": total}
     if pr is None:
         return {**diag, "parse_pr_ok": False}
@@ -248,119 +170,6 @@ def _summarize_out_quality(out_text: str) -> Dict[str, Any]:
         smooth = 1.0
     diag.update({"neg_frac": neg_frac, "tail_ratio": tail_ratio, "smoothness": smooth, "p_abs_max": p_abs_max})
     return diag
-
-
-def _parse_out_iq_table(
-    out_text: str,
-) -> Optional[tuple[np.ndarray, np.ndarray, Optional[np.ndarray], np.ndarray]]:
-    """
-    Parse the experimental/scattering section from an ATSAS .out file.
-
-    Returns (q, I_exp, I_fit_or_reg_or_lastcol) and optionally sigma if present.
-    The exact column semantics vary by ATSAS version and settings; this parser uses
-    common header hints and falls back to selecting sensible numeric columns.
-    """
-    lines = (out_text or "").splitlines()
-    header_idx: Optional[int] = None
-    for i, ln in enumerate(lines):
-        s = ln.strip().upper()
-        # Typical headers contain S/Q and EXP/ERROR/REG/FIT wording.
-        if ("EXP" in s or "EXPER" in s) and ("ERROR" in s or "ERR" in s) and ("S" in s or "Q" in s):
-            header_idx = i
-            break
-    start = header_idx + 1 if header_idx is not None else 0
-
-    rows: List[List[float]] = []
-    for ln in lines[start:]:
-        st = ln.strip()
-        if not st:
-            if rows:
-                break
-            continue
-        parts = re.split(r"[,\s]+", st)
-        if len(parts) < 3:
-            if rows:
-                break
-            continue
-        try:
-            vals = [float(x) for x in parts]
-        except ValueError:
-            if rows:
-                break
-            continue
-        # Filter out obvious non-data lines.
-        if not np.isfinite(vals[0]) or vals[0] <= 0:
-            if rows:
-                break
-            continue
-        rows.append(vals)
-
-    if len(rows) < 8:
-        # Fallback: pick the last large numeric block in the file.
-        rows = []
-        blocks: List[List[List[float]]] = []
-        cur: List[List[float]] = []
-        for ln in lines:
-            st = ln.strip()
-            if not st:
-                if cur:
-                    blocks.append(cur)
-                    cur = []
-                continue
-            parts = re.split(r"[,\s]+", st)
-            if len(parts) < 3:
-                if cur:
-                    blocks.append(cur)
-                    cur = []
-                continue
-            try:
-                vals = [float(x) for x in parts]
-            except ValueError:
-                if cur:
-                    blocks.append(cur)
-                    cur = []
-                continue
-            cur.append(vals)
-        if cur:
-            blocks.append(cur)
-        for blk in reversed(blocks):
-            if len(blk) >= 8 and len(blk[0]) >= 3:
-                rows = blk
-                break
-
-    if len(rows) < 8:
-        return None
-
-    ncol = max(len(r) for r in rows)
-    arr = np.full((len(rows), ncol), np.nan, dtype=float)
-    for i, r in enumerate(rows):
-        arr[i, : len(r)] = r
-    q = arr[:, 0]
-    I_exp = arr[:, 1]
-    sigma = arr[:, 2] if ncol >= 3 else None
-
-    # Prefer a "fit/regularized" column: last column if exists, else 4th, else 3rd.
-    if ncol >= 5:
-        I_fit = arr[:, 4]
-    elif ncol >= 4:
-        I_fit = arr[:, 3]
-    else:
-        I_fit = None
-    if I_fit is None or not np.any(np.isfinite(I_fit)):
-        # fall back to last available numeric column beyond I_exp
-        for j in range(ncol - 1, 1, -1):
-            cand = arr[:, j]
-            if np.any(np.isfinite(cand)):
-                I_fit = cand
-                break
-    if I_fit is None:
-        return None
-    return (
-        q.astype(float),
-        I_exp.astype(float),
-        sigma.astype(float) if sigma is not None else None,
-        I_fit.astype(float),
-    )
 
 
 def _run_datgnom_once(
@@ -456,10 +265,11 @@ def _candidate_from_out_text(
     stderr: str,
     intermediate: bool,
 ) -> Dict[str, Any]:
-    total = _parse_gnom_total_estimate(out_text)
-    suspicious = bool(re.search(r"SUSPICIOUS", out_text or "", flags=re.IGNORECASE))
-    rmax_nm = _parse_out_real_space_rmax(out_text)
-    pr = _parse_gnom_pr_table(out_text)
+    parsed = parse_gnom_out(out_text)
+    total = parsed.get("total_estimate")
+    suspicious = bool(parsed.get("suspicious"))
+    rmax_nm = parsed.get("real_space_rmax")
+    pr = parsed.get("distribution")
 
     diag: Dict[str, Any] = {"total_estimate": total}
     prm: Dict[str, Any] = {}
@@ -863,11 +673,12 @@ def _fit_distances_paths(
     fit_vs_exp_png_path: Optional[str] = None
     fit_vs_exp_png_error: Optional[str] = None
     try:
-        parsed = _parse_out_iq_table(out_text)
-        if parsed is None:
+        parsed = parse_gnom_out(out_text)
+        iq_table = parsed.get("iq_table")
+        if iq_table is None:
             fit_vs_exp_png_error = "could not parse I(q) table from .out"
         else:
-            q, I_exp, sigma_arr, I_fit = parsed
+            q, I_exp, sigma_arr, I_fit = iq_table
             fit_vs_exp_png_path = os.path.join(output_dir, f"{base}_fits.png")
             fig, ax = plt.subplots(figsize=(7, 4))
             ax.plot(q, I_exp, lw=3, label="exp")
@@ -924,7 +735,7 @@ def _fit_distances_paths(
                     {"text": f"DATGNOM (fit_distances): p(r) PNG not created ({best_pr_png_error})."},
                 )
             continue
-        pr = _parse_gnom_pr_table(out_text)
+        pr = parse_gnom_out(out_text).get("distribution")
         if pr is None:
             best_pr_png_error = f"could not parse p(r) table from: {os.path.basename(out_path)}"
             if event_bus:

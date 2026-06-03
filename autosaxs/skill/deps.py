@@ -53,6 +53,7 @@ from ..core.utils import (  # noqa: F401
     ensure_q_nm,
     load_config,
     load_saxs_1d_any,
+    parse_gnom_out,
     read_bodies_cif,
     read_from_tiff,
     read_saxs,

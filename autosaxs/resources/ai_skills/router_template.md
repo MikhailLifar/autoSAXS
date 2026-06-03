@@ -18,7 +18,10 @@ Use this skill as the **top-level SAXS orchestration layer** for the SAXS-specif
 - Reframe the request in **scientific / data-flow terms** (what exists on disk, what is unknown, what quality checks matter).
 - Produce a **concise plan**: ordered list of subskills when more than one step is useful; note dependencies and optional branches.
 - **Open leaf `SKILL.md` files only when needed** for the step you are about to run or explain; refresh the plan as new artifacts appear.
+- Tell the user your plan - what are you going to do, what will be the resulting artifacts. Present your plan in a user-friendly form, avoiding autosaxs-specific terms (fit-sizes, fit-distances) and instead using popular scientific terms ("fitting size distribution D(R)", "fitting pair distances distribution function P(r), characterizing the shape of particles"). Make your plan detailed - you are not going to just "calibrate" or "subtract", but you wanna use a specific image for calibration and specific curve as a buffer, and so on.
+- Execute the plan upon agreement.
 - You may **reorder, skip, or repeat** subskills when the user’s goal or intermediate results justify it (not only strict linear pipelines).
+
 
 ## What you should not do
 
@@ -35,27 +38,28 @@ The purpose and use-cases for each subskill can be derived from its **descriptio
 - Common patterns: calibration / geometry → azimuthal integration → buffer subtraction (if the notion of buffer is applicable)  → plots → analysis / fits.  
   - Typical monodisperse analysis: **fit-distances → fit-bodies and fit-dammif**  
   - Typical polydisperse analysis (assuming spherical shape of the particles): **fit-sizes → fit-mixture**  
-- State the sequence as explicit steps: **order → subskill path → rationale → what is still unknown or assumed**.
-- After a step completes, **revisit the plan** before pulling in additional leaf skills.
+- State the sequence as explicit steps: **order → subskill path → rationale → what is still unknown or assumed**.  
+- After a step completes, **revisit the plan** before pulling in additional leaf skills.  
 
 ## Reports (fragment contract)
 
 - Processing skills write per-sample ``{basename}_report_individual.md`` and optional ``{basename}_report_summary.yaml`` next to their outputs (paths inside those files are relative to that directory).
-- ``report-individual`` merges all ``*_report_individual.md`` under the pipeline root for a basename; ``report-summary`` merges all ``*_report_summary.yaml``. PDFs are built with **ReportLab** from the merged Markdown.
+- ``report-individual`` merges all ``*_report_individual.md`` under the pipeline root for a basename; ``report-summary`` merges all ``*_report_summary.yaml``.
 
 ## Inputs and outputs (orchestrator level)
 - **Execution is strict only where the leaf says so:** when you actually run a subskill, follow its `SKILL.md` for required arguments, configs, and environment rules.
 
+## SAXS data I/O
+
+When you need to inspect, transform, or create SAXS data files from Python, prefer the canonical helpers in `autosaxs.core.utils` instead of ad-hoc parsing or serialization. Import from the installed package, e.g. `from autosaxs.core.utils import read_saxs, parse_gnom_out`.
+
+{{io_helpers_catalog}}
+
+- Preserve the pipeline unit convention from `autosaxs.core.utils`: `q` is in `nm^-1`, while `Rg`, `Dmax`, and other lengths are in `nm`.
+
 ## Implementation note (`autosaxs`)
 
 Nested folders under `saxs-processing/` correspond to the **autosaxs** Python package / CLI. When this bundle is the chosen implementation, prefer `<env>/bin/autosaxs <command>` (or the Python API noted in each leaf). Other SAXS-capable tools remain valid if the user or environment requires them — this bundle does not mandate autosaxs for high-level reasoning, only for invoking these leaves.
-
-## Suggested orchestrator output
-
-1. Restated goal in SAXS terms (short paragraph).
-2. Planned **sequence** of subskill paths, or a single step if that suffices.
-3. **Gaps and assumptions** (missing files, ambiguous sample/buffer pairing, unknown beamline metadata, …).
-4. **Next action:** which leaf `SKILL.md` to read and what to run or ask for first.
 
 ## Provenance
 

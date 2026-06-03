@@ -63,6 +63,7 @@ def write_skill_report_fragments(
     md_body: str,
     *,
     summary_references: Optional[List[Dict[str, Any]]] = None,
+    summary_extra: Optional[Dict[str, Any]] = None,
     order: Optional[int] = None,
     write_summary_yaml: bool = True,
 ) -> Tuple[str, Optional[str]]:
@@ -70,6 +71,7 @@ def write_skill_report_fragments(
     Write ``{basename}_report_individual.md`` and optionally ``{basename}_report_summary.yaml`` under ``output_dir``.
 
     Paths inside ``md_body`` and in ``summary_references[*].path`` must be relative to ``output_dir``.
+    Optional ``summary_extra`` keys are merged into the summary YAML (e.g. ``correctness`` for subtract).
 
     Returns ``(md_path, yaml_path_or_none)``.
     """
@@ -100,6 +102,8 @@ def write_skill_report_fragments(
             "order": order_eff,
             "references": refs,
         }
+        if summary_extra:
+            doc.update(summary_extra)
         _yaml_dump(doc, yaml_path)
     return md_path, yaml_path
 
@@ -608,6 +612,50 @@ def _overview_table(docs: List[Tuple[str, str, int, str, Dict[str, Any]]]) -> st
     return "".join(lines)
 
 
+def _subtraction_correctness_table(docs: List[Tuple[str, str, int, str, Dict[str, Any]]]) -> str:
+    rows_out: List[List[str]] = []
+    for base, sid, _o, ydir, doc in docs:
+        if sid != "subtract":
+            continue
+        correctness = doc.get("correctness")
+        if not correctness:
+            refs = doc.get("references") or []
+            if isinstance(refs, list):
+                sub_ref = next(
+                    (
+                        r
+                        for r in refs
+                        if isinstance(r, dict)
+                        and str(r.get("role", "")) in ("subtracted_curve", "sub")
+                    ),
+                    None,
+                )
+                if sub_ref:
+                    abs_p = _resolve_path(ydir, str(sub_ref.get("path", "")))
+                    if os.path.isfile(abs_p):
+                        try:
+                            _, _, meta = read_saxs(abs_p)
+                            subm = meta.get("subtract") if isinstance(meta, dict) else {}
+                            if isinstance(subm, dict):
+                                correctness = subm.get("correctness")
+                        except Exception:
+                            pass
+        if correctness:
+            rows_out.append([base, str(correctness)])
+    if not rows_out:
+        return ""
+    hdr = ["Sample", "Subtraction quality"]
+    lines = [
+        "## Buffer subtraction quality\n\n",
+        "| " + " | ".join(hdr) + " |\n",
+        "| " + " | ".join(["---"] * len(hdr)) + " |\n",
+    ]
+    for row in rows_out:
+        lines.append("| " + " | ".join(_md_escape_cell(c) for c in row) + " |\n")
+    lines.append("\n")
+    return "".join(lines)
+
+
 def _gnom_best_table(docs: List[Tuple[str, str, int, str, Dict[str, Any]]]) -> str:
     rows_out: List[List[str]] = []
     for base, sid, _o, ydir, doc in docs:
@@ -814,6 +862,10 @@ def assemble_summary_markdown(
             break
     if not had_any_curve_fig:
         parts.append("_No plottable 1D curves were found in summary references._\n\n")
+
+    sub_quality = _subtraction_correctness_table(docs)
+    if sub_quality:
+        parts.append(sub_quality)
 
     gnom_best = _gnom_best_table(docs)
     if gnom_best:

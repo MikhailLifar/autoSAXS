@@ -65,9 +65,9 @@ def subtract(
     - `scaling_factor` (float | None, default `None`): If provided, overrides automatic scaling and uses this factor directly (must be finite and > 0).
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
-    Important constraint:
+    Required q window:
 
-    - If you set `q_max`, you must also set `q_min` (otherwise the skill raises `ValueError`).
+    - `q_min` and `q_max` must both be set (CLI, Python API, or user config). There are no defaults; the skill raises `ValueError` if either is missing.
 
     ### Returns
 
@@ -77,6 +77,9 @@ def subtract(
     - `diff_plot_path`: Path to a diff plot PNG.
     - `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
     - `sub_plot_path`: Path to a subtracted curve plot PNG.
+
+    Subtraction quality (`correct` or `over-subtracted`) is written into the subtracted `.dat` metadata
+    (``subtract.correctness``) and into per-sample report fragments (individual Markdown and summary YAML).
 
     ### Python usage
 
@@ -118,20 +121,18 @@ def subtract(
     method_eff = str(merged.get("method", "point_match")).strip().lower().replace("-", "_")
     q_min_eff = merged.get("q_min", q_min)
     q_max_eff = merged.get("q_max", q_max)
+    if q_min_eff is None or q_max_eff is None:
+        raise ValueError("subtract: q_min and q_max must both be set (no defaults)")
     sample_form_eff = merged.get("sample_form", "Porod-plus-linear")
     buffer_form_eff = merged.get("buffer_form", "linear")
     point_match_factor_eff = float(merged.get("point_match_factor", 0.995))
     scaling_factor_eff = merged.get("scaling_factor", scaling_factor)
-    match_tail_ops: Dict = {}
-    if q_min_eff is not None or q_max_eff is not None:
-        if q_min_eff is None:
-            raise ValueError("subtract: q_min must be set when q_max is set")
-        match_tail_ops["q_range_abs"] = (q_min_eff, q_max_eff)
+    match_tail_ops: Dict = {"q_range_abs": (float(q_min_eff), float(q_max_eff))}
     if method_eff == "point_match":
         match_tail_ops["sample_form"] = sample_form_eff
         match_tail_ops["buffer_form"] = buffer_form_eff
         match_tail_ops["point_match_factor"] = point_match_factor_eff
-    match_tail_ops_out: Optional[Dict] = match_tail_ops if match_tail_ops else None
+    match_tail_ops_out: Dict = match_tail_ops
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
     sample_1d = coerce_dat_path_expression(sample_1d)
@@ -169,7 +170,7 @@ def _subtract_paths(
     use_cache: bool = False,
     sample_index: int = 0,
     method: str = "point_match",
-    match_tail_ops: Optional[Dict] = None,
+    match_tail_ops: Optional[Dict] = None,  # required q_range_abs when called via subtract()
     scaling_factor: Optional[float] = None,
 ) -> Dict[str, Union[str, List[str]]]:
     _ = config, use_cache, sample_index
@@ -236,9 +237,17 @@ def _subtract_paths(
     )
     from autosaxs.core.report_fragments import write_skill_report_fragments
 
+    _, _, _sigma, meta = read_saxs(dest)
+    subtract_meta = meta.get("subtract") if isinstance(meta, dict) else {}
+    correctness = (
+        str(subtract_meta.get("correctness"))
+        if isinstance(subtract_meta, dict) and subtract_meta.get("correctness")
+        else "correct"
+    )
     md_lines = [
         "### Buffer subtraction\n",
         f"Scaling method: **{method}**.\n",
+        f"Subtraction quality: **{correctness}**.\n",
         f"![Difference sample vs scaled buffer]({os.path.basename(diff_plot_path)})\n",
         f"![Difference log scale]({os.path.basename(diff_log_plot_path)})\n",
         f"![Subtracted curve]({os.path.basename(sub_plot_path)})\n",
@@ -252,6 +261,7 @@ def _subtract_paths(
         "subtract",
         "".join(md_lines),
         summary_references=summary_refs,
+        summary_extra={"correctness": correctness},
     )
     return {
         "subtracted_1d": dest,

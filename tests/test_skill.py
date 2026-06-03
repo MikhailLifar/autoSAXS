@@ -153,6 +153,8 @@ def test_subtract_contract():
             sample_path,
             buffer_path,
             output_dir=out_dir,
+            q_min=0.1,
+            q_max=2.0,
             use_cache=False,
         )
         assert "subtracted_1d" in result
@@ -708,10 +710,10 @@ def test_subtract_applies_bundled_defaults_without_q_window(monkeypatch):
         buff = os.path.join(tmp, "b.dat")
         write_saxs(sample, [1.0, 2.0], [1.0, 1.0], [0.1, 0.1], {})
         write_saxs(buff, [1.0, 2.0], [0.5, 0.5], [0.1, 0.1], {})
-        subtract(sample, buff, output_dir=os.path.join(tmp, "out"), use_cache=False)
+        subtract(sample, buff, output_dir=os.path.join(tmp, "out"), q_min=1.0, q_max=2.0, use_cache=False)
         assert captured["method"] == "point_match"
         assert captured["match_tail_ops"] is not None
-        assert "q_range_abs" not in captured["match_tail_ops"]
+        assert captured["match_tail_ops"]["q_range_abs"] == (1.0, 2.0)
 
 
 # ---------------------------------------------------------------------------

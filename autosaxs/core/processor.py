@@ -866,6 +866,15 @@ def subtract_buffer(
         used_ops = dict(algo_ops) if isinstance(algo_ops, dict) else None
     except Exception:
         used_ops = None
+    from .utils import subtraction_correctness
+
+    subtract_meta = {
+        'method': method_key,
+        'scaling_factor': float(scaling_factor),
+        'manual_scaling_factor': bool(manual_scale is not None),
+        'match_tail_ops': used_ops,
+        'correctness': subtraction_correctness(I_sub, sigma_sub),
+    }
     write_saxs(
         destpath,
         q,
@@ -875,12 +884,7 @@ def subtract_buffer(
             'type': 'sub',
             'sample_path': src_path,
             'buffer_path': buffer_path,
-            'subtract': {
-                'method': method_key,
-                'scaling_factor': float(scaling_factor),
-                'manual_scaling_factor': bool(manual_scale is not None),
-                'match_tail_ops': used_ops,
-            },
+            'subtract': subtract_meta,
         },
     )
     

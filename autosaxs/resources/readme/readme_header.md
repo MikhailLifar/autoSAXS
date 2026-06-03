@@ -39,7 +39,7 @@ Some parts of the pipeline rely on ATSAS executables (e.g. `dammif`). On import,
 Install the package (includes the `autosaxs` CLI entry point):
 
 ```bash
-python -m pip install "autosaxs @ git+http://hpc.nano.sfedu.ru:8080/mikhail/saxsprocessing.git@main"
+python -m pip install "autosaxs @ git+http://hpc.nano.sfedu.ru:8080/mikhail/saxsprocessing.git"
 ```
 
 Then check the CLI:
@@ -65,7 +65,7 @@ autosaxs get-default-config -o .
 Install with GUI extras (adds `customtkinter` and `tkinterdnd2`):
 
 ```bash
-python -m pip install "autosaxs[gui] @ git+http://hpc.nano.sfedu.ru:8080/mikhail/saxsprocessing.git@main"
+python -m pip install "autosaxs[gui] @ git+http://hpc.nano.sfedu.ru:8080/mikhail/saxsprocessing.git"
 ```
 
 This also installs the `guisaxs-skills` and `guisaxs-liveview` console entry points (see below).
