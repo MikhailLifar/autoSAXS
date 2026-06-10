@@ -22,6 +22,8 @@ from .common import (
     coerce_dat_path_expression,
     expand_files_from_unwrapped,
 )
+from autosaxs.core.gnom import candidate_score, parse_gnom_out
+
 from .deps import (
     EventBus,
     EventType,
@@ -29,11 +31,9 @@ from .deps import (
     apply_batch,
     ensure_q_nm,
     load_saxs_1d_any,
-    parse_gnom_out,
     run_with_cache,
     write_saxs_atsas_format,
 )
-from .fit_distances import _candidate_score
 from .fit_guinier.guinier import run_guinier_analysis
 
 
@@ -294,7 +294,7 @@ def _candidate_from_gnom_out(
         "stderr": stderr,
         **diag,
     }
-    cand["score"] = _candidate_score(cand)
+    cand["score"] = candidate_score(cand)
     return cand
 
 

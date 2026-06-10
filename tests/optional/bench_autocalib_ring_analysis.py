@@ -16,16 +16,14 @@ WORKSPACE_ROOT = Path("/home/mikl/KurchatovCoop")
 REPOS_DIR = WORKSPACE_ROOT / "repos"
 sys.path.insert(0, str(REPOS_DIR))
 
-from autosaxs.core.processor import autocalib as autosaxs_autocalib  # noqa: E402
 from autosaxs.core.utils import load_config  # noqa: E402
-from autosaxs.core.viewer import PLTViewer  # noqa: E402
 from autosaxs.skill.calibrate.autocalib import autocalib_ring_analysis  # noqa: E402
 
 
 def _safe_float(x: Any) -> Optional[float]:
     try:
         v = float(x)
-        if v != v:  # NaN check
+        if v != v:
             return None
         return v
     except Exception:
@@ -54,7 +52,7 @@ def _iter_matching_tifs(data_dir: Path, regex: re.Pattern[str], limit: int) -> L
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Benchmark autosaxs autocalib vs ring_analysis-driven autocalib.",
+        description="Benchmark ring_analysis-driven autocalib.",
     )
     parser.add_argument(
         "--data-dir",
@@ -93,26 +91,10 @@ def main() -> int:
         help="Optional CSV output path (e.g. debug/bench_results.csv).",
     )
     parser.add_argument(
-        "--out-dir-legacy",
-        type=str,
-        default=str(WORKSPACE_ROOT / "debug" / "bench_autocalib_legacy"),
-        help="Directory where the legacy autosaxs autocalib saves plots/refined.yml.",
-    )
-    parser.add_argument(
         "--out-dir-ring",
         type=str,
         default=str(WORKSPACE_ROOT / "debug" / "bench_autocalib_ring_analysis"),
         help="Directory where ring-analysis autocalib saves plots/refined.yml.",
-    )
-    parser.add_argument(
-        "--ring-analysis-make-plots",
-        action="store_true",
-        help="If set, ring_analysis debug plots will be generated during benchmark.",
-    )
-    parser.add_argument(
-        "--ring-only",
-        action="store_true",
-        help="Run only ring_analysis-driven autocalib (skip legacy autosaxs autocalib).",
     )
     args = parser.parse_args()
 
@@ -127,10 +109,7 @@ def main() -> int:
 
     cfg = load_config(args.config_path)
     mask_path = args.mask_path.strip() if args.mask_path else None
-    out_dir_legacy = Path(args.out_dir_legacy)
     out_dir_ring = Path(args.out_dir_ring)
-    if not args.ring_only:
-        out_dir_legacy.mkdir(parents=True, exist_ok=True)
     out_dir_ring.mkdir(parents=True, exist_ok=True)
 
     results: List[Dict[str, Any]] = []
@@ -139,57 +118,6 @@ def main() -> int:
         stem = tif_path.stem
         row: Dict[str, Any] = {"file": tif_path.name}
 
-        # ---- Current autosaxs autocalib ----
-        if not args.ring_only:
-            t0 = time.perf_counter()
-            try:
-                res1 = autosaxs_autocalib(str(tif_path), cfg, mask_path=mask_path)
-                t1 = time.perf_counter()
-                row["autosaxs_ok"] = True
-                row["autosaxs_time_s"] = float(t1 - t0)
-                row["autosaxs_center_y_px"] = _safe_float(res1.get("center_y_px"))
-                row["autosaxs_center_x_px"] = _safe_float(res1.get("center_x_px"))
-                row.update(_extract_refined_summary(res1))
-                rings_arr_1 = res1.get("rings")
-                row["autosaxs_rings_count"] = int(rings_arr_1.shape[0]) if rings_arr_1 is not None else None
-
-                legacy_refined_path = out_dir_legacy / f"{stem}_autosaxs_refined.yml"
-                with legacy_refined_path.open("w", encoding="utf-8") as f:
-                    yaml.safe_dump(res1.get("refined", {}), f)
-
-                legacy_calibration_plot_path = out_dir_legacy / f"{stem}_autosaxs_calibration.png"
-                PLTViewer.view_calibration(
-                    img_data=res1["calib_data"],
-                    tiff_path=str(tif_path),
-                    center_y_px=res1["center_y_px"],
-                    center_x_px=res1["center_x_px"],
-                    clusters=res1.get("clusters"),
-                    rings=res1["rings"],
-                    curve_calibrated=res1["curve_calibrated"],
-                    theoretical_peaks=res1["theoretical_peaks"],
-                    show_duration=None,
-                    plotFilePath=legacy_calibration_plot_path,
-                )
-
-                legacy_mask_plot_path = out_dir_legacy / f"{stem}_autosaxs_calibration_mask.png"
-                PLTViewer.view_mask(
-                    res1["calib_data"],
-                    res1["integrator"].mask,
-                    tiff_path=str(tif_path),
-                    show_duration=None,
-                    plotFilePath=legacy_mask_plot_path,
-                )
-            except Exception as e:
-                t1 = time.perf_counter()
-                row["autosaxs_ok"] = False
-                row["autosaxs_time_s"] = float(t1 - t0)
-                row["autosaxs_error"] = str(e)
-            finally:
-                if "res1" in locals():
-                    del res1
-                gc.collect()
-
-        # ---- Ring-analysis-driven autocalib ----
         t0 = time.perf_counter()
         try:
             res2 = autocalib_ring_analysis(
@@ -248,4 +176,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

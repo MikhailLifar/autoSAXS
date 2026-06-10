@@ -16,6 +16,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 import yaml
 
+from autosaxs.core.gnom import candidate_score, parse_gnom_out
+
 from .deps import (
     EventBus,
     EventType,
@@ -23,7 +25,6 @@ from .deps import (
     apply_batch,
     ensure_q_nm,
     load_saxs_1d_any,
-    parse_gnom_out,
     run_with_cache,
     write_saxs_atsas_format,
 )
@@ -210,23 +211,6 @@ def _run_datgnom_once(
     return True, int(proc.returncode), (proc.stderr or "")[:2000], out_text
 
 
-def _candidate_score(cand: Dict[str, Any]) -> float:
-    """score = Total Estimate − neg_frac (higher is better)."""
-    te = cand.get("total_estimate")
-    try:
-        te_v = float(te) if te is not None else float("-inf")
-    except (TypeError, ValueError):
-        te_v = float("-inf")
-    nf = cand.get("neg_frac")
-    try:
-        nf_v = float(nf) if nf is not None else 0.0
-    except (TypeError, ValueError):
-        nf_v = 0.0
-    if not np.isfinite(te_v):
-        return float("-inf")
-    return float(te_v - nf_v)
-
-
 def _is_suspicious_candidate(c: Dict[str, Any]) -> bool:
     return bool(c.get("suspicious"))
 
@@ -248,7 +232,7 @@ def _select_best(cs: List[Dict[str, Any]]) -> Dict[str, Any]:
             tail_v = float(tail) if tail is not None else 1.0
         except (TypeError, ValueError):
             tail_v = 1.0
-        return (-_candidate_score(c), neg_v, tail_v)
+        return (-candidate_score(c), neg_v, tail_v)
 
     return sorted(pool, key=sort_key)[0]
 
@@ -311,7 +295,7 @@ def _candidate_from_out_text(
         **diag,
         **prm,
     }
-    cand["score"] = _candidate_score(cand)
+    cand["score"] = candidate_score(cand)
     return cand
 
 

@@ -82,9 +82,9 @@ or legacy `match_tail`, optionally restricted to a q window (`q_min` / `q_max`).
 - `scaling_factor` (float | None, default `None`): If provided, overrides automatic scaling and uses this factor directly (must be finite and > 0).
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
-Important constraint:
+Required q window:
 
-- If you set `q_max`, you must also set `q_min` (otherwise the skill raises `ValueError`).
+- `q_min` and `q_max` must both be set (CLI, Python API, or user config). There are no defaults; the skill raises `ValueError` if either is missing.
 
 ### Returns
 
@@ -94,6 +94,9 @@ Important constraint:
 - `diff_plot_path`: Path to a diff plot PNG.
 - `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
 - `sub_plot_path`: Path to a subtracted curve plot PNG.
+
+Subtraction quality (`correct` or `over-subtracted`) is written into the subtracted `.dat` metadata
+(``subtract.correctness``) and into per-sample report fragments (individual Markdown and summary YAML).
 
 ### Python usage
 

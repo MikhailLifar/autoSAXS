@@ -290,14 +290,10 @@ class LiveviewRightPanel(QWidget):
         lay = QVBoxLayout(w)
         lay.addWidget(
             QLabel(
-                "Primitives: the queue runs fit_distances (GNOM) using the same options as p(r), then fit_bodies "
-                "with that first/last interval."
+                "Primitives: the queue runs fit_bodies on each profile. BODIES --first is derived via "
+                "in-process Guinier (no GNOM / fit_distances step)."
             )
         )
-        lay.addWidget(QLabel("GNOM / p(r) parameters:"))
-        btn_gnom = QPushButton("Set fit_distances (GNOM / p(r))…")
-        btn_gnom.clicked.connect(self._open_fit_wizard)
-        lay.addWidget(btn_gnom)
         lay.addWidget(QLabel("Body models to fit:"))
         btn_shapes = QPushButton("Set fit_bodies (shapes)…")
         btn_shapes.clicked.connect(self._open_fit_bodies_wizard)
@@ -630,9 +626,14 @@ class LiveviewRightPanel(QWidget):
         try:
             raw = yml_path.read_text(encoding="utf-8", errors="replace")
             data = yaml.safe_load(raw)
-            m = (data or {}).get("mixture") if isinstance(data, dict) else None
+            if not isinstance(data, dict):
+                return
+            m = data.get("fit_mixture")
+            if not isinstance(m, dict):
+                m = data.get("mixture")
             if not isinstance(m, dict):
                 return
+            self._state.fit_mixture_options = {str(k): v for k, v in m.items()}
             keys = ("max_nph", "maxit", "r_min", "r_max", "poly_min", "poly_max")
             self._fit_mixture_saved_mixture_params = {k: m[k] for k in keys if k in m}
         except Exception:
@@ -681,7 +682,17 @@ class LiveviewRightPanel(QWidget):
     def build_fit_mixture_request_from_wizard(self) -> RunRequest:
         if self._fit_mixture_wizard is None:
             raise RuntimeError("Open the fit_mixture wizard first")
-        return self._fit_mixture_wizard.build_fit_mixture_request()
+        req = self._fit_mixture_wizard.build_fit_mixture_request()
+        opts = dict(req.options)
+        saved = self._state.fit_mixture_options
+        if isinstance(saved, dict):
+            for k, v in saved.items():
+                if k not in ("output_dir", "use_cache", "config_path") and v is not None:
+                    if not (isinstance(v, str) and not str(v).strip()):
+                        opts[k] = v
+        opts.pop("config_path", None)
+        opts["use_cache"] = False
+        return RunRequest(skill_name=req.skill_name, positional=list(req.positional), options=opts)
 
     def fit_distances_wizard_profile_text(self) -> str:
         if self._fit_wizard is None or self._meta_fit is None:
@@ -870,6 +881,9 @@ class LiveviewRightPanel(QWidget):
     ) -> None:
         if self._meta_mixture is None:
             return
+        from .right_wizards import fit_mixture_run_options_from_wizard
+
+        self._state.fit_mixture_options = fit_mixture_run_options_from_wizard(wizard)
         cfg_path = wizard.write_mixture_config_yaml()
         self._state.fit_mixture_config_path = cfg_path
         self._write_mixture_sidecar(cfg_path)

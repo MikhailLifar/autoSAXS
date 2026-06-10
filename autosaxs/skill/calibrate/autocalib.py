@@ -774,7 +774,7 @@ def autocalib_ring_analysis(
     ``initial_dist_guess_k_m_per_px`` (scale ``L / r_out`` in m/px).
     """
     from .autocalib_viz import save_refined_curve_with_theoretical_peaks
-    from autosaxs.core.processor import get_r_beam_px, refine
+    from .autocalib_refine import get_r_beam_px, refine
 
     calib_data = read_from_tiff(calibration_image_path)
 

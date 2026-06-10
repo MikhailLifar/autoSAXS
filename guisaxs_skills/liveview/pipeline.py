@@ -253,8 +253,7 @@ class LiveviewPipeline(QObject):
             self._start_fit_distances(profile_abs=profile_abs)
             return
         if mode == AnalysisMode.MONODISPERSE_BODIES:
-            self._chain_fit_bodies_after = True
-            self._start_fit_distances(profile_abs=profile_abs)
+            self._start_fit_bodies(profile_abs=profile_abs)
             return
         if mode == AnalysisMode.POLYDISPERSE_DR:
             self._start_fit_sizes(profile_abs=profile_abs)
@@ -431,25 +430,24 @@ class LiveviewPipeline(QObject):
         )
 
     def _start_fit_mixture(self, *, profile_abs: str) -> None:
-        cfg = self._state.fit_mixture_config_path
-        if cfg is None or not cfg.is_file():
-            self.error.emit(
-                "fit_mixture: set mixture config YAML in the right panel (config file missing); skipping file."
-            )
-            self._finish_current(False)
-            return
         outdir = self._state.watchdir / "mixture"
         outdir.mkdir(parents=True, exist_ok=True)
+        opts: dict = {"output_dir": str(outdir.resolve()), "use_cache": False}
+        raw = self._state.fit_mixture_options
+        if isinstance(raw, dict):
+            skip = frozenset({"output_dir", "use_cache", "config_path"})
+            for key, value in raw.items():
+                if key in skip or value is None:
+                    continue
+                if isinstance(value, str) and not value.strip():
+                    continue
+                opts[str(key)] = value
         self._pending_step = "fit_mixture"
         self._runner.start(
             RunRequest(
                 skill_name="fit_mixture",
                 positional=[profile_abs],
-                options={
-                    "output_dir": str(outdir.resolve()),
-                    "use_cache": False,
-                    "config_path": str(cfg.resolve()),
-                },
+                options=opts,
             )
         )
 

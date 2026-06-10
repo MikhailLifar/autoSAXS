@@ -55,8 +55,10 @@ class LiveviewSessionState:
     analysis_mode: AnalysisMode = AnalysisMode.OFF
     fit_distances_conf_path: Optional[Path] = None
     fit_sizes_conf_path: Optional[Path] = None
-    # Path to YAML with mixture section (fit_mixture --config-path).
+    # Optional ``mixture/liveview_mixture.yml`` from wizard Apply (persistence only).
     fit_mixture_config_path: Optional[Path] = None
+    # CLI options for ``fit_mixture`` (q range, MIXTURE params). None → bundled defaults, full q.
+    fit_mixture_options: Optional[Dict[str, Any]] = None
     # Written by the primitives wizard to fit_bodies/fit_bodies.conf (shape subset).
     fit_bodies_conf_path: Optional[Path] = None
     # Subset of BODIES model names; None or [] means pipeline uses DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES.
@@ -87,6 +89,7 @@ class LiveviewSessionState:
         self.analysis_mode = AnalysisMode.OFF
         self.fit_bodies_shapes = None
         self.fit_bodies_conf_path = None
+        self.fit_mixture_options = None
 
     def reset_buffer_to_state_b(self) -> None:
         """Clear buffer/subtract settings; analysis Off; remain calibrated (state B if integrator is set)."""
@@ -111,6 +114,7 @@ class LiveviewSessionState:
         self.fit_distances_conf_path = None
         self.fit_sizes_conf_path = None
         self.fit_mixture_config_path = None
+        self.fit_mixture_options = None
         self.fit_bodies_shapes = None
         self.fit_bodies_conf_path = None
 

@@ -132,7 +132,7 @@ class LogCurvePlot(FigureCanvas):
 
         if scale is None:
             # Fallback: recompute scaling (legacy behavior).
-            from autosaxs.core.processor import subtract_buffer
+            from autosaxs.skill.subtract import subtract_buffer
 
             method, mtops = subtract_options_to_match_tail_ops(subtract_options or {})
             fd, tmp = tempfile.mkstemp(suffix=".dat")

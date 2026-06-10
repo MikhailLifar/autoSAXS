@@ -616,11 +616,25 @@ def test_fit_mixture_contract_with_mock_mixture(monkeypatch):
         out_dir = os.path.join(tmp, "mixture_out")
         result = fit_mixture(profile_path, output_dir=out_dir, config_path=cfg_path, use_cache=False)
 
-        for key in ("output_subdir", "comparison_path", "distributions_path", "results_csv_path"):
+        for key in (
+            "output_subdir",
+            "comparison_path",
+            "comparison_loglog_path",
+            "comparison_log_path",
+            "distributions_path",
+            "results_csv_path",
+        ):
             assert key in result, f"fit_mixture must return {key}"
-            assert os.path.isfile(str(result[key])) or os.path.isdir(str(result[key])), f"{key} must exist"
 
-        # The skill returns per-sample output_subdir; CSV should exist and be non-empty.
+        # plot_I_q / plot_logI_logq default to False → empty paths, not missing files.
+        assert result["comparison_path"] == ""
+        assert result["comparison_loglog_path"] == ""
+
+        for key in ("output_subdir", "comparison_log_path", "distributions_path", "results_csv_path"):
+            path = str(result[key])
+            assert path, f"{key} must be non-empty"
+            assert os.path.isfile(path) or os.path.isdir(path), f"{key} must exist"
+
         csv_path = str(result["results_csv_path"])
         assert os.path.getsize(csv_path) > 0
 
@@ -1124,14 +1138,15 @@ def test_fit_distances_contract(monkeypatch):
 
 
 def test_fit_distances_score_te_minus_nf():
-    from autosaxs.skill.fit_distances import _candidate_score, _select_best
+    from autosaxs.core.gnom import candidate_score
+    from autosaxs.skill.fit_distances import _select_best
 
     c_high = {"total_estimate": 0.9, "neg_frac": 0.1, "suspicious": False}
     c_low = {"total_estimate": 0.9, "neg_frac": 0.3, "suspicious": False}
-    assert _candidate_score(c_high) == pytest.approx(0.8)
-    assert _candidate_score(c_low) == pytest.approx(0.6)
-    assert _candidate_score({"total_estimate": None, "neg_frac": 0.0}) == float("-inf")
-    assert _candidate_score({"total_estimate": 1.0}) == pytest.approx(1.0)
+    assert candidate_score(c_high) == pytest.approx(0.8)
+    assert candidate_score(c_low) == pytest.approx(0.6)
+    assert candidate_score({"total_estimate": None, "neg_frac": 0.0}) == float("-inf")
+    assert candidate_score({"total_estimate": 1.0}) == pytest.approx(1.0)
 
     best = _select_best(
         [

@@ -1,5 +1,5 @@
 # autosaxs: interactive SAXS pipeline core (controller, processor, skill, utils, guinier, event_bus, cli, viewer, context, gui, gui_interface, api, polydispfit, report)
-__version__ = "2.6.0"
+__version__ = "2.6.2"
 import re
 import subprocess
 import warnings
@@ -52,6 +52,7 @@ _check_atsas_installed()
 from .core.event_bus import EventBus, EventType
 from .core.context import Context
 from .pipeline import cli_interface
+from .core import integrator
 from .core import processor
 from .core import utils
 from .core import viewer
@@ -65,6 +66,7 @@ __all__ = [
     "Context",
     "Controller",
     "cli_interface",
+    "integrator",
     "processor",
     "utils",
     "viewer",

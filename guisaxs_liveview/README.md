@@ -33,7 +33,7 @@ After buffer is set, automatic subtraction follows integration immediately for e
    - **Off** — no extra fit steps after integration (and subtraction if enabled).
    - **Monodisperse analysis: p(r)** — **fit_distances** (AUTORG + GNOM): fit vs data and pair-distance distribution **p(r)**.
    - **Monodisperse analysis: DAM** — same GNOM setup as **p(r)**, then **DAMMIF** (FAST mode) on the GNOM **.out**; adds **3D** preview of the bead model.
-   - **Monodisperse analysis: primitives** — **fit_distances** (same GNOM options as **p(r)**) followed by **fit_bodies** (internally invokes BODIES) for simple geometric **primitives**; shows curve comparison and **3D** for the best-fitting shape.
+   - **Monodisperse analysis: primitives** — **fit_bodies** (BODIES; `--first` from in-process Guinier) for simple geometric **primitives**; shows curve comparison and **3D** for the best-fitting shape.
    - **Polydisperse analysis: d(r)** — **fit_sizes**: polydisperse size distribution **d(r)** (GNOM) and fit plot.
    - **Polydisperse analysis: mixture** — **fit_mixture** (MIXTURE): multi-component modeling; shows component and distribution previews.
 9. The top panel. There are three buttons: "<", ">" and "Process". "<" and ">" allow you to navigate through the files processed in this section. Remember - these buttons don't trigger any processing, they just re-upload existing results. If some results are missing, the corresponding fields just remain empty. To run the processing for the current 2D image, press "Process" button whcih is equivalent to re-uploading the file.
@@ -82,7 +82,7 @@ All paths below are **inside your selected Watchdir** (the folder shown at the t
   - **Monodisperse DAM** (`fit_distances` then `fit_dammif`): same **`fit_distances`** layout as above, plus **`Watchdir/dammif/<stem>/`**
     - DAMMIF bead models, `dammif_fits.yml`, `dammif-*-1.cif`, and summary PNGs (e.g. `*_fits.png`) used for the **3D** preview.
 
-  - **Monodisperse primitives** (`fit_distances` then `fit_bodies`): **`fit_distances`** as for p(r), plus **`Watchdir/fit_bodies/<stem>/`**
+  - **Monodisperse primitives** (`fit_bodies`): **`Watchdir/fit_bodies/<stem>/`**
     - Shape list saved once: `Watchdir/fit_bodies/fit_bodies.conf`
     - Typical artifacts: `bodies_fits.yml`, `bodies_fits.csv`, fit PNGs; the UI may plot **exp vs best model** from the CSV or fall back to a `*_fits.png`.
 

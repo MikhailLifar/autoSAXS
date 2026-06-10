@@ -78,12 +78,14 @@ SAXS / small-angle x-ray scattering: integrate 2D SAXS images to 1D curves (q, I
 - `output_dir` (str, default `.`): Directory where integrated curves are written.
 - `npt` (int, default `1000`): Number of points in the output q grid.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+- `validation_png` (bool, default `False`): If `True`, write a PNG next to each integrated curve showing the source image (log-intensity) with integrator-masked pixels highlighted in semi-transparent red.
 
 ### Returns
 
 `dict[str, str | list[str]]` with:
 
 - `integrated_1d`: List of paths to integrated 1D `.dat` curves (one per input image).
+- `validation_png` (only when `validation_png=True`): List of paths to validation PNG(s), one per input image.
 
 ### Python usage
 

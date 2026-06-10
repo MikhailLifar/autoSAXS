@@ -78,6 +78,9 @@ Prerequisites:
 - `config_path` (str | None, default `None`): Optional path to a YAML config file with a `fit_mixture` section. When omitted, bundled defaults apply.
 - `q_min_nm` / `q_max_nm` (float | None): Optional q bounds (nm^-1); set via CLI or user config (not in bundled template).
 - `maxit`, `max_nph`: MIXTURE parameters; defaults from bundled `fit_mixture` section when omitted.
+- `plot_I_q` (bool, default `False`): Write I vs q fit comparison plot (labels show BIC).
+- `plot_logI_logq` (bool, default `False`): Write log I vs log q fit comparison plot (labels show BIC_log).
+- `plot_logI_q` (bool, default `True`): Write log I vs q fit comparison plot (labels show chi2).
 - `r_min` (float | None): MIXTURE minimum radius (nm). If omitted, defaults to `0.1`. Converted to Å internally for ATSAS MIXTURE.
 - `r_max` (float | None): MIXTURE maximum radius (nm). If omitted, defaults to `rmax_nm` from in-process `fit_sizes`.
 - `poly_min` (float | None): MIXTURE minimum polydispersity (nm). If omitted, defaults to `0.05`.
@@ -93,8 +96,9 @@ Important constraint:
 `dict[str, str]` with:
 
 - `output_subdir`: The subdirectory that contains MIXTURE outputs.
-- `comparison_path`: Path to the MIXTURE comparison plot (linear y).
-- `comparison_log_path`: Path to the MIXTURE comparison plot (log y).
+- `comparison_path`: Path to the I vs q comparison plot (empty when `plot_I_q=False`).
+- `comparison_loglog_path`: Path to the log I vs log q comparison plot (empty when `plot_logI_logq=False`).
+- `comparison_log_path`: Path to the log I vs q comparison plot (empty when `plot_logI_q=False`).
 - `distributions_path`: Path to the MIXTURE size distributions plot.
 - `results_csv_path`: Path to the MIXTURE results CSV.
 

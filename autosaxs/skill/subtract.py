@@ -7,16 +7,249 @@ from typing import Dict, List, Optional, Union
 
 import numpy as np
 
+from autosaxs.core.utils import read_saxs, subtraction_correctness, write_saxs
+
 from .deps import (
     EventBus,
     EventType,
     PLTViewer,
     _strip_sub_int_prefix,
     apply_batch,
-    read_saxs,
     run_with_cache,
-    subtract_buffer,
 )
+
+
+def _match_tail_scale_two_step(
+    q_tail: np.ndarray,
+    I_tail: np.ndarray,
+    I_buff_tail: np.ndarray,
+    n_min: int = 2,
+    n_max: int = 6,
+) -> float:
+    if q_tail.size < 3:
+        return 1.0
+    coeffs_buff = np.polyfit(q_tail, I_buff_tail, 1)
+    A_buff, B_buff = coeffs_buff[0], coeffs_buff[1]
+    f_buff_tail = A_buff * q_tail + B_buff
+
+    best_scale = 1.0
+    best_rss = np.inf
+    for n in range(n_min, int(n_max) + 1):
+        if np.any(q_tail <= 0):
+            continue
+        q_inv_n = np.power(q_tail, -n)
+        X = np.column_stack([q_inv_n, f_buff_tail])
+        try:
+            beta, residuals, _, _ = np.linalg.lstsq(X, I_tail, rcond=None)
+            rss = float(np.sum(residuals ** 2)) if residuals.size else np.inf
+            if rss < best_rss:
+                best_rss = rss
+                best_scale = float(beta[1])
+        except (np.linalg.LinAlgError, IndexError, TypeError):
+            continue
+    return best_scale
+
+
+def _normalize_scattering_form(form: str) -> str:
+    key = str(form).strip().lower().replace("_", "-")
+    if key == "linear":
+        return "linear"
+    if key == "porod":
+        return "porod"
+    if key in ("porod-plus-linear", "porod+linear"):
+        return "porod-plus-linear"
+    raise ValueError(
+        f"Unknown scattering form {form!r}; expected 'linear', 'Porod', or 'Porod-plus-linear'"
+    )
+
+
+def _fit_intensity_at_q(
+    q_fit: np.ndarray,
+    I_fit: np.ndarray,
+    form: str,
+    n_min: int,
+    n_max: int,
+    q_eval: float,
+) -> float:
+    form_n = _normalize_scattering_form(form)
+    q_fit = np.asarray(q_fit, dtype=float)
+    I_fit = np.asarray(I_fit, dtype=float)
+    if q_fit.size == 0:
+        return float("nan")
+    if q_eval <= 0 and form_n != "linear":
+        return float("nan")
+
+    if form_n == "linear":
+        if q_fit.size < 2:
+            return float(np.interp(q_eval, q_fit, I_fit)) if q_fit.size == 1 else float("nan")
+        coeffs = np.polyfit(q_fit, I_fit, 1)
+        return float(np.polyval(coeffs, q_eval))
+
+    if np.any(q_fit <= 0):
+        return float("nan")
+
+    if form_n == "porod":
+        if q_fit.size < 2:
+            return float("nan")
+        best_rss = np.inf
+        best_val = float("nan")
+        qe_n = float(q_eval)
+        for n in range(int(n_min), int(n_max) + 1):
+            col = np.power(q_fit, -n).reshape(-1, 1)
+            try:
+                beta, residuals, _, _ = np.linalg.lstsq(col, I_fit, rcond=None)
+                rss = float(np.sum(residuals ** 2)) if residuals.size else 0.0
+                if rss < best_rss:
+                    best_rss = rss
+                    A = float(beta[0])
+                    best_val = A * (qe_n ** (-n))
+            except (np.linalg.LinAlgError, IndexError, TypeError, FloatingPointError):
+                continue
+        return best_val
+
+    if q_fit.size < 3:
+        return float("nan")
+    best_rss = np.inf
+    best_val = float("nan")
+    qe_n = float(q_eval)
+    ones = np.ones_like(q_fit)
+    for n in range(int(n_min), int(n_max) + 1):
+        X = np.column_stack([np.power(q_fit, -n), q_fit, ones])
+        try:
+            beta, residuals, _, _ = np.linalg.lstsq(X, I_fit, rcond=None)
+            rss = float(np.sum(residuals ** 2)) if residuals.size else 0.0
+            if rss < best_rss:
+                best_rss = rss
+                A, B, C = float(beta[0]), float(beta[1]), float(beta[2])
+                best_val = A * (qe_n ** (-n)) + B * qe_n + C
+        except (np.linalg.LinAlgError, IndexError, TypeError, FloatingPointError):
+            continue
+    return best_val
+
+
+def subtract_buffer(
+    buffer_path,
+    src_path,
+    destpath,
+    image_path=None,
+    method="match_tail",
+    match_tail_ops=None,
+    scaling_factor: Optional[float] = None,
+):
+    q_buff, I_buff, sigma_buff, _ = read_saxs(buffer_path)
+
+    manual_scale: Optional[float] = None
+    if scaling_factor is not None:
+        try:
+            manual_scale = float(scaling_factor)
+        except (TypeError, ValueError):
+            manual_scale = None
+        if manual_scale is None or not np.isfinite(manual_scale) or manual_scale <= 0.0:
+            raise ValueError(
+                "subtract_buffer: scaling_factor must be a finite positive number when provided"
+            )
+
+    q, I, sigma, _ = read_saxs(src_path)
+    scaling_factor = 1.00 if manual_scale is None else float(manual_scale)
+    method_key = str(method).strip().lower().replace("-", "_")
+    algo_ops = None
+    if manual_scale is None and method_key in ("match_tail", "point_match"):
+        algo_ops = {
+            "q_range_abs": None,
+            "q_range_rel": (0.8, None),
+            "approach_factor": 1.00,
+            "n_min": 2,
+            "n_max": 6,
+        }
+        if match_tail_ops is None:
+            match_tail_ops = dict()
+        algo_ops.update(match_tail_ops)
+        if algo_ops["q_range_abs"] is not None:
+            algo_ops["q_range_rel"] = None
+
+        assert algo_ops["q_range_abs"] is None or algo_ops["q_range_rel"] is None, (
+            "cant set both q_range_abs and q_range_rel"
+        )
+
+        if not np.array_equal(q, q_buff):
+            I_buff = np.interp(q, q_buff, I_buff)
+
+        q_max = np.max(q)
+        if algo_ops["q_range_rel"] is not None:
+            q0, q1 = algo_ops["q_range_rel"]
+            if q1 is None:
+                q1 = 1.0
+            algo_ops["q_range_abs"] = q0 * q_max, q1 * q_max
+        q0, q1 = algo_ops["q_range_abs"]
+        if q1 is None:
+            q1 = q_max
+        idx = (q0 < q) & (q < q1)
+
+        q_tail = q[idx]
+        I_tail = I[idx]
+        I_buff_tail = I_buff[idx]
+
+        if method_key == "match_tail":
+            scaling_factor = _match_tail_scale_two_step(
+                q_tail,
+                I_tail,
+                I_buff_tail,
+                n_min=int(algo_ops.get("n_min", 2)),
+                n_max=int(algo_ops.get("n_max", 6)),
+            )
+            scaling_factor *= algo_ops.get("approach_factor", 1.00)
+        elif method_key == "point_match":
+            sample_form = algo_ops.get("sample_form", "Porod-plus-linear")
+            buffer_form = algo_ops.get("buffer_form", "linear")
+            q_intersect = float(q1)
+            pm_factor = float(algo_ops.get("point_match_factor", 0.995))
+            n_lo = int(algo_ops.get("n_min", 2))
+            n_hi = int(algo_ops.get("n_max", 6))
+            I_s = _fit_intensity_at_q(q_tail, I_tail, sample_form, n_lo, n_hi, q_intersect)
+            I_b = _fit_intensity_at_q(q_tail, I_buff_tail, buffer_form, n_lo, n_hi, q_intersect)
+            if not np.isfinite(I_s) or not np.isfinite(I_b) or abs(I_b) < 1e-30 * max(1.0, abs(I_s)):
+                scaling_factor = 1.0
+            else:
+                scaling_factor = pm_factor * I_s / I_b
+            scaling_factor *= algo_ops.get("approach_factor", 1.00)
+
+    I_buffer_scaled = I_buff * scaling_factor
+    I_sub = I - I_buffer_scaled
+
+    if sigma_buff is not None and sigma is not None:
+        sigma_buffer_scaled = sigma_buff * scaling_factor
+        sigma_sub = sigma_buffer_scaled + sigma
+    else:
+        sigma_sub = None
+
+    used_ops = None
+    try:
+        used_ops = dict(algo_ops) if isinstance(algo_ops, dict) else None
+    except Exception:
+        used_ops = None
+
+    subtract_meta = {
+        "method": method_key,
+        "scaling_factor": float(scaling_factor),
+        "manual_scaling_factor": bool(manual_scale is not None),
+        "match_tail_ops": used_ops,
+        "correctness": subtraction_correctness(I_sub, sigma_sub),
+    }
+    write_saxs(
+        destpath,
+        q,
+        I_sub,
+        sigma_sub,
+        metadata={
+            "type": "sub",
+            "sample_path": src_path,
+            "buffer_path": buffer_path,
+            "subtract": subtract_meta,
+        },
+    )
+
+    return q, I_sub, I_buffer_scaled, sigma_sub, sigma_buffer_scaled
+
 from .common import (
     ConfigPathExpressionArg,
     DatPathExpressionArg,

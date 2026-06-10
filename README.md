@@ -272,12 +272,14 @@ SAXS / small-angle x-ray scattering: integrate 2D SAXS images to 1D curves (q, I
 - `output_dir` (str, default `.`): Directory where integrated curves are written.
 - `npt` (int, default `1000`): Number of points in the output q grid.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+- `validation_png` (bool, default `False`): If `True`, write a PNG next to each integrated curve showing the source image (log-intensity) with integrator-masked pixels highlighted in semi-transparent red.
 
 ### Returns
 
 `dict[str, str | list[str]]` with:
 
 - `integrated_1d`: List of paths to integrated 1D `.dat` curves (one per input image).
+- `validation_png` (only when `validation_png=True`): List of paths to validation PNG(s), one per input image.
 
 ### Python usage
 
@@ -376,9 +378,9 @@ or legacy `match_tail`, optionally restricted to a q window (`q_min` / `q_max`).
 - `scaling_factor` (float | None, default `None`): If provided, overrides automatic scaling and uses this factor directly (must be finite and > 0).
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
-Important constraint:
+Required q window:
 
-- If you set `q_max`, you must also set `q_min` (otherwise the skill raises `ValueError`).
+- `q_min` and `q_max` must both be set (CLI, Python API, or user config). There are no defaults; the skill raises `ValueError` if either is missing.
 
 ### Returns
 
@@ -388,6 +390,9 @@ Important constraint:
 - `diff_plot_path`: Path to a diff plot PNG.
 - `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
 - `sub_plot_path`: Path to a subtracted curve plot PNG.
+
+Subtraction quality (`correct` or `over-subtracted`) is written into the subtracted `.dat` metadata
+(``subtract.correctness``) and into per-sample report fragments (individual Markdown and summary YAML).
 
 ### Python usage
 
@@ -680,6 +685,9 @@ Prerequisites:
 - `config_path` (str | None, default `None`): Optional path to a YAML config file with a `fit_mixture` section. When omitted, bundled defaults apply.
 - `q_min_nm` / `q_max_nm` (float | None): Optional q bounds (nm^-1); set via CLI or user config (not in bundled template).
 - `maxit`, `max_nph`: MIXTURE parameters; defaults from bundled `fit_mixture` section when omitted.
+- `plot_I_q` (bool, default `False`): Write I vs q fit comparison plot (labels show BIC).
+- `plot_logI_logq` (bool, default `False`): Write log I vs log q fit comparison plot (labels show BIC_log).
+- `plot_logI_q` (bool, default `True`): Write log I vs q fit comparison plot (labels show chi2).
 - `r_min` (float | None): MIXTURE minimum radius (nm). If omitted, defaults to `0.1`. Converted to Å internally for ATSAS MIXTURE.
 - `r_max` (float | None): MIXTURE maximum radius (nm). If omitted, defaults to `rmax_nm` from in-process `fit_sizes`.
 - `poly_min` (float | None): MIXTURE minimum polydispersity (nm). If omitted, defaults to `0.05`.
@@ -695,8 +703,9 @@ Important constraint:
 `dict[str, str]` with:
 
 - `output_subdir`: The subdirectory that contains MIXTURE outputs.
-- `comparison_path`: Path to the MIXTURE comparison plot (linear y).
-- `comparison_log_path`: Path to the MIXTURE comparison plot (log y).
+- `comparison_path`: Path to the I vs q comparison plot (empty when `plot_I_q=False`).
+- `comparison_loglog_path`: Path to the log I vs log q comparison plot (empty when `plot_logI_logq=False`).
+- `comparison_log_path`: Path to the log I vs q comparison plot (empty when `plot_logI_q=False`).
 - `distributions_path`: Path to the MIXTURE size distributions plot.
 - `results_csv_path`: Path to the MIXTURE results CSV.
 

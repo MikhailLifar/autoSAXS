@@ -221,9 +221,8 @@ class FitBodiesWizardDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.addWidget(
             QLabel(
-                "Select body models to fit. Default is ellipsoid only. GNOM / p(r) settings come from "
-                "“Set fit_distances (GNOM / p(r))…”. Run/Apply writes fit_bodies/fit_bodies.conf; the live queue "
-                "runs fit_distances then fit_bodies using the GNOM first/last interval."
+                "Select body models to fit (default: ellipsoid). Run/Apply writes fit_bodies/fit_bodies.conf. "
+                "The live queue runs fit_bodies only; --first comes from in-process Guinier (fit_guinier)."
             )
         )
         lay.addWidget(self._list, 1)
@@ -380,8 +379,33 @@ class FitSizesWizardDialog(QDialog):
         QGuiApplication.clipboard().setText(text)
 
 
-# Written under watchdir/mixture/; only contains the ``mixture:`` section for ``fit_mixture --config-path``.
+# Written under watchdir/mixture/ for persistence (``fit_mixture:`` section; queue uses CLI options).
 LIVEVIEW_MIXTURE_YML_NAME = "liveview_mixture.yml"
+
+
+def _mixture_skill_options_from_form(form: SkillForm) -> dict[str, Any]:
+    """q range and other skill-form options (excludes output_dir / use_cache / config_path)."""
+    try:
+        st = form.state()
+    except Exception:
+        return {}
+    opts = (st.get("options") or {}).copy()
+    out: dict[str, Any] = {}
+    skip = frozenset({"output_dir", "use_cache", "config_path"})
+    for key, value in opts.items():
+        if key in skip or value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        out[str(key)] = value
+    return out
+
+
+def fit_mixture_run_options_from_wizard(wizard: FitMixtureWizardDialog) -> dict[str, Any]:
+    """MIXTURE spinbox params plus q-range (and related) fields from the skill form."""
+    merged = dict(wizard.mixture_params())
+    merged.update(_mixture_skill_options_from_form(wizard._form))  # type: ignore[attr-defined]
+    return merged
 
 
 class FitMixtureWizardDialog(QDialog):
@@ -456,9 +480,9 @@ class FitMixtureWizardDialog(QDialog):
             _remove_skill_option_field(self._form, "config_path")
             lay.addWidget(
                 QLabel(
-                    "MIXTURE settings are saved to mixture/liveview_mixture.yml. Run/Apply stores parameters and, "
-                    "if a profile .dat is set below, runs fit_mixture immediately. The live queue uses the "
-                    "subtracted (or integrated) curve when Polydisperse mixture mode is on."
+                    "Set q_min_nm / q_max_nm below to limit the fit range (recommended). Run/Apply saves options "
+                    "for the live queue; mixture/liveview_mixture.yml is optional persistence. Config file is "
+                    "not required — bundled MIXTURE defaults apply when spinboxes are left at defaults."
                 )
             )
             lay.addWidget(self._mix_group)
@@ -515,7 +539,7 @@ class FitMixtureWizardDialog(QDialog):
 
     def write_mixture_config_yaml(self) -> Path:
         path = self.mixture_config_yaml_path()
-        doc = {"mixture": self.mixture_params()}
+        doc = {"fit_mixture": fit_mixture_run_options_from_wizard(self)}
         path.write_text(yaml.safe_dump(doc, sort_keys=True, allow_unicode=True), encoding="utf-8")
         return path
 
@@ -547,12 +571,15 @@ class FitMixtureWizardDialog(QDialog):
     def build_fit_mixture_request(self) -> RunRequest:
         if self._meta is None:
             raise RuntimeError("fit_mixture skill is not available")
-        cfg_path = self.write_mixture_config_yaml()
         req = self._form.build_request()
-        opts = dict(req.options)
-        opts["config_path"] = str(cfg_path)
+        opts = fit_mixture_run_options_from_wizard(self)
+        opts.pop("output_dir", None)
         opts.pop("use_cache", None)
+        opts.pop("config_path", None)
         opts["use_cache"] = False
+        out = (req.options or {}).get("output_dir")
+        if isinstance(out, str) and out.strip():
+            opts["output_dir"] = out.strip()
         return RunRequest(skill_name=req.skill_name, positional=list(req.positional), options=opts)
 
     def set_running(self, running: bool) -> None:

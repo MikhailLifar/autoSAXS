@@ -126,6 +126,9 @@ def fit_mixture(
     poly_min: Optional[float] = None,
     poly_max: Optional[float] = None,
     max_nph: Optional[int] = None,
+    plot_I_q: Optional[bool] = None,
+    plot_logI_logq: Optional[bool] = None,
+    plot_logI_q: Optional[bool] = None,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
@@ -142,6 +145,9 @@ def fit_mixture(
     - `config_path` (str | None, default `None`): Optional path to a YAML config file with a `fit_mixture` section. When omitted, bundled defaults apply.
     - `q_min_nm` / `q_max_nm` (float | None): Optional q bounds (nm^-1); set via CLI or user config (not in bundled template).
     - `maxit`, `max_nph`: MIXTURE parameters; defaults from bundled `fit_mixture` section when omitted.
+    - `plot_I_q` (bool, default `False`): Write I vs q fit comparison plot (labels show BIC).
+    - `plot_logI_logq` (bool, default `False`): Write log I vs log q fit comparison plot (labels show BIC_log).
+    - `plot_logI_q` (bool, default `True`): Write log I vs q fit comparison plot (labels show chi2).
     - `r_min` (float | None): MIXTURE minimum radius (nm). If omitted, defaults to `0.1`. Converted to Å internally for ATSAS MIXTURE.
     - `r_max` (float | None): MIXTURE maximum radius (nm). If omitted, defaults to `rmax_nm` from in-process `fit_sizes`.
     - `poly_min` (float | None): MIXTURE minimum polydispersity (nm). If omitted, defaults to `0.05`.
@@ -157,8 +163,9 @@ def fit_mixture(
     `dict[str, str]` with:
 
     - `output_subdir`: The subdirectory that contains MIXTURE outputs.
-    - `comparison_path`: Path to the MIXTURE comparison plot (linear y).
-    - `comparison_log_path`: Path to the MIXTURE comparison plot (log y).
+    - `comparison_path`: Path to the I vs q comparison plot (empty when `plot_I_q=False`).
+    - `comparison_loglog_path`: Path to the log I vs log q comparison plot (empty when `plot_logI_logq=False`).
+    - `comparison_log_path`: Path to the log I vs q comparison plot (empty when `plot_logI_q=False`).
     - `distributions_path`: Path to the MIXTURE size distributions plot.
     - `results_csv_path`: Path to the MIXTURE results CSV.
 
@@ -198,6 +205,9 @@ def fit_mixture(
         poly_min=poly_min,
         poly_max=poly_max,
         max_nph=max_nph,
+        plot_I_q=plot_I_q,
+        plot_logI_logq=plot_logI_logq,
+        plot_logI_q=plot_logI_q,
     )
     required = ("maxit", "max_nph")
     missing = [k for k in required if k not in merged or merged[k] is None]
@@ -215,6 +225,9 @@ def fit_mixture(
     mixture_param_overrides: Dict[str, Any] = {
         "maxit": int(merged["maxit"]),
         "max_nph": int(merged["max_nph"]),
+        "plot_I_q": bool(merged.get("plot_I_q", False)),
+        "plot_logI_logq": bool(merged.get("plot_logI_logq", False)),
+        "plot_logI_q": bool(merged.get("plot_logI_q", True)),
     }
     for key in ("r_min", "r_max", "poly_min", "poly_max"):
         if key in merged and merged[key] is not None:
@@ -288,6 +301,9 @@ def _fit_mixture_paths(
         r_max=mixture_params["r_max"],
         poly_min=mixture_params["poly_min"],
         poly_max=mixture_params["poly_max"],
+        plot_I_q=bool(mixture_param_overrides.get("plot_I_q", False)),
+        plot_logI_logq=bool(mixture_param_overrides.get("plot_logI_logq", False)),
+        plot_logI_q=bool(mixture_param_overrides.get("plot_logI_q", True)),
     )
     if result is None:
         raise RuntimeError("fit_mixture failed")
@@ -296,15 +312,16 @@ def _fit_mixture_paths(
 
     obase = _strip_base(os.path.splitext(os.path.basename(profile))[0])
     dest_dir = str(result["output_subdir"])
-    comp = os.path.basename(result["comparison_path"])
+    comp = _first_comparison_basename(result)
     dist = os.path.basename(result["distributions_path"])
     csvb = os.path.basename(result["results_csv_path"])
     md_parts = [
         "### MIXTURE (multi-phase spheres)\n",
         f"Best model: **{result.get('best_label', '')}**; BIC_log = {result.get('BIC_log')}\n",
-        f"![Comparison I(q)]({comp})\n",
-        f"![Size distributions]({dist})\n",
     ]
+    if comp:
+        md_parts.append(f"![Comparison I(q)]({comp})\n")
+    md_parts.append(f"![Size distributions]({dist})\n")
     summary_refs = [
         {
             "role": "mixture_scores_preview",
@@ -313,8 +330,9 @@ def _fit_mixture_paths(
             "row": 0,
             "columns": ["label", "BIC_log", "n_phases"],
         },
-        {"role": "mixture_comparison_png", "path": comp, "format": "png"},
     ]
+    if comp:
+        summary_refs.append({"role": "mixture_comparison_png", "path": comp, "format": "png"})
     write_skill_report_fragments(
         dest_dir,
         obase,
@@ -324,8 +342,17 @@ def _fit_mixture_paths(
     )
     return {
         "output_subdir": result["output_subdir"],
-        "comparison_path": result["comparison_path"],
+        "comparison_path": result.get("comparison_path", ""),
+        "comparison_loglog_path": result.get("comparison_loglog_path", ""),
         "comparison_log_path": result.get("comparison_log_path", ""),
         "distributions_path": result["distributions_path"],
         "results_csv_path": result["results_csv_path"],
     }
+
+
+def _first_comparison_basename(result: Dict[str, Any]) -> str:
+    for key in ("comparison_log_path", "comparison_path", "comparison_loglog_path"):
+        path = str(result.get(key) or "").strip()
+        if path:
+            return os.path.basename(path)
+    return ""

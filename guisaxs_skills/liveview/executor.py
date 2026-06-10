@@ -561,22 +561,12 @@ class LiveviewJobExecutor(QObject):
             ]
 
         if mode == AnalysisMode.MONODISPERSE_BODIES:
-            outdir = wd / "fit_distances"
-            outdir.mkdir(parents=True, exist_ok=True)
-            opts: dict = {}
-            if self._state.fit_distances_conf_path is not None:
-                opts.update(self._load_yaml_options(self._state.fit_distances_conf_path))
-            opts.pop("output_dir", None)
-            opts.pop("use_cache", None)
-            opts["output_dir"] = str(outdir.resolve())
-            opts["use_cache"] = False
             bodies_dir = wd / "fit_bodies"
             bodies_dir.mkdir(parents=True, exist_ok=True)
             shapes = self._state.fit_bodies_shapes
             if not shapes:
                 shapes = list(DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES)
             return [
-                JobStep(name="fit_distances", request=RunRequest("fit_distances", [prof], opts)),
                 JobStep(
                     name="fit_bodies",
                     request=RunRequest(
@@ -586,9 +576,6 @@ class LiveviewJobExecutor(QObject):
                             "output_dir": str(bodies_dir.resolve()),
                             "use_cache": False,
                             "shapes": list(shapes),
-                            # Prefer parsed values from executor enrichment when available.
-                            "first": "${fit_distances.selected_first}",
-                            "last": "${fit_distances.selected_last}",
                         },
                     ),
                 ),
@@ -607,23 +594,35 @@ class LiveviewJobExecutor(QObject):
             return [JobStep(name="fit_sizes", request=RunRequest("fit_sizes", [prof], opts))]
 
         if mode == AnalysisMode.POLYDISPERSE_MIXTURE:
-            cfg = self._state.fit_mixture_config_path
-            if cfg is None or not cfg.is_file():
-                raise RuntimeError("fit_mixture config_path missing")
             outdir = wd / "mixture"
             outdir.mkdir(parents=True, exist_ok=True)
+            opts: dict = {"output_dir": str(outdir.resolve()), "use_cache": False}
+            opts.update(self._fit_mixture_run_options())
             return [
                 JobStep(
                     name="fit_mixture",
-                    request=RunRequest(
-                        "fit_mixture",
-                        [prof],
-                        {"output_dir": str(outdir.resolve()), "use_cache": False, "config_path": str(cfg.resolve())},
-                    ),
+                    request=RunRequest("fit_mixture", [prof], opts),
                 )
             ]
 
         return []
+
+    def _fit_mixture_run_options(self) -> dict:
+        """Skill options from wizard Apply; omit empty values and persistence-only keys."""
+        raw = self._state.fit_mixture_options
+        if not isinstance(raw, dict):
+            return {}
+        skip = frozenset({"output_dir", "use_cache", "config_path"})
+        out: dict = {}
+        for key, value in raw.items():
+            if key in skip:
+                continue
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            out[str(key)] = value
+        return out
 
     @staticmethod
     def _load_yaml_options(path: Optional[Path]) -> dict:

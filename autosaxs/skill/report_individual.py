@@ -67,7 +67,9 @@ def collect_report_data_from_directory(directory: str, basename: str) -> Dict[st
     sample_mixture = os.path.join(mixture_dir, base)
     if os.path.isdir(sample_mixture):
         comp = _first_existing([
+            os.path.join(sample_mixture, "mixture_comparison_logI_vs_q.png"),
             os.path.join(sample_mixture, "mixture_comparison_I_vs_q.png"),
+            os.path.join(sample_mixture, "mixture_comparison_logI_vs_logq.png"),
             os.path.join(sample_mixture, "comparison.png"),
             os.path.join(sample_mixture, "mixture_comparison.png"),
         ])
