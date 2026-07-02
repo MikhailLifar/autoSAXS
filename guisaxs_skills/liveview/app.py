@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import QApplication
 
 from ..core.event_bus import EventBus
 from ..ui.style import apply_style
-from .workdir import load_last_watchdir, save_last_watchdir, select_watchdir
+from .workdir import default_watchdir, load_last_watchdir, save_last_watchdir
 from .window import LiveviewMainWindow
 
 
@@ -17,7 +17,7 @@ def run_liveview_app() -> None:
 
     bus = EventBus()
 
-    watchdir = load_last_watchdir() or select_watchdir(parent=None)
+    watchdir = load_last_watchdir() or default_watchdir()
     if watchdir is None:
         return
     save_last_watchdir(watchdir)

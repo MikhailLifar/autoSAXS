@@ -727,7 +727,7 @@ class Controller:
                     calibrant_path,
                     directory,
                     config_path=config_path,
-                    mask=mask_path,
+                    mask=mask_path or "",
                     mask_mode=mask_mode,
                     use_cache=fast_forward,
                 )

@@ -522,6 +522,24 @@ def _add_skill_subparser(
                     help="Optional YAML config file (skill-keyed sections); bundled defaults apply when omitted",
                 )
                 continue
+            if param.name == "wavelength":
+                p.add_argument(
+                    opt_name,
+                    dest=param.name,
+                    type=_parse_optional_float,
+                    default=param.default,
+                    help="X-ray wavelength in Ångström",
+                )
+                continue
+            if param.name == "dist_guess":
+                p.add_argument(
+                    opt_name,
+                    dest=param.name,
+                    type=_parse_optional_float,
+                    default=param.default,
+                    help="Initial sample-detector distance in metres (before pyFAI refinement)",
+                )
+                continue
 
             ann = type_hints.get(param.name, param.annotation)
 
@@ -563,6 +581,14 @@ def _add_skill_subparser(
                     help="BODIES model names to fit (default: all). Example: --shapes cylinder ellipsoid",
                 )
                 continue
+
+            if param.default is inspect._empty:
+                if ann is float:
+                    p.add_argument(opt_name, dest=param.name, type=float, required=True)
+                    continue
+                if ann is int:
+                    p.add_argument(opt_name, dest=param.name, type=int, required=True)
+                    continue
 
             p.add_argument(opt_name, dest=param.name, default=param.default)
 

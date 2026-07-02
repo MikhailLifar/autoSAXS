@@ -3,6 +3,9 @@ from __future__ import annotations
 from PyQt5.QtGui import QColor, QFont, QPalette
 from PyQt5.QtWidgets import QApplication, QStyleFactory
 
+COLOR_MUTED_TEXT = "#728195"
+COLOR_REQUIRED_STAR = "#ff4d4f"
+
 
 def apply_style(app: QApplication) -> None:
     """
@@ -34,14 +37,14 @@ def apply_style(app: QApplication) -> None:
     app.setPalette(pal)
 
     app.setStyleSheet(
-        """
-        QMainWindow { background: #121821; }
-        QLabel { color: #e7eef6; }
+        f"""
+        QMainWindow {{ background: #121821; }}
+        QLabel {{ color: #e7eef6; }}
 
-        QSplitter::handle { background: #0f151d; }
+        QSplitter::handle {{ background: #0f151d; }}
 
         QLineEdit, QTextEdit, QPlainTextEdit,
-        QComboBox, QSpinBox, QDoubleSpinBox {
+        QComboBox, QSpinBox, QDoubleSpinBox {{
             background: #0f151d;
             border: 1px solid #2a3646;
             border-radius: 8px;
@@ -49,82 +52,84 @@ def apply_style(app: QApplication) -> None:
             color: #e7eef6;
             selection-background-color: #4c8dff;
             selection-color: #ffffff;
-        }
+        }}
+        /* Keep placeholder color muted for general readability. */
+        QLineEdit::placeholder {{ color: {COLOR_MUTED_TEXT}; }}
 
-        QComboBox::drop-down {
+        QComboBox::drop-down {{
             border: 0;
             width: 24px;
-        }
-        QComboBox QAbstractItemView {
+        }}
+        QComboBox QAbstractItemView {{
             background-color: #0f151d;
             color: #e7eef6;
             border: 1px solid #2a3646;
             selection-background-color: #4c8dff;
             selection-color: #ffffff;
             outline: 0;
-        }
+        }}
 
         QSpinBox::up-button, QSpinBox::down-button,
-        QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+        QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
             background: #182232;
             border: 0;
             width: 18px;
-        }
+        }}
         QSpinBox::up-button:hover, QSpinBox::down-button:hover,
-        QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
+        QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {{
             background: #1b2a3d;
-        }
+        }}
 
-        QCheckBox { color: #e7eef6; spacing: 6px; }
+        QCheckBox {{ color: #e7eef6; spacing: 6px; }}
 
-        QGroupBox {
+        QGroupBox {{
             border: 1px solid #2a3646;
             border-radius: 12px;
             margin-top: 10px;
             padding: 8px;
-        }
-        QGroupBox::title {
+        }}
+        QGroupBox::title {{
             subcontrol-origin: margin;
             left: 10px;
             padding: 0 6px 0 6px;
             color: #a7b7c8;
-        }
+        }}
 
-        QPushButton {
+        QPushButton {{
             background: #182232;
             border: 1px solid #2a3646;
             border-radius: 12px;
             padding: 7px 10px;
-        }
-        QPushButton:hover { border-color: #4c8dff; }
-        QPushButton:disabled { color: #728195; background: #141c26; }
+        }}
+        QPushButton:hover {{ border-color: #4c8dff; }}
+        QPushButton:disabled {{ color: {COLOR_MUTED_TEXT}; background: #141c26; }}
 
         /* High-contrast help button */
-        QPushButton#helpButton {
+        QPushButton#helpButton {{
             background: #4c8dff;
             color: #0b1016;
             border: 0;
             border-radius: 11px;
             font-weight: 700;
-        }
-        QPushButton#helpButton:hover { background: #6aa0ff; }
+        }}
+        QPushButton#helpButton:hover {{ background: #6aa0ff; }}
 
-        QTabWidget::pane { border: 0; }
+        QTabWidget::pane {{ border: 0; }}
 
-        QListWidget {
+        QListWidget {{
             background: #0f151d;
             border: 1px solid #2a3646;
             border-radius: 12px;
             padding: 6px;
-        }
-        QListWidget::item {
+        }}
+        QListWidget::item {{
             padding: 8px 10px;
             border-radius: 8px;
-        }
-        QListWidget::item:selected {
+        }}
+        QListWidget::item:selected {{
             background: #1b2a3d;
             border: 1px solid #4c8dff;
-        }
+        }}
         """
     )
 

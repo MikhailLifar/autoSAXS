@@ -27,21 +27,32 @@ class _Handler(FileSystemEventHandler):
         self._on_new_file = on_new_file
         self._started_at = started_at
 
+    def _notify_tif(self, path: str, *, require_mtime_after_start: bool) -> None:
+        if not path or not _is_tif(path):
+            return
+        if require_mtime_after_start:
+            # Ignore files whose last modification predates the watcher (pre-existing at startup).
+            try:
+                if os.path.getmtime(path) < self._started_at:
+                    return
+            except Exception:
+                pass
+        self._on_new_file(path, time.monotonic())
+
     def on_created(self, event) -> None:  # type: ignore[override]
         try:
             if getattr(event, "is_directory", False):
                 return
-            src = getattr(event, "src_path", "")
-            if not src or not _is_tif(src):
+            self._notify_tif(getattr(event, "src_path", ""), require_mtime_after_start=True)
+        except Exception:
+            return
+
+    def on_modified(self, event) -> None:  # type: ignore[override]
+        # In-place overwrites (cp/mv onto an existing name) usually emit modified, not created.
+        try:
+            if getattr(event, "is_directory", False):
                 return
-            # Best-effort: ignore pre-existing files (watcher started after they existed).
-            try:
-                mtime = os.path.getmtime(src)
-                if mtime < self._started_at:
-                    return
-            except Exception:
-                pass
-            self._on_new_file(src, time.monotonic())
+            self._notify_tif(getattr(event, "src_path", ""), require_mtime_after_start=True)
         except Exception:
             return
 
@@ -50,10 +61,7 @@ class _Handler(FileSystemEventHandler):
         try:
             if getattr(event, "is_directory", False):
                 return
-            dest = getattr(event, "dest_path", "")
-            if not dest or not _is_tif(dest):
-                return
-            self._on_new_file(dest, time.monotonic())
+            self._notify_tif(getattr(event, "dest_path", ""), require_mtime_after_start=False)
         except Exception:
             return
 

@@ -132,9 +132,14 @@ def _gnom_path_from_fit_distances(
         use_cache=False,
         per_sample_subdir_override="never",
     )
+    from .gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
+
+    if not is_atsas_fit_ok(result):
+        raise RuntimeError(
+            failure_message_from_result(result, skill_id="fit_distances")
+            or "fit_dammif: fit_distances did not produce a GNOM .out; cannot run DAMMIF."
+        )
     gnom_path = result.get("best_gnom_out_path")
-    if not gnom_path or not os.path.isfile(str(gnom_path)):
-        raise RuntimeError("fit_dammif: fit_distances did not produce best_gnom_out_path; cannot run DAMMIF.")
     gnom_path = os.path.normpath(os.path.abspath(os.path.expanduser(str(gnom_path))))
     if not os.path.isfile(gnom_path):
         raise RuntimeError(f"fit_dammif: GNOM .out not found after resolve: {gnom_path}")

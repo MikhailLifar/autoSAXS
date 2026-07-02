@@ -11,6 +11,7 @@ from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 from ..core.models import RunRequest
 from ..core.paths import runs_dir
 from ..logic.runner_qprocess import RunOutcome, SkillRunner
+from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
 from .queue import FIFOQueue, QueueItem
 from .stability import StabilityConfig, StabilityTracker
 from .state import (
@@ -528,6 +529,14 @@ class LiveviewPipeline(QObject):
             self._chain_fit_bodies_after = False
             prof = self._analysis_profile_abs
 
+            if not is_atsas_fit_ok(outcome.result):
+                self.error.emit(
+                    failure_message_from_result(outcome.result, skill_id="fit_distances")
+                )
+                self._analysis_profile_abs = None
+                self._finish_current(True)
+                return
+
             if chain_dam:
                 gnom = outcome.result.get("best_gnom_out_path")
                 gpath = ""
@@ -563,7 +572,13 @@ class LiveviewPipeline(QObject):
             self._finish_current(True)
             return
 
-        if step in ("fit_bodies", "fit_sizes", "fit_mixture"):
+        if step in ("fit_bodies", "fit_mixture"):
+            self._finish_current(True)
+            return
+
+        if step == "fit_sizes":
+            if not is_atsas_fit_ok(outcome.result):
+                self.error.emit(failure_message_from_result(outcome.result, skill_id="fit_sizes"))
             self._finish_current(True)
             return
 

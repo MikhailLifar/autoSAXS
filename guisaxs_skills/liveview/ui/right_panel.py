@@ -27,6 +27,7 @@ from ...ui.curve_plot import CurvePlot
 from ...ui.path_field import PathField
 from ...ui.preview_panel import PreviewPanel
 from ..state import AnalysisMode, LiveviewSessionState, LiveviewState
+from autosaxs.skill.gnom_fit_common import failure_message_from_result
 from .right_wizards import (
     LIVEVIEW_MIXTURE_YML_NAME,
     FitBodiesWizardDialog,
@@ -428,13 +429,17 @@ class LiveviewRightPanel(QWidget):
     def clear_output_previews(self) -> None:
         """Clear analysis thumbnails and 3D viewers (e.g. after switching watch directory)."""
         self._fit_plot_pr.show_path("")
+        self._hint_fit_pr.setText("—")
         self._hint_fit_pr.setVisible(True)
         self._pr_plot_pr.show_path("")
+        self._hint_pr_pr.setText("—")
         self._hint_pr_pr.setVisible(True)
 
         self._fit_plot_dam.show_path("")
+        self._hint_fit_dam.setText("—")
         self._hint_fit_dam.setVisible(True)
         self._pr_plot_dam.show_path("")
+        self._hint_pr_dam.setText("—")
         self._hint_pr_dam.setVisible(True)
         self._viewer_dam.clear()
 
@@ -446,8 +451,10 @@ class LiveviewRightPanel(QWidget):
         self._viewer_bodies.clear()
 
         self._fit_plot_dr.show_path("")
+        self._hint_fit_dr.setText("—")
         self._hint_fit_dr.setVisible(True)
         self._dr_plot.show_path("")
+        self._hint_dr.setText("—")
         self._hint_dr.setVisible(True)
 
         self._mix_comp.show_path("")
@@ -987,27 +994,74 @@ class LiveviewRightPanel(QWidget):
             {"fit_vs_exp_png_path": fit_png or "", "best_pr_png_path": pr_png or ""}
         )
 
+    def _resolve_output_subdir(self, sub: str) -> Path:
+        p = Path(sub.strip()).expanduser()
+        if p.is_absolute():
+            return p.resolve()
+        return (self._state.watchdir / p).resolve()
+
+    @staticmethod
+    def _looks_like_atsas_fit_failure(result: dict) -> bool:
+        """True only for an explicit ATSAS/GNOM failure payload, not empty pending outputs."""
+        ok = result.get("atsas_fit_ok")
+        if ok is False:
+            return True
+        if isinstance(ok, str) and ok.strip().lower() in ("false", "0", "no"):
+            return True
+        gf = result.get("gnom_failed")
+        if gf is True:
+            return True
+        if isinstance(gf, str) and gf.strip().lower() in ("true", "1", "yes"):
+            return True
+        msg = result.get("failure_message")
+        if isinstance(msg, str) and msg.strip():
+            return True
+        return False
+
+    @staticmethod
+    def _result_targets_fit_sizes(result: dict) -> bool:
+        return "best_dr_png_path" in result or "dr_csv_path" in result
+
+    @staticmethod
+    def _result_targets_gnom_pr(result: dict) -> bool:
+        return (
+            "fit_vs_exp_png_path" in result
+            or "best_pr_png_path" in result
+            or _norm_path(result.get("best_gnom_out_path"))
+        )
+
     def ingest_skill_result(self, result: dict) -> None:
         if not isinstance(result, dict):
             return
+        # Skills such as fit_dammif / fit_bodies / fit_mixture return no atsas_fit_ok flag.
         if result.get("comparison_path") or result.get("distributions_path"):
             self._apply_mixture_outputs(result)
             return
-        if _norm_path(result.get("best_dr_png_path")):
-            self._apply_fit_sizes_outputs(result)
-            return
-        if _norm_path(result.get("best_pr_png_path")) or _norm_path(result.get("fit_vs_exp_png_path")):
-            self._apply_gnom_pr_outputs(result)
-            return
         sub = result.get("output_subdir")
         if isinstance(sub, str) and sub.strip():
-            sd = Path(sub.strip()).resolve()
-            if (sd / "dammif_fits.yml").is_file() or list(sd.glob("dammif-*.cif")):
+            sd = self._resolve_output_subdir(sub)
+            if (sd / "dammif_fits.yml").is_file() or any(sd.glob("dammif-*.cif")):
                 self._apply_dammif_subdir(sd)
                 return
             if (sd / "bodies_fits.yml").is_file():
                 self._apply_bodies_subdir(sd)
                 return
+        if self._result_targets_fit_sizes(result):
+            if self._looks_like_atsas_fit_failure(result):
+                self._apply_fit_sizes_failure(
+                    failure_message_from_result(result, skill_id="fit_sizes")
+                )
+            else:
+                self._apply_fit_sizes_outputs(result)
+            return
+        if self._result_targets_gnom_pr(result):
+            if self._looks_like_atsas_fit_failure(result):
+                self._apply_gnom_pr_failure(
+                    failure_message_from_result(result, skill_id="fit_distances")
+                )
+            else:
+                self._apply_gnom_pr_outputs(result)
+            return
 
     def _apply_gnom_pr_outputs(self, result: dict) -> None:
         fp = _norm_path(result.get("fit_vs_exp_png_path"))
@@ -1022,13 +1076,37 @@ class LiveviewRightPanel(QWidget):
                 plot.show_path(fp, path_label_visible=show_fname)
             else:
                 plot.show_path("")
+                hint.setText("—")
                 hint.setVisible(True)
             if pp and os.path.isfile(pp):
                 prhint.setVisible(False)
                 prplot.show_path(pp, path_label_visible=show_fname)
             else:
                 prplot.show_path("")
+                prhint.setText("—")
                 prhint.setVisible(True)
+
+    def _apply_gnom_pr_failure(self, message: str) -> None:
+        text = (message or "").strip() or "DATGNOM/GNOM failed."
+        for plot, hint, prplot, prhint in (
+            (self._fit_plot_pr, self._hint_fit_pr, self._pr_plot_pr, self._hint_pr_pr),
+            (self._fit_plot_dam, self._hint_fit_dam, self._pr_plot_dam, self._hint_pr_dam),
+        ):
+            plot.show_path("")
+            hint.setText(text)
+            hint.setVisible(True)
+            prplot.show_path("")
+            prhint.setText(text)
+            prhint.setVisible(True)
+
+    def _apply_fit_sizes_failure(self, message: str) -> None:
+        text = (message or "").strip() or "GNOM failed."
+        self._fit_plot_dr.show_path("")
+        self._hint_fit_dr.setText(text)
+        self._hint_fit_dr.setVisible(True)
+        self._dr_plot.show_path("")
+        self._hint_dr.setText(text)
+        self._hint_dr.setVisible(True)
 
     def _apply_fit_sizes_outputs(self, result: dict) -> None:
         fp = _norm_path(result.get("fit_vs_exp_png_path"))
@@ -1038,12 +1116,14 @@ class LiveviewRightPanel(QWidget):
             self._fit_plot_dr.show_path(fp)
         else:
             self._fit_plot_dr.show_path("")
+            self._hint_fit_dr.setText("—")
             self._hint_fit_dr.setVisible(True)
         if dp and os.path.isfile(dp):
             self._hint_dr.setVisible(False)
             self._dr_plot.show_path(dp)
         else:
             self._dr_plot.show_path("")
+            self._hint_dr.setText("—")
             self._hint_dr.setVisible(True)
 
     def _apply_mixture_outputs(self, result: dict) -> None:

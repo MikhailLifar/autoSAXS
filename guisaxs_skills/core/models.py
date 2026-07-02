@@ -19,7 +19,7 @@ class RunState(str, Enum):
 @dataclass(frozen=True)
 class SkillParam:
     name: str
-    kind: str  # positional|required|optional|kwonly
+    kind: str  # positional|required|optional|kwonly|required_kwonly
     default: Optional[Any] = None
     annotation: Optional[str] = None
 

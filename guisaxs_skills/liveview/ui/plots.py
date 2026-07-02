@@ -560,8 +560,17 @@ class Image2DPlot(FigureCanvas):
         self._ax = self._fig.add_subplot(111)
         self._cbar = None
         self._cax = None
+        self._last_image_shape: Optional[tuple[int, int]] = None
+        self._last_tiff_path: str = ""
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.updateGeometry()
+
+    def last_image_shape(self) -> Optional[tuple[int, int]]:
+        """Return (H, W) of the last successfully loaded TIFF, or None."""
+        return self._last_image_shape
+
+    def last_tiff_path(self) -> str:
+        return self._last_tiff_path
 
     def _remove_colorbar(self) -> None:
         if self._cbar is not None:
@@ -580,6 +589,8 @@ class Image2DPlot(FigureCanvas):
     def clear(self) -> None:
         self._remove_colorbar()
         self._ax.clear()
+        self._last_image_shape = None
+        self._last_tiff_path = ""
         self.draw_idle()
         self.setCursor(Qt.ArrowCursor)
 
@@ -607,6 +618,13 @@ class Image2DPlot(FigureCanvas):
         # If multi-frame, show first.
         if a.ndim > 2:
             a = a.reshape((-1,) + a.shape[-2:])[0]
+        # Store shape in raw array coordinates (H, W).
+        try:
+            self._last_image_shape = (int(a.shape[0]), int(a.shape[1]))
+            self._last_tiff_path = str(path or "").strip()
+        except Exception:
+            self._last_image_shape = None
+            self._last_tiff_path = ""
         a = np.asarray(a, dtype=float)
         a = np.log1p(np.maximum(a, 0.0))
 

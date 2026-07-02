@@ -270,10 +270,10 @@ def subtract(
     buffer_1d: SingletonDatPathExpressionArg,
     output_dir: str = ".",
     *,
+    q_min: float,
+    q_max: float,
     config_path: Optional[ConfigPathExpressionArg] = None,
     method: Optional[str] = None,
-    q_min: Optional[float] = None,
-    q_max: Optional[float] = None,
     sample_form: Optional[str] = None,
     buffer_form: Optional[str] = None,
     point_match_factor: Optional[float] = None,
@@ -291,16 +291,14 @@ def subtract(
     - `output_dir` (str, default `.`): Directory where subtraction outputs are written.
     - `config_path` (str | None, default `None`): Optional path to a YAML config file with a `subtract` section. When omitted, bundled defaults apply for method/forms; q-window keys come from CLI or user file only.
     - `method` (str | None, default `None`): `point_match` or `match_tail`. Defaults from bundled config when omitted.
-    - `q_min` (float | None, default `None`): Lower bound of q-range (CLI or user config; not in bundled template).
-    - `q_max` (float | None, default `None`): Upper bound of q-range; for `point_match` the match uses this as q intersect (upper edge of the window).
+    - `q_min` (float): Lower bound of q-range (nm⁻¹). Required; may be overridden by a user config file `subtract` section.
+    - `q_max` (float): Upper bound of q-range (nm⁻¹); for `point_match` the match uses this as q intersect (upper edge of the window). Required; may be overridden by a user config file `subtract` section.
     - `sample_form` / `buffer_form` (str | None): For `point_match` only — each is `linear`, `Porod`, or `Porod-plus-linear`.
     - `point_match_factor` (float | None, default `None`): For `point_match`, scale satisfies `point_match_factor * I_sample_fit(q_max) = scale * I_buffer_fit(q_max)`.
     - `scaling_factor` (float | None, default `None`): If provided, overrides automatic scaling and uses this factor directly (must be finite and > 0).
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
-    Required q window:
-
-    - `q_min` and `q_max` must both be set (CLI, Python API, or user config). There are no defaults; the skill raises `ValueError` if either is missing.
+    The q window (`q_min`, `q_max`) is always required at the Python API and CLI. A user config file may supply values that override the arguments passed to `subtract()`.
 
     ### Returns
 

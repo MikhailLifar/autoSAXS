@@ -11,13 +11,19 @@ from PyQt5.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QVBoxLayout,
+    QWidget,
 )
 
 from ...logic.session_state import SessionPathHints
 from ...logic.skill_catalog import discover_skills
+from ...ui.path_field import PathField
 from ...ui.run_controls import RunControls
 from ...ui.skill_form import SkillForm
+from .plots import DropTiffImageCanvas
+from PyQt5.QtWidgets import QLineEdit
+from .plots import mpl_navigation_toolbar
 
 
 def _empty_hints():
@@ -50,6 +56,13 @@ def _disable_subtract_sample_field(form: SkillForm, meta) -> None:
             continue
         if i < len(form._pos_widgets):  # type: ignore[attr-defined]
             w = form._pos_widgets[i]  # type: ignore[attr-defined]
+            try:
+                lbl = form._pos_layout.labelForField(w)  # type: ignore[attr-defined]
+                if lbl is not None:
+                    lbl.setEnabled(False)
+                    lbl.setVisible(False)
+            except Exception:
+                pass
             w.setEnabled(False)
             w.setVisible(False)
         break
@@ -62,8 +75,28 @@ class CalibrationWizardDialog(QDialog):
         super().__init__(parent)
         self._watchdir = watchdir
         self.setWindowTitle("Set calibration")
-        self.setMinimumWidth(560)
-        self.resize(720, 640)
+        # Make it a true top-level window (not a "dialog" window type) so WMs show min/max controls.
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.CustomizeWindowHint
+            | Qt.WindowTitleHint
+            | Qt.WindowSystemMenuHint
+            | Qt.WindowCloseButtonHint
+            | Qt.WindowMinMaxButtonsHint
+        )
+        self.setSizeGripEnabled(True)
+        # Default size: 75% width, 80% height of available screen.
+        try:
+            scr = QGuiApplication.primaryScreen()
+            geo = scr.availableGeometry() if scr is not None else None
+            if geo is not None:
+                w = max(980, int(0.75 * int(geo.width())))
+                h = max(720, int(0.80 * int(geo.height())))
+                self.resize(w, h)
+                self.setMinimumSize(860, 640)
+        except Exception:
+            self.setMinimumWidth(980)
+            self.resize(1260, 820)
 
         skills = {m.name: m for m in discover_skills()}
         meta = skills.get("calibrate")
@@ -71,6 +104,9 @@ class CalibrationWizardDialog(QDialog):
         self._controls = RunControls()
         self._controls.run_button.setText("Run")
         self._meta = meta
+        self._viewer = DropTiffImageCanvas()
+        self._viewer_toolbar = None
+        self._mask_wizard = None
 
         lay = QVBoxLayout(self)
         if meta is not None:
@@ -90,8 +126,33 @@ class CalibrationWizardDialog(QDialog):
                     "config_path is optional — leave empty to use bundled autosaxs defaults."
                 )
             )
-            lay.addWidget(self._form, 1)
-            lay.addWidget(self._controls)
+            splitter = QSplitter(Qt.Horizontal)
+            splitter.setChildrenCollapsible(False)
+            viewer_wrap = QWidget()
+            viewer_lay = QVBoxLayout(viewer_wrap)
+            viewer_lay.setContentsMargins(0, 0, 0, 0)
+            self._viewer_toolbar = mpl_navigation_toolbar(self._viewer, viewer_wrap)
+            viewer_lay.addWidget(self._viewer_toolbar, 0)
+            viewer_lay.addWidget(self._viewer, 1)
+            splitter.addWidget(viewer_wrap)
+
+            right = QWidget()
+            right_lay = QVBoxLayout(right)
+            right_lay.setContentsMargins(0, 0, 0, 0)
+            top_row = QHBoxLayout()
+            top_row.addStretch(1)
+            self._btn_create_mask = QPushButton("Create mask")
+            self._btn_create_mask.setToolTip("Create or edit a mask for this calibration image")
+            top_row.addWidget(self._btn_create_mask, 0, Qt.AlignRight)
+            right_lay.addLayout(top_row)
+            right_lay.addWidget(self._form, 1)
+            splitter.addWidget(right)
+            splitter.setStretchFactor(0, 3)
+            splitter.setStretchFactor(1, 2)
+
+            lay.addWidget(splitter, 1)
+
+            lay.addWidget(self._controls, 0)
             self._btn_reset = QPushButton("Reset")
             self._btn_reset.setToolTip(
                 "Clear calibration from this session (state A), turn analysis Off, and empty this form"
@@ -113,6 +174,113 @@ class CalibrationWizardDialog(QDialog):
         self._controls.run_button.clicked.connect(self._on_run_clicked)
         self._controls.cancel_button.clicked.connect(self._on_cancel_clicked)
         self._controls.copy_cli_button.clicked.connect(self._on_copy_cli)
+        if meta is not None:
+            self._wire_viewer_updates()
+            self._btn_create_mask.clicked.connect(self._open_mask_wizard)  # type: ignore[attr-defined]
+            self._viewer.mpl_connect("button_press_event", self._on_viewer_click_open_mask)
+            self._viewer.tiff_files_dropped.connect(self._on_tiff_dropped_to_viewer)
+            self._refresh_viewer_from_form()
+
+    def _on_tiff_dropped_to_viewer(self, paths_obj: object) -> None:
+        if not isinstance(paths_obj, list):
+            return
+        paths = [p for p in paths_obj if isinstance(p, str) and p.strip()]
+        if not paths:
+            return
+        f = self._calib_image_field()
+        if f is None:
+            return
+        # Prefer first dropped file.
+        f.set_text(paths[0])
+        self._refresh_viewer_from_form()
+
+    def _calib_image_field(self) -> PathField | None:
+        try:
+            w0 = self._form._pos_widgets[0]  # type: ignore[attr-defined]
+        except Exception:
+            return None
+        return w0 if isinstance(w0, PathField) else None
+
+    def _mask_field(self) -> PathField | None:
+        try:
+            w = self._form._opt_fields.get("mask")  # type: ignore[attr-defined]
+        except Exception:
+            return None
+        return w if isinstance(w, PathField) else None
+
+    def _mask_mode_field(self):
+        try:
+            w = self._form._opt_fields.get("mask_mode")  # type: ignore[attr-defined]
+        except Exception:
+            return None
+        return w if isinstance(w, QLineEdit) else None
+
+    def _wire_viewer_updates(self) -> None:
+        f = self._calib_image_field()
+        if f is not None:
+            f.path_changed.connect(self._refresh_viewer_from_form)
+
+    def _refresh_viewer_from_form(self) -> None:
+        f = self._calib_image_field()
+        path = f.text().strip() if f is not None else ""
+        if not path:
+            self._viewer.clear()
+            return
+        try:
+            self._viewer.show_tiff(path)
+        except Exception:
+            self._viewer.clear()
+
+    def _is_left_click_in_axes(self, ev: object) -> bool:
+        if getattr(ev, "inaxes", None) is None:
+            return False
+        return int(getattr(ev, "button", 0)) == 1
+
+    def _on_viewer_click_open_mask(self, ev: object) -> None:
+        if not self._is_left_click_in_axes(ev):
+            return
+        # Don't open mask wizard when user is zooming/panning.
+        tb = self._viewer_toolbar
+        if tb is not None and str(getattr(tb, "mode", "") or ""):
+            return
+        f = self._calib_image_field()
+        if f is None or not f.text().strip():
+            return
+        self._open_mask_wizard()
+
+    def _open_mask_wizard(self) -> None:
+        # Lazy import to avoid circular imports while editing.
+        from .mask_wizard import MaskWizardDialog  # type: ignore
+
+        calib_field = self._calib_image_field()
+        mask_field = self._mask_field()
+        calib_path = calib_field.text().strip() if calib_field is not None else ""
+        mask_path = mask_field.text().strip() if mask_field is not None else ""
+        outdir = self._watchdir / "calibration"
+        outdir.mkdir(parents=True, exist_ok=True)
+        if self._mask_wizard is None:
+            self._mask_wizard = MaskWizardDialog(
+                watchdir=self._watchdir,
+                default_image_path=calib_path,
+                default_mask_path=mask_path,
+                default_save_dir=outdir,
+                parent=self,
+            )
+        else:
+            self._mask_wizard.set_defaults(
+                image_path=calib_path,
+                mask_path=mask_path,
+                default_save_dir=outdir,
+            )
+        if self._mask_wizard.exec_() == QDialog.Accepted:
+            pass
+        # Update mask field if the wizard saved something, regardless of accept/reject.
+        chosen = self._mask_wizard.saved_mask_path()
+        if chosen and mask_field is not None:
+            mask_field.set_text(chosen)
+            mm = self._mask_mode_field()
+            if mm is not None and not mm.text().strip():
+                mm.setText("from_file")
 
     def _on_reset_clicked(self) -> None:
         self.reset_requested.emit()
@@ -130,6 +298,8 @@ class CalibrationWizardDialog(QDialog):
             saved_state=None,
         )
         _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+        self._wire_viewer_updates()
+        self._refresh_viewer_from_form()
 
     def _on_run_clicked(self) -> None:
         if self._meta is None:

@@ -10,6 +10,7 @@ from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
 from ..core.models import RunRequest
 from ..logic.runner_qprocess import RunOutcome, SkillRunner
+from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
 from .jobs import Job, JobStep, PlaceholderError, resolve_request_placeholders
 from .queue import FIFOQueue, JobQueue, QueueItem
 from .stability import StabilityConfig, StabilityTracker
@@ -434,6 +435,16 @@ class LiveviewJobExecutor(QObject):
                     pass
             self._requeue_cancelled_job = False
             self._finish_job(ok=False)
+            return
+
+        if step_name == "fit_distances" and not is_atsas_fit_ok(res):
+            self.error.emit(failure_message_from_result(res, skill_id="fit_distances"))
+            self._finish_job(ok=True)
+            return
+
+        if step_name == "fit_sizes" and not is_atsas_fit_ok(res):
+            self.error.emit(failure_message_from_result(res, skill_id="fit_sizes"))
+            self._finish_job(ok=True)
             return
 
         # Advance to next step.

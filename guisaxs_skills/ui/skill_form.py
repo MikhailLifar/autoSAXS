@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import QCheckBox, QFormLayout, QGroupBox, QLineEdit, QWidget, QVBoxLayout
+from PyQt5.QtWidgets import QCheckBox, QFormLayout, QGroupBox, QLabel, QLineEdit, QWidget, QVBoxLayout
 
 from ..core.models import RunRequest, SkillMeta
 from ..logic.path_normalize import normalize_pathish
@@ -32,10 +32,27 @@ from ..logic.smart_defaults import (
     session_hint_option_mask,
 )
 from .path_field import PathField
+from .style import COLOR_REQUIRED_STAR
 
 
 class SkillForm(QWidget):
     submit_requested = pyqtSignal()
+
+    @staticmethod
+    def _required_label(name: str) -> QLabel:
+        """
+        Render a form label with a red '*' suffix (required-field marker).
+        Use RichText so only the star is colored.
+        """
+        lab = QLabel(f"{name} <span style='color:{COLOR_REQUIRED_STAR}; font-weight:700'>*</span>")
+        lab.setTextFormat(1)  # Qt.RichText (avoid importing Qt just for this)
+        return lab
+
+    @staticmethod
+    def _label(name: str) -> QLabel:
+        lab = QLabel(str(name))
+        lab.setTextFormat(0)  # Qt.PlainText
+        return lab
 
     def __init__(self) -> None:
         super().__init__()
@@ -93,6 +110,7 @@ class SkillForm(QWidget):
         self._opt_fields = {}
 
         for p in meta.positional_params:
+            label = self._required_label(p.name)
             if self._is_path_expression_annotation(p.annotation):
                 f = PathField(
                     mode="any",
@@ -102,31 +120,33 @@ class SkillForm(QWidget):
                 )
                 f.set_workdir(workdir)
                 self._pos_widgets.append(f)
-                self._pos_layout.addRow(p.name, f)
+                self._pos_layout.addRow(label, f)
             else:
                 le = QLineEdit()
                 if p.default is not None:
                     le.setText(str(p.default))
                 self._pos_widgets.append(le)
-                self._pos_layout.addRow(p.name, le)
+                self._pos_layout.addRow(label, le)
                 le.returnPressed.connect(self.submit_requested.emit)
 
         output = PathField(mode="dir")
         output.set_workdir(workdir)
         output.set_text(default_output_dir)
         self._opt_fields["output_dir"] = output
-        self._opt_layout.addRow("output_dir", output)
+        self._opt_layout.addRow(self._label("output_dir"), output)
         for le in output.findChildren(QLineEdit):
             le.returnPressed.connect(self.submit_requested.emit)
 
         use_cache = QCheckBox("")
         use_cache.setChecked(False)
         self._opt_fields["use_cache"] = use_cache
-        self._opt_layout.addRow("Use cache", use_cache)
+        self._opt_layout.addRow(self._label("Use cache"), use_cache)
 
         for opt in meta.option_params:
             if opt.name in ("output_dir", "use_cache"):
                 continue
+            is_required = opt.kind == "required_kwonly"
+            label = self._required_label(opt.name) if is_required else self._label(opt.name)
             if self._is_path_expression_annotation(opt.annotation):
                 f = PathField(
                     mode="any",
@@ -138,7 +158,7 @@ class SkillForm(QWidget):
                 if opt.default is not None:
                     f.set_text(str(opt.default))
                 self._opt_fields[opt.name] = f
-                self._opt_layout.addRow(opt.name, f)
+                self._opt_layout.addRow(label, f)
                 for le in f.findChildren(QLineEdit):
                     le.returnPressed.connect(self.submit_requested.emit)
                 continue
@@ -146,13 +166,13 @@ class SkillForm(QWidget):
                 cb = QCheckBox(opt.name)
                 cb.setChecked(bool(opt.default))
                 self._opt_fields[opt.name] = cb
-                self._opt_layout.addRow(opt.name, cb)
+                self._opt_layout.addRow(label, cb)
             else:
                 le = QLineEdit()
                 if opt.default is not None:
                     le.setText(str(opt.default))
                 self._opt_fields[opt.name] = le
-                self._opt_layout.addRow(opt.name, le)
+                self._opt_layout.addRow(label, le)
                 le.returnPressed.connect(self.submit_requested.emit)
 
         saved = saved_state or {}
@@ -598,6 +618,13 @@ class SkillForm(QWidget):
                 if raw == "":
                     continue
                 options[k] = raw
+
+        for opt in self._meta.option_params:
+            if opt.kind != "required_kwonly":
+                continue
+            val = options.get(opt.name)
+            if val is None or str(val).strip() == "":
+                raise ValueError(f"{opt.name} is required")
 
         positional: List[str] = []
         for w in self._pos_widgets:

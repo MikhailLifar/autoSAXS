@@ -761,14 +761,15 @@ def autocalib_ring_analysis(
     plots_out_dir: Optional[Path] = None,
     plot_stem: Optional[str] = None,
     calibration_curve_plot_path: Optional[Path] = None,
+    dist_guess_m: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Autocalib variant which uses `ring_analysis()` for initial center + ring pixels,
     and then runs the original `autosaxs.processor.refine()` geometry refinement.
 
-    The initial sample–detector distance passed to ``refine`` is derived from the innermost
-    ring's ``r_out`` (after filtering/shrinkage), wavelength, mean pixel size, and the
-    smallest Bragg ``2θ`` of the configured calibrant — not from ``detector_geometry.dist``.
+    The initial sample–detector distance passed to ``refine`` is either ``dist_guess_m``
+    (when provided) or derived from the innermost ring's ``r_out`` (after filtering/shrinkage),
+    wavelength, mean pixel size, and the smallest Bragg ``2θ`` of the configured calibrant.
 
     Returns a dict including ``final_ring_radii_px``, ``initial_dist_guess_m``, and
     ``initial_dist_guess_k_m_per_px`` (scale ``L / r_out`` in m/px).
@@ -813,7 +814,7 @@ def autocalib_ring_analysis(
         r_beam_px = float(config.get("r_beam_px", 35.0))
 
     d_geom = config["detector_geometry"]
-    geometry_params = {k: d_geom[k] for k in ["dist", "wavelength", "pixel_size", "rot1", "rot2", "rot3"]}
+    geometry_params = {k: d_geom[k] for k in ["wavelength", "pixel_size", "rot1", "rot2", "rot3"]}
 
     # -------------------------
     # Final ring filtering rules + brightest-sub-annulus shrinkage
@@ -939,20 +940,29 @@ def autocalib_ring_analysis(
     if rings_pixels.size == 0:
         raise RuntimeError("autocalib_ring_analysis produced empty filtered rings pixels")
 
-    # Initialize distance from innermost ring's r_out
+    # Initialize distance: explicit guess or innermost-ring estimate.
     r_out0_px = float(final_ring_radii_px[0, 0])
-    dist_init_m, k_m_per_px = initial_sample_distance_m_from_innermost_ring_rout_px(
-        r_out0_px,
-        wavelength_m=float(geometry_params["wavelength"]),
-        pixel_size_m=geometry_params["pixel_size"],
-        calibrant_name=str(config["calibrant_name"]),
-    )
-    print(
-        "DEBUG: Initial dist from innermost ring: "
-        f"k_m_per_px={k_m_per_px:.6g} (expect ~order 1e-2 for typical SAXS), "
-        f"dist_m={dist_init_m:.6g}, r_out_ring0_px={r_out0_px:.6g}",
-        flush=True,
-    )
+    if dist_guess_m is not None:
+        dist_init_m = float(dist_guess_m)
+        k_m_per_px = dist_init_m / r_out0_px if r_out0_px > 0 else float("nan")
+        print(
+            "DEBUG: Using provided dist_guess for initial dist: "
+            f"k_m_per_px={k_m_per_px:.6g}, dist_m={dist_init_m:.6g}, r_out_ring0_px={r_out0_px:.6g}",
+            flush=True,
+        )
+    else:
+        dist_init_m, k_m_per_px = initial_sample_distance_m_from_innermost_ring_rout_px(
+            r_out0_px,
+            wavelength_m=float(geometry_params["wavelength"]),
+            pixel_size_m=geometry_params["pixel_size"],
+            calibrant_name=str(config["calibrant_name"]),
+        )
+        print(
+            "DEBUG: Initial dist from innermost ring: "
+            f"k_m_per_px={k_m_per_px:.6g} (expect ~order 1e-2 for typical SAXS), "
+            f"dist_m={dist_init_m:.6g}, r_out_ring0_px={r_out0_px:.6g}",
+            flush=True,
+        )
     geometry_params["dist"] = dist_init_m
     geometry_params.update(
         {

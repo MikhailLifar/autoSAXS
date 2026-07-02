@@ -19,8 +19,8 @@ You may want to do this inside a virtual environment (venv or conda).
 ## Procedure
 
 0. Make sure a Python environment, where `autosaxs[gui]` is installed, is activated in your terminal.
-1. Type **`guisaxs-liveview`**. The GUI starts.
-2. If asked, **select a directory** in the opening file browser.Next time it may skip this if it still remembers a valid last folder.
+1. Type **`guisaxs-liveview`** from the folder you want to watch. The GUI starts using that directory as the watch folder (or the last folder you used, if it is still valid).
+2. To watch a different folder, use **Change watch folder…** at the top of the window.
 3. You can feed TIFFs in two ways:
    - **Drag and drop** `.tif` / `.tiff` onto the **middle** panel (“Latest image (2D) — drop .tif here”) (YOU CAN D-N-D MULTIPLE `.tif` / `.tiff` AT ONCE!), **or**
    - **Copy or save** files **directly into** that watch directory (not into subfolders).
@@ -99,4 +99,4 @@ All paths below are **inside your selected Watchdir** (the folder shown at the t
 ## Rules the watcher follows (so you are not surprised)
 
 - Only the **top-level** watch directory is watched — **not** nested folders.
-- Only files that appear **after** the app started count as “new” (plus **moves** into the folder). Old TIFFs already sitting there are **not** auto-queued. But you can drag-and-drop them to the middle column.
+- Only files that appear **after** the app started count as “new” (plus **moves** into the folder, and **overwrites** of an existing `.tif` / `.tiff` name). Old TIFFs already sitting there are **not** auto-queued until they are replaced or you drag-and-drop them to the middle column.

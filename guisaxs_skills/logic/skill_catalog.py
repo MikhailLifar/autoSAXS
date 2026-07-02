@@ -162,14 +162,24 @@ def discover_skills() -> List[SkillMeta]:
             ann = _annotation_label(fn, param, type_hints)
 
             if param.kind == inspect.Parameter.KEYWORD_ONLY:
-                options.append(
-                    SkillParam(
-                        name=param.name,
-                        kind="kwonly",
-                        default=None if param.default is inspect._empty else param.default,
-                        annotation=ann,
+                if param.default is inspect._empty:
+                    options.append(
+                        SkillParam(
+                            name=param.name,
+                            kind="required_kwonly",
+                            default=None,
+                            annotation=ann,
+                        )
                     )
-                )
+                else:
+                    options.append(
+                        SkillParam(
+                            name=param.name,
+                            kind="kwonly",
+                            default=param.default,
+                            annotation=ann,
+                        )
+                    )
             elif param.default is inspect._empty:
                 positional.append(SkillParam(name=param.name, kind="positional", default=None, annotation=ann))
             else:

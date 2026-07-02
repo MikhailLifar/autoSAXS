@@ -18,6 +18,7 @@ import yaml
 
 from autosaxs.core.gnom import candidate_score, parse_gnom_out
 
+from .gnom_fit_common import default_atsas_failure_message
 from .deps import (
     EventBus,
     EventType,
@@ -439,6 +440,139 @@ def _optimize_rg_nm(
     return float(best_rg), trials, failures
 
 
+def _finalize_fit_distances_failure(
+    *,
+    output_dir: str,
+    profile: str,
+    base: str,
+    atsas_dat_path: str,
+    failure_reason: str,
+    failures: List[Dict[str, Any]],
+    candidates: List[Dict[str, Any]],
+    guinier_summary: Optional[Dict[str, Any]],
+    event_bus: Optional[EventBus],
+    detail: str = "",
+) -> Dict[str, Union[str, List[str]]]:
+    """Write failure artifacts and return a non-throwing skill result dict."""
+    os.makedirs(output_dir, exist_ok=True)
+    message = default_atsas_failure_message("fit_distances")
+    if detail.strip():
+        message = f"{message}\n\nLast error: {detail.strip()[:1500]}"
+
+    failure_txt_path = os.path.join(output_dir, f"{base}_atsas_fit_failure.txt")
+    with open(failure_txt_path, "w", encoding="utf-8") as fp:
+        fp.write(message)
+        fp.write("\n")
+
+    fits_csv_path = os.path.join(output_dir, "fit_distances_fits.csv")
+    with open(fits_csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(
+            [
+                "rg_nm",
+                "first",
+                "last",
+                "smooth",
+                "rmax_nm",
+                "peak_r",
+                "peak_p",
+                "fwhm",
+                "suspicious",
+                "intermediate",
+                "total_estimate",
+                "neg_frac",
+                "score",
+                "tail_ratio",
+                "smoothness",
+                "ok",
+                "out_path",
+            ]
+        )
+        for c in candidates:
+            w.writerow(
+                [
+                    c.get("rg_nm"),
+                    c.get("first"),
+                    c.get("last"),
+                    c.get("smooth"),
+                    c.get("rmax_nm"),
+                    c.get("peak_r"),
+                    c.get("peak_p"),
+                    c.get("fwhm"),
+                    bool(c.get("suspicious")),
+                    bool(c.get("intermediate")),
+                    c.get("total_estimate"),
+                    c.get("neg_frac"),
+                    c.get("score"),
+                    c.get("tail_ratio"),
+                    c.get("smoothness"),
+                    bool(c.get("ok")),
+                    c.get("out_path"),
+                ]
+            )
+
+    best_summary_path = os.path.join(output_dir, f"{base}_fit_distances_best.yml")
+    summary = {
+        "profile": profile,
+        "atsas_dat_path": atsas_dat_path,
+        "atsas_fit_ok": False,
+        "gnom_failed": True,
+        "failure_reason": failure_reason,
+        "failure_message": message,
+        "fit_guinier": guinier_summary,
+        "candidates": candidates,
+        "failures": failures,
+        "fits_csv_path": fits_csv_path,
+        "failure_txt_path": failure_txt_path,
+    }
+    with open(best_summary_path, "w") as f:
+        yaml.dump(summary, f, default_flow_style=False)
+
+    from autosaxs.core.report_fragments import write_skill_report_fragments
+
+    md_body = (
+        "### DATGNOM / p(r) (fit_distances)\n\n"
+        f"**DATGNOM failed** — no valid p(r) was produced.\n\n"
+        f"{message}\n"
+    )
+    write_skill_report_fragments(
+        output_dir,
+        base,
+        "fit_distances",
+        md_body,
+        summary_references=[
+            {"role": "fit_distances_failure", "path": os.path.basename(failure_txt_path), "format": "text"},
+            {"role": "fit_distances_summary", "path": os.path.basename(best_summary_path), "format": "text"},
+        ],
+        summary_extra={"atsas_fit_ok": False, "failure_reason": failure_reason},
+    )
+
+    warn = f"fit_distances: {message}"
+    if event_bus:
+        event_bus.publish(EventType.MESSAGE, {"text": f"WARNING: {warn}"})
+    else:
+        print(f"WARNING: {warn}", file=sys.stderr)
+
+    return {
+        "output_subdir": output_dir,
+        "atsas_fit_ok": False,
+        "gnom_failed": True,
+        "failure_reason": failure_reason,
+        "failure_message": message,
+        "gnom_out_paths": [],
+        "best_gnom_out_path": "",
+        "best_summary_path": best_summary_path,
+        "fit_params_path": "",
+        "best_symlink_out_path": "",
+        "fits_csv_path": fits_csv_path,
+        "failure_txt_path": failure_txt_path,
+        "fit_vs_exp_png_path": "",
+        "fit_vs_exp_png_error": message,
+        "best_pr_png_path": "",
+        "best_pr_png_error": message,
+    }
+
+
 @apply_batch(stem_from_keys="profile", per_sample_subdir="always")
 @run_with_cache(
     path_keys_for_hash=["profile"],
@@ -491,6 +625,18 @@ def _fit_distances_paths(
         if event_bus:
             event_bus.publish(EventType.MESSAGE, {"text": "fit_distances: fit_guinier completed."})
 
+    guinier_summary: Optional[Dict[str, Any]] = None
+    if guinier_info is not None:
+        guinier_summary = {
+            "rg": guinier_info.get("rg"),
+            "rg_min": guinier_info.get("rg_min"),
+            "rg_max": guinier_info.get("rg_max"),
+            "q_min": guinier_info.get("q_min"),
+            "q_max": guinier_info.get("q_max"),
+            "chosen_interval": guinier_info.get("chosen_interval"),
+            "quality_class": guinier_info.get("quality_class"),
+        }
+
     if user_first is not None:
         first_pt = int(user_first)
     else:
@@ -531,17 +677,36 @@ def _fit_distances_paths(
         except Exception as e:
             raise RuntimeError(f"fit_distances: failed to create temporary DATGNOM output file: {e}")
         assert guinier_info is not None
-        rg_nm, rg_trials, rg_failures = _optimize_rg_nm(
-            atsas_dat_path=atsas_dat_path,
-            output_dir=output_dir,
-            rg_max_nm=float(guinier_info["rg_max"]),
-            first=first_pt,
-            last=last_pt,
-            smooth=smooth_val,
-            eval_tmp_path=eval_tmp_path,
-            timeout_s=30.0,
-            event_bus=event_bus,
-        )
+        try:
+            rg_nm, rg_trials, rg_failures = _optimize_rg_nm(
+                atsas_dat_path=atsas_dat_path,
+                output_dir=output_dir,
+                rg_max_nm=float(guinier_info["rg_max"]),
+                first=first_pt,
+                last=last_pt,
+                smooth=smooth_val,
+                eval_tmp_path=eval_tmp_path,
+                timeout_s=30.0,
+                event_bus=event_bus,
+            )
+        except RuntimeError as exc:
+            if eval_tmp_path:
+                try:
+                    os.remove(eval_tmp_path)
+                except OSError:
+                    pass
+            return _finalize_fit_distances_failure(
+                output_dir=output_dir,
+                profile=profile,
+                base=base,
+                atsas_dat_path=atsas_dat_path,
+                failure_reason="rg_optimization_no_success",
+                failures=failures,
+                candidates=candidates,
+                guinier_summary=guinier_summary,
+                event_bus=event_bus,
+                detail=str(exc),
+            )
         failures.extend(rg_failures)
         candidates.extend(rg_trials)
     else:
@@ -571,7 +736,34 @@ def _fit_distances_paths(
         out_path=out_path_final,
     )
     if not ok:
-        raise RuntimeError(f"fit_distances failed: datgnom exited with code {rc}\n{stderr}")
+        if eval_tmp_path:
+            try:
+                os.remove(eval_tmp_path)
+            except OSError:
+                pass
+        failures.append(
+            {
+                "rg_nm": float(rg_nm),
+                "first": first_pt,
+                "last": last_pt,
+                "smooth": smooth_val,
+                "ok": False,
+                "returncode": int(rc),
+                "stderr": stderr,
+            }
+        )
+        return _finalize_fit_distances_failure(
+            output_dir=output_dir,
+            profile=profile,
+            base=base,
+            atsas_dat_path=atsas_dat_path,
+            failure_reason="final_run_failed",
+            failures=failures,
+            candidates=candidates,
+            guinier_summary=guinier_summary,
+            event_bus=event_bus,
+            detail=stderr,
+        )
     gnom_out_paths.append(out_path_final)
     best_gnom_out_path = out_path_final
     best = _candidate_from_out_text(
@@ -795,22 +987,11 @@ def _fit_distances_paths(
     else:
         smooth_param_src = "default"
 
-    guinier_summary: Optional[Dict[str, Any]] = None
-    if need_guinier and guinier_info is not None:
-        guinier_summary = {
-            "rg": guinier_info.get("rg"),
-            "rg_min": guinier_info.get("rg_min"),
-            "rg_max": guinier_info.get("rg_max"),
-            "q_min": guinier_info.get("q_min"),
-            "q_max": guinier_info.get("q_max"),
-            "chosen_interval": guinier_info.get("chosen_interval"),
-            "quality_class": guinier_info.get("quality_class"),
-        }
-
     best_summary_path = os.path.join(output_dir, f"{base}_fit_distances_best.yml")
     summary = {
         "profile": profile,
         "atsas_dat_path": atsas_dat_path,
+        "atsas_fit_ok": True,
         "unit_note": "Input profile assumed q in nm^-1; DATGNOM uses the same units, therefore Rg and r are in nm.",
         "fit_params_path": fit_params_path,
         "fit_param_sources": {
@@ -872,6 +1053,7 @@ def _fit_distances_paths(
 
     return {
         "output_subdir": output_dir,
+        "atsas_fit_ok": True,
         "gnom_out_paths": gnom_out_paths,
         "best_gnom_out_path": best_gnom_out_path,
         "best_summary_path": best_summary_path,

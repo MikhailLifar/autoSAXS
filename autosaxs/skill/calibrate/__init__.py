@@ -10,6 +10,7 @@ import yaml
 from pyFAI.calibrant import ALL_CALIBRANTS
 
 from autosaxs.core.event_bus import EventBus, EventType
+from autosaxs.core.utils import write_saxs
 from autosaxs.core.viewer import PLTViewer
 
 from ..config import merge_skill_params, resolve_optional_config_path
@@ -19,13 +20,42 @@ from ..common import (
     ConfigPathExpressionArg,
     SingletonMaskPathExpressionArg,
     SingletonTiffPathExpressionArg,
-    coerce_optional_singleton_path_expression,
+    coerce_singleton_mask_expression,
     coerce_singleton_tiff_path_expression,
 )
 
 
+ANGSTROM_TO_METER = 1e-10
+
+
 def _resolve_config_path(config_path: Optional[ConfigPathExpressionArg]) -> Optional[str]:
     return resolve_optional_config_path(config_path)
+
+
+def _wavelength_angstrom_to_meter(wavelength_a: float) -> float:
+    return float(wavelength_a) * ANGSTROM_TO_METER
+
+
+def _resolve_wavelength_angstrom(merged: Dict) -> float:
+    wavelength_a = merged.get("wavelength")
+    if wavelength_a is None:
+        raise ValueError(
+            "calibrate requires wavelength in Ångström; pass wavelength=... or set calibrate.wavelength in config"
+        )
+    wavelength_a = float(wavelength_a)
+    if not np.isfinite(wavelength_a) or wavelength_a <= 0:
+        raise ValueError(f"wavelength must be a positive finite value in Ångström; got {wavelength_a!r}")
+    return wavelength_a
+
+
+def _resolve_dist_guess_meters(merged: Dict) -> Optional[float]:
+    dist_guess = merged.get("dist_guess")
+    if dist_guess is None:
+        return None
+    dist_guess_m = float(dist_guess)
+    if not np.isfinite(dist_guess_m) or dist_guess_m <= 0:
+        raise ValueError(f"dist_guess must be a positive finite value in metres; got {dist_guess!r}")
+    return dist_guess_m
 
 
 def calibrate(
@@ -33,9 +63,11 @@ def calibrate(
     output_dir: str = ".",
     *,
     config_path: Optional[ConfigPathExpressionArg] = None,
-    mask: Optional[SingletonMaskPathExpressionArg] = None,
+    mask: SingletonMaskPathExpressionArg,
     mask_mode: Optional[str] = None,
     calibrant: Optional[str] = None,
+    wavelength: Optional[float] = None,
+    dist_guess: Optional[float] = None,
     use_cache: bool = False,
 ) -> Dict[str, str]:
     """
@@ -46,14 +78,16 @@ def calibrate(
     - `calib_image` (str): Path to the calibration image (e.g. TIFF) used for ring analysis.
     - `output_dir` (str, default `.`): Directory where results are written.
     - `config_path` (str | None, default `None`): Optional path to a YAML config file with a `calibrate` section. When omitted, bundled defaults from the installed `autosaxs` package are used.
-    - `mask` (str | None, default `None`): Optional path to a mask used during ring analysis. Supports .txt (NuPy format), .msk (Fit2d)
+    - `mask` (str): Path to a mask used during ring analysis. Supports .txt (NuPy format), .msk (Fit2d)
     - `mask_mode` (str | None, default `None`): Mask mode selector (`f`/`from_file`, `a`/`auto`, `c`/`combined`). Defaults come from config when omitted.
     - `calibrant` (str | None, default `None`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`). Defaults come from config when omitted.
+    - `wavelength` (float | None, default `None`): X-ray wavelength in **Ångström**. Defaults come from config when omitted.
+    - `dist_guess` (float | None, default `None`): Optional initial sample–detector distance in **metres** passed to pyFAI before geometry refinement. When omitted, distance is estimated from the innermost calibration ring.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     Important constraints:
 
-    - If `mask_mode` is `f/from_file` or `c/combined`, `mask` **must** be provided (the skill raises `ValueError` otherwise).
+    - `mask` is always required by the skill and the CLI (the GUI should treat it as a required field).
 
     ### Returns
 
@@ -63,6 +97,7 @@ def calibrate(
     - `refined_path`: Path to the refined calibration YAML.
     - `calibration_plots_dir`: Directory containing calibration plots.
     - `calibration_curve_plot_path`: Path to the calibration q/I curve plot (PNG).
+    - `calibration_curve_dat_path`: Path to the calibration q/I curve (`.dat`, same format as integrated 1D curves).
     - `calibration_mask_path`: Path to the calibration mask visualization (PNG).
 
     ### Python usage
@@ -95,6 +130,8 @@ def calibrate(
         config_path=cfg_path,
         mask_mode=mask_mode,
         calibrant=calibrant,
+        wavelength=wavelength,
+        dist_guess=dist_guess,
     )
     calibrant_eff = merged.get("calibrant", "AgBh")
     if calibrant_eff not in ALL_CALIBRANTS:
@@ -103,17 +140,18 @@ def calibrate(
             f"Expected one of pyFAI.calibrant.ALL_CALIBRANTS: {sorted(ALL_CALIBRANTS.keys())}"
         )
     mask_mode_eff = merged.get("mask_mode", "f")
+    wavelength_a = _resolve_wavelength_angstrom(merged)
+    dist_guess_m = _resolve_dist_guess_meters(merged)
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
     calib_image = coerce_singleton_tiff_path_expression(calib_image)
-    mask_expr = coerce_optional_singleton_path_expression(mask)
+    mask_expr = coerce_singleton_mask_expression(mask)
     imgs = calib_image.unwrap()
-    mask_path = mask_expr.unwrap()[0] if mask_expr is not None else None
+    mask_path = mask_expr.unwrap()[0]
     input_batch: List[Dict[str, Union[str, List[str]]]] = []
     for im in imgs:
         inp: Dict[str, Union[str, List[str]]] = {"calib_image": im}
-        if mask_path is not None:
-            inp["mask"] = mask_path
+        inp["mask"] = mask_path
         input_batch.append(inp)
     input_paths: Union[Dict[str, Union[str, List[str]]], List[Dict[str, Union[str, List[str]]]]]
     input_paths = input_batch[0] if len(input_batch) == 1 else input_batch
@@ -125,13 +163,15 @@ def calibrate(
         use_cache=use_cache,
         mask_mode=mask_mode_eff,
         calibrant=calibrant_eff,
+        wavelength_a=wavelength_a,
+        dist_guess_m=dist_guess_m,
     )  # type: ignore[return-value]
 
 
 @apply_batch(stem_from_keys="calib_image", per_sample_subdir="never")
 @run_with_cache(
     path_keys_for_hash=["calib_image", "mask"],
-    kwargs_for_hash_keys=["calibrant", "mask_mode"],
+    kwargs_for_hash_keys=["calibrant", "mask_mode", "wavelength_a", "dist_guess_m"],
     include_config_in_hash=True,
 )
 def _calibrate_paths(
@@ -143,6 +183,8 @@ def _calibrate_paths(
     sample_index: int = 0,
     mask_mode: str = "f",
     calibrant: str = "AgBh",
+    wavelength_a: float = 1.445,
+    dist_guess_m: Optional[float] = None,
 ) -> Dict[str, Union[str, List[str]]]:
     _ = use_cache, sample_index
     calib_image = input_paths.get("calib_image")
@@ -168,9 +210,14 @@ def _calibrate_paths(
             f"Expected one of pyFAI.calibrant.ALL_CALIBRANTS: {sorted(ALL_CALIBRANTS.keys())}"
         )
     cfg = dict(config)
-    for key in ("mask_mode", "calibrant"):
+    for key in ("mask_mode", "calibrant", "wavelength", "dist_guess"):
         cfg.pop(key, None)
     cfg["calibrant_name"] = calibrant
+    d_geom = dict(cfg.get("detector_geometry") or {})
+    d_geom.pop("dist", None)
+    d_geom.pop("wavelength", None)
+    d_geom["wavelength"] = _wavelength_angstrom_to_meter(wavelength_a)
+    cfg["detector_geometry"] = d_geom
     cfg_mask_config = dict(cfg.get("mask_config") or {})
     cfg_mask_config["mode"] = mask_mode_map[mask_mode]
     cfg["mask_config"] = cfg_mask_config
@@ -186,6 +233,7 @@ def _calibrate_paths(
     os.makedirs(calibration_plots_dir, exist_ok=True)
     stem = os.path.splitext(os.path.basename(calib_image))[0]
     calibration_curve_plot_path = os.path.join(calibration_plots_dir, "calibration_curve.png")
+    calibration_curve_dat_path = os.path.join(calibration_plots_dir, "calibration_curve.dat")
     result = autocalib_ring_analysis(
         calib_image,
         cfg,
@@ -193,7 +241,20 @@ def _calibrate_paths(
         plots_out_dir=Path(calibration_plots_dir),
         plot_stem=stem,
         calibration_curve_plot_path=Path(calibration_curve_plot_path),
+        dist_guess_m=dist_guess_m,
     )
+    curve_calibrated = result.get("curve_calibrated")
+    if curve_calibrated is not None:
+        q_cal, I_cal, sigma = curve_calibrated
+        theoretical_peaks = result.get("theoretical_peaks")
+        metadata = {
+            "type": "calibration_curve",
+            "calib_image": calib_image,
+            "calibrant": calibrant,
+        }
+        if theoretical_peaks is not None:
+            metadata["theoretical_peaks_q_nm_inv"] = np.asarray(theoretical_peaks).tolist()
+        write_saxs(calibration_curve_dat_path, q_cal, I_cal, sigma, metadata)
     integrator_dir = os.path.join(output_dir, "integrator")
     result["integrator"].to_disk(integrator_dir)
     refined_path = os.path.join(output_dir, "refined.yml")
@@ -218,6 +279,14 @@ def _calibrate_paths(
     summary_refs = [
         {"role": "refined_geometry", "path": os.path.basename(refined_path), "format": "text"},
     ]
+    if curve_calibrated is not None:
+        summary_refs.append(
+            {
+                "role": "calibration_curve",
+                "path": os.path.relpath(calibration_curve_dat_path, output_dir).replace(os.sep, "/"),
+                "format": "saxs_dat",
+            }
+        )
     write_skill_report_fragments(
         output_dir,
         calib_base,
@@ -230,5 +299,6 @@ def _calibrate_paths(
         "refined_path": refined_path,
         "calibration_plots_dir": calibration_plots_dir,
         "calibration_curve_plot_path": calibration_curve_plot_path,
+        "calibration_curve_dat_path": calibration_curve_dat_path,
         "calibration_mask_path": calibration_mask_path,
     }

@@ -9,6 +9,7 @@ from PyQt5.QtCore import QEvent
 from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QLineEdit, QMessageBox, QPushButton, QWidget
 from PyQt5.QtWidgets import QTreeView
 
+from ..logic.autosaxs_cli import run_get_default_config
 from ..logic.path_normalize import normalize_pathish
 from ..logic.smart_defaults import browse_start_dir_for_resolved_paths
 
@@ -75,6 +76,9 @@ class PathField(QWidget):
                     return True
         return super().eventFilter(obj, event)
 
+
+    def set_placeholder(self, text: str) -> None:
+        self._edit.setPlaceholderText(text)
 
     def text(self) -> str:
         return self._edit.text().strip()
@@ -171,24 +175,7 @@ class PathField(QWidget):
 
     def _config_default_dest_path(self) -> Path:
         wd = self._workdir.resolve() if self._workdir is not None else Path.cwd().resolve()
-        return wd / "config.conf"
-
-    @staticmethod
-    def _copy_autosaxs_default_config_to(dest: Path) -> None:
-        """
-        Copy autosaxs/config_base.conf to dest.
-        """
-        try:
-            import importlib.resources as ir
-
-            data = ir.files("autosaxs").joinpath("config_base.conf").read_bytes()
-        except Exception as e:
-            raise FileNotFoundError("Cannot load autosaxs/config_base.conf from installed package") from e
-
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix(dest.suffix + ".tmp")
-        tmp.write_bytes(data)
-        os.replace(str(tmp), str(dest))
+        return wd / "config_base.conf"
 
     def _on_get_default(self) -> None:
         dest = self._config_default_dest_path()
@@ -202,14 +189,18 @@ class PathField(QWidget):
             )
             if resp != QMessageBox.Yes:
                 return
+        out_dir = dest.parent
+        self._get_default.setEnabled(False)
         try:
-            self._copy_autosaxs_default_config_to(dest)
+            written = run_get_default_config(output_dir=out_dir)
         except Exception as e:
             QMessageBox.critical(self, "Cannot write config", str(e))
             return
+        finally:
+            self._get_default.setEnabled(True)
 
         self._dropped_paths = []
-        self._edit.setText(str(dest))
+        self._edit.setText(str(written))
         self._maybe_warn_ext_mismatch(force=True)
 
     def _dialog_start_directory(self) -> str:

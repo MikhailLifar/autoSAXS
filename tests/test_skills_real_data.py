@@ -40,6 +40,7 @@ from autosaxs.core.utils import (
     read_saxs,
 )
 from autosaxs.skill.calibrate import calibrate
+from autosaxs.skill.config import merge_skill_params
 from autosaxs.skill.integrate import integrate
 from autosaxs.skill.subtract import subtract
 
@@ -244,7 +245,7 @@ def run_calibration_integration_subtraction(mask_choice="f", *, run_subtraction:
 
     calib_image = _validation_calib_tif()
     mask_mode = _MASK_MODE_BY_CHOICE[mask_choice]
-    mask_path = _validation_mask_path() if mask_choice in ("f", "c") else None
+    mask_path = _validation_mask_path()
 
     out_cal = calibrate(
         calib_image,
@@ -295,11 +296,18 @@ def run_calibration_integration_subtraction(mask_choice="f", *, run_subtraction:
         )
 
     os.makedirs(SUBTRACTED_DIR, exist_ok=True)
+    sub_merged = merge_skill_params("subtract", config_path=CONFIG_PATH)
+    q_sub_min = sub_merged.get("q_min")
+    q_sub_max = sub_merged.get("q_max")
+    if q_sub_min is None or q_sub_max is None:
+        raise RuntimeError("validation config.conf subtract section must define q_min and q_max")
     for sample_path, buffer_path in alignment["aligned_pairs"]:
         subtract(
             sample_path,
             buffer_path,
             SUBTRACTED_DIR,
+            q_min=float(q_sub_min),
+            q_max=float(q_sub_max),
             config_path=CONFIG_PATH,
             use_cache=False,
         )

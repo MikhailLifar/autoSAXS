@@ -24,6 +24,7 @@ from .common import (
 )
 from autosaxs.core.gnom import candidate_score, parse_gnom_out
 
+from .gnom_fit_common import default_atsas_failure_message
 from .deps import (
     EventBus,
     EventType,
@@ -433,6 +434,141 @@ def _optimize_rmax_nm(
     return float(best_rmax), trials, failures
 
 
+def _finalize_fit_sizes_failure(
+    *,
+    output_dir: str,
+    profile: str,
+    base: str,
+    atsas_dat_path: str,
+    shape: str,
+    system: int,
+    failure_reason: str,
+    failures: List[Dict[str, Any]],
+    candidates: List[Dict[str, Any]],
+    guinier_summary: Optional[Dict[str, Any]],
+    event_bus: Optional[EventBus],
+    detail: str = "",
+) -> Dict[str, Union[str, List[str]]]:
+    os.makedirs(output_dir, exist_ok=True)
+    message = default_atsas_failure_message("fit_sizes")
+    if detail.strip():
+        message = f"{message}\n\nLast error: {detail.strip()[:1500]}"
+
+    failure_txt_path = os.path.join(output_dir, f"{base}_atsas_fit_failure.txt")
+    with open(failure_txt_path, "w", encoding="utf-8") as fp:
+        fp.write(message)
+        fp.write("\n")
+
+    fits_csv_path = os.path.join(output_dir, "fit_sizes_fits.csv")
+    with open(fits_csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(
+            [
+                "shape",
+                "system",
+                "rmin_nm",
+                "rmax_nm",
+                "rad56_nm",
+                "first",
+                "last",
+                "alpha",
+                "nr",
+                "total_estimate",
+                "neg_frac",
+                "score",
+                "parse_dr_ok",
+                "suspicious",
+                "intermediate",
+                "out_path",
+            ]
+        )
+        for c in candidates:
+            w.writerow(
+                [
+                    c.get("shape"),
+                    c.get("system"),
+                    c.get("rmin_nm"),
+                    c.get("rmax_nm"),
+                    c.get("rad56_nm"),
+                    c.get("first"),
+                    c.get("last"),
+                    c.get("alpha"),
+                    c.get("nr"),
+                    c.get("total_estimate"),
+                    c.get("neg_frac"),
+                    c.get("score"),
+                    bool(c.get("parse_dr_ok")),
+                    bool(c.get("suspicious")),
+                    bool(c.get("intermediate")),
+                    c.get("out_path"),
+                ]
+            )
+
+    best_summary_path = os.path.join(output_dir, f"{base}_fit_sizes_best.yml")
+    summary = {
+        "profile": profile,
+        "atsas_dat_path": atsas_dat_path,
+        "shape": shape,
+        "system": int(system),
+        "atsas_fit_ok": False,
+        "gnom_failed": True,
+        "failure_reason": failure_reason,
+        "failure_message": message,
+        "fit_guinier": guinier_summary,
+        "candidates": candidates,
+        "failures": failures,
+        "fits_csv_path": fits_csv_path,
+        "failure_txt_path": failure_txt_path,
+    }
+    with open(best_summary_path, "w") as f:
+        yaml.dump(summary, f, default_flow_style=False)
+
+    from autosaxs.core.report_fragments import write_skill_report_fragments
+
+    md_body = (
+        f"### GNOM size distribution (fit_sizes, shape={shape})\n\n"
+        f"**GNOM failed** — no valid D(R) was produced.\n\n"
+        f"{message}\n"
+    )
+    write_skill_report_fragments(
+        output_dir,
+        base,
+        "fit_sizes",
+        md_body,
+        summary_references=[
+            {"role": "fit_sizes_failure", "path": os.path.basename(failure_txt_path), "format": "text"},
+            {"role": "fit_sizes_summary", "path": os.path.basename(best_summary_path), "format": "text"},
+        ],
+        summary_extra={"atsas_fit_ok": False, "failure_reason": failure_reason},
+    )
+
+    warn = f"fit_sizes: {message}"
+    if event_bus:
+        event_bus.publish(EventType.MESSAGE, {"text": f"WARNING: {warn}"})
+    else:
+        print(f"WARNING: {warn}", file=sys.stderr)
+
+    return {
+        "output_subdir": output_dir,
+        "atsas_fit_ok": False,
+        "gnom_failed": True,
+        "failure_reason": failure_reason,
+        "failure_message": message,
+        "gnom_out_paths": [],
+        "best_gnom_out_path": "",
+        "best_summary_path": best_summary_path,
+        "fit_params_path": "",
+        "best_symlink_out_path": "",
+        "fits_csv_path": fits_csv_path,
+        "failure_txt_path": failure_txt_path,
+        "fit_vs_exp_png_path": "",
+        "fit_vs_exp_png_error": message,
+        "best_dr_png_path": "",
+        "best_dr_png_error": message,
+        "dr_csv_path": "",
+    }
+
+
 @apply_batch(stem_from_keys="profile", per_sample_subdir="always")
 @run_with_cache(
     path_keys_for_hash=["profile"],
@@ -498,6 +634,18 @@ def _fit_sizes_paths(
         if event_bus:
             event_bus.publish(EventType.MESSAGE, {"text": "fit_sizes: fit_guinier completed."})
 
+    guinier_summary: Optional[Dict[str, Any]] = None
+    if guinier_info is not None:
+        guinier_summary = {
+            "rg": guinier_info.get("rg"),
+            "rg_min": guinier_info.get("rg_min"),
+            "rg_max": guinier_info.get("rg_max"),
+            "q_min": guinier_info.get("q_min"),
+            "q_max": guinier_info.get("q_max"),
+            "chosen_interval": guinier_info.get("chosen_interval"),
+            "quality_class": guinier_info.get("quality_class"),
+        }
+
     if user_first is not None:
         first_pt = int(user_first)
     else:
@@ -545,22 +693,43 @@ def _fit_sizes_paths(
         except OSError as e:
             raise RuntimeError(f"fit_sizes: failed to create temporary GNOM output file: {e}")
         assert guinier_info is not None
-        best_rmax_nm, rmax_trials, rmax_failures = _optimize_rmax_nm(
-            atsas_dat_path=atsas_dat_path,
-            output_dir=output_dir,
-            system=system,
-            shape=shape,
-            rg_max_nm=float(guinier_info["rg_max"]),
-            rmin_nm=rmin_nm,
-            rad56_nm=rad56_nm,
-            first=first_pt,
-            last=last_pt,
-            alpha=alpha,
-            nr=nr,
-            eval_tmp_path=eval_tmp_path,
-            timeout_s=30.0,
-            event_bus=event_bus,
-        )
+        try:
+            best_rmax_nm, rmax_trials, rmax_failures = _optimize_rmax_nm(
+                atsas_dat_path=atsas_dat_path,
+                output_dir=output_dir,
+                system=system,
+                shape=shape,
+                rg_max_nm=float(guinier_info["rg_max"]),
+                rmin_nm=rmin_nm,
+                rad56_nm=rad56_nm,
+                first=first_pt,
+                last=last_pt,
+                alpha=alpha,
+                nr=nr,
+                eval_tmp_path=eval_tmp_path,
+                timeout_s=30.0,
+                event_bus=event_bus,
+            )
+        except RuntimeError as exc:
+            if eval_tmp_path:
+                try:
+                    os.remove(eval_tmp_path)
+                except OSError:
+                    pass
+            return _finalize_fit_sizes_failure(
+                output_dir=output_dir,
+                profile=profile,
+                base=base,
+                atsas_dat_path=atsas_dat_path,
+                shape=shape,
+                system=system,
+                failure_reason="rmax_optimization_no_success",
+                failures=failures,
+                candidates=candidates,
+                guinier_summary=guinier_summary,
+                event_bus=event_bus,
+                detail=str(exc),
+            )
         failures.extend(rmax_failures)
         candidates.extend(rmax_trials)
     else:
@@ -598,7 +767,30 @@ def _fit_sizes_paths(
         out_path=best_gnom_out_path,
     )
     if not ok:
-        raise RuntimeError(f"fit_sizes failed: final GNOM run exited with code {rc}\n{stderr}")
+        failures.append(
+            {
+                "shape": shape,
+                "system": int(system),
+                "rmax_nm": best_rmax_nm,
+                "ok": False,
+                "returncode": int(rc),
+                "stderr": stderr,
+            }
+        )
+        return _finalize_fit_sizes_failure(
+            output_dir=output_dir,
+            profile=profile,
+            base=base,
+            atsas_dat_path=atsas_dat_path,
+            shape=shape,
+            system=system,
+            failure_reason="final_run_failed",
+            failures=failures,
+            candidates=candidates,
+            guinier_summary=guinier_summary,
+            event_bus=event_bus,
+            detail=stderr,
+        )
     gnom_out_paths = [best_gnom_out_path]
     best = _candidate_from_gnom_out(
         out_text_final,
@@ -792,22 +984,11 @@ def _fit_sizes_paths(
     else:
         first_param_src = "fit_guinier"
 
-    guinier_summary: Optional[Dict[str, Any]] = None
-    if need_guinier and guinier_info is not None:
-        guinier_summary = {
-            "rg": guinier_info.get("rg"),
-            "rg_min": guinier_info.get("rg_min"),
-            "rg_max": guinier_info.get("rg_max"),
-            "q_min": guinier_info.get("q_min"),
-            "q_max": guinier_info.get("q_max"),
-            "chosen_interval": guinier_info.get("chosen_interval"),
-            "quality_class": guinier_info.get("quality_class"),
-        }
-
     best_summary_path = os.path.join(output_dir, f"{base}_fit_sizes_best.yml")
     summary = {
         "profile": profile,
         "atsas_dat_path": atsas_dat_path,
+        "atsas_fit_ok": True,
         "unit_note": "Input profile assumed q in nm^-1; GNOM uses the same units on the command line, therefore R is in nm.",
         "fit_params_path": fit_params_path,
         "fit_param_sources": {
@@ -866,6 +1047,7 @@ def _fit_sizes_paths(
 
     return {
         "output_subdir": output_dir,
+        "atsas_fit_ok": True,
         "gnom_out_paths": gnom_out_paths,
         "best_gnom_out_path": best_gnom_out_path,
         "best_summary_path": best_summary_path,

@@ -23,6 +23,7 @@ from ..core.event_bus import EventBus
 from ..core.models import RunRequest
 from ..core.paths import latest_stderr_path, runs_dir
 from ..logic.runner_qprocess import RunOutcome, SkillRunner
+from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
 from .executor import LiveviewJobExecutor, LiveviewQueueStatus
 from .session_persistence import load_liveview_session_settings, save_liveview_session_settings
 from .state import LiveviewSessionState, LiveviewState
@@ -813,8 +814,23 @@ class LiveviewMainWindow(QMainWindow):
                     outcome.request.skill_name,
                     f"Skill failed (exit code {outcome.exit_code}).{detail}",
                 )
-        if outcome.success and outcome.request is not None:
-            if outcome.request.skill_name == "calibrate":
+        if outcome.request is not None and outcome.success:
+            skill = outcome.request.skill_name
+            if skill in (
+                "fit_distances",
+                "fit_dammif",
+                "fit_bodies",
+                "fit_sizes",
+                "fit_mixture",
+            ):
+                self._right.ingest_skill_result(outcome.result)
+            if skill in ("fit_distances", "fit_sizes") and not is_atsas_fit_ok(outcome.result):
+                QMessageBox.warning(
+                    self,
+                    skill,
+                    failure_message_from_result(outcome.result, skill_id=skill),
+                )
+            if skill == "calibrate":
                 integ_dir = outcome.result.get("integrator_dir")
                 if isinstance(integ_dir, str) and integ_dir.strip():
                     self._state.integrator_dir = Path(integ_dir.strip())
@@ -838,13 +854,5 @@ class LiveviewMainWindow(QMainWindow):
                     self._state.calibration_curve_plot_path = None
                     self._left.set_calibration_preview_path("")
                 self._persist_session_settings()
-            elif outcome.request.skill_name in (
-                "fit_distances",
-                "fit_dammif",
-                "fit_bodies",
-                "fit_sizes",
-                "fit_mixture",
-            ):
-                self._right.ingest_skill_result(outcome.result)
         self._right.sync_modeling_ui_to_session_state()
 

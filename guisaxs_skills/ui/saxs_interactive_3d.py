@@ -4,9 +4,12 @@ Interactive 3D viewer for DAMMIF / mmCIF dummy-atom models (shared Qt widget).
 Uses the same isosurface path as autosaxs ``PLTViewer.plot_3d_views_and_scattering`` (Gaussian
 density + marching cubes + ``Poly3DCollection``), with scatter fallback if the surface fails.
 
-- ``embedded=True`` (right-panel thumbnail): no title/labels, axes hidden, auto-rotation, click opens
+Coordinates are in ångströms (Å), matching ATSAS DAMMIF / BODIES outputs. When a model is loaded,
+axes show tick labels and a light grid so the physical scale can be read from the view.
+
+- ``embedded=True`` (right-panel thumbnail): compact axis labels, auto-rotation, click opens
   fullscreen dialog.
-- ``embedded=False`` (dialog): matplotlib navigation toolbar for rotate/zoom/pan.
+- ``embedded=False`` (dialog): larger tick labels plus matplotlib navigation toolbar.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
+from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  # registers 3d projection
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from PyQt5.QtCore import Qt, QTimer
@@ -236,19 +240,45 @@ class SaxsInteractive3DWidget(QWidget):
             return
         self._full_view_cb()
 
-    def _apply_embedded_chrome(self) -> None:
+    def _apply_empty_chrome(self) -> None:
         self._ax.set_axis_off()
         for axis in (self._ax.xaxis, self._ax.yaxis, self._ax.zaxis):
             axis.pane.set_visible(False)
             axis.line.set_visible(False)
         self._ax.set_title("")
-        self._fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+        if self._embedded:
+            self._fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+        else:
+            self._fig.subplots_adjust(left=0.05, right=0.95, bottom=0.05, top=0.95)
 
-    def _apply_dialog_chrome(self) -> None:
-        self._ax.set_axis_off()
+    def _apply_scaled_axes_chrome(self) -> None:
+        """Show Å tick labels and grid so model size can be read from the plot."""
+        compact = self._embedded
+        label_fs = 7 if compact else 10
+        tick_fs = 6 if compact else 9
+        pane_alpha = 0.12 if compact else 0.22
+
+        self._ax.set_axis_on()
+        self._ax.set_xlabel("x (Å)", fontsize=label_fs, labelpad=2 if compact else 6)
+        self._ax.set_ylabel("y (Å)", fontsize=label_fs, labelpad=2 if compact else 6)
+        self._ax.set_zlabel("z (Å)", fontsize=label_fs, labelpad=2 if compact else 6)
+        self._ax.grid(True, linestyle=":", linewidth=0.5, alpha=0.55)
+        nbins = 4 if compact else 5
         for axis in (self._ax.xaxis, self._ax.yaxis, self._ax.zaxis):
-            axis.pane.set_visible(False)
-        self._ax.set_title("")
+            axis.pane.set_visible(True)
+            axis.pane.set_alpha(pane_alpha)
+            axis.line.set_visible(True)
+            axis.set_major_locator(MaxNLocator(nbins=nbins, prune=None))
+        self._ax.tick_params(labelsize=tick_fs, pad=1 if compact else 3)
+        if self._embedded:
+            self._ax.set_title("")
+            self._fig.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0)
+        else:
+            if self._title:
+                self._ax.set_title(self._title, fontsize=11)
+            else:
+                self._ax.set_title("")
+            self._fig.subplots_adjust(left=0.02, right=0.98, bottom=0.02, top=0.96)
 
     def _reset_empty_view(self) -> None:
         self._has_model = False
@@ -257,8 +287,8 @@ class SaxsInteractive3DWidget(QWidget):
             self._timer.stop()
         self._disconnect_click()
         self._ax.clear()
+        self._apply_empty_chrome()
         if self._embedded:
-            self._apply_embedded_chrome()
             self._ax.text2D(
                 0.5,
                 0.5,
@@ -270,7 +300,6 @@ class SaxsInteractive3DWidget(QWidget):
                 color="0.45",
             )
         else:
-            self._apply_dialog_chrome()
             self._ax.text2D(
                 0.5,
                 0.5,
@@ -369,8 +398,9 @@ class SaxsInteractive3DWidget(QWidget):
             self._ax.set_zlim(-1, 1)
 
         t = title or f"{shape_name} (analytical)"
+        self._title = "" if self._embedded else t
+        self._apply_scaled_axes_chrome()
         if self._embedded:
-            self._apply_embedded_chrome()
             self._anim_phase = 0
             self._anim_theta_deg = 0.0
             self._ax.view_init(elev=self._base_elev, azim=self._base_azim)
@@ -378,8 +408,6 @@ class SaxsInteractive3DWidget(QWidget):
             if self.isVisible() and not self._rotation_suspended:
                 self._timer.start()
         else:
-            self._apply_dialog_chrome()
-            self._title = t
             self._ax.view_init(elev=self._base_elev, azim=self._base_azim)
 
         try:
@@ -452,8 +480,9 @@ class SaxsInteractive3DWidget(QWidget):
             self._ax.set_ylim(center[1] - lim, center[1] + lim)
             self._ax.set_zlim(center[2] - lim, center[2] + lim)
 
+        self._title = "" if self._embedded else (title or "")
+        self._apply_scaled_axes_chrome()
         if self._embedded:
-            self._apply_embedded_chrome()
             self._anim_phase = 0
             self._anim_theta_deg = 0.0
             self._ax.view_init(elev=self._base_elev, azim=self._base_azim)
@@ -461,9 +490,6 @@ class SaxsInteractive3DWidget(QWidget):
             if self.isVisible() and not self._rotation_suspended:
                 self._timer.start()
         else:
-            self._apply_dialog_chrome()
-            if title:
-                self._title = title
             self._ax.view_init(elev=self._base_elev, azim=self._base_azim)
 
         try:
@@ -531,8 +557,9 @@ class SaxsInteractive3DWidget(QWidget):
         self._ax.set_ylim(center[1] - lim, center[1] + lim)
         self._ax.set_zlim(center[2] - lim, center[2] + lim)
 
+        self._title = "" if self._embedded else (title or "")
+        self._apply_scaled_axes_chrome()
         if self._embedded:
-            self._apply_embedded_chrome()
             self._anim_phase = 0
             self._anim_theta_deg = 0.0
             self._ax.view_init(elev=self._base_elev, azim=self._base_azim)
@@ -540,7 +567,7 @@ class SaxsInteractive3DWidget(QWidget):
             if self.isVisible() and not self._rotation_suspended:
                 self._timer.start()
         else:
-            self._apply_dialog_chrome()
+            self._ax.view_init(elev=self._base_elev, azim=self._base_azim)
 
         try:
             self._ax.set_box_aspect((1, 1, 1))
