@@ -26,6 +26,7 @@ from .deps import (  # noqa: F401
 _SKILL_IMPORTS: Dict[str, str] = {
     "calibrate": "autosaxs.skill.calibrate",
     "integrate": "autosaxs.skill.integrate",
+    "average": "autosaxs.skill.average",
     "integrate_proxy": "autosaxs.skill.integrate_proxy",
     "subtract": "autosaxs.skill.subtract",
     "plot": "autosaxs.skill.plot",
@@ -43,6 +44,7 @@ _SKILL_IMPORTS: Dict[str, str] = {
 SKILL_ORDER = [
     "calibrate",
     "integrate",
+    "average",
     "integrate_proxy",
     "subtract",
     "plot",

@@ -127,6 +127,79 @@ def _fit_intensity_at_q(
     return best_val
 
 
+def _minimal_ratio_scale(
+    q: np.ndarray,
+    I_sample: np.ndarray,
+    I_buffer: np.ndarray,
+    *,
+    window_q_fraction: float = 0.025,
+    approach_factor: float = 0.99,
+    window_log_ratio_std_max: float = 1.0,
+    q_min: Optional[float] = None,
+    q_max: Optional[float] = None,
+) -> float:
+    """
+    Non-parametric buffer scale (experimental; not exposed via ``subtract()``).
+
+    Sliding q-range windows (fraction of total q span), median of I_sample/I_buffer
+    per window, global min, × approach_factor. Windows with std(log(ratio)) above
+    ``window_log_ratio_std_max`` are skipped (noisy low-intensity tails).
+    """
+    q = np.asarray(q, dtype=float)
+    I_s = np.asarray(I_sample, dtype=float)
+    I_b = np.asarray(I_buffer, dtype=float)
+    frac = float(window_q_fraction)
+    if not np.isfinite(frac) or frac <= 0.0:
+        raise ValueError(f"minimal_ratio window_q_fraction must be finite and > 0, got {window_q_fraction!r}")
+
+    if q_min is None and q_max is None:
+        q_lo = float(np.min(q))
+        q_hi = float(np.max(q))
+        mask = np.ones(q.shape, dtype=bool)
+    elif q_min is not None and q_max is not None:
+        q_lo = float(q_min)
+        q_hi = float(q_max)
+        mask = (q >= q_lo) & (q <= q_hi)
+    else:
+        raise ValueError("minimal_ratio: q_min and q_max must both be set or both omitted")
+
+    q_span = q_hi - q_lo
+    if q_span <= 0.0:
+        raise ValueError("minimal_ratio: q range must have positive span")
+    win_dq = frac * q_span
+
+    q_sel = q[mask]
+    I_s_sel = I_s[mask]
+    I_b_sel = I_b[mask]
+    point_ok = (I_b_sel > 0.0) & (I_s_sel >= 0.0) & np.isfinite(I_s_sel) & np.isfinite(I_b_sel)
+    q_sel = q_sel[point_ok]
+    I_s_sel = I_s_sel[point_ok]
+    I_b_sel = I_b_sel[point_ok]
+    n = int(q_sel.size)
+    if n < 2:
+        raise ValueError(f"minimal_ratio requires at least 2 valid points in the q range, got {n}")
+
+    ratios = I_s_sel / I_b_sel
+    log_std_max = float(window_log_ratio_std_max)
+    window_medians: List[float] = []
+    for i in range(n):
+        q_start = float(q_sel[i])
+        in_win = (q_sel >= q_start) & (q_sel <= q_start + win_dq)
+        if not np.any(in_win):
+            continue
+        win_ratios = ratios[in_win]
+        pos = win_ratios > 0.0
+        if np.count_nonzero(pos) < 2:
+            continue
+        log_r = np.log(win_ratios[pos])
+        if float(np.std(log_r)) > log_std_max:
+            continue
+        window_medians.append(float(np.median(win_ratios)))
+    if not window_medians:
+        raise ValueError("minimal_ratio: no valid sliding windows in q range")
+    return float(approach_factor) * min(window_medians)
+
+
 def subtract_buffer(
     buffer_path,
     src_path,
@@ -137,6 +210,7 @@ def subtract_buffer(
     scaling_factor: Optional[float] = None,
 ):
     q_buff, I_buff, sigma_buff, _ = read_saxs(buffer_path)
+    q_buff_orig = np.asarray(q_buff, dtype=float)
 
     manual_scale: Optional[float] = None
     if scaling_factor is not None:
@@ -153,65 +227,89 @@ def subtract_buffer(
     scaling_factor = 1.00 if manual_scale is None else float(manual_scale)
     method_key = str(method).strip().lower().replace("-", "_")
     algo_ops = None
-    if manual_scale is None and method_key in ("match_tail", "point_match"):
-        algo_ops = {
-            "q_range_abs": None,
-            "q_range_rel": (0.8, None),
-            "approach_factor": 1.00,
-            "n_min": 2,
-            "n_max": 6,
-        }
+    # minimal_ratio branch kept for internal/experimental use via subtract_buffer only.
+    if manual_scale is None and method_key in ("match_tail", "point_match", "minimal_ratio"):
+        if method_key == "minimal_ratio":
+            algo_ops = {
+                "q_range_abs": None,
+                "window_q_fraction": 0.025,
+                "approach_factor": 0.99,
+                "window_log_ratio_std_max": 1.0,
+            }
+        else:
+            algo_ops = {
+                "approach_factor": 1.00,
+                "n_min": 2,
+                "n_max": 6,
+            }
         if match_tail_ops is None:
             match_tail_ops = dict()
         algo_ops.update(match_tail_ops)
-        if algo_ops["q_range_abs"] is not None:
-            algo_ops["q_range_rel"] = None
-
-        assert algo_ops["q_range_abs"] is None or algo_ops["q_range_rel"] is None, (
-            "cant set both q_range_abs and q_range_rel"
-        )
+        if algo_ops.get("q_range_rel") is not None:
+            raise ValueError(
+                "subtract_buffer: q_range_rel is no longer supported; use q_range_abs (q_min and q_max)"
+            )
 
         if not np.array_equal(q, q_buff):
             I_buff = np.interp(q, q_buff, I_buff)
 
-        q_max = np.max(q)
-        if algo_ops["q_range_rel"] is not None:
-            q0, q1 = algo_ops["q_range_rel"]
-            if q1 is None:
-                q1 = 1.0
-            algo_ops["q_range_abs"] = q0 * q_max, q1 * q_max
-        q0, q1 = algo_ops["q_range_abs"]
-        if q1 is None:
-            q1 = q_max
-        idx = (q0 < q) & (q < q1)
-
-        q_tail = q[idx]
-        I_tail = I[idx]
-        I_buff_tail = I_buff[idx]
-
-        if method_key == "match_tail":
-            scaling_factor = _match_tail_scale_two_step(
-                q_tail,
-                I_tail,
-                I_buff_tail,
-                n_min=int(algo_ops.get("n_min", 2)),
-                n_max=int(algo_ops.get("n_max", 6)),
-            )
-            scaling_factor *= algo_ops.get("approach_factor", 1.00)
-        elif method_key == "point_match":
-            sample_form = algo_ops.get("sample_form", "Porod-plus-linear")
-            buffer_form = algo_ops.get("buffer_form", "linear")
-            q_intersect = float(q1)
-            pm_factor = float(algo_ops.get("point_match_factor", 0.995))
-            n_lo = int(algo_ops.get("n_min", 2))
-            n_hi = int(algo_ops.get("n_max", 6))
-            I_s = _fit_intensity_at_q(q_tail, I_tail, sample_form, n_lo, n_hi, q_intersect)
-            I_b = _fit_intensity_at_q(q_tail, I_buff_tail, buffer_form, n_lo, n_hi, q_intersect)
-            if not np.isfinite(I_s) or not np.isfinite(I_b) or abs(I_b) < 1e-30 * max(1.0, abs(I_s)):
-                scaling_factor = 1.0
+        if method_key == "minimal_ratio":
+            q_range_abs = algo_ops.get("q_range_abs")
+            if q_range_abs is None:
+                q0 = max(float(np.min(q)), float(np.min(q_buff_orig)))
+                q1 = min(float(np.max(q)), float(np.max(q_buff_orig)))
+                algo_ops["q_range_abs"] = (q0, q1)
             else:
-                scaling_factor = pm_factor * I_s / I_b
-            scaling_factor *= algo_ops.get("approach_factor", 1.00)
+                q0, q1 = q_range_abs
+            scaling_factor = _minimal_ratio_scale(
+                q,
+                I,
+                I_buff,
+                window_q_fraction=float(algo_ops.get("window_q_fraction", 0.025)),
+                approach_factor=float(algo_ops.get("approach_factor", 0.99)),
+                window_log_ratio_std_max=float(algo_ops.get("window_log_ratio_std_max", 1.0)),
+                q_min=float(q0),
+                q_max=float(q1),
+            )
+        else:
+            q_range_abs = algo_ops.get("q_range_abs")
+            if q_range_abs is None:
+                raise ValueError(
+                    f"subtract_buffer: q_range_abs is required for method {method_key!r} "
+                    "(set q_min and q_max)"
+                )
+            q0, q1 = q_range_abs
+            if q1 is None:
+                q1 = float(np.max(q))
+            idx = (q0 < q) & (q < q1)
+
+            q_tail = q[idx]
+            I_tail = I[idx]
+            I_buff_tail = I_buff[idx]
+
+            if method_key == "match_tail":
+                scaling_factor = _match_tail_scale_two_step(
+                    q_tail,
+                    I_tail,
+                    I_buff_tail,
+                    n_min=int(algo_ops.get("n_min", 2)),
+                    n_max=int(algo_ops.get("n_max", 6)),
+                )
+                scaling_factor *= algo_ops.get("approach_factor", 1.00)
+            elif method_key == "point_match":
+                sample_form = algo_ops.get("sample_form", "Porod-plus-linear")
+                buffer_form = algo_ops.get("buffer_form", "linear")
+                q_intersect = float(q1)
+                pm_factor = float(algo_ops.get("point_match_factor", 0.995))
+                n_lo = int(algo_ops.get("n_min", 2))
+                n_hi = int(algo_ops.get("n_max", 6))
+                I_s = _fit_intensity_at_q(q_tail, I_tail, sample_form, n_lo, n_hi, q_intersect)
+                I_b = _fit_intensity_at_q(q_tail, I_buff_tail, buffer_form, n_lo, n_hi, q_intersect)
+                if not np.isfinite(I_s) or not np.isfinite(I_b) or abs(I_b) < 1e-30 * max(1.0, abs(I_s)):
+                    scaling_factor = 1.0
+                else:
+                    scaling_factor = pm_factor * I_s / I_b
+                scaling_factor *= algo_ops.get("approach_factor", 1.00)
 
     I_buffer_scaled = I_buff * scaling_factor
     I_sub = I - I_buffer_scaled
@@ -350,6 +448,11 @@ def subtract(
         scaling_factor=scaling_factor,
     )
     method_eff = str(merged.get("method", "point_match")).strip().lower().replace("-", "_")
+    if method_eff == "minimal_ratio":
+        raise ValueError(
+            "subtract: method 'minimal_ratio' is not supported via the public API "
+            "(experimental; reserved for future development). Use 'point_match' or 'match_tail'."
+        )
     q_min_eff = merged.get("q_min", q_min)
     q_max_eff = merged.get("q_max", q_max)
     if q_min_eff is None or q_max_eff is None:

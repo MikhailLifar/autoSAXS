@@ -34,6 +34,7 @@ SKILL_DEFAULT_ORDER: Dict[str, int] = {
     "integrate_proxy": 1,
     "calibrate": 10,
     "integrate": 20,
+    "average": 25,
     "subtract": 30,
     "plot": 40,
     "fit_guinier": 41,

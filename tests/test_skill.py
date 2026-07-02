@@ -140,7 +140,7 @@ def test_skill_has_standard_docstring(skill_name, skill_fn):
 # ---------------------------------------------------------------------------
 def test_subtract_contract():
     with tempfile.TemporaryDirectory() as tmp:
-        q = np.linspace(0.1, 2.0, 20)
+        q = np.linspace(0.1, 2.0, 40)
         I_s = np.exp(-q**2) + 0.1
         I_b = 0.05 * np.exp(-q**2)
         sigma = 0.01 * I_s
@@ -817,7 +817,7 @@ def test_fit_mixture_radius_params_use_nm_externally():
     assert params["poly_max"] == pytest.approx(40.0)
 
 
-def test_subtract_applies_bundled_defaults_without_q_window(monkeypatch):
+def test_subtract_applies_bundled_defaults_with_q_window_from_kwargs(monkeypatch):
     captured = {}
 
     def _fake_subtract_paths(input_paths, output_dir, match_tail_ops=None, method=None, **kwargs):
@@ -844,8 +844,8 @@ def test_subtract_applies_bundled_defaults_without_q_window(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         sample = os.path.join(tmp, "s.dat")
         buff = os.path.join(tmp, "b.dat")
-        write_saxs(sample, [1.0, 2.0], [1.0, 1.0], [0.1, 0.1], {})
-        write_saxs(buff, [1.0, 2.0], [0.5, 0.5], [0.1, 0.1], {})
+        write_saxs(sample, np.linspace(0.1, 2.0, 40), np.ones(40), np.full(40, 0.1), {})
+        write_saxs(buff, np.linspace(0.1, 2.0, 40), np.ones(40), np.full(40, 0.1), {})
         subtract(sample, buff, output_dir=os.path.join(tmp, "out"), q_min=1.0, q_max=2.0, use_cache=False)
         assert captured["method"] == "point_match"
         assert captured["match_tail_ops"] is not None
