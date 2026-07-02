@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ..logic.calibration_storage import calibration_subdir, ensure_tiff_in_calibration
 from ...logic.session_state import SessionPathHints
 from ...logic.skill_catalog import discover_skills
 from ...ui.path_field import PathField
@@ -91,7 +92,7 @@ class CalibrationWizardDialog(QDialog):
             geo = scr.availableGeometry() if scr is not None else None
             if geo is not None:
                 w = max(980, int(0.75 * int(geo.width())))
-                h = max(720, int(0.80 * int(geo.height())))
+                h = max(720, int(0.90 * int(geo.height())))
                 self.resize(w, h)
                 self.setMinimumSize(860, 640)
         except Exception:
@@ -147,8 +148,8 @@ class CalibrationWizardDialog(QDialog):
             right_lay.addLayout(top_row)
             right_lay.addWidget(self._form, 1)
             splitter.addWidget(right)
-            splitter.setStretchFactor(0, 3)
-            splitter.setStretchFactor(1, 2)
+            splitter.setStretchFactor(0, 2)
+            splitter.setStretchFactor(1, 1)
 
             lay.addWidget(splitter, 1)
 
@@ -190,8 +191,13 @@ class CalibrationWizardDialog(QDialog):
         f = self._calib_image_field()
         if f is None:
             return
-        # Prefer first dropped file.
-        f.set_text(paths[0])
+        try:
+            stored = ensure_tiff_in_calibration(self._watchdir, paths[0])
+        except (OSError, FileNotFoundError) as e:
+            QMessageBox.warning(self, "Calibration image", str(e))
+            return
+        f.set_text(stored)
+        f.set_browse_start_dir(str(calibration_subdir(self._watchdir)))
         self._refresh_viewer_from_form()
 
     def _calib_image_field(self) -> PathField | None:
@@ -219,6 +225,10 @@ class CalibrationWizardDialog(QDialog):
         f = self._calib_image_field()
         if f is not None:
             f.path_changed.connect(self._refresh_viewer_from_form)
+            f.set_browse_start_dir(str(calibration_subdir(self._watchdir)))
+        mask_f = self._mask_field()
+        if mask_f is not None:
+            mask_f.set_browse_start_dir(str(calibration_subdir(self._watchdir)))
 
     def _refresh_viewer_from_form(self) -> None:
         f = self._calib_image_field()

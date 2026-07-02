@@ -17,6 +17,13 @@ class LiveviewState(str, Enum):
     CD = "CD"
 
 
+class LiveviewWatchMode(str, Enum):
+    """Filesystem watch layout: flat (top-level) vs recursive tree."""
+
+    FLAT = "flat"
+    TREE = "tree"
+
+
 class AnalysisMode(str, Enum):
     """Right-column analysis mode (spec §6.4). First combo item is OFF."""
 
@@ -34,6 +41,7 @@ class AnalysisMode(str, Enum):
 @dataclass
 class LiveviewSessionState:
     watchdir: Path
+    watch_mode: LiveviewWatchMode = LiveviewWatchMode.FLAT
 
     # Calibration artifacts
     integrator_dir: Optional[Path] = None

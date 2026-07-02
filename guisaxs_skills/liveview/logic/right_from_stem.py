@@ -12,7 +12,15 @@ import yaml
 
 from autosaxs.skill.gnom_fit_common import default_atsas_failure_message
 
-from ..state import AnalysisMode
+from ..output_paths import (
+    dammif_dir,
+    fit_bodies_dir,
+    fit_distances_dir,
+    fit_sizes_dir,
+    mixture_dir,
+    tiff_output_root,
+)
+from ..state import AnalysisMode, LiveviewWatchMode
 
 
 def _mtime_key(p: Path) -> float:
@@ -116,16 +124,18 @@ def apply_right_outputs_from_disk(
     watchdir: Path,
     tiff_stem: str,
     mode: AnalysisMode,
+    tiff_path: str = "",
+    watch_mode: LiveviewWatchMode = LiveviewWatchMode.FLAT,
 ) -> None:
-    """Clear analysis previews, then load paths under ``watchdir`` for ``tiff_stem`` and ``mode``."""
+    """Clear analysis previews, then load paths for ``tiff_stem`` under the TIFF output root."""
     right.clear_output_previews()
     if mode == AnalysisMode.OFF or not (tiff_stem or "").strip():
         return
     stem = tiff_stem.strip()
-    wd = watchdir.expanduser().resolve()
+    root = tiff_output_root(watchdir=watchdir, tiff_path=tiff_path, mode=watch_mode)
 
     if mode == AnalysisMode.MONODISPERSE_PR:
-        fd = wd / "fit_distances" / stem
+        fd = fit_distances_dir(root) / stem
         failed = _read_atsas_failure_payload(fd, stem, skill_id="fit_distances")
         if failed is not None:
             right.ingest_skill_result(failed)
@@ -135,26 +145,26 @@ def apply_right_outputs_from_disk(
         return
 
     if mode == AnalysisMode.MONODISPERSE_DAM:
-        fd = wd / "fit_distances" / stem
+        fd = fit_distances_dir(root) / stem
         failed = _read_atsas_failure_payload(fd, stem, skill_id="fit_distances")
         if failed is not None:
             right.ingest_skill_result(failed)
             return
         fp, pp = _discover_fit_distances_pngs(fd, stem)
         right.ingest_skill_result({"fit_vs_exp_png_path": fp, "best_pr_png_path": pp})
-        dam = wd / "dammif" / stem
+        dam = dammif_dir(root) / stem
         if dam.is_dir():
             right.ingest_skill_result({"output_subdir": str(dam.resolve())})
         return
 
     if mode == AnalysisMode.MONODISPERSE_BODIES:
-        fb = wd / "fit_bodies" / stem
+        fb = fit_bodies_dir(root) / stem
         if fb.is_dir():
             right.ingest_skill_result({"output_subdir": str(fb.resolve())})
         return
 
     if mode == AnalysisMode.POLYDISPERSE_DR:
-        fs = wd / "fit_sizes" / stem
+        fs = fit_sizes_dir(root) / stem
         failed = _read_atsas_failure_payload(fs, stem, skill_id="fit_sizes")
         if failed is not None:
             right.ingest_skill_result(failed)
@@ -164,7 +174,7 @@ def apply_right_outputs_from_disk(
         return
 
     if mode == AnalysisMode.POLYDISPERSE_MIXTURE:
-        mx = wd / "mixture" / stem
+        mx = mixture_dir(root) / stem
         comp = mx / "mixture_comparison_I_vs_q.png"
         dist = mx / "mixture_distributions.png"
         right.ingest_skill_result(

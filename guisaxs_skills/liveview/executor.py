@@ -14,7 +14,20 @@ from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas
 from .jobs import Job, JobStep, PlaceholderError, resolve_request_placeholders
 from .queue import FIFOQueue, JobQueue, QueueItem
 from .stability import StabilityConfig, StabilityTracker
-from .state import AnalysisMode, DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES, LiveviewSessionState, LiveviewState
+from .state import AnalysisMode, DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES, LiveviewSessionState, LiveviewState, LiveviewWatchMode
+from .output_paths import (
+    averaged_dir,
+    averaged_proxy_dir,
+    dammif_dir,
+    fit_bodies_dir,
+    fit_distances_dir,
+    fit_sizes_dir,
+    integrated_dat_path,
+    mixture_dir,
+    subtracted_dat_path,
+    subtracted_dir,
+    tiff_output_root,
+)
 
 
 @dataclass(frozen=True)
@@ -110,10 +123,34 @@ class LiveviewJobExecutor(QObject):
     def session_processed_tiffs(self) -> tuple[str, ...]:
         return tuple(self._session_tiff_history)
 
-    def enqueue_tiff(self, *, path: str, detected_at_monotonic: float) -> None:
+    def is_idle(self) -> bool:
+        """True when no skill is running and nothing is queued or awaiting stability."""
+        if self._paused:
+            return False
+        if self._runner.is_running():
+            return False
+        if self._current_job is not None:
+            return False
+        if self._current_incoming is not None:
+            return False
+        if len(self._incoming) > 0 or len(self._jobs) > 0:
+            return False
+        return True
+
+    def enqueue_tiff(
+        self,
+        *,
+        path: str,
+        detected_at_monotonic: float,
+        stability_cfg: Optional[StabilityConfig] = None,
+    ) -> None:
         cur = self._current_incoming.path if self._current_incoming else None
         self._incoming.put_if_absent(
-            QueueItem(path=path, detected_at_monotonic=float(detected_at_monotonic)),
+            QueueItem(
+                path=path,
+                detected_at_monotonic=float(detected_at_monotonic),
+                stability_cfg=stability_cfg,
+            ),
             current_path=cur,
         )
 
@@ -140,7 +177,8 @@ class LiveviewJobExecutor(QObject):
         if stem.startswith("int_"):
             stem = stem[len("int_") :]
         wd = self._state.watchdir
-        subdir = wd / "subtracted"
+        root = self._subtraction_output_root(sample_dat=sp)
+        subdir = subtracted_dir(root)
         subdir.mkdir(parents=True, exist_ok=True)
         opts = {"output_dir": str(subdir.resolve()), "use_cache": False}
         opts.update(dict(self._state.subtract_options or {}))
@@ -155,8 +193,8 @@ class LiveviewJobExecutor(QObject):
                 ),
             )
         ]
-        profile = str((wd / "subtracted" / f"sub_{stem}.dat").resolve())
-        steps.extend(self._analysis_steps_for_profile(profile))
+        profile = str(subtracted_dat_path(root=root, stem=stem).resolve())
+        steps.extend(self._analysis_steps_for_profile(profile, output_root=root))
         return Job(
             id=f"rerun_sub:{stem}:{time.time_ns()}",
             priority=int(priority),
@@ -239,7 +277,8 @@ class LiveviewJobExecutor(QObject):
             if item is None:
                 return
             self._current_incoming = item
-            self._current_stability = StabilityTracker(path=item.path, cfg=self._stability_cfg)
+            cfg = item.stability_cfg or self._stability_cfg
+            self._current_stability = StabilityTracker(path=item.path, cfg=cfg)
 
         if self._current_stability is None or self._current_incoming is None:
             return
@@ -450,6 +489,15 @@ class LiveviewJobExecutor(QObject):
         # Advance to next step.
         self._job_step_idx += 1
 
+    def _subtraction_output_root(self, *, sample_dat: str) -> Path:
+        wd = self._state.watchdir.resolve()
+        if self._state.watch_mode != LiveviewWatchMode.TREE:
+            return wd
+        sp = Path((sample_dat or "").strip()).expanduser().resolve()
+        if sp.parent.name in ("averaged", "averaged_proxy"):
+            return sp.parent.parent
+        return sp.parent
+
     def _build_process_tiff_job(self, *, tiff_path: str) -> Job:
         """
         Build a Job for a stable incoming TIFF based on current session state.
@@ -459,13 +507,14 @@ class LiveviewJobExecutor(QObject):
         tp = (tiff_path or "").strip()
         stem = Path(tp).stem
         wd = self._state.watchdir
+        root = tiff_output_root(watchdir=wd, tiff_path=tp, mode=self._state.watch_mode)
 
         st = self._state.current_state()
         steps: List[JobStep] = []
 
         # Always disable caching for live runs.
         if st == LiveviewState.A:
-            outdir = wd / "averaged_proxy"
+            outdir = averaged_proxy_dir(root)
             outdir.mkdir(parents=True, exist_ok=True)
             steps.append(
                 JobStep(
@@ -477,12 +526,17 @@ class LiveviewJobExecutor(QObject):
                     ),
                 )
             )
-            return Job(id=f"tiff:{stem}:{time.time_ns()}", priority=0, steps=steps, context={"tiff_path": tp, "tiff_stem": stem})
+            return Job(
+                id=f"tiff:{stem}:{time.time_ns()}",
+                priority=0,
+                steps=steps,
+                context={"tiff_path": tp, "tiff_stem": stem, "output_root": str(root.resolve())},
+            )
 
         # Calibrated paths (B/BD/C/CD)
         if self._state.integrator_dir is None:
             raise RuntimeError("Missing integrator_dir (not calibrated)")
-        outdir = wd / "averaged"
+        outdir = averaged_dir(root)
         outdir.mkdir(parents=True, exist_ok=True)
         steps.append(
             JobStep(
@@ -495,12 +549,12 @@ class LiveviewJobExecutor(QObject):
             )
         )
 
-        integrated_dat = str((wd / "averaged" / f"int_{stem}.dat").resolve())
+        integrated_dat = str(integrated_dat_path(root=root, stem=stem, integrator_ready=True).resolve())
 
         if st in (LiveviewState.C, LiveviewState.CD):
             if self._state.buffer_dat_path is None or self._state.subtract_options is None:
                 raise RuntimeError("State C requires buffer_dat_path and subtract_options")
-            subdir = wd / "subtracted"
+            subdir = subtracted_dir(root)
             subdir.mkdir(parents=True, exist_ok=True)
             opts = {"output_dir": str(subdir), "use_cache": False}
             opts.update(dict(self._state.subtract_options or {}))
@@ -514,16 +568,26 @@ class LiveviewJobExecutor(QObject):
                     ),
                 )
             )
-            profile = str((wd / "subtracted" / f"sub_{stem}.dat").resolve())
-            steps.extend(self._analysis_steps_for_profile(profile))
-            return Job(id=f"tiff:{stem}:{time.time_ns()}", priority=0, steps=steps, context={"tiff_path": tp, "tiff_stem": stem})
+            profile = str(subtracted_dat_path(root=root, stem=stem).resolve())
+            steps.extend(self._analysis_steps_for_profile(profile, output_root=root))
+            return Job(
+                id=f"tiff:{stem}:{time.time_ns()}",
+                priority=0,
+                steps=steps,
+                context={"tiff_path": tp, "tiff_stem": stem, "output_root": str(root.resolve())},
+            )
 
         # State B/BD
         profile = integrated_dat
-        steps.extend(self._analysis_steps_for_profile(profile))
-        return Job(id=f"tiff:{stem}:{time.time_ns()}", priority=0, steps=steps, context={"tiff_path": tp, "tiff_stem": stem})
+        steps.extend(self._analysis_steps_for_profile(profile, output_root=root))
+        return Job(
+            id=f"tiff:{stem}:{time.time_ns()}",
+            priority=0,
+            steps=steps,
+            context={"tiff_path": tp, "tiff_stem": stem, "output_root": str(root.resolve())},
+        )
 
-    def _analysis_steps_for_profile(self, profile_abs: str) -> List[JobStep]:
+    def _analysis_steps_for_profile(self, profile_abs: str, *, output_root: Path) -> List[JobStep]:
         mode = self._state.analysis_mode
         if not mode.is_active():
             return []
@@ -531,7 +595,7 @@ class LiveviewJobExecutor(QObject):
         prof = str(Path(profile_abs).expanduser().resolve())
 
         if mode == AnalysisMode.MONODISPERSE_PR:
-            outdir = wd / "fit_distances"
+            outdir = fit_distances_dir(output_root)
             outdir.mkdir(parents=True, exist_ok=True)
             opts: dict = {}
             if self._state.fit_distances_conf_path is not None:
@@ -543,7 +607,7 @@ class LiveviewJobExecutor(QObject):
             return [JobStep(name="fit_distances", request=RunRequest("fit_distances", [prof], opts))]
 
         if mode == AnalysisMode.MONODISPERSE_DAM:
-            outdir = wd / "fit_distances"
+            outdir = fit_distances_dir(output_root)
             outdir.mkdir(parents=True, exist_ok=True)
             opts: dict = {}
             if self._state.fit_distances_conf_path is not None:
@@ -553,7 +617,7 @@ class LiveviewJobExecutor(QObject):
             opts["output_dir"] = str(outdir.resolve())
             opts["use_cache"] = False
             # DAMMIF needs gnom_path from fit_distances result.
-            damdir = wd / "dammif"
+            damdir = dammif_dir(output_root)
             damdir.mkdir(parents=True, exist_ok=True)
             return [
                 JobStep(name="fit_distances", request=RunRequest("fit_distances", [prof], opts)),
@@ -572,7 +636,7 @@ class LiveviewJobExecutor(QObject):
             ]
 
         if mode == AnalysisMode.MONODISPERSE_BODIES:
-            bodies_dir = wd / "fit_bodies"
+            bodies_dir = fit_bodies_dir(output_root)
             bodies_dir.mkdir(parents=True, exist_ok=True)
             shapes = self._state.fit_bodies_shapes
             if not shapes:
@@ -593,7 +657,7 @@ class LiveviewJobExecutor(QObject):
             ]
 
         if mode == AnalysisMode.POLYDISPERSE_DR:
-            outdir = wd / "fit_sizes"
+            outdir = fit_sizes_dir(output_root)
             outdir.mkdir(parents=True, exist_ok=True)
             opts: dict = {}
             if self._state.fit_sizes_conf_path is not None:
@@ -605,7 +669,7 @@ class LiveviewJobExecutor(QObject):
             return [JobStep(name="fit_sizes", request=RunRequest("fit_sizes", [prof], opts))]
 
         if mode == AnalysisMode.POLYDISPERSE_MIXTURE:
-            outdir = wd / "mixture"
+            outdir = mixture_dir(output_root)
             outdir.mkdir(parents=True, exist_ok=True)
             opts: dict = {"output_dir": str(outdir.resolve()), "use_cache": False}
             opts.update(self._fit_mixture_run_options())

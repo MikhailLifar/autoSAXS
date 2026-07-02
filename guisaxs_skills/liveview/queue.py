@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import collections
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Deque, Optional
+
+from .stability import StabilityConfig
 
 import heapq
 import itertools
@@ -17,6 +19,7 @@ from .jobs import Job
 class QueueItem:
     path: str
     detected_at_monotonic: float
+    stability_cfg: Optional[StabilityConfig] = field(default=None)
 
 
 class FIFOQueue:

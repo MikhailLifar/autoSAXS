@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtCore import QEvent
@@ -18,6 +18,7 @@ class PathField(QWidget):
     """Emitted when the path text or dropped paths change (not during programmatic set_text / set_state)."""
 
     path_changed = pyqtSignal()
+    load_clicked = pyqtSignal()
 
     def __init__(
         self,
@@ -25,29 +26,36 @@ class PathField(QWidget):
         mode: str = "any",
         allow_multiple: bool = False,
         show_get_default: bool = False,
+        show_load: bool = False,
         expected_exts: Optional[tuple[str, ...]] = None,
     ) -> None:
         super().__init__()
         self._mode = mode  # any|file|dir
         self._allow_multiple = bool(allow_multiple)
         self._show_get_default = bool(show_get_default)
+        self._show_load = bool(show_load)
         self._expected_exts = tuple(x.lower() for x in (expected_exts or ()) if isinstance(x, str) and x.strip())
         self._last_ext_warned_path: Optional[str] = None
         self._last_valid_state: dict = {"text": "", "dropped_paths": []}
         self._browse_start_dir: Optional[str] = None
         self._workdir: Optional[Path] = None
+        self._smart_drop_handler: Optional[Callable[[list[str], "PathField"], bool]] = None
         self._dropped_paths: list[str] = []
         self._edit = QLineEdit()
         # Prevent QLineEdit from "inserting text at cursor" on drop; we handle drops at the widget level.
         self._edit.setAcceptDrops(False)
         self._edit.installEventFilter(self)
         self._browse = QPushButton("Browse")
+        self._load: Optional[QPushButton] = QPushButton("Load") if self._show_load else None
         self._get_default = QPushButton("Get Default")
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._edit, 1)
         lay.addWidget(self._browse, 0)
+        if self._load is not None:
+            lay.addWidget(self._load, 0)
+            self._load.clicked.connect(self.load_clicked.emit)
         if self._show_get_default:
             lay.addWidget(self._get_default, 0)
 
@@ -57,6 +65,10 @@ class PathField(QWidget):
         self._edit.textEdited.connect(self._on_text_edited)
         self._edit.textChanged.connect(lambda _t: self.path_changed.emit())
         self._edit.textChanged.connect(lambda _t: self._maybe_warn_ext_mismatch())
+
+    @property
+    def load_button(self) -> Optional[QPushButton]:
+        return self._load
     def eventFilter(self, obj, event):  # type: ignore[override]
         # Ensure drops on the line edit behave like drops on the whole widget (replace content).
         if obj is self._edit:
@@ -173,6 +185,15 @@ class PathField(QWidget):
         """Used to resolve relative paths when choosing the dialog start directory."""
         self._workdir = workdir
 
+    def set_smart_drop_handler(
+        self, handler: Optional[Callable[[list[str], "PathField"], bool]]
+    ) -> None:
+        """
+        Optional drop router. If the handler returns True, the drop was consumed elsewhere
+        (e.g. routed to a sibling field with matching expected extensions).
+        """
+        self._smart_drop_handler = handler
+
     def _config_default_dest_path(self) -> Path:
         wd = self._workdir.resolve() if self._workdir is not None else Path.cwd().resolve()
         return wd / "config_base.conf"
@@ -228,6 +249,8 @@ class PathField(QWidget):
         self._set_dropped_paths(paths)
 
     def _set_dropped_paths(self, paths: list[str]) -> None:
+        if self._smart_drop_handler is not None and self._smart_drop_handler(paths, self):
+            return
         # Replace any existing content with the dropped list.
         self._dropped_paths = list(paths)
         self._sync_display_from_dropped()

@@ -30,9 +30,13 @@ from .state import LiveviewSessionState, LiveviewState
 from .state import AnalysisMode
 from .workdir import save_last_watchdir, select_watchdir
 from .watcher import DirectoryWatcher, WatcherConfig
+from .poll_watcher import POLL_TRIGGERED_STABILITY, ProcessedTiffPoller, PollWatcherConfig
+from .dir_tree_observer import TREE_STABILITY, TreeDirObserver, TreeObserverConfig
+from .output_paths import tiff_history_label
 from .logic.middle_from_stem import apply_middle_view_from_disk
 from .logic.right_from_stem import apply_right_outputs_from_disk
 from ..logic.path_display import contracted_path_label
+from .state import LiveviewWatchMode
 from .ui.left_panel import LiveviewLeftPanel, pick_calibration_curve_image_path
 from .ui.middle_panel import LiveviewMiddlePanel
 from .ui.right_panel import LiveviewRightPanel
@@ -53,10 +57,16 @@ class LiveviewMainWindow(QMainWindow):
             cfg=WatcherConfig(recursive=False),
             on_new_file=self._on_new_file_detected,
         )
-        self._executor.queue_status.connect(self._on_queue_status)
-        self._executor.error.connect(self._on_error)
-        self._executor.latest_artifacts.connect(self._on_latest_artifacts)
-        self._executor.session_file_completed.connect(self._on_session_file_completed)
+        self._poll_watcher = ProcessedTiffPoller(
+            cfg=PollWatcherConfig(),
+            on_update=self._on_polled_file_detected,
+        )
+        self._tree_observer = TreeDirObserver(
+            cfg=TreeObserverConfig(),
+            watchdir=watchdir,
+            on_update=self._on_tree_file_detected,
+        )
+        self._connect_executor(self._executor)
 
         self.setWindowTitle("guisaxs-liveview")
 
@@ -82,6 +92,15 @@ class LiveviewMainWindow(QMainWindow):
         self._watchdir_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         top = QHBoxLayout()
         top.addWidget(self._watchdir_label, 1)
+        self._watch_mode_btn = QPushButton()
+        self._watch_mode_btn.setCheckable(True)
+        self._watch_mode_btn.clicked.connect(self._on_watch_mode_toggled)
+        self._update_watch_mode_button()
+        self._watch_mode_btn.setToolTip(
+            "Flat dir: watch top-level TIFFs only; outputs under watchdir.\n"
+            "Tree dir: recursive TIFF discovery; outputs beside each TIFF."
+        )
+        top.addWidget(self._watch_mode_btn, 0, Qt.AlignRight)
         self._change_watchdir_btn = QPushButton("Change watch folder…")
         self._change_watchdir_btn.setToolTip("Same folder picker as guisaxs_skills working directory")
         self._change_watchdir_btn.clicked.connect(self._on_change_watchdir)
@@ -90,12 +109,12 @@ class LiveviewMainWindow(QMainWindow):
         layout.addWidget(self._splitter, 1)
         self.setCentralWidget(container)
 
-        self._executor.start()
-        self._watcher.start()
-        self._wire_ui()
         self._last_2d_path: str = ""
         self._history_index: int = 0
         self._watchdir_resolved = watchdir.resolve()
+        self._executor.start()
+        self._apply_watch_mode_watchers()
+        self._wire_ui()
         self._apply_loaded_session_to_ui()
         self._refresh_history_chrome()
         self._sub_wizard: SubtractionWizardDialog | None = None
@@ -138,6 +157,14 @@ class LiveviewMainWindow(QMainWindow):
         except Exception:
             pass
         try:
+            self._poll_watcher.stop()
+        except Exception:
+            pass
+        try:
+            self._tree_observer.stop()
+        except Exception:
+            pass
+        try:
             self._executor.stop()
         except Exception:
             pass
@@ -147,9 +174,100 @@ class LiveviewMainWindow(QMainWindow):
             pass
         super().closeEvent(event)
 
+    def _connect_executor(self, executor: LiveviewJobExecutor) -> None:
+        executor.queue_status.connect(self._on_queue_status)
+        executor.error.connect(self._on_error)
+        executor.latest_artifacts.connect(self._on_latest_artifacts)
+        executor.session_file_completed.connect(self._on_session_file_completed)
+        executor.session_file_completed.connect(self._poll_watcher.track_processed_path)
+        self._poll_watcher.set_idle_check(executor.is_idle)
+        self._tree_observer.set_idle_check(executor.is_idle)
+
+    def _update_watch_mode_button(self) -> None:
+        tree = self._state.watch_mode == LiveviewWatchMode.TREE
+        self._watch_mode_btn.blockSignals(True)
+        self._watch_mode_btn.setChecked(tree)
+        self._watch_mode_btn.setText("Tree dir" if tree else "Flat dir")
+        self._watch_mode_btn.blockSignals(False)
+
+    def _apply_watch_mode_watchers(self) -> None:
+        if self._state.watch_mode == LiveviewWatchMode.TREE:
+            try:
+                self._watcher.stop()
+            except Exception:
+                pass
+            try:
+                self._poll_watcher.stop()
+            except Exception:
+                pass
+            self._tree_observer.restart_at(self._watchdir_resolved)
+        else:
+            try:
+                self._tree_observer.stop()
+            except Exception:
+                pass
+            self._tree_observer.clear()
+            try:
+                self._watcher.restart_at(self._watchdir_resolved)
+            except Exception:
+                self._watcher.start()
+            self._poll_watcher.start()
+
+    def _on_watch_mode_toggled(self, checked: bool) -> None:
+        if self._runner.is_running():
+            QMessageBox.warning(
+                self,
+                "Watch mode",
+                "A skill is still running. Wait for it to finish, then switch watch mode.",
+            )
+            self._update_watch_mode_button()
+            return
+        new_mode = LiveviewWatchMode.TREE if checked else LiveviewWatchMode.FLAT
+        if new_mode == self._state.watch_mode:
+            return
+        self._state.watch_mode = new_mode
+        self._persist_session_settings()
+        self._update_watch_mode_button()
+        self._apply_watch_mode_watchers()
+        self._refresh_history_chrome()
+        if self._executor.session_processed_tiffs:
+            self._reload_history_view()
+
+    def _on_tree_file_detected(self, path: str, detected_at_monotonic: float) -> None:
+        self._executor.enqueue_tiff(
+            path=path,
+            detected_at_monotonic=detected_at_monotonic,
+            stability_cfg=TREE_STABILITY,
+        )
+
+    def _reload_history_view(self) -> None:
+        hist = list(self._executor.session_processed_tiffs)
+        if not hist:
+            return
+        self._history_index = max(0, min(self._history_index, len(hist) - 1))
+        tiff_path = hist[self._history_index]
+        apply_middle_view_from_disk(
+            self._middle,
+            watchdir=self._watchdir_resolved,
+            tiff_path=tiff_path,
+            state=self._state,
+            subtract_options=self._load_subtract_yaml_options(),
+        )
+        if tiff_path.lower().endswith((".tif", ".tiff")):
+            self._last_2d_path = tiff_path
+        self._refresh_right_outputs_for_session_history()
+
     def _on_new_file_detected(self, path: str, detected_at_monotonic: float) -> None:
         # Called from watchdog thread. Enqueue only; no Qt calls here.
         self._executor.enqueue_tiff(path=path, detected_at_monotonic=detected_at_monotonic)
+
+    def _on_polled_file_detected(self, path: str, detected_at_monotonic: float) -> None:
+        # NFS overwrite fallback: faster poll cadence and shorter stability only here.
+        self._executor.enqueue_tiff(
+            path=path,
+            detected_at_monotonic=detected_at_monotonic,
+            stability_cfg=POLL_TRIGGERED_STABILITY,
+        )
 
     def _middle_updates_follow_pipeline(self) -> bool:
         hist = self._executor.session_processed_tiffs
@@ -169,7 +287,11 @@ class LiveviewMainWindow(QMainWindow):
             self._history_index = n - 1
         if self._history_index < 0:
             self._history_index = 0
-        name = Path(hist[self._history_index]).name
+        name = tiff_history_label(
+            watchdir=self._watchdir_resolved,
+            tiff_path=hist[self._history_index],
+            mode=self._state.watch_mode,
+        )
         self._middle.set_history_label(f"{self._history_index + 1} / {n} · {name}")
         self._middle.set_history_prev_enabled(self._history_index > 0)
         self._middle.set_history_next_enabled(self._history_index < n - 1)
@@ -220,6 +342,8 @@ class LiveviewMainWindow(QMainWindow):
             watchdir=self._watchdir_resolved,
             tiff_stem=stem,
             mode=self._state.analysis_mode,
+            tiff_path=hist[idx],
+            watch_mode=self._state.watch_mode,
         )
         self._right.sync_modeling_ui_to_session_state()
 
@@ -306,6 +430,14 @@ class LiveviewMainWindow(QMainWindow):
         except Exception:
             pass
         try:
+            self._poll_watcher.stop()
+        except Exception:
+            pass
+        try:
+            self._tree_observer.stop()
+        except Exception:
+            pass
+        try:
             self._executor.stop()
         except Exception:
             pass
@@ -320,17 +452,15 @@ class LiveviewMainWindow(QMainWindow):
             return
 
         runs_dir(self._state.watchdir).mkdir(parents=True, exist_ok=True)
-        self._watcher.restart_at(new_p)
+        self._poll_watcher.clear()
+        self._tree_observer.clear()
         # Recreate executor so it uses the updated state + runner workdir cleanly.
         try:
             self._executor.deleteLater()
         except Exception:
             pass
         self._executor = LiveviewJobExecutor(state=self._state, runner=self._runner)
-        self._executor.queue_status.connect(self._on_queue_status)
-        self._executor.error.connect(self._on_error)
-        self._executor.latest_artifacts.connect(self._on_latest_artifacts)
-        self._executor.session_file_completed.connect(self._on_session_file_completed)
+        self._connect_executor(self._executor)
         self._executor.start()
         self._watchdir_resolved = new_p.resolve()
         wd_short, wd_full = contracted_path_label(new_p)
@@ -339,6 +469,8 @@ class LiveviewMainWindow(QMainWindow):
         save_last_watchdir(str(new_p))
         self._last_2d_path = ""
         self._history_index = 0
+        self._update_watch_mode_button()
+        self._apply_watch_mode_watchers()
         self._right.clear_output_previews()
         self._right.sync_modeling_ui_to_session_state()
         self._apply_loaded_session_to_ui()
