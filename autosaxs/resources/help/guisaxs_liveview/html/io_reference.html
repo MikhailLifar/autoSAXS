@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>I/O reference</title>
+<link rel="stylesheet" href="../style/help.css"/>
+</head>
+<body>
+<h1>Input and output paths</h1>
+<p>All paths below are under your <b>Watchdir</b> unless noted.</p>
+<h2>Inputs</h2>
+<ul>
+<li><code>*.tif</code> / <code>*.tiff</code> — new detector images</li>
+<li>Calibration files — chosen in wizard (original paths unchanged)</li>
+<li>Buffer <code>.dat</code> — chosen in wizard</li>
+</ul>
+<h2>Outputs</h2>
+<ul>
+<li><code>runs/latest/</code> — request.yml, result.yml, stdout.log, stderr.log</li>
+<li><code>calibration/</code> — calibrate results</li>
+<li><code>averaged_proxy/</code> — proxy integrate (uncalibrated)</li>
+<li><code>averaged/</code> — integrate (calibrated)</li>
+<li><code>subtracted/</code> — subtracted 1D curves</li>
+<li><code>fit_distances/&lt;stem&gt;/</code>, <code>dammif/&lt;stem&gt;/</code>, <code>fit_bodies/&lt;stem&gt;/</code>,
+<code>fit_sizes/&lt;stem&gt;/</code>, <code>mixture/&lt;stem&gt;/</code> — analysis per TIFF stem</li>
+</ul>
+<p>Shared wizard configs (e.g. <code>fit_distances.conf</code>) sit next to per-stem folders.</p>
+</body>
+</html>

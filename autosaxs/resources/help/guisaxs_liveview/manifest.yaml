@@ -1,0 +1,48 @@
+# Table of contents for guisaxs-liveview help (bundled HTML; no build step).
+home: html/index.html
+
+toc:
+  - title: Welcome
+    page: html/index.html
+  - title: Quick start
+    page: html/quickstart.html
+  - title: Window tour
+    page: html/window_tour.html
+  - title: Working with data
+    children:
+      - title: Feeding images
+        page: html/feeding_data.html
+      - title: Flat vs tree mode
+        page: html/watch_modes.html
+  - title: Setup
+    children:
+      - title: Calibration
+        page: html/calibration.html
+      - title: Buffer subtraction
+        page: html/buffer_subtraction.html
+  - title: Analysis
+    children:
+      - title: Overview
+        page: html/analysis_overview.html
+      - title: Monodisperse modes
+        page: html/analysis_monodisperse.html
+      - title: Polydisperse modes
+        page: html/analysis_polydisperse.html
+  - title: Session history
+    page: html/history_navigation.html
+  - title: Reference
+    children:
+      - title: Input and output paths
+        page: html/io_reference.html
+      - title: Watcher rules
+        page: html/watcher_rules.html
+      - title: Troubleshooting
+        page: html/troubleshooting.html
+  - title: Theory (optional)
+    children:
+      - title: Pipeline states
+        page: html/theory/pipeline_states.html
+      - title: Flat vs tree (deeper)
+        page: html/theory/flat_vs_tree.html
+      - title: SAXS basics
+        page: html/theory/saxs_basics.html

@@ -75,8 +75,6 @@ SAXS / small-angle x-ray scattering: calibrate detector geometry using a calibra
 - `mask` (str | None, default `None`): Optional path to a mask used during ring analysis. Supports .txt (NuPy format), .msk (Fit2d)
 - `mask_mode` (str | None, default `None`): Mask mode selector (`f`/`from_file`, `a`/`auto`, `c`/`combined`). Defaults come from config when omitted.
 - `calibrant` (str | None, default `None`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`). Defaults come from config when omitted.
-- `wavelength` (float | None, default `None`): X-ray wavelength in **Ångström**. Defaults come from config when omitted.
-- `dist_guess` (float | None, default `None`): Optional initial sample–detector distance in **metres** passed to pyFAI before geometry refinement. When omitted, distance is estimated from the innermost calibration ring.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 Important constraints:
@@ -91,7 +89,6 @@ Important constraints:
 - `refined_path`: Path to the refined calibration YAML.
 - `calibration_plots_dir`: Directory containing calibration plots.
 - `calibration_curve_plot_path`: Path to the calibration q/I curve plot (PNG).
-- `calibration_curve_dat_path`: Path to the calibration q/I curve (`.dat`, same format as integrated 1D curves).
 - `calibration_mask_path`: Path to the calibration mask visualization (PNG).
 
 ### Python usage

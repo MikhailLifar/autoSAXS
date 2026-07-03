@@ -12,8 +12,9 @@ from ..core.models import RunRequest
 from ..logic.runner_qprocess import RunOutcome, SkillRunner
 from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
 from .jobs import Job, JobStep, PlaceholderError, resolve_request_placeholders
-from .queue import FIFOQueue, JobQueue, QueueItem
+from .queue import FIFOQueue, JobQueue, QueueItem, RevisionEnqueueResult
 from .stability import StabilityConfig, StabilityTracker
+from .tiff_revision import TiffRevision, is_newer_than, is_tiff_path, make_revision, normalize_tiff_path, TiffRevisionSource
 from .state import AnalysisMode, DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES, LiveviewSessionState, LiveviewState, LiveviewWatchMode
 from .output_paths import (
     averaged_dir,
@@ -51,6 +52,7 @@ class LiveviewJobExecutor(QObject):
     latest_artifacts = pyqtSignal(object)  # dict
     error = pyqtSignal(str)
     session_file_completed = pyqtSignal(str)  # tiff path
+    tiff_revision_pending = pyqtSignal(object)  # TiffRevision — queued or stabilizing
 
     def __init__(self, *, state: LiveviewSessionState, runner: SkillRunner) -> None:
         super().__init__()
@@ -137,22 +139,60 @@ class LiveviewJobExecutor(QObject):
             return False
         return True
 
+    def enqueue_revision(
+        self,
+        revision: TiffRevision,
+        *,
+        stability_cfg: Optional[StabilityConfig] = None,
+    ) -> None:
+        """Accept an observed TIFF revision into the incoming pipeline."""
+        item = QueueItem.from_revision(revision, stability_cfg=stability_cfg)
+        accepted = self._accept_incoming_revision(item)
+        if accepted:
+            self._jobs.drop_jobs_for_tiff_path(revision.path)
+            self.tiff_revision_pending.emit(revision)
+
     def enqueue_tiff(
         self,
         *,
         path: str,
         detected_at_monotonic: float,
         stability_cfg: Optional[StabilityConfig] = None,
+        stat: Optional[object] = None,
     ) -> None:
-        cur = self._current_incoming.path if self._current_incoming else None
-        self._incoming.put_if_absent(
-            QueueItem(
-                path=path,
-                detected_at_monotonic=float(detected_at_monotonic),
-                stability_cfg=stability_cfg,
-            ),
-            current_path=cur,
+        from .stability import FileStatSnapshot
+
+        snap = stat if isinstance(stat, FileStatSnapshot) else None
+        rev = make_revision(
+            path=path,
+            detected_at=detected_at_monotonic,
+            source=TiffRevisionSource.MANUAL,
+            stat=snap,
         )
+        if rev is None:
+            return
+        self.enqueue_revision(rev, stability_cfg=stability_cfg)
+
+    def _accept_incoming_revision(self, item: QueueItem) -> bool:
+        """Queue or upgrade a revision; return True when the pending work item changed."""
+        cur = self._current_incoming
+        if cur is not None and normalize_tiff_path(cur.path) == normalize_tiff_path(item.path):
+            if cur.observed_stat == item.observed_stat:
+                return False
+            if not is_newer_than(item.observed_stat, cur.observed_stat):
+                return False
+            cfg = item.stability_cfg or cur.stability_cfg or self._stability_cfg
+            self._current_incoming = QueueItem(
+                path=item.path,
+                detected_at_monotonic=item.detected_at_monotonic,
+                observed_stat=item.observed_stat,
+                stability_cfg=cfg,
+            )
+            self._current_stability = StabilityTracker(path=item.path, cfg=cfg)
+            return True
+
+        result = self._incoming.put_revision(item)
+        return result in (RevisionEnqueueResult.ADDED, RevisionEnqueueResult.REPLACED)
 
     def enqueue_job(self, job: Job) -> None:
         self._jobs.put(job)
@@ -239,8 +279,7 @@ class LiveviewJobExecutor(QObject):
 
     @staticmethod
     def _is_tiff_path(path: str) -> bool:
-        pl = (path or "").lower()
-        return pl.endswith(".tif") or pl.endswith(".tiff")
+        return is_tiff_path(path)
 
     def _tick(self) -> None:
         self._emit_status()
@@ -303,6 +342,7 @@ class LiveviewJobExecutor(QObject):
         except Exception as e:
             self.error.emit(f"Cannot build job for TIFF: {tiff}\n{e}")
             return
+        self._jobs.drop_jobs_for_tiff_path(tiff)
         self._jobs.put(job)
 
     def _start_job(self, job: Job) -> None:

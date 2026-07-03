@@ -1,25 +1,41 @@
 from __future__ import annotations
 
 import collections
-import os
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Deque, Optional
-
-from .stability import StabilityConfig
-
 import heapq
 import itertools
-from typing import List, Tuple
+import os
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import Deque, List, Optional, Tuple
 
 from .jobs import Job
+from .stability import FileStatSnapshot, StabilityConfig
+from .tiff_revision import TiffRevision, is_newer_than, normalize_tiff_path
+
+
+class RevisionEnqueueResult(str, Enum):
+    ADDED = "added"
+    REPLACED = "replaced"
+    UNCHANGED = "unchanged"
+    IGNORED_STALE = "ignored_stale"
 
 
 @dataclass(frozen=True)
 class QueueItem:
     path: str
     detected_at_monotonic: float
+    observed_stat: FileStatSnapshot
     stability_cfg: Optional[StabilityConfig] = field(default=None)
+
+    @staticmethod
+    def from_revision(rev: TiffRevision, *, stability_cfg: Optional[StabilityConfig] = None) -> QueueItem:
+        return QueueItem(
+            path=rev.path,
+            detected_at_monotonic=float(rev.detected_at),
+            observed_stat=rev.stat,
+            stability_cfg=stability_cfg,
+        )
 
 
 class FIFOQueue:
@@ -31,10 +47,7 @@ class FIFOQueue:
 
     @staticmethod
     def _norm_key(path: str) -> str:
-        try:
-            return str(Path(path).resolve())
-        except Exception:
-            return os.path.normcase(os.path.abspath(path))
+        return normalize_tiff_path(path)
 
     def contains_path(self, path: str) -> bool:
         k = self._norm_key(path)
@@ -43,8 +56,28 @@ class FIFOQueue:
     def put(self, item: QueueItem) -> None:
         self._q.append(item)
 
+    def put_revision(self, item: QueueItem) -> RevisionEnqueueResult:
+        """
+        Append a TIFF revision, or replace an existing queued entry for the same path in place.
+
+        Replacement keeps FIFO position. Identical stats are ignored; older stats are dropped.
+        """
+        k = self._norm_key(item.path)
+        for i, it in enumerate(self._q):
+            if self._norm_key(it.path) != k:
+                continue
+            existing = it.observed_stat
+            if existing == item.observed_stat:
+                return RevisionEnqueueResult.UNCHANGED
+            if not is_newer_than(item.observed_stat, existing):
+                return RevisionEnqueueResult.IGNORED_STALE
+            self._q[i] = item
+            return RevisionEnqueueResult.REPLACED
+        self._q.append(item)
+        return RevisionEnqueueResult.ADDED
+
     def put_if_absent(self, item: QueueItem, *, current_path: Optional[str] = None) -> bool:
-        """Append item only if the same path is not already queued or currently processing. Preserves FIFO order."""
+        """Legacy helper: append only when path is not already queued or current."""
         k = self._norm_key(item.path)
         if current_path is not None and self._norm_key(current_path) == k:
             return False
@@ -60,6 +93,9 @@ class FIFOQueue:
 
     def __len__(self) -> int:
         return len(self._q)
+
+    def __iter__(self):
+        return iter(self._q)
 
 
 class JobQueue:
@@ -80,6 +116,25 @@ class JobQueue:
         pri = int(getattr(job, "priority", 0))
         heapq.heappush(self._heap, (-pri, next(self._seq), job))
 
+    def drop_jobs_for_tiff_path(self, path: str) -> int:
+        """Remove not-yet-started jobs targeting ``path`` (superseded by a newer revision)."""
+        k = normalize_tiff_path(path)
+        if not self._heap:
+            return 0
+        kept: List[Tuple[int, int, Job]] = []
+        dropped = 0
+        for entry in self._heap:
+            job = entry[2]
+            tp = str(job.context.get("tiff_path") or "").strip()
+            if tp and normalize_tiff_path(tp) == k:
+                dropped += 1
+                continue
+            kept.append(entry)
+        if dropped:
+            self._heap = kept
+            heapq.heapify(self._heap)
+        return dropped
+
     def get_nowait(self) -> Optional[Job]:
         if not self._heap:
             return None
@@ -88,4 +143,3 @@ class JobQueue:
 
     def __len__(self) -> int:
         return len(self._heap)
-

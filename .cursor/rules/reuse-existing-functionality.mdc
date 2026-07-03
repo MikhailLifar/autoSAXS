@@ -7,16 +7,8 @@ alwaysApply: true
 
 Before adding helpers, constants, or new modules:
 
-1. **Search for an existing home** — theme colors in `guisaxs_skills/ui/style.py`, form widgets in `skill_form.py` / `path_field.py`, skill metadata in `skill_catalog.py`, etc.
-2. **Import and extend** — add a constant or small method to the canonical module rather than copying literals or logic elsewhere.
+1. **Search for an existing home**
+2. **Import and extend** — if necessary, add a constant or small method to the canonical module rather than copying literals or logic elsewhere. If the existing functionality is enough to realize the required feature - don't create any new entities (constants/funcitons/classes/modules/etc)
 3. **Keep the diff small** — no new file unless it clearly removes duplication across multiple call sites.
 
-```python
-# Prefer
-from guisaxs_skills.ui.style import COLOR_MUTED_TEXT, OPTIONAL_FIELD_PLACEHOLDER
-
-# Avoid
-MUTED_TEXT_COLOR = "#728195"  # duplicated from style.py
-```
-
-When behavior already exists (placeholders, path pickers, skill param classification), wire into that path instead of parallel APIs (e.g. per-wizard override dicts) unless a real mismatch appears.
+When behavior already exists, wire into that path instead of parallel APIs.

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Buffer subtraction</title>
+<link rel="stylesheet" href="../style/help.css"/>
+</head>
+<body>
+<h1>Buffer subtraction</h1>
+<p>Left column → <b>Set buffer</b> when you need buffer-subtracted 1D curves.</p>
+<h2>Required steps</h2>
+<ol>
+<li>Choose a buffer <code>.dat</code> file.</li>
+<li>Set <b>q_min</b> and <b>q_max</b> — the q-range used to match tails and estimate the buffer scale
+(not necessarily a wide range).</li>
+<li>Press <b>Apply</b>.</li>
+</ol>
+<p>After buffer is configured, each new TIFF is integrated then subtracted automatically.
+Outputs: <code>Watchdir/subtracted/</code>.</p>
+<p>In states C/CD the middle column shows sample+buffer and subtracted plots. You can open the
+subtraction wizard from the middle panel to adjust scaling for the current file and re-run.</p>
+</body>
+</html>

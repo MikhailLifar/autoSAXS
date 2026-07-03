@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Monodisperse analysis</title>
+<link rel="stylesheet" href="../style/help.css"/>
+</head>
+<body>
+<h1>Monodisperse analysis</h1>
+<h2>p(r)</h2>
+<p><b>fit_distances</b> (AUTORG + GNOM). Wizard options: <code>fit_distances/fit_distances.conf</code>.
+Per-TIFF results: <code>fit_distances/&lt;stem&gt;/</code> — fit PNG, p(r) plot, GNOM .out.</p>
+<h2>DAM</h2>
+<p>Same GNOM setup as p(r), then <b>fit_dammif</b> (FAST) on the GNOM output.
+Additional folder: <code>dammif/&lt;stem&gt;/</code> — bead model, CIF, 3D preview.</p>
+<h2>Primitives</h2>
+<p><b>fit_bodies</b> (BODIES shapes). Shape list: <code>fit_bodies/fit_bodies.conf</code>.
+Per-TIFF: <code>fit_bodies/&lt;stem&gt;/</code> — CSV, fit PNGs, 3D for best shape.</p>
+</body>
+</html>

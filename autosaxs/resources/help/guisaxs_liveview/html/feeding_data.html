@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Feeding images</title>
+<link rel="stylesheet" href="../style/help.css"/>
+</head>
+<body>
+<h1>Feeding images</h1>
+<h2>Drag and drop</h2>
+<p>Drop one or more <code>.tif</code> / <code>.tiff</code> files onto the middle <b>2D</b> panel.
+Files outside the watch directory are <b>copied</b> into it, then queued.</p>
+<h2>Copy into watchdir</h2>
+<p>Save or copy TIFFs directly into the watch folder. In <b>flat</b> mode only top-level files are discovered;
+in <b>tree</b> mode nested TIFFs are found recursively (see <a href="watch_modes.html">Flat vs tree mode</a>).</p>
+<h2>What gets queued</h2>
+<ul>
+<li>Files that appear <b>after</b> the app started (plus moves into the folder and overwrites of existing names).</li>
+<li>TIFFs already present at launch are <b>not</b> auto-queued until replaced or drag-dropped.</li>
+</ul>
+<p>Processing is <b>sequential</b> (FIFO queue).</p>
+</body>
+</html>

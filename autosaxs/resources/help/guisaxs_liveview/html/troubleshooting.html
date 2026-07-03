@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Troubleshooting</title>
+<link rel="stylesheet" href="../style/help.css"/>
+</head>
+<body>
+<h1>Troubleshooting</h1>
+<h2>Skill failed</h2>
+<p>Check <code>Watchdir/runs/latest/stderr.log</code> and <code>result.yml</code>.
+The UI shows a dialog for calibration and analysis skill failures.</p>
+<h2>Cannot change watchdir or watch mode</h2>
+<p>Wait until the running skill finishes.</p>
+<h2>Plots empty when browsing history</h2>
+<p>That TIFF may not have been processed with the current calibration/buffer/analysis settings.
+Use <b>Process</b> to re-run the pipeline.</p>
+<h2>Update failed</h2>
+<p>Ensure network access to the git server and write permission to the Python environment.
+Editable installs may need a manual <code>git pull</code> and reinstall.</p>
+<h2>Help missing or empty</h2>
+<p>Reinstall <code>autosaxs[gui]</code> or verify that
+<code>autosaxs/resources/help/guisaxs_liveview/</code> is present in your installation
+(manifest.yaml, html/, style/).</p>
+</body>
+</html>

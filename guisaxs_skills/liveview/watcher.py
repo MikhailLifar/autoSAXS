@@ -10,10 +10,7 @@ from typing import Callable, Optional
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-
-def _is_tif(path: str) -> bool:
-    p = path.lower()
-    return p.endswith(".tif") or p.endswith(".tiff")
+from .tiff_revision import TiffRevision, TiffRevisionSource, make_revision
 
 
 @dataclass(frozen=True)
@@ -22,22 +19,25 @@ class WatcherConfig:
 
 
 class _Handler(FileSystemEventHandler):
-    def __init__(self, *, on_new_file: Callable[[str, float], None], started_at: float) -> None:
+    def __init__(self, *, on_revision: Callable[[TiffRevision], None], started_at: float) -> None:
         super().__init__()
-        self._on_new_file = on_new_file
+        self._on_revision = on_revision
         self._started_at = started_at
 
     def _notify_tif(self, path: str, *, require_mtime_after_start: bool) -> None:
-        if not path or not _is_tif(path):
-            return
         if require_mtime_after_start:
-            # Ignore files whose last modification predates the watcher (pre-existing at startup).
             try:
                 if os.path.getmtime(path) < self._started_at:
                     return
             except Exception:
-                pass
-        self._on_new_file(path, time.monotonic())
+                return
+        rev = make_revision(
+            path=path,
+            detected_at=time.monotonic(),
+            source=TiffRevisionSource.INOTIFY,
+        )
+        if rev is not None:
+            self._on_revision(rev)
 
     def on_created(self, event) -> None:  # type: ignore[override]
         try:
@@ -48,7 +48,6 @@ class _Handler(FileSystemEventHandler):
             return
 
     def on_modified(self, event) -> None:  # type: ignore[override]
-        # In-place overwrites (cp/mv onto an existing name) usually emit modified, not created.
         try:
             if getattr(event, "is_directory", False):
                 return
@@ -57,7 +56,6 @@ class _Handler(FileSystemEventHandler):
             return
 
     def on_moved(self, event) -> None:  # type: ignore[override]
-        # Treat atomic moves into directory as new arrivals.
         try:
             if getattr(event, "is_directory", False):
                 return
@@ -72,11 +70,11 @@ class DirectoryWatcher:
         *,
         directory: Path,
         cfg: WatcherConfig,
-        on_new_file: Callable[[str, float], None],
+        on_revision: Callable[[TiffRevision], None],
     ) -> None:
         self._directory = directory
         self._cfg = cfg
-        self._on_new_file = on_new_file
+        self._on_revision = on_revision
         self._observer: Optional[Observer] = None
         self._lock = threading.Lock()
         self._started_at_epoch = time.time()
@@ -85,7 +83,7 @@ class DirectoryWatcher:
         with self._lock:
             if self._observer is not None:
                 return
-            handler = _Handler(on_new_file=self._on_new_file, started_at=self._started_at_epoch)
+            handler = _Handler(on_revision=self._on_revision, started_at=self._started_at_epoch)
             obs = Observer()
             obs.schedule(handler, str(self._directory), recursive=bool(self._cfg.recursive))
             obs.start()
@@ -112,4 +110,3 @@ class DirectoryWatcher:
         self._directory = directory.expanduser().resolve()
         self._started_at_epoch = time.time()
         self.start()
-

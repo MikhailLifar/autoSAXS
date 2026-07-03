@@ -120,11 +120,16 @@ class LiveviewPipeline(QObject):
         self._session_tiff_history.clear()
 
     def enqueue(self, *, path: str, detected_at_monotonic: float) -> None:
-        cur = self._current_item.path if self._current_item else None
-        self._queue.put_if_absent(
-            QueueItem(path=path, detected_at_monotonic=float(detected_at_monotonic)),
-            current_path=cur,
+        from .tiff_revision import TiffRevisionSource, make_revision
+
+        rev = make_revision(
+            path=path,
+            detected_at=detected_at_monotonic,
+            source=TiffRevisionSource.MANUAL,
         )
+        if rev is None:
+            return
+        self._queue.put_revision(QueueItem.from_revision(rev))
 
     def _emit_status(self) -> None:
         avg = (sum(self._durations) / len(self._durations)) if self._durations else 0.0

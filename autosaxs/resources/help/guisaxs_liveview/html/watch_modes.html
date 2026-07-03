@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Flat vs tree mode</title>
+<link rel="stylesheet" href="../style/help.css"/>
+</head>
+<body>
+<h1>Flat vs tree mode</h1>
+<p>Switch via <b>File → Switch to flat directory</b> or <b>File → Switch to tree directory</b>
+(only one is shown at a time). Cannot switch while a skill is running.</p>
+<table>
+<tr><th>Mode</th><th>Discovery</th><th>Typical outputs</th></tr>
+<tr><td><b>Flat</b></td><td>Top-level TIFFs in watchdir only</td><td>Under watchdir: <code>averaged/</code>, <code>subtracted/</code>, skill folders</td></tr>
+<tr><td><b>Tree</b></td><td>Recursive TIFF discovery</td><td>Outputs beside each TIFF in the tree</td></tr>
+</table>
+<div class="note">Session settings (calibration, buffer, analysis configs) are stored per watchdir in <code>.guisaxs_liveview/session.yaml</code>.</div>
+<p><a href="theory/flat_vs_tree.html">Deeper explanation (theory) →</a></p>
+</body>
+</html>

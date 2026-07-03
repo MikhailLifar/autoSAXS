@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Analysis overview</title>
+<link rel="stylesheet" href="../style/help.css"/>
+</head>
+<body>
+<h1>Analysis overview</h1>
+<p>Right column → <b>Analysis</b> drop-down. Default is <b>Off</b>.</p>
+<p>When a mode is active and calibration is set, the chosen pipeline runs <b>automatically for every new TIFF</b>
+using the latest integrated curve (or subtracted curve if buffer is configured).</p>
+<table>
+<tr><th>Mode</th><th>Skills</th><th>Main outputs</th></tr>
+<tr><td>Off</td><td>—</td><td>Integration (+ subtraction if enabled) only</td></tr>
+<tr><td>Monodisperse: p(r)</td><td>fit_distances</td><td>Fit vs data, p(r)</td></tr>
+<tr><td>Monodisperse: DAM</td><td>fit_distances → fit_dammif</td><td>+ 3D bead model</td></tr>
+<tr><td>Monodisperse: primitives</td><td>fit_bodies</td><td>Best primitive shape, 3D</td></tr>
+<tr><td>Polydisperse: d(r)</td><td>fit_sizes</td><td>Size distribution d(r)</td></tr>
+<tr><td>Polydisperse: mixture</td><td>fit_mixture</td><td>Components, distributions</td></tr>
+</table>
+<p>Open the mode-specific wizards in the right panel to save options (shared across TIFFs in the session).</p>
+<p><a href="analysis_monodisperse.html">Monodisperse modes →</a> ·
+<a href="analysis_polydisperse.html">Polydisperse modes →</a></p>
+</body>
+</html>

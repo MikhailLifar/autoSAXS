@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,11 +8,7 @@ from typing import Callable, Dict, Optional
 from PyQt5.QtCore import QObject, QTimer
 
 from .stability import FileStatSnapshot, StabilityConfig, _try_stat
-
-
-def _is_tif(path: str) -> bool:
-    p = path.lower()
-    return p.endswith(".tif") or p.endswith(".tiff")
+from .tiff_revision import TiffRevision, TiffRevisionSource, is_tiff_path, normalize_tiff_path
 
 
 # Tuned for NFS atomic overwrite (e.g. Lima temp.tif): fast detect, short settle.
@@ -38,9 +33,9 @@ class ProcessedTiffPollEngine:
     def __init__(
         self,
         *,
-        on_update: Callable[[str, float], None],
+        on_revision: Callable[[TiffRevision], None],
     ) -> None:
-        self._on_update = on_update
+        self._on_revision = on_revision
         self._idle_check: Callable[[], bool] = lambda: True
         self._tracked: Dict[str, FileStatSnapshot] = {}
 
@@ -50,18 +45,11 @@ class ProcessedTiffPollEngine:
     def clear(self) -> None:
         self._tracked.clear()
 
-    @staticmethod
-    def _norm(path: str) -> str:
-        try:
-            return str(Path(path).resolve())
-        except Exception:
-            return os.path.normcase(os.path.abspath(path))
-
     def track_processed_path(self, path: str) -> None:
         """Remember ``path`` and record its current stat as the poll baseline."""
-        if not path or not _is_tif(path):
+        if not path or not is_tiff_path(path):
             return
-        key = self._norm(path)
+        key = normalize_tiff_path(path)
         snap = _try_stat(key)
         if snap is not None:
             self._tracked[key] = snap
@@ -75,7 +63,14 @@ class ProcessedTiffPollEngine:
             if cur is None or cur == prev:
                 continue
             self._tracked[path] = cur
-            self._on_update(path, now)
+            self._on_revision(
+                TiffRevision(
+                    path=path,
+                    stat=cur,
+                    detected_at=now,
+                    source=TiffRevisionSource.POLL,
+                )
+            )
 
 
 class ProcessedTiffPoller(QObject):
@@ -90,11 +85,11 @@ class ProcessedTiffPoller(QObject):
         self,
         *,
         cfg: Optional[PollWatcherConfig] = None,
-        on_update: Callable[[str, float], None],
+        on_revision: Callable[[TiffRevision], None],
     ) -> None:
         super().__init__()
         self._cfg = cfg or PollWatcherConfig()
-        self._engine = ProcessedTiffPollEngine(on_update=on_update)
+        self._engine = ProcessedTiffPollEngine(on_revision=on_revision)
         self._timer = QTimer(self)
         self._timer.setInterval(max(100, int(float(self._cfg.poll_interval_s) * 1000)))
         self._timer.timeout.connect(self._engine.poll_once)
