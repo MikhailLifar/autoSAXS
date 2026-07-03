@@ -35,7 +35,7 @@ class UpdateDialog(QDialog):
             "The application must be restarted after a successful update."
         )
         intro.setWordWrap(True)
-        intro.setTextFormat(intro.RichText)
+        intro.setTextFormat(Qt.RichText)
 
         self._log = QPlainTextEdit()
         self._log.setReadOnly(True)
