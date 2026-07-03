@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from PyQt5.QtCore import QProcess, Qt
+import os
+
+from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import (
+    QApplication,
     QDialog,
-    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -16,7 +17,7 @@ from PyQt5.QtWidgets import (
 from ..logic.package_update import (
     LIVEVIEW_UPDATE_SPEC,
     is_editable_install,
-    pip_upgrade_argv,
+    launch_deferred_pip_upgrade,
 )
 
 
@@ -24,40 +25,33 @@ class UpdateDialog(QDialog):
     def __init__(self, *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Update autosaxs")
-        self.setMinimumSize(640, 420)
-        self._process: QProcess | None = None
-        self._finished_ok = False
+        self.setMinimumWidth(520)
+        self._update_scheduled = False
 
         intro = QLabel(
             "This will upgrade <b>autosaxs[gui]</b> in the current Python environment "
             "from the project git <code>main</code> branch.<br><br>"
             f"<code>{LIVEVIEW_UPDATE_SPEC}</code><br><br>"
-            "The application must be restarted after a successful update."
+            "The application will <b>close</b> and a small updater window will run "
+            "<code>pip</code> after it exits. When the update finishes, a notification "
+            "with the log and an <b>OK</b> button will appear, and "
+            "<b>guisaxs-liveview</b> will start again automatically."
         )
         intro.setWordWrap(True)
         intro.setTextFormat(Qt.RichText)
 
-        self._log = QPlainTextEdit()
-        self._log.setReadOnly(True)
-        self._log.setPlaceholderText("pip output will appear here…")
-
-        self._btn_run = QPushButton("Start update")
+        self._btn_run = QPushButton("Update and quit…")
         self._btn_run.clicked.connect(self._start_update)
-        self._btn_close = QPushButton("Close")
+        self._btn_close = QPushButton("Cancel")
         self._btn_close.clicked.connect(self.reject)
-        self._btn_quit = QPushButton("Quit now")
-        self._btn_quit.setEnabled(False)
-        self._btn_quit.clicked.connect(self._quit_application)
 
         row = QHBoxLayout()
         row.addStretch(1)
         row.addWidget(self._btn_run)
-        row.addWidget(self._btn_quit)
         row.addWidget(self._btn_close)
 
         lay = QVBoxLayout(self)
         lay.addWidget(intro)
-        lay.addWidget(self._log, 1)
         lay.addLayout(row)
 
         if is_editable_install():
@@ -69,68 +63,41 @@ class UpdateDialog(QDialog):
                 "Consider pulling the git repo and reinstalling manually.",
             )
 
-    def _append_log(self, text: str) -> None:
-        if not text:
-            return
-        self._log.moveCursor(self._log.textCursor().End)
-        self._log.insertPlainText(text)
-        if not text.endswith("\n"):
-            self._log.insertPlainText("\n")
+    def update_scheduled(self) -> bool:
+        return self._update_scheduled
 
     def _start_update(self) -> None:
-        if self._process is not None and self._process.state() != QProcess.NotRunning:
+        answer = QMessageBox.question(
+            self,
+            "Update autosaxs",
+            "guisaxs-liveview will close and install the latest autosaxs[gui] "
+            "in the background.\n\nContinue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
             return
-        self._btn_run.setEnabled(False)
-        self._log.clear()
-        self._append_log("$ " + " ".join(pip_upgrade_argv()))
 
-        proc = QProcess(self)
-        self._process = proc
-        proc.setProcessChannelMode(QProcess.MergedChannels)
-        proc.readyReadStandardOutput.connect(self._on_ready_read)
-        proc.finished.connect(self._on_finished)
-        proc.start(pip_upgrade_argv()[0], pip_upgrade_argv()[1:])
-
-    def _on_ready_read(self) -> None:
-        proc = self._process
-        if proc is None:
-            return
-        data = proc.readAllStandardOutput()
         try:
-            self._append_log(bytes(data).decode("utf-8", errors="replace"))
-        except Exception:
-            pass
-
-    def _on_finished(self, exit_code: int, _status: QProcess.ExitStatus) -> None:
-        self._btn_run.setEnabled(True)
-        self._finished_ok = int(exit_code) == 0
-        if self._finished_ok:
-            self._append_log("\nUpdate finished successfully.")
-            self._btn_quit.setEnabled(True)
-            QMessageBox.information(
-                self,
-                "Update complete",
-                "autosaxs[gui] was upgraded.\n\n"
-                "Restart guisaxs-liveview to use the new version.",
-            )
-        else:
+            log_path = launch_deferred_pip_upgrade(parent_pid=os.getpid(), force=False)
+        except OSError as exc:
             QMessageBox.critical(
                 self,
                 "Update failed",
-                f"pip exited with code {exit_code}. See the log for details.",
+                f"Could not start the background updater:\n{exc}",
             )
+            return
 
-    def _quit_application(self) -> None:
-        win = self.window()
-        while win is not None and win.parentWidget() is not None:
-            win = win.parentWidget()
-        if win is not None:
-            win.close()
+        self._update_scheduled = True
+        self._btn_run.setEnabled(False)
+        QMessageBox.information(
+            self,
+            "Update scheduled",
+            "The application will now close.\n\n"
+            "An update window will appear shortly with pip output. "
+            "guisaxs-liveview will restart automatically when the update finishes.",
+        )
         self.accept()
-
-    def closeEvent(self, event) -> None:  # type: ignore[override]
-        proc = self._process
-        if proc is not None and proc.state() != QProcess.NotRunning:
-            proc.kill()
-            proc.waitForFinished(3000)
-        super().closeEvent(event)
+        app = QApplication.instance()
+        if app is not None:
+            QTimer.singleShot(0, app.quit)

@@ -1,5 +1,10 @@
 """Re-export autosaxs CLI update helpers for GUI entry points."""
 
+from autosaxs.cli.deferred_pip_upgrade import (  # noqa: F401
+    deferred_upgrade_log_path,
+    guisaxs_liveview_restart_argv,
+    launch_deferred_pip_upgrade,
+)
 from autosaxs.cli.package_update import (  # noqa: F401
     AUTOSAXS_UPDATE_SPEC,
     environment_summary,
