@@ -11,6 +11,26 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union, get_args, 
 from ..core.path_expression import ConfigPathExpression, PathExpression, SingletonPathExpression
 
 
+class AutosaxsHelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """Compact top-level usage (no enumerated list of every subcommand)."""
+
+    def _format_usage(self, usage, actions, groups, prefix):
+        if usage is not None:
+            pfx = prefix if prefix else "usage: "
+            return pfx + usage + "\n\n"
+        pfx = prefix if prefix else "usage: "
+        return f"{pfx}autosaxs [-h] [-v] [-U [--force]] COMMAND ...\n\n"
+
+
+def _autosaxs_version() -> str:
+    try:
+        import autosaxs
+
+        return str(getattr(autosaxs, "__version__", "unknown"))
+    except Exception:
+        return "unknown"
+
+
 def _to_kebab(s: str) -> str:
     return s.replace("_", "-")
 
@@ -594,16 +614,41 @@ def _add_skill_subparser(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    version = _autosaxs_version()
     parser = argparse.ArgumentParser(
         prog="autosaxs",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=AutosaxsHelpFormatter,
         description=(
             "SAXS pipeline: processing skills plus helpers that write README, IDE skills, and "
             "default config into your workspace (see epilog)."
         ),
         epilog=_read_agent_quickstart_epilog(),
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"autosaxs {version}",
+        help="Show the installed autosaxs version and exit.",
+    )
+    parser.add_argument(
+        "-U",
+        "--update",
+        action="store_true",
+        help="Upgrade autosaxs[gui] to the latest version from git main.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="With -U/--update, reinstall with pip --force-reinstall (default: upgrade only).",
+    )
+    subparsers = parser.add_subparsers(
+        dest="command",
+        required=False,
+        metavar="COMMAND",
+        title="commands",
+        description="Run a skill or helper (autosaxs COMMAND --help for details).",
+    )
 
     _add_get_readme_subparser(subparsers)
     _add_get_skills_subparser(subparsers)
@@ -635,6 +680,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
     args = parser.parse_args(argv)
+
+    if getattr(args, "update", False):
+        from .package_update import run_pip_upgrade
+
+        return run_pip_upgrade(force=bool(getattr(args, "force", False)))
+
+    if not getattr(args, "command", None):
+        parser.error("the following arguments are required: command")
 
     internal_cmd = getattr(args, "_autosaxs_internal_cmd", None)
     if internal_cmd == "get-readme":
