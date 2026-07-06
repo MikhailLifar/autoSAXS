@@ -38,7 +38,7 @@ from .logic.right_from_stem import apply_right_outputs_from_disk
 from ..logic.path_display import contracted_path_label
 from ..ui.about_dialog import AboutDialog
 from ..ui.html_help_dialog import HtmlHelpDialog
-from ..ui.update_dialog import UpdateDialog
+from ..ui.update_dialog import request_app_update
 from .state import LiveviewWatchMode
 from .tiff_revision import TiffRevision, TiffRevisionSource, make_revision
 from .stability import FileStatSnapshot
@@ -250,7 +250,7 @@ class LiveviewMainWindow(QMainWindow):
                 "A skill is still running. Wait for it to finish, then try again.",
             )
             return
-        UpdateDialog(parent=self).exec_()
+        request_app_update(parent=self)
 
     def _set_watch_mode(self, new_mode: LiveviewWatchMode) -> None:
         if new_mode == self._state.watch_mode:
