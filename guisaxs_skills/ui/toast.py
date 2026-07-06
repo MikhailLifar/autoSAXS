@@ -56,7 +56,7 @@ class Toast(QWidget):
 
 
 class ConfirmToast(QWidget):
-    """Small bottom-centered prompt with OK/Cancel buttons."""
+    """Small centered prompt with OK/Cancel buttons."""
 
     accepted = pyqtSignal()
     rejected = pyqtSignal()
@@ -114,7 +114,7 @@ class ConfirmToast(QWidget):
             """
         )
 
-    def show_near_bottom(self, *, y_offset: int = 18) -> None:
+    def show_centered(self) -> None:
         parent = self.parentWidget()
         self.adjustSize()
         if parent is None:
@@ -122,7 +122,7 @@ class ConfirmToast(QWidget):
             return
         gp = parent.mapToGlobal(QPoint(0, 0))
         x = gp.x() + max(int((parent.width() - self.width()) / 2), 0)
-        y = gp.y() + max(parent.height() - self.height() - y_offset, 0)
+        y = gp.y() + max(int((parent.height() - self.height()) / 2), 0)
         self.move(x, y)
         self.show()
         self.raise_()

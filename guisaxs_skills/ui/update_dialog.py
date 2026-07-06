@@ -31,4 +31,4 @@ def request_app_update(*, parent: QWidget) -> None:
             QTimer.singleShot(0, app.quit)
 
     toast.accepted.connect(on_accept)
-    toast.show_near_bottom()
+    toast.show_centered()

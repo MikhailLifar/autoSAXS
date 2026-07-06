@@ -96,7 +96,7 @@ def _run_pip_headless(*, pip_argv: list[str], log_path: Path, restart_argv: list
     return code
 
 
-def _launch_detached(argv: list[str]) -> None:
+def _launch_detached(argv: list[str]) -> int | None:
     kwargs: dict = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
@@ -109,23 +109,44 @@ def _launch_detached(argv: list[str]) -> None:
         kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
-    subprocess.Popen(argv, **kwargs)
+    proc = subprocess.Popen(argv, **kwargs)
+    return proc.pid
 
 
-def _try_launch_restart(restart_argv: list[str], *, log_path: Path) -> bool:
+def _try_launch_restart(restart_argv: list[str], *, log_path: Path) -> int | None:
     if os.environ.get("AUTOSAXS_DEFERRED_UPDATE_HEADLESS") == "1":
-        return False
+        return None
     if not restart_argv:
         _append_log(log_path, "No restart command configured.")
-        return False
+        return None
     try:
         _append_log(log_path, "Launching " + " ".join(restart_argv) + " ...")
-        _launch_detached(restart_argv)
+        restart_pid = _launch_detached(restart_argv)
         _append_log(log_path, "guisaxs-liveview started.")
-        return True
+        return restart_pid
     except OSError as exc:
         _append_log(log_path, f"Could not start guisaxs-liveview: {exc}")
-        return False
+        return None
+
+
+def _schedule_close_after_restart(restart_pid: int, dlg) -> None:
+    from PyQt5.QtCore import QTimer
+
+    started = time.monotonic()
+
+    def poll() -> None:
+        elapsed = time.monotonic() - started
+        if _pid_alive(restart_pid) and elapsed >= 0.75:
+            dlg.accept()
+            return
+        if elapsed >= 4.0:
+            dlg.accept()
+            return
+        if elapsed >= 60.0:
+            return
+        QTimer.singleShot(200, poll)
+
+    QTimer.singleShot(300, poll)
 
 
 def _show_update_dialog(
@@ -202,8 +223,10 @@ def _show_update_dialog(
             )
             if detail:
                 append_output(detail)
-            if _try_launch_restart(restart_argv, log_path=log_path):
+            restart_pid = _try_launch_restart(restart_argv, log_path=log_path)
+            if restart_pid is not None:
                 append_output("guisaxs-liveview is starting.")
+                _schedule_close_after_restart(restart_pid, dlg)
             else:
                 append_output("Start guisaxs-liveview manually to use the new version.")
         else:
