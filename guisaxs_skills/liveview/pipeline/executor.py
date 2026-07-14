@@ -3,25 +3,26 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import yaml
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
-from ..core.models import RunRequest
-from ..logic.runner_qprocess import RunOutcome, SkillRunner
+from ...core.models import RunRequest
+from ...logic.runner_qprocess import RunOutcome, SkillRunner
 from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
-from .jobs import Job, JobStep, PlaceholderError, resolve_request_placeholders
-from .queue import FIFOQueue, JobQueue, QueueItem, RevisionEnqueueResult
-from .stability import StabilityConfig, StabilityTracker
-from .tiff_revision import TiffRevision, is_newer_than, is_tiff_path, make_revision, normalize_tiff_path, TiffRevisionSource
-from .state import AnalysisMode, DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES, LiveviewSessionState, LiveviewState, LiveviewWatchMode
-from .output_paths import (
+from ..ingest.stability import StabilityConfig, StabilityTracker
+from ..ingest.tiff_revision import (
+    TiffRevision,
+    TiffRevisionSource,
+    is_newer_than,
+    is_tiff_path,
+    make_revision,
+    normalize_tiff_path,
+)
+from ..session.output_paths import (
     averaged_dir,
     averaged_proxy_dir,
-    dammif_dir,
-    fit_bodies_dir,
-    fit_distances_dir,
     fit_sizes_dir,
     integrated_dat_path,
     mixture_dir,
@@ -29,6 +30,22 @@ from .output_paths import (
     subtracted_dir,
     tiff_output_root,
 )
+from ..session.state import (
+    AnalysisMode,
+    LiveviewSessionState,
+    LiveviewState,
+    LiveviewWatchMode,
+    MonodisperseShapeMode,
+)
+from ..services.artifacts import merge_fit_distances_quality_fields
+from .jobs import Job, JobStep, PlaceholderError, is_manual_job, resolve_request_placeholders
+from .monodisperse_pipeline import (
+    MonodispersePipelineParts,
+    build_monodisperse_steps,
+    job_includes_shape,
+    profile_sample_stem,
+)
+from .queue import FIFOQueue, JobQueue, QueueItem, RevisionEnqueueResult
 
 
 @dataclass(frozen=True)
@@ -53,6 +70,8 @@ class LiveviewJobExecutor(QObject):
     error = pyqtSignal(str)
     session_file_completed = pyqtSignal(str)  # tiff path
     tiff_revision_pending = pyqtSignal(object)  # TiffRevision — queued or stabilizing
+    skill_started = pyqtSignal(str)
+    skill_finished = pyqtSignal(object)  # RunOutcome
 
     def __init__(self, *, state: LiveviewSessionState, runner: SkillRunner) -> None:
         super().__init__()
@@ -64,6 +83,7 @@ class LiveviewJobExecutor(QObject):
         self._tick_timer.timeout.connect(self._tick)
 
         self._paused: bool = False
+        self._pause_sources: set[str] = set()
 
         self._incoming = FIFOQueue()
         self._stability_cfg = StabilityConfig()
@@ -85,6 +105,9 @@ class LiveviewJobExecutor(QObject):
         self._runner.finished.connect(self._on_skill_finished)
         self._requeue_cancelled_job: bool = False
         self._requeue_priority: int = 50
+        # True while handling a skill result (incl. modal UI in skill_finished slots).
+        # Nested Qt event loops must not let _tick restart the same job step.
+        self._handling_skill_outcome: bool = False
 
     def start(self) -> None:
         if self._tick_timer.isActive():
@@ -94,6 +117,7 @@ class LiveviewJobExecutor(QObject):
     def stop(self) -> None:
         self._tick_timer.stop()
         self._paused = False
+        self._pause_sources.clear()
         self._current_incoming = None
         self._current_stability = None
         self._current_job = None
@@ -101,21 +125,21 @@ class LiveviewJobExecutor(QObject):
         self._pending_step_name = None
         self._step_results.clear()
 
-    def pause(self) -> None:
-        self._paused = True
+    def pause(self, *, source: str = "default") -> None:
+        self._pause_sources.add(str(source))
+        self._paused = bool(self._pause_sources)
 
-    def resume(self) -> None:
-        self._paused = False
+    def resume(self, *, source: Optional[str] = None) -> None:
+        if source is None:
+            self._pause_sources.clear()
+        else:
+            self._pause_sources.discard(str(source))
+        self._paused = bool(self._pause_sources)
 
     def cancel_current(self) -> None:
         # Cancellation policy: by default we requeue the current job so users don't lose the file.
         # Call sites that don't want this can toggle `_requeue_cancelled_job` before cancelling.
-        if self._current_job is not None:
-            self._requeue_cancelled_job = True
-        try:
-            self._runner.cancel()
-        except Exception:
-            pass
+        self.cancel_running(requeue=True)
 
     @property
     def paused(self) -> bool:
@@ -126,7 +150,7 @@ class LiveviewJobExecutor(QObject):
         return tuple(self._session_tiff_history)
 
     def is_idle(self) -> bool:
-        """True when no skill is running and nothing is queued or awaiting stability."""
+        """True when not paused and no skill, job, or incoming TIFF work is active."""
         if self._paused:
             return False
         if self._runner.is_running():
@@ -138,6 +162,14 @@ class LiveviewJobExecutor(QObject):
         if len(self._incoming) > 0 or len(self._jobs) > 0:
             return False
         return True
+
+    def is_processing_idle(self) -> bool:
+        """True when no autosaxs skill subprocess is currently running."""
+        return not self._runner.is_running()
+
+    @property
+    def queue_suspended(self) -> bool:
+        return bool(self._paused)
 
     def enqueue_revision(
         self,
@@ -196,6 +228,23 @@ class LiveviewJobExecutor(QObject):
 
     def enqueue_job(self, job: Job) -> None:
         self._jobs.put(job)
+
+    def enqueue_manual_skill(self, request: RunRequest, *, priority: int = 150) -> None:
+        """Enqueue a single-step skill run (calibration, manual fit, …) ahead of normal TIFF jobs."""
+        job = Job(
+            id=f"manual:{request.skill_name}:{time.time_ns()}",
+            priority=int(priority),
+            steps=[JobStep(name=request.skill_name, request=request)],
+            context={"manual": True, "skill_name": request.skill_name},
+        )
+        self.enqueue_job(job)
+
+    def cancel_running(self, *, requeue: bool = False) -> None:
+        self._requeue_cancelled_job = bool(requeue) and self._current_job is not None
+        try:
+            self._runner.cancel()
+        except Exception:
+            pass
 
     def build_rerun_subtraction_job(
         self,
@@ -287,9 +336,9 @@ class LiveviewJobExecutor(QObject):
         # Never start a new subprocess while one is running.
         if self._runner.is_running():
             return
-
-        # When paused: do not advance to next step/job/incoming item.
-        if self._paused:
+        # skill_finished slots may show modal dialogs (nested event loop). Do not
+        # advance/restart the current job until outcome handling has finished.
+        if self._handling_skill_outcome:
             return
 
         # If a job is active and no step is pending, advance.
@@ -297,7 +346,16 @@ class LiveviewJobExecutor(QObject):
             if self._job_step_idx >= len(self._current_job.steps):
                 self._finish_job(ok=True)
                 return
-            self._start_next_job_step()
+            # When auto-processing is suspended, only manual jobs may advance.
+            if not self._paused or is_manual_job(self._current_job):
+                self._start_next_job_step()
+            return
+
+        if self._paused:
+            # Suspended: run queued manual jobs only; hold TIFF intake and auto jobs.
+            nxt = self._jobs.get_nowait_manual()
+            if nxt is not None:
+                self._start_job(nxt)
             return
 
         # No current job: promote stable incoming TIFFs into jobs.
@@ -345,6 +403,19 @@ class LiveviewJobExecutor(QObject):
         self._jobs.drop_jobs_for_tiff_path(tiff)
         self._jobs.put(job)
 
+    @property
+    def current_job_output_root(self) -> Optional[Path]:
+        job = self._current_job
+        if job is None:
+            return None
+        or_raw = job.context.get("output_root")
+        if isinstance(or_raw, str) and or_raw.strip():
+            try:
+                return Path(or_raw.strip()).expanduser().resolve()
+            except OSError:
+                return None
+        return None
+
     def _start_job(self, job: Job) -> None:
         self._current_job = job
         self._job_step_idx = 0
@@ -366,10 +437,74 @@ class LiveviewJobExecutor(QObject):
             self._append_session_tiff(tiff_path)
             self.session_file_completed.emit(tiff_path)
             self._last_processed = tiff_path
+        followup = self._shape_followup_job_if_needed(job=job, ok=ok)
         self._current_job = None
         self._job_step_idx = 0
         self._pending_step_name = None
         self._step_results.clear()
+        if followup is not None:
+            self._jobs.put(followup)
+
+    def _shape_followup_job_if_needed(self, *, job: Job, ok: bool) -> Optional[Job]:
+        """
+        If an auto job finished without a shape step but shape mode is now set
+        (e.g. user selected DAMMIF mid-run), enqueue a shape-only follow-up.
+        """
+        if not ok or is_manual_job(job):
+            return None
+        if self._state.analysis_mode != AnalysisMode.MONODISPERSE:
+            return None
+        if self._state.monodisperse_shape_mode == MonodisperseShapeMode.NONE:
+            return None
+        if job_includes_shape(list(job.steps)):
+            return None
+        fd = self._step_results.get("fit_distances")
+        if not isinstance(fd, dict) or not is_atsas_fit_ok(fd):
+            return None
+        prof = str(job.context.get("profile_path") or "").strip()
+        if not prof:
+            for step in job.steps:
+                if step.name in ("fit_guinier", "fit_distances") and step.request.positional:
+                    prof = str(step.request.positional[0]).strip()
+                    break
+        if not prof:
+            return None
+        try:
+            root_raw = job.context.get("output_root")
+            root = (
+                Path(str(root_raw)).expanduser().resolve()
+                if root_raw
+                else self._state.watchdir.expanduser().resolve()
+            )
+        except OSError:
+            root = self._state.watchdir.expanduser().resolve()
+        gnom_hint = ""
+        if isinstance(fd.get("best_gnom_out_path"), str):
+            gnom_hint = fd["best_gnom_out_path"].strip()
+        steps = build_monodisperse_steps(
+            prof,
+            output_root=root,
+            state=self._state,
+            parts=MonodispersePipelineParts.SHAPE_ONLY,
+            load_yaml=self._load_yaml_options,
+            gnom_out_path=gnom_hint or None,
+        )
+        if not steps:
+            return None
+        stem = profile_sample_stem(prof)
+        return Job(
+            id=f"mono_shape_followup:{stem}:{time.time_ns()}",
+            priority=0,
+            steps=steps,
+            context={
+                "monodisperse": True,
+                "shape_followup": True,
+                "profile_path": str(Path(prof).expanduser().resolve()),
+                "tiff_stem": stem,
+                "output_root": str(root),
+                "tiff_path": str(job.context.get("tiff_path") or "").strip(),
+            },
+        )
 
     def _start_next_job_step(self) -> None:
         assert self._current_job is not None
@@ -377,10 +512,24 @@ class LiveviewJobExecutor(QObject):
         try:
             req = resolve_request_placeholders(step.request, results_by_step=self._step_results)
         except PlaceholderError as e:
+            if step.name == "fit_distances" and "fit_guinier.rg" in str(e):
+                guinier = self._step_results.get("fit_guinier")
+                if isinstance(guinier, dict):
+                    guinier = self._enrich_fit_guinier_result(
+                        dict(guinier), resolve_bases=self._artifact_resolve_bases_for_job()
+                    )
+                if not isinstance(guinier, dict) or guinier.get("rg") is None:
+                    self.error.emit(
+                        "Guinier fit produced no Rg for this curve (empty or invalid interval). "
+                        "Open the monodisperse wizard and adjust the Guinier range, or clear guinier.conf."
+                    )
+                    self._finish_job(ok=False)
+                    return
             self.error.emit(f"Job placeholder resolution failed ({step.name}): {e}")
             self._finish_job(ok=False)
             return
         self._pending_step_name = step.name
+        self.skill_started.emit(req.skill_name)
         self._runner.start(req)
 
     @staticmethod
@@ -449,7 +598,171 @@ class LiveviewJobExecutor(QObject):
             out["selected_first"] = int(first_i)
         if last_i is not None:
             out["selected_last"] = int(last_i)
+        return merge_fit_distances_quality_fields(out, watchdir=watchdir)
+
+    def _resolve_artifact_path(
+        self, path_str: str, *, resolve_bases: Optional[Sequence[Path]] = None
+    ) -> Path:
+        p = Path(path_str.strip()).expanduser()
+        if p.is_absolute():
+            return p.resolve()
+        bases = [b.expanduser().resolve() for b in (resolve_bases or [])]
+        if not bases:
+            bases = [self._state.watchdir.expanduser().resolve()]
+        for base in bases:
+            cand = (base / p).resolve()
+            if cand.is_file():
+                return cand
+        return (bases[0] / p).resolve()
+
+    def _artifact_resolve_bases_for_job(self) -> List[Path]:
+        bases: List[Path] = []
+        job = self._current_job
+        if job is None:
+            return [self._state.watchdir.expanduser().resolve()]
+        or_raw = job.context.get("output_root")
+        if isinstance(or_raw, str) and or_raw.strip():
+            bases.append(Path(or_raw.strip()).expanduser().resolve())
+        for step in job.steps:
+            if step.name != "fit_guinier":
+                continue
+            od = (step.request.options or {}).get("output_dir")
+            if isinstance(od, str) and od.strip():
+                bases.append(Path(od.strip()).expanduser().resolve())
+            break
+        bases.append(self._state.watchdir.expanduser().resolve())
+        seen: set[str] = set()
+        out: List[Path] = []
+        for b in bases:
+            key = str(b)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(b)
         return out
+
+    def _enrich_fit_guinier_result(
+        self, result: Dict[str, Any], *, resolve_bases: Optional[Sequence[Path]] = None
+    ) -> Dict[str, Any]:
+        from autosaxs.skill.fit_guinier.guinier import guinier_point_range_1based
+
+        out = dict(result or {})
+        grp_raw = out.get("guinier_region_path")
+        if isinstance(grp_raw, list) and len(grp_raw) == 1:
+            grp_raw = grp_raw[0]
+        if not isinstance(grp_raw, str) or not grp_raw.strip():
+            return out
+        try:
+            p = self._resolve_artifact_path(grp_raw.strip(), resolve_bases=resolve_bases)
+            if not p.is_file():
+                return out
+            data = yaml.safe_load(p.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, TypeError, yaml.YAMLError):
+            return out
+        if not isinstance(data, dict):
+            return out
+        for key in (
+            "rg",
+            "i0",
+            "first_point_1based",
+            "last_point_1based",
+            "classification",
+            "quality_class",
+        ):
+            if key in data and data[key] is not None:
+                out[key] = data[key]
+        fp, lp = guinier_point_range_1based(data)
+        if fp is not None:
+            out["first_point_1based"] = fp
+        if lp is not None:
+            out["last_point_1based"] = lp
+        return out
+
+    def build_monodisperse_manual_job(
+        self,
+        *,
+        profile_abs: str,
+        steps: List[JobStep],
+        output_root: Optional[Path] = None,
+        priority: int = 150,
+    ) -> Job:
+        prof = str(Path(profile_abs).expanduser().resolve())
+        stem = profile_sample_stem(prof)
+        root = (output_root or self._state.watchdir).expanduser().resolve()
+        return Job(
+            id=f"mono_manual:{stem}:{time.time_ns()}",
+            priority=int(priority),
+            steps=steps,
+            context={
+                "manual": True,
+                "monodisperse": True,
+                "profile_path": prof,
+                "tiff_stem": stem,
+                "output_root": str(root),
+            },
+        )
+
+    def monodisperse_steps_guinier_and_distances(
+        self,
+        profile_abs: str,
+        *,
+        output_root: Path,
+        guinier_handoff: Optional[dict] = None,
+        fixed_guinier_interval: bool = False,
+        guinier_interval_first: Optional[int] = None,
+        guinier_interval_last: Optional[int] = None,
+    ) -> List[JobStep]:
+        return build_monodisperse_steps(
+            profile_abs,
+            output_root=output_root,
+            state=self._state,
+            parts=MonodispersePipelineParts.GUINIER_AND_DISTANCES,
+            load_yaml=self._load_yaml_options,
+            guinier_handoff=guinier_handoff,
+            fixed_guinier_interval=fixed_guinier_interval,
+            guinier_interval_first=guinier_interval_first,
+            guinier_interval_last=guinier_interval_last,
+        )
+
+    def monodisperse_step_fit_distances(
+        self, profile_abs: str, *, output_root: Path, guinier_handoff: Optional[dict] = None
+    ) -> JobStep:
+        steps = build_monodisperse_steps(
+            profile_abs,
+            output_root=output_root,
+            state=self._state,
+            parts=MonodispersePipelineParts.DISTANCES_ONLY,
+            load_yaml=self._load_yaml_options,
+            guinier_handoff=guinier_handoff,
+        )
+        return steps[0]
+
+    def monodisperse_step_shape(
+        self,
+        profile_abs: str,
+        *,
+        output_root: Path,
+        shape_mode: str,
+        gnom_out_path: Optional[str] = None,
+    ) -> Optional[JobStep]:
+        # Prefer explicit mode passed by caller; temporarily sync session if needed.
+        prev = self._state.monodisperse_shape_mode
+        try:
+            self._state.monodisperse_shape_mode = MonodisperseShapeMode(str(shape_mode).lower())
+        except ValueError:
+            self._state.monodisperse_shape_mode = MonodisperseShapeMode.NONE
+        try:
+            steps = build_monodisperse_steps(
+                profile_abs,
+                output_root=output_root,
+                state=self._state,
+                parts=MonodispersePipelineParts.SHAPE_ONLY,
+                load_yaml=self._load_yaml_options,
+                gnom_out_path=gnom_out_path,
+            )
+        finally:
+            self._state.monodisperse_shape_mode = prev
+        return steps[0] if steps else None
 
     def _sync_last_paths_from_result(self, result: Dict[str, Any]) -> None:
         integ = result.get("integrated_1d")
@@ -487,47 +800,57 @@ class LiveviewJobExecutor(QObject):
         step_name = self._pending_step_name
         self._pending_step_name = None
 
-        # Push raw result to UI for job-driven steps.
-        self.latest_artifacts.emit(outcome.result)
-        self._sync_last_paths_from_result(outcome.result)
+        # Guard _tick for the whole handler: skill_finished slots may open modal
+        # dialogs (nested event loop). Without this, _tick can restart the same
+        # step while _current_job is still set, leaving the wizard stuck busy.
+        self._handling_skill_outcome = True
+        try:
+            # Push raw result to UI for job-driven steps.
+            self.latest_artifacts.emit(outcome.result)
+            self._sync_last_paths_from_result(outcome.result)
+            self.skill_finished.emit(outcome)
 
-        # Record step result for placeholder substitution.
-        res = dict(outcome.result or {})
-        if step_name == "fit_distances":
-            res = self._enrich_fit_distances_result(res)
-        if step_name:
-            self._step_results[step_name] = res
+            # Record step result for placeholder substitution.
+            res = dict(outcome.result or {})
+            if step_name == "fit_distances":
+                res = self._enrich_fit_distances_result(res)
+            if step_name == "fit_guinier":
+                res = self._enrich_fit_guinier_result(res, resolve_bases=self._artifact_resolve_bases_for_job())
+            if step_name:
+                self._step_results[step_name] = res
 
-        if not outcome.success:
-            # Job failed/cancelled.
-            if self._requeue_cancelled_job and self._current_job is not None:
-                try:
-                    j = self._current_job
-                    retry = Job(
-                        id=f"{j.id}:retry:{time.time_ns()}",
-                        priority=int(self._requeue_priority),
-                        steps=list(j.steps),
-                        context=dict(j.context),
-                    )
-                    self._jobs.put(retry)
-                except Exception:
-                    pass
-            self._requeue_cancelled_job = False
-            self._finish_job(ok=False)
-            return
+            if not outcome.success:
+                # Job failed/cancelled.
+                if self._requeue_cancelled_job and self._current_job is not None:
+                    try:
+                        j = self._current_job
+                        retry = Job(
+                            id=f"{j.id}:retry:{time.time_ns()}",
+                            priority=int(self._requeue_priority),
+                            steps=list(j.steps),
+                            context=dict(j.context),
+                        )
+                        self._jobs.put(retry)
+                    except Exception:
+                        pass
+                self._requeue_cancelled_job = False
+                self._finish_job(ok=False)
+                return
 
-        if step_name == "fit_distances" and not is_atsas_fit_ok(res):
-            self.error.emit(failure_message_from_result(res, skill_id="fit_distances"))
-            self._finish_job(ok=True)
-            return
+            if step_name == "fit_distances" and not is_atsas_fit_ok(res):
+                self.error.emit(failure_message_from_result(res, skill_id="fit_distances"))
+                self._finish_job(ok=True)
+                return
 
-        if step_name == "fit_sizes" and not is_atsas_fit_ok(res):
-            self.error.emit(failure_message_from_result(res, skill_id="fit_sizes"))
-            self._finish_job(ok=True)
-            return
+            if step_name == "fit_sizes" and not is_atsas_fit_ok(res):
+                self.error.emit(failure_message_from_result(res, skill_id="fit_sizes"))
+                self._finish_job(ok=True)
+                return
 
-        # Advance to next step.
-        self._job_step_idx += 1
+            # Advance to next step.
+            self._job_step_idx += 1
+        finally:
+            self._handling_skill_outcome = False
 
     def _subtraction_output_root(self, *, sample_dat: str) -> Path:
         wd = self._state.watchdir.resolve()
@@ -634,67 +957,15 @@ class LiveviewJobExecutor(QObject):
         wd = self._state.watchdir
         prof = str(Path(profile_abs).expanduser().resolve())
 
-        if mode == AnalysisMode.MONODISPERSE_PR:
-            outdir = fit_distances_dir(output_root)
-            outdir.mkdir(parents=True, exist_ok=True)
-            opts: dict = {}
-            if self._state.fit_distances_conf_path is not None:
-                opts.update(self._load_yaml_options(self._state.fit_distances_conf_path))
-            opts.pop("output_dir", None)
-            opts.pop("use_cache", None)
-            opts["output_dir"] = str(outdir.resolve())
-            opts["use_cache"] = False
-            return [JobStep(name="fit_distances", request=RunRequest("fit_distances", [prof], opts))]
-
-        if mode == AnalysisMode.MONODISPERSE_DAM:
-            outdir = fit_distances_dir(output_root)
-            outdir.mkdir(parents=True, exist_ok=True)
-            opts: dict = {}
-            if self._state.fit_distances_conf_path is not None:
-                opts.update(self._load_yaml_options(self._state.fit_distances_conf_path))
-            opts.pop("output_dir", None)
-            opts.pop("use_cache", None)
-            opts["output_dir"] = str(outdir.resolve())
-            opts["use_cache"] = False
-            # DAMMIF needs gnom_path from fit_distances result.
-            damdir = dammif_dir(output_root)
-            damdir.mkdir(parents=True, exist_ok=True)
-            return [
-                JobStep(name="fit_distances", request=RunRequest("fit_distances", [prof], opts)),
-                JobStep(
-                    name="fit_dammif",
-                    request=RunRequest(
-                        "fit_dammif",
-                        [prof],
-                        {
-                            "output_dir": str(damdir.resolve()),
-                            "use_cache": False,
-                            "gnom_path": "${fit_distances.best_gnom_out_path}",
-                        },
-                    ),
-                ),
-            ]
-
-        if mode == AnalysisMode.MONODISPERSE_BODIES:
-            bodies_dir = fit_bodies_dir(output_root)
-            bodies_dir.mkdir(parents=True, exist_ok=True)
-            shapes = self._state.fit_bodies_shapes
-            if not shapes:
-                shapes = list(DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES)
-            return [
-                JobStep(
-                    name="fit_bodies",
-                    request=RunRequest(
-                        "fit_bodies",
-                        [prof],
-                        {
-                            "output_dir": str(bodies_dir.resolve()),
-                            "use_cache": False,
-                            "shapes": list(shapes),
-                        },
-                    ),
-                ),
-            ]
+        if mode == AnalysisMode.MONODISPERSE:
+            return build_monodisperse_steps(
+                prof,
+                output_root=output_root,
+                state=self._state,
+                parts=MonodispersePipelineParts.FULL,
+                load_yaml=self._load_yaml_options,
+                guinier_handoff=None,
+            )
 
         if mode == AnalysisMode.POLYDISPERSE_DR:
             outdir = fit_sizes_dir(output_root)

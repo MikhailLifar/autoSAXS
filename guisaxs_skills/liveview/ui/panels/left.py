@@ -19,11 +19,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ...logic.session_state import SessionPathHints
-from ...ui.preview_panel import PreviewPanel
-from ..logic.calibration_display import refined_yml_display_rows
-from ..state import LiveviewSessionState
-from .left_wizards import BufferWizardDialog, CalibrationWizardDialog
+from ....logic.session_state import SessionPathHints
+from ....ui.preview_panel import PreviewPanel
+from ...services.calibration.display import refined_yml_display_rows
+from ...session.state import LiveviewSessionState
+from ..wizards.left import BufferWizardDialog, CalibrationWizardDialog
 
 
 def pick_calibration_curve_image_path(result: Dict[str, Any]) -> str:

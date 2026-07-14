@@ -16,10 +16,10 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ...ui.preview_panel import ImageViewerDialog, open_image_viewer
-from ..pipeline import LiveviewQueueStatus
-from ...logic.path_display import contracted_path_label
-from .plots import (
+from ....ui.preview_panel import ImageViewerDialog, open_image_viewer
+from ...pipeline import LiveviewQueueStatus
+from ....logic.path_display import contracted_path_label
+from ..widgets.plots import (
     DatCurveViewerDialog,
     DropTiffImageCanvas,
     LogCurvePlot,

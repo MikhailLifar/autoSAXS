@@ -7,7 +7,12 @@ Prerequisites:
   - validation/ must contain raw/*_calib.tif, raw/*_buffer.tif, raw/*_sample.tif,
     reference/*.chi, reference_subtracted/sub_*.dat, config.conf (skill-keyed YAML), and a mask file (e.g. mask*.msk).
 
-Metric: int_{q0}^{qmax} 2 * |I1(q) - I2(q)| / (|I1(q)|*|I2(q)| + eps)
+Metric (integrated): int_{q0}^{qmax} 2 * |I1(q) - I2(q)| / (|I1(q)|*|I2(q)| + eps)
+
+Metric (subtracted): (1/(q_max-q_0)) * int_{q_0}^{q_max} |I_ref - I_sub| / (|I_ref| + |I_sub| + eps) dq
+
+Chi2 (integrated and subtracted): :func:`chi2_average_sigma` on a common q grid;
+sigma_ref = 3% * |I_ref|; pipeline sigma from file or 3% * |I_pipe| if absent.
 
 Subtracted curves: ``reference_subtracted/sub_*.dat`` and ``metrics_subtracted.csv`` are used only
 as a regression baseline against the pipeline output for the configured ``sub`` method (e.g.
@@ -21,6 +26,7 @@ import glob
 import re
 import csv
 import shutil
+from typing import Optional
 import pytest
 import numpy as np
 import matplotlib
@@ -33,11 +39,13 @@ if _REPOS not in sys.path:
     sys.path.insert(0, _REPOS)
 
 from autosaxs.core.utils import (
+    chi2_average_sigma,
     integration_comparison_metric,
     map_sample_files_to_buffer_files,
     read_chi,
     read_reference_sub_dat,
     read_saxs,
+    subtraction_comparison_metric,
 )
 from autosaxs.skill.calibrate import calibrate
 from autosaxs.skill.config import merge_skill_params
@@ -60,8 +68,11 @@ OUTPUT_DIR_SUBTRACTED = os.path.join(OUTPUT_DIR, "subtracted")
 
 METRICS_INTEGRATED_CSV = os.path.join(VALIDATION_DIR, "metrics_integrated.csv")
 METRICS_SUBTRACTED_CSV = os.path.join(VALIDATION_DIR, "metrics_subtracted.csv")
+METRICS_INTEGRATED_CHI2_CSV = os.path.join(VALIDATION_DIR, "metrics_integrated_chi2.csv")
+METRICS_SUBTRACTED_CHI2_CSV = os.path.join(VALIDATION_DIR, "metrics_subtracted_chi2.csv")
 SUCCESS_TXT = os.path.join(VALIDATION_DIR, "success.txt")
 SIGNIFICANT_INCREASE_REL = 0.01  # >1%
+REFERENCE_DEFAULT_REL_SIGMA = 0.03
 
 SUB_DAT_PATTERN = re.compile(r"^sub_\d+\.dat$")
 
@@ -162,6 +173,33 @@ def _compare_metrics(old: dict, new_rows, label: str):
             )
 
     return len(increased) == 0
+
+
+def _chi2_vs_reference(
+    q_ref: np.ndarray,
+    I_ref: np.ndarray,
+    q_pipe: np.ndarray,
+    I_pipe: np.ndarray,
+    sigma_pipe: Optional[np.ndarray] = None,
+    q_min: Optional[float] = None,
+    q_max: float = 6.0,
+) -> float:
+    """Reduced chi2 via :func:`chi2_average_sigma` on a common q grid."""
+    if q_min is None:
+        q_min = max(np.min(q_ref), np.min(q_pipe))
+    q_max_val = float(q_max)
+    q_common = np.sort(np.unique(np.concatenate([q_ref, q_pipe])))
+    q_common = q_common[(q_common >= q_min) & (q_common <= q_max_val)]
+    if len(q_common) < 2:
+        return np.nan
+    I_ref_interp = np.interp(q_common, q_ref, I_ref)
+    I_pipe_interp = np.interp(q_common, q_pipe, I_pipe)
+    sigma_ref = REFERENCE_DEFAULT_REL_SIGMA * np.abs(I_ref_interp)
+    if sigma_pipe is not None:
+        sigma_pipe_interp = np.interp(q_common, q_pipe, sigma_pipe)
+    else:
+        sigma_pipe_interp = REFERENCE_DEFAULT_REL_SIGMA * np.abs(I_pipe_interp)
+    return chi2_average_sigma(I_ref_interp, I_pipe_interp, sigma_ref, sigma_pipe_interp)
 
 
 def _strip_leading_number_codes(name: str) -> str:
@@ -313,21 +351,24 @@ def run_calibration_integration_subtraction(mask_choice="f", *, run_subtraction:
         )
 
 
-def _plot_comparison(q_ref, I_ref, q_pipe, I_pipe, metric, base, ref_label, pipe_label, out_dir, log_scale=True):
-    """Draw comparison plot and save to out_dir with metric in title and filename. log_scale=False for subtracted (can be negative)."""
+def _plot_comparison(
+    q_ref, I_ref, q_pipe, I_pipe, metric, chi2, base, ref_label, pipe_label, out_dir, log_scale=True
+):
+    """Draw comparison plot; metric and chi2 appear in title and filename."""
     os.makedirs(out_dir, exist_ok=True)
     fig, ax = plt.subplots()
     ax.plot(q_ref, I_ref, label=ref_label, alpha=0.8)
     ax.plot(q_pipe, I_pipe, label=pipe_label, alpha=0.8)
     ax.set_xlabel("q")
     ax.set_ylabel("I")
-    ax.set_title(f"metric = {metric:.6f}\n{base}")
+    ax.set_title(f"metric = {metric:.6f}, chi2 = {chi2:.6f}\n{base}")
     ax.legend()
     if log_scale:
         ax.set_yscale("log")
     fig.tight_layout()
     safe_metric_str = f"{metric:.4f}".replace(".", "_")
-    out_name = f"{safe_metric_str}_{base}.png"
+    safe_chi2_str = f"{chi2:.4f}".replace(".", "_")
+    out_name = f"{safe_metric_str}_chi2_{safe_chi2_str}_{base}.png"
     fig.savefig(os.path.join(out_dir, out_name), dpi=150)
     plt.close(fig)
 
@@ -346,6 +387,7 @@ def compare_and_plot_integrated():
 
     results = []
     metrics_rows = []
+    chi2_rows = []
     for int_path in int_files:
         base = os.path.splitext(os.path.basename(int_path))[0]
         ref_base = _int_dat_to_ref_basename(base)
@@ -355,29 +397,33 @@ def compare_and_plot_integrated():
         if not os.path.isfile(ref_path):
             continue
 
-        q_pipe, I_pipe, _, _ = read_saxs(int_path)
+        q_pipe, I_pipe, sigma_pipe, _ = read_saxs(int_path)
         q_ref, I_ref = read_chi(ref_path)
 
         metric = integration_comparison_metric(q_pipe, I_pipe, q_ref, I_ref)
+        chi2 = _chi2_vs_reference(q_ref, I_ref, q_pipe, I_pipe, sigma_pipe=sigma_pipe)
         results.append((base, ref_base, metric, q_pipe, I_pipe, q_ref, I_ref))
         metrics_rows.append(
             {"reference": ref_base + ".chi", "generated": base + ".dat", "metric": float(metric)}
         )
+        chi2_rows.append(
+            {"reference": ref_base + ".chi", "generated": base + ".dat", "metric": float(chi2)}
+        )
 
         _plot_comparison(
-            q_ref, I_ref, q_pipe, I_pipe, metric, base,
+            q_ref, I_ref, q_pipe, I_pipe, metric, chi2, base,
             ref_label="reference (.chi)", pipe_label="pipeline (int)",
             out_dir=OUTPUT_DIR_INTEGRATED_LOG,
             log_scale=True,
         )
         _plot_comparison(
-            q_ref, I_ref, q_pipe, I_pipe, metric, base,
+            q_ref, I_ref, q_pipe, I_pipe, metric, chi2, base,
             ref_label="reference (.chi)", pipe_label="pipeline (int)",
             out_dir=OUTPUT_DIR_INTEGRATED_LINEAR,
             log_scale=False,
         )
 
-    return results, metrics_rows
+    return results, metrics_rows, chi2_rows
 
 
 def compare_and_plot_subtracted():
@@ -396,6 +442,7 @@ def compare_and_plot_subtracted():
 
     results = []
     metrics_rows = []
+    chi2_rows = []
     for ref_name in ref_sub_files:
         ref_path = os.path.join(REFERENCE_SUBTRACTED_DIR, ref_name)
         try:
@@ -407,22 +454,26 @@ def compare_and_plot_subtracted():
         if not pipe_path or not os.path.isfile(pipe_path):
             continue
 
-        q_pipe, I_pipe, _, _ = read_saxs(pipe_path)
-        metric = integration_comparison_metric(q_pipe, I_pipe, q_ref, I_ref)
+        q_pipe, I_pipe, sigma_pipe, _ = read_saxs(pipe_path)
+        metric = subtraction_comparison_metric(q_ref, I_ref, q_pipe, I_pipe)
+        chi2 = _chi2_vs_reference(q_ref, I_ref, q_pipe, I_pipe, sigma_pipe=sigma_pipe)
         base = os.path.splitext(os.path.basename(pipe_path))[0]
         results.append((base, ref_name, metric, q_pipe, I_pipe, q_ref, I_ref))
         metrics_rows.append(
             {"reference": ref_name, "generated": base + ".dat", "metric": float(metric)}
         )
+        chi2_rows.append(
+            {"reference": ref_name, "generated": base + ".dat", "metric": float(chi2)}
+        )
 
         _plot_comparison(
-            q_ref, I_ref, q_pipe, I_pipe, metric, base,
+            q_ref, I_ref, q_pipe, I_pipe, metric, chi2, base,
             ref_label="reference (sub_*.dat)", pipe_label="pipeline (sub)",
             out_dir=OUTPUT_DIR_SUBTRACTED,
             log_scale=False,
         )
 
-    return results, metrics_rows
+    return results, metrics_rows, chi2_rows
 
 
 def test_calib_integration_validation():
@@ -430,15 +481,18 @@ def test_calib_integration_validation():
     _reset_validation_plots_dir()
     _reset_validation_plots_subdir("integrated")
     old_int = _read_metrics_csv(METRICS_INTEGRATED_CSV)
+    old_int_chi2 = _read_metrics_csv(METRICS_INTEGRATED_CHI2_CSV)
     run_calibration_integration_subtraction(run_subtraction=False)
-    results_int, metrics_rows = compare_and_plot_integrated()
+    results_int, metrics_rows, chi2_rows = compare_and_plot_integrated()
     assert len(results_int) > 0, "No pipeline outputs could be matched to reference .chi files"
     ok = _compare_metrics(old_int, metrics_rows, label="Integrated")
+    ok_chi2 = _compare_metrics(old_int_chi2, chi2_rows, label="Integrated chi2")
     _write_metrics_csv(METRICS_INTEGRATED_CSV, metrics_rows)
+    _write_metrics_csv(METRICS_INTEGRATED_CHI2_CSV, chi2_rows)
     with open(SUCCESS_TXT, "w") as f:
-        f.write("SUCCESS\n" if ok else "FAIL\n")
-    print(f"VALIDATION: {'SUCCESS' if ok else 'FAIL'} (integrated)")
-    assert ok, "Integrated metric regression detected (>1% increase)."
+        f.write("SUCCESS\n" if ok and ok_chi2 else "FAIL\n")
+    print(f"VALIDATION: {'SUCCESS' if ok and ok_chi2 else 'FAIL'} (integrated)")
+    assert ok and ok_chi2, "Integrated metric regression detected (>1% increase)."
 
 
 def test_calib_integration_subtraction_validation():
@@ -446,35 +500,46 @@ def test_calib_integration_subtraction_validation():
     _reset_validation_plots_dir()
     _reset_validation_plots_subdir("subtracted")
     old_sub = _read_metrics_csv(METRICS_SUBTRACTED_CSV)
+    old_sub_chi2 = _read_metrics_csv(METRICS_SUBTRACTED_CHI2_CSV)
     run_calibration_integration_subtraction()
-    results_sub, metrics_rows = compare_and_plot_subtracted()
+    results_sub, metrics_rows, chi2_rows = compare_and_plot_subtracted()
     assert len(results_sub) > 0, "No pipeline subtracted outputs could be matched to reference sub_*.dat"
     ok = _compare_metrics(old_sub, metrics_rows, label="Subtracted")
+    ok_chi2 = _compare_metrics(old_sub_chi2, chi2_rows, label="Subtracted chi2")
     _write_metrics_csv(METRICS_SUBTRACTED_CSV, metrics_rows)
+    _write_metrics_csv(METRICS_SUBTRACTED_CHI2_CSV, chi2_rows)
     with open(SUCCESS_TXT, "w") as f:
-        f.write("SUCCESS\n" if ok else "FAIL\n")
-    print(f"VALIDATION: {'SUCCESS' if ok else 'FAIL'} (subtracted)")
-    assert ok, "Subtracted metric regression detected (>1% increase)."
+        f.write("SUCCESS\n" if ok and ok_chi2 else "FAIL\n")
+    print(f"VALIDATION: {'SUCCESS' if ok and ok_chi2 else 'FAIL'} (subtracted)")
+    assert ok and ok_chi2, "Subtracted metric regression detected (>1% increase)."
 
 
 if __name__ == "__main__":
     if not os.path.isdir(VALIDATION_DIR):
         raise FileNotFoundError(_VALIDATION_MISSING_MSG)
     _reset_validation_plots_dir()
+    _reset_validation_plots_subdir("integrated")
+    _reset_validation_plots_subdir("subtracted")
 
     old_int = _read_metrics_csv(METRICS_INTEGRATED_CSV)
     old_sub = _read_metrics_csv(METRICS_SUBTRACTED_CSV)
+    old_int_chi2 = _read_metrics_csv(METRICS_INTEGRATED_CHI2_CSV)
+    old_sub_chi2 = _read_metrics_csv(METRICS_SUBTRACTED_CHI2_CSV)
 
     run_calibration_integration_subtraction()
-    results_int, int_rows = compare_and_plot_integrated()
-    results_sub, sub_rows = compare_and_plot_subtracted()
+    results_int, int_rows, int_chi2_rows = compare_and_plot_integrated()
+    results_sub, sub_rows, sub_chi2_rows = compare_and_plot_subtracted()
 
     ok_int = _compare_metrics(old_int, int_rows, label="Integrated")
     ok_sub = _compare_metrics(old_sub, sub_rows, label="Subtracted")
-    ok_all = ok_int and ok_sub
+    ok_int_chi2 = _compare_metrics(old_int_chi2, int_chi2_rows, label="Integrated chi2")
+    ok_sub_chi2 = _compare_metrics(old_sub_chi2, sub_chi2_rows, label="Subtracted chi2")
+    ok_all = ok_int and ok_sub and ok_int_chi2 and ok_sub_chi2
 
     _write_metrics_csv(METRICS_INTEGRATED_CSV, int_rows)
     _write_metrics_csv(METRICS_SUBTRACTED_CSV, sub_rows)
+    _write_metrics_csv(METRICS_INTEGRATED_CHI2_CSV, int_chi2_rows)
+    _write_metrics_csv(METRICS_SUBTRACTED_CHI2_CSV, sub_chi2_rows)
     with open(SUCCESS_TXT, "w") as f:
         f.write("SUCCESS\n" if ok_all else "FAIL\n")
     print(f"VALIDATION: {'SUCCESS' if ok_all else 'FAIL'}")
@@ -482,9 +547,15 @@ if __name__ == "__main__":
     print(f"Integrated: compared {len(results_int)} curves. Plots in {OUTPUT_DIR_INTEGRATED_LOG} (log) and {OUTPUT_DIR_INTEGRATED_LINEAR} (linear)")
     for base, ref_base, metric, *_ in results_int:
         print(f"  {base} vs {ref_base}.chi  metric = {metric:.6f}")
+    print(f"Integrated chi2: compared {len(results_int)} curves.")
+    for row in int_chi2_rows:
+        print(f"  {row['generated']} vs {row['reference']}  chi2 = {row['metric']:.6f}")
     print(f"Subtracted: compared {len(results_sub)} curves. Plots in {OUTPUT_DIR_SUBTRACTED}")
     for base, ref_name, metric, *_ in results_sub:
         print(f"  {base} vs {ref_name}  metric = {metric:.6f}")
+    print(f"Subtracted chi2: compared {len(results_sub)} curves.")
+    for row in sub_chi2_rows:
+        print(f"  {row['generated']} vs {row['reference']}  chi2 = {row['metric']:.6f}")
 
     if not ok_all:
         raise SystemExit(1)

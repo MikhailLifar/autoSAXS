@@ -12,7 +12,7 @@ from .toast import ConfirmToast
 def request_app_update(*, parent: QWidget) -> None:
     """Ask once, then close the app and run the deferred pip upgrade."""
     toast = ConfirmToast(
-        text="Updating the app requires closing it. Continue?",
+        text="Updating the app requires closing it. It will re-open when the update finishes. Continue?",
         parent=parent,
     )
 

@@ -9,9 +9,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Deque, List, Optional, Tuple
 
-from .jobs import Job
-from .stability import FileStatSnapshot, StabilityConfig
-from .tiff_revision import TiffRevision, is_newer_than, normalize_tiff_path
+from ..ingest.stability import FileStatSnapshot, StabilityConfig
+from ..ingest.tiff_revision import TiffRevision, is_newer_than, normalize_tiff_path
+from .jobs import Job, is_manual_job
 
 
 class RevisionEnqueueResult(str, Enum):
@@ -139,6 +139,22 @@ class JobQueue:
         if not self._heap:
             return None
         _pri, _seq, job = heapq.heappop(self._heap)
+        return job
+
+    def get_nowait_manual(self) -> Optional[Job]:
+        """Pop the highest-priority manual job, leaving auto/TIFF jobs queued."""
+        if not self._heap:
+            return None
+        best_idx: Optional[int] = None
+        for i, entry in enumerate(self._heap):
+            if not is_manual_job(entry[2]):
+                continue
+            if best_idx is None or entry < self._heap[best_idx]:
+                best_idx = i
+        if best_idx is None:
+            return None
+        _pri, _seq, job = self._heap.pop(best_idx)
+        heapq.heapify(self._heap)
         return job
 
     def __len__(self) -> int:

@@ -16,19 +16,19 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ..logic.calibration_storage import calibration_subdir, ensure_tiff_in_calibration
-from ...logic.session_state import SessionPathHints
-from ...logic.skill_catalog import discover_skills
-from ...ui.path_field import PathField
-from ...ui.run_controls import RunControls
-from ...ui.skill_form import SkillForm
-from .plots import DropTiffImageCanvas
+from ...services.calibration.storage import calibration_subdir, ensure_tiff_in_calibration
+from ....logic.session_state import SessionPathHints
+from ....logic.skill_catalog import discover_skills
+from ....ui.path_field import PathField
+from ....ui.run_controls import RunControls
+from ....ui.skill_form import SkillForm
+from ..widgets.plots import DropTiffImageCanvas
 from PyQt5.QtWidgets import QLineEdit
-from .plots import mpl_navigation_toolbar
+from ..widgets.plots import mpl_navigation_toolbar
 
 
 def _empty_hints():
-    from ...logic.session_state import SessionPathHints
+    from ....logic.session_state import SessionPathHints
 
     return SessionPathHints()
 
@@ -260,27 +260,23 @@ class CalibrationWizardDialog(QDialog):
 
     def _open_mask_wizard(self) -> None:
         # Lazy import to avoid circular imports while editing.
-        from .mask_wizard import MaskWizardDialog  # type: ignore
+        from .mask import MaskWizardDialog  # type: ignore
 
         calib_field = self._calib_image_field()
         mask_field = self._mask_field()
         calib_path = calib_field.text().strip() if calib_field is not None else ""
         mask_path = mask_field.text().strip() if mask_field is not None else ""
-        outdir = self._watchdir / "calibration"
-        outdir.mkdir(parents=True, exist_ok=True)
         if self._mask_wizard is None:
             self._mask_wizard = MaskWizardDialog(
                 watchdir=self._watchdir,
                 default_image_path=calib_path,
                 default_mask_path=mask_path,
-                default_save_dir=outdir,
                 parent=self,
             )
         else:
             self._mask_wizard.set_defaults(
                 image_path=calib_path,
                 mask_path=mask_path,
-                default_save_dir=outdir,
             )
         if self._mask_wizard.exec_() == QDialog.Accepted:
             pass

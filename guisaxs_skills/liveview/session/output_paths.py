@@ -27,6 +27,10 @@ def subtracted_dir(root: Path) -> Path:
     return root / "subtracted"
 
 
+def guinier_dir(root: Path) -> Path:
+    return root / "guinier"
+
+
 def fit_distances_dir(root: Path) -> Path:
     return root / "fit_distances"
 

@@ -76,6 +76,8 @@ SAXS / small-angle x-ray scattering: fit the Guinier region on a 1D profile (ada
 
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where analysis outputs are written.
+- `first` (int | None, default `None`): 1-based start point for a fixed-interval Guinier fit (requires `last`).
+- `last` (int | None, default `None`): 1-based end point (inclusive) for a fixed-interval Guinier fit (requires `first`).
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns

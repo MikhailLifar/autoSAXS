@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
-    from ..liveview.ui.plots import DatCurveViewerDialog
+    from ..liveview.ui.widgets.plots import DatCurveViewerDialog
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
@@ -457,7 +457,7 @@ class PreviewPanel(QWidget):
     def _open_viewer(self) -> None:
         src = self._source_path_for_viewer
         if src and Path(src).suffix.lower() == ".dat":
-            from ..liveview.ui.plots import open_dat_curve_dialog
+            from ..liveview.ui.widgets.plots import open_dat_curve_dialog
 
             self._dat_curve_viewer = open_dat_curve_dialog(self, src, reuse=self._dat_curve_viewer)
             return
@@ -524,7 +524,7 @@ def open_compare_sample_buffer_viewer(
     reuse: Optional["DatCurveViewerDialog"] = None,
 ) -> Optional["DatCurveViewerDialog"]:
     """Interactive sample + scaled buffer viewer (matplotlib toolbar); thin wrapper over open_compare_curves_dialog."""
-    from ..liveview.ui.plots import open_compare_curves_dialog
+    from ..liveview.ui.widgets.plots import open_compare_curves_dialog
 
     return open_compare_curves_dialog(
         parent,

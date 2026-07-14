@@ -36,6 +36,7 @@ from autosaxs.skill.fit_distances import fit_distances
 from autosaxs.skill.fit_sizes import fit_sizes
 from autosaxs.skill.fit_mixture import fit_mixture
 from autosaxs.skill.fit_guinier import fit_guinier
+from autosaxs.skill.analyze_kratky import analyze_kratky
 from autosaxs.skill.integrate import integrate
 from autosaxs.skill.integrate_proxy import integrate_proxy
 from autosaxs.skill.plot import plot
@@ -112,6 +113,7 @@ def test_check_output_integrity_ok():
     ("plot", plot),
     ("plot-2d", plot_2d),
     ("fit-guinier", fit_guinier),
+    ("analyze-kratky", analyze_kratky),
     ("fit-distances", fit_distances),
     ("fit-mixture", fit_mixture),
     ("fit-bodies", fit_bodies),
@@ -422,6 +424,7 @@ def test_calibrate_raises_without_calib_image():
         calibrate(
             calib_image="",
             output_dir=tempfile.mkdtemp(),
+            mask="dummy_mask.msk",
             use_cache=False,
         )
 
@@ -431,6 +434,7 @@ def test_calibrate_rejects_unknown_calibrant():
         calibrate(
             calib_image="",
             output_dir=tempfile.mkdtemp(),
+            mask="dummy_mask.msk",
             calibrant="not_a_real_calibrant",
             use_cache=False,
         )
@@ -1097,6 +1101,86 @@ def test_fit_guinier_raises_without_profile():
         fit_guinier(
             profile="/nonexistent.dat",
             output_dir=tempfile.mkdtemp(),
+            use_cache=False,
+        )
+
+
+def test_analyze_kratky_contract_with_explicit_rg_i0():
+    with tempfile.TemporaryDirectory() as tmp:
+        rg_nm = 2.0
+        i0 = 1.0
+        q = np.linspace(0.05, 1.2, 120)
+        I = i0 * np.exp(-((q * rg_nm) ** 2) / 3.0)
+        sigma = 0.01 * I
+        profile_path = os.path.join(tmp, "profile.dat")
+        write_saxs(profile_path, q, I, sigma, {})
+        out_dir = os.path.join(tmp, "kratky")
+        result = analyze_kratky(
+            profile_path,
+            output_dir=out_dir,
+            rg_nm=rg_nm,
+            i0=i0,
+            use_cache=False,
+        )
+        for key in (
+            "results_path",
+            "kratky_plot_path",
+            "kratky_dimensionless_plot_path",
+            "kratky_classical_dat_path",
+            "kratky_dimensionless_dat_path",
+            "classification",
+            "x_max",
+            "y_max",
+        ):
+            assert key in result, f"analyze_kratky must return {key}"
+        assert os.path.isfile(str(result["results_path"]))
+        assert os.path.isfile(str(result["kratky_dimensionless_plot_path"]))
+        assert result["classification"] == "globular"
+
+
+def test_analyze_kratky_runs_guinier_when_rg_i0_omitted(monkeypatch):
+    guinier_calls = []
+
+    def _fake_guinier(q_nm, I, sigma, atsas_dat_path=None):
+        guinier_calls.append(atsas_dat_path)
+        return {
+            "chosen": "adaptive",
+            "chosen_Rg": 2.0,
+            "chosen_I0": 1.0,
+            "chosen_interval": (0.05, 0.4),
+        }
+
+    monkeypatch.setattr("autosaxs.skill.analyze_kratky.run_guinier_analysis", _fake_guinier)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        rg_nm = 2.0
+        i0 = 1.0
+        q = np.linspace(0.05, 1.2, 120)
+        I = i0 * np.exp(-((q * rg_nm) ** 2) / 3.0)
+        profile_path = os.path.join(tmp, "profile.dat")
+        write_saxs(profile_path, q, I, 0.01 * I, {})
+        out_dir = os.path.join(tmp, "kratky")
+        result = analyze_kratky(profile_path, output_dir=out_dir, use_cache=False)
+        assert guinier_calls
+        assert result["classification"] == "globular"
+
+
+def test_analyze_kratky_raises_if_only_one_of_rg_i0():
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.05, 1.0, 40)
+        profile_path = os.path.join(tmp, "profile.dat")
+        write_saxs(profile_path, q, np.exp(-q**2), 0.01, {})
+        with pytest.raises(ValueError, match="both rg_nm and i0"):
+            analyze_kratky(profile_path, output_dir=tmp, rg_nm=2.0, use_cache=False)
+
+
+def test_analyze_kratky_raises_without_profile():
+    with pytest.raises(FileNotFoundError):
+        analyze_kratky(
+            profile="/nonexistent.dat",
+            output_dir=tempfile.mkdtemp(),
+            rg_nm=2.0,
+            i0=1.0,
             use_cache=False,
         )
 

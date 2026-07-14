@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from .plots import LogCurvePlot
+from ..widgets.plots import LogCurvePlot
 
 
 class SubtractionWizardDialog(QDialog):
@@ -39,6 +39,14 @@ class SubtractionWizardDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Subtraction wizard")
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.CustomizeWindowHint
+            | Qt.WindowTitleHint
+            | Qt.WindowSystemMenuHint
+            | Qt.WindowCloseButtonHint
+            | Qt.WindowMinMaxButtonsHint
+        )
         self.setMinimumWidth(820)
         self.resize(1100, 700)
 

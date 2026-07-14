@@ -7,7 +7,7 @@ importing from the ``guisaxs_liveview`` package.
 
 from __future__ import annotations
 
-from guisaxs_skills.liveview.ui.viewer_3d import LiveviewViewer3D
+from guisaxs_skills.liveview.ui.widgets import LiveviewViewer3D
 from guisaxs_skills.ui.saxs_interactive_3d import Interactive3DViewerDialog, SaxsInteractive3DWidget
 
 __all__ = ["Interactive3DViewerDialog", "LiveviewViewer3D", "SaxsInteractive3DWidget"]

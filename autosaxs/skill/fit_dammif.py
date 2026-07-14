@@ -198,8 +198,18 @@ def _fit_dammif_paths(
         # otherwise it may attempt to write to output_dir/output_dir/...
         dammif_prefix = f"dammif-{i}"
         proc = subprocess.run(
-            # ATSAS DAMMIF documentation uses FAST/SLOW/INTERACTIVE (case-sensitive in some builds).
-            ["dammif", f"--prefix={dammif_prefix}", "--mode=FAST", str(gnom_path)],
+            # Autosaxs GNOM/DATGNOM .out files use q in nm^-1 and lengths in nm.
+            # DAMMIF --unit=UNKNOWN guesses from s-range and often picks ANGSTROM for
+            # moderate-q curves, which makes Dmax ~10× too small ("initial shape
+            # dimensions too small, check units"). Explicit NANOMETRE matches our convention.
+            # ATSAS mode names are case-sensitive on some builds (FAST/SLOW/INTERACTIVE).
+            [
+                "dammif",
+                f"--prefix={dammif_prefix}",
+                "--mode=FAST",
+                "--unit=NANOMETRE",
+                str(gnom_path),
+            ],
             cwd=output_dir,
             capture_output=True,
             text=True,
@@ -230,8 +240,8 @@ def _fit_dammif_paths(
         sigma_fit = data[:, 2]
         I_fit = data[:, 3]
 
-        # If DAMMIF was fed a GNOM .out, sExp is in Å^-1 (see dammif-*.log: "Angular units: angstrom").
-        # Convert to nm^-1 so we can overlay with autosaxs' nm^-1 convention.
+        # DAMMIF always reports sExp in Å^-1 in .fir (internal unit), even when
+        # --unit=NANOMETRE was used for the GNOM input. Convert to nm^-1 for autosaxs.
         if str(gnom_path).lower().endswith(".out"):
             q_fit = q_fit * 10.0
         if exp_ref is None:

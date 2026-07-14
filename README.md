@@ -575,6 +575,8 @@ SAXS / small-angle x-ray scattering: fit the Guinier region on a 1D profile (ada
 
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where analysis outputs are written.
+- `first` (int | None, default `None`): 1-based start point for a fixed-interval Guinier fit (requires `last`).
+- `last` (int | None, default `None`): 1-based end point (inclusive) for a fixed-interval Guinier fit (requires `first`).
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
@@ -608,6 +610,65 @@ autosaxs fit-guinier subtracted/sub_sample_01.dat --output-dir guinier
 
 ---
 
+## `analyze_kratky`
+
+SAXS / small-angle x-ray scattering: dimensionless Kratky conformation analysis on a 1D profile.
+
+Builds classical (I·q² vs q) and dimensionless ((q·Rg)²·I/I(0) vs q·Rg) Kratky plots,
+locates the global peak, and assigns a model-free conformation class (globular / elongated /
+coil / intermediate).
+
+Unless both ``rg_nm`` and ``i0`` are supplied, runs in-process Guinier analysis to obtain them.
+
+### Arguments
+
+- `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where analysis outputs are written.
+- `config_path` (str | None, default `None`): Optional YAML config path for CLI parity; unused by this skill.
+- `rg_nm` (float | None, default `None`): Radius of gyration in nm. If omitted, taken from in-process Guinier.
+- `i0` (float | None, default `None`): Forward scattering I(0). If omitted, taken from in-process Guinier.
+- `q_min`, `q_max` (float | None): Optional q-range (nm⁻¹) applied before analysis.
+- `globular_x_min`, `globular_x_max`, `globular_y_min`, `globular_y_max`: Globular peak bands (defaults from quality guide).
+- `elongated_x_min`, `elongated_x_max`, `elongated_y_min`: Elongated peak bands.
+- `coil_plateau_y`, `coil_plateau_tol`, `coil_high_x_min`: Coil / Debye-plateau detection.
+- `x_search_min`, `x_search_max`: Peak search window in q·Rg.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict` with:
+
+- `results_path`: Path to the text results file.
+- `kratky_plot_path`: Path to the classical Kratky PNG (I·q² vs q).
+- `kratky_dimensionless_plot_path`: Path to the dimensionless Kratky PNG.
+- `kratky_classical_dat_path`: Path to classical Kratky `.dat`.
+- `kratky_dimensionless_dat_path`: Path to dimensionless Kratky `.dat`.
+- `classification`: Assigned conformation label.
+- `x_max`, `y_max`: Dimensionless peak coordinates (q·Rg, Y).
+
+### Python usage
+
+```python
+from autosaxs.skill import analyze_kratky
+
+out = analyze_kratky(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="kratky",
+    use_cache=False,
+)
+
+print(out["classification"])
+```
+
+### CLI usage
+
+```bash
+autosaxs analyze-kratky subtracted/sub_sample_01.dat --output-dir kratky
+autosaxs analyze-kratky subtracted/sub_sample_01.dat --rg-nm 3.2 --i0 1.05 --output-dir kratky
+```
+
+---
+
 ## `fit_distances`
 
 SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve (real-space distance distribution).
@@ -635,6 +696,17 @@ SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance
 - `fits_csv_path`: Path to a CSV containing candidate scores/metadata.
 - `fit_vs_exp_png_path` / `fit_vs_exp_png_error`: Fit-vs-experiment plot output or error message.
 - `best_pr_png_path` / `best_pr_png_error`: \(p(r)\) plot output or error message.
+- `dmax_nm`: Maximum real-space size D_max (nm) from the selected GNOM/DATGNOM fit.
+- `rg_pr_nm` / `i0_pr`: Integral Rg and I(0) from p(r) (GNOM-reported or computed from the distribution).
+- `rg_guinier_nm`: Guinier Rg (nm) from in-process `fit_guinier` or user `rg_nm`.
+- `q_min_fit_nm`: Low-q bound (nm⁻¹) used in the GNOM fit (from the `.out` angular range when available).
+- `total_estimate`: GNOM Total Estimate of the selected fit.
+- `delta_rg_pct`: \|Rg_Guinier − Rg_P(r)\| / Rg_Guinier × 100.
+- `shannon_s_min`, `shannon_class`, `shannon_ok`, `shannon_tip`: Shannon sampling metrics and interpretation guide.
+- `pr_quality_class`: `high_quality` \| `acceptable` \| `failed`.
+- `overall_status`: `HIGH QUALITY` \| `ACCEPTABLE` \| `FAILED` (quality passport label).
+- `quality_rationale` / `user_tips`: Lists explaining the quality assessment.
+- `quality_passport_path`: YAML path with the full quality block.
 
 ### Python usage
 
@@ -695,6 +767,15 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a siz
 - `fit_vs_exp_png_path` / `fit_vs_exp_png_error`: Fit-vs-experiment plot output or error message.
 - `best_dr_png_path` / `best_dr_png_error`: \(D(R)\) plot output or error message.
 - `dr_csv_path`: Path to a CSV export of \(D(R)\) (if successfully parsed).
+- `d_avg_nm` / `d_std_nm` / `pdi`: Mean size, standard deviation, and polydispersity index σ/⟨R⟩ from D(R).
+- `dr_peak_positions_nm` / `dr_n_peaks`: Peak positions and count in D(R).
+- `modality_class`: `monodisperse` \| `unimodal_polydisperse` \| `multimodal` \| `unknown`.
+- `rg_guinier_nm`: Guinier Rg (nm) when `fit_guinier` ran in-process.
+- `total_estimate`: GNOM Total Estimate of the selected fit.
+- `sizes_quality_class`: `high_quality` \| `acceptable` \| `failed`.
+- `overall_status`: `HIGH QUALITY` \| `ACCEPTABLE` \| `FAILED`.
+- `quality_rationale` / `user_tips`: Lists explaining the quality assessment.
+- `quality_passport_path`: YAML path with the full quality block.
 
 ### Python usage
 

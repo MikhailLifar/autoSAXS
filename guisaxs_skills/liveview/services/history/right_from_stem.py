@@ -1,6 +1,5 @@
 """
 Load right-column analysis previews from disk using autosaxs per-sample subdirs (stem = TIFF basename).
-Matches ``apply_batch(..., per_sample_subdir="always")`` layout under the watch directory.
 """
 
 from __future__ import annotations
@@ -12,15 +11,14 @@ import yaml
 
 from autosaxs.skill.gnom_fit_common import default_atsas_failure_message
 
-from ..output_paths import (
-    dammif_dir,
-    fit_bodies_dir,
-    fit_distances_dir,
+from ...session.output_paths import (
     fit_sizes_dir,
+    integrated_dat_path,
     mixture_dir,
+    subtracted_dat_path,
     tiff_output_root,
 )
-from ..state import AnalysisMode, LiveviewWatchMode
+from ...session.state import AnalysisMode, LiveviewWatchMode
 
 
 def _mtime_key(p: Path) -> float:
@@ -28,35 +26,6 @@ def _mtime_key(p: Path) -> float:
         return p.stat().st_mtime
     except OSError:
         return 0.0
-
-
-def _discover_fit_distances_pngs(subdir: Path, stem: str) -> tuple[str, str]:
-    """GNOM / fit_distances: ``{stem}_fits.png`` and a companion p(r) PNG (not ``*_fits.png``)."""
-    if not subdir.is_dir():
-        return "", ""
-    fit: Path | None = subdir / f"{stem}_fits.png"
-    if not fit.is_file():
-        cands = sorted(
-            (p for p in subdir.glob("*_fits.png") if "fit_sizes" not in p.name),
-            key=_mtime_key,
-            reverse=True,
-        )
-        fit = cands[0] if cands else None
-    fp = str(fit.resolve()) if fit is not None and fit.is_file() else ""
-    fp_res = Path(fp).resolve() if fp else None
-
-    pr_cands: list[Path] = []
-    for p in subdir.glob("*.png"):
-        if fp_res is not None and p.resolve() == fp_res:
-            continue
-        if p.name.endswith("_fits.png"):
-            continue
-        if "fit_sizes" in p.name or p.name.endswith("_DR.png"):
-            continue
-        pr_cands.append(p)
-    pr_cands.sort(key=_mtime_key, reverse=True)
-    pp = str(pr_cands[0].resolve()) if pr_cands else ""
-    return fp, pp
 
 
 def _discover_fit_sizes_pngs(subdir: Path, stem: str) -> tuple[str, str]:
@@ -109,8 +78,6 @@ def _read_atsas_failure_payload(subdir: Path, stem: str, *, skill_id: str) -> di
         "atsas_fit_ok": False,
         "gnom_failed": True,
         "failure_message": message or default_atsas_failure_message(skill_id),
-        "fit_vs_exp_png_path": "",
-        "best_pr_png_path": "",
     }
     if skill_id == "fit_sizes":
         payload["best_dr_png_path"] = ""
@@ -134,43 +101,27 @@ def apply_right_outputs_from_disk(
     stem = tiff_stem.strip()
     root = tiff_output_root(watchdir=watchdir, tiff_path=tiff_path, mode=watch_mode)
 
-    if mode == AnalysisMode.MONODISPERSE_PR:
-        fd = fit_distances_dir(root) / stem
-        failed = _read_atsas_failure_payload(fd, stem, skill_id="fit_distances")
-        if failed is not None:
-            right.ingest_skill_result(failed)
-            return
-        fp, pp = _discover_fit_distances_pngs(fd, stem)
-        right.ingest_skill_result({"fit_vs_exp_png_path": fp, "best_pr_png_path": pp})
-        return
-
-    if mode == AnalysisMode.MONODISPERSE_DAM:
-        fd = fit_distances_dir(root) / stem
-        failed = _read_atsas_failure_payload(fd, stem, skill_id="fit_distances")
-        if failed is not None:
-            right.ingest_skill_result(failed)
-            return
-        fp, pp = _discover_fit_distances_pngs(fd, stem)
-        right.ingest_skill_result({"fit_vs_exp_png_path": fp, "best_pr_png_path": pp})
-        dam = dammif_dir(root) / stem
-        if dam.is_dir():
-            right.ingest_skill_result({"output_subdir": str(dam.resolve())})
-        return
-
-    if mode == AnalysisMode.MONODISPERSE_BODIES:
-        fb = fit_bodies_dir(root) / stem
-        if fb.is_dir():
-            right.ingest_skill_result({"output_subdir": str(fb.resolve())})
+    if mode == AnalysisMode.MONODISPERSE:
+        sub = subtracted_dat_path(root=root, stem=stem)
+        integ = integrated_dat_path(root=root, stem=stem, integrator_ready=True)
+        prof = sub if sub.is_file() else integ
+        profile_path = str(prof.resolve()) if prof.is_file() else ""
+        if hasattr(right, "load_monodisperse_from_disk"):
+            right.load_monodisperse_from_disk(
+                profile_path=profile_path,
+                stem=stem,
+                tiff_path=tiff_path,
+            )
         return
 
     if mode == AnalysisMode.POLYDISPERSE_DR:
         fs = fit_sizes_dir(root) / stem
         failed = _read_atsas_failure_payload(fs, stem, skill_id="fit_sizes")
         if failed is not None:
-            right.ingest_skill_result(failed)
+            right.ingest_skill_result(failed, skill_name="fit_sizes")
             return
         fp, dp = _discover_fit_sizes_pngs(fs, stem)
-        right.ingest_skill_result({"fit_vs_exp_png_path": fp, "best_dr_png_path": dp})
+        right.ingest_skill_result({"fit_vs_exp_png_path": fp, "best_dr_png_path": dp}, skill_name="fit_sizes")
         return
 
     if mode == AnalysisMode.POLYDISPERSE_MIXTURE:
@@ -181,5 +132,6 @@ def apply_right_outputs_from_disk(
             {
                 "comparison_path": str(comp.resolve()) if comp.is_file() else "",
                 "distributions_path": str(dist.resolve()) if dist.is_file() else "",
-            }
+            },
+            skill_name="fit_mixture",
         )

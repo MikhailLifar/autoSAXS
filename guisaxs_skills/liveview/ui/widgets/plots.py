@@ -13,7 +13,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QDialog, QSizePolicy, QVBoxLayout, QWidget
 
-from ...logic.path_display import contracted_path_label
+from ....logic.path_display import contracted_path_label
 
 
 def mpl_navigation_toolbar(canvas: FigureCanvas, parent: QWidget) -> NavigationToolbar2QT:

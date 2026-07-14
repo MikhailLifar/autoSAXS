@@ -90,6 +90,17 @@ SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance
 - `fits_csv_path`: Path to a CSV containing candidate scores/metadata.
 - `fit_vs_exp_png_path` / `fit_vs_exp_png_error`: Fit-vs-experiment plot output or error message.
 - `best_pr_png_path` / `best_pr_png_error`: \(p(r)\) plot output or error message.
+- `dmax_nm`: Maximum real-space size D_max (nm) from the selected GNOM/DATGNOM fit.
+- `rg_pr_nm` / `i0_pr`: Integral Rg and I(0) from p(r) (GNOM-reported or computed from the distribution).
+- `rg_guinier_nm`: Guinier Rg (nm) from in-process `fit_guinier` or user `rg_nm`.
+- `q_min_fit_nm`: Low-q bound (nm⁻¹) used in the GNOM fit (from the `.out` angular range when available).
+- `total_estimate`: GNOM Total Estimate of the selected fit.
+- `delta_rg_pct`: \|Rg_Guinier − Rg_P(r)\| / Rg_Guinier × 100.
+- `shannon_s_min`, `shannon_class`, `shannon_ok`, `shannon_tip`: Shannon sampling metrics and interpretation guide.
+- `pr_quality_class`: `high_quality` \| `acceptable` \| `failed`.
+- `overall_status`: `HIGH QUALITY` \| `ACCEPTABLE` \| `FAILED` (quality passport label).
+- `quality_rationale` / `user_tips`: Lists explaining the quality assessment.
+- `quality_passport_path`: YAML path with the full quality block.
 
 ### Python usage
 

@@ -100,6 +100,15 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a siz
 - `fit_vs_exp_png_path` / `fit_vs_exp_png_error`: Fit-vs-experiment plot output or error message.
 - `best_dr_png_path` / `best_dr_png_error`: \(D(R)\) plot output or error message.
 - `dr_csv_path`: Path to a CSV export of \(D(R)\) (if successfully parsed).
+- `d_avg_nm` / `d_std_nm` / `pdi`: Mean size, standard deviation, and polydispersity index σ/⟨R⟩ from D(R).
+- `dr_peak_positions_nm` / `dr_n_peaks`: Peak positions and count in D(R).
+- `modality_class`: `monodisperse` \| `unimodal_polydisperse` \| `multimodal` \| `unknown`.
+- `rg_guinier_nm`: Guinier Rg (nm) when `fit_guinier` ran in-process.
+- `total_estimate`: GNOM Total Estimate of the selected fit.
+- `sizes_quality_class`: `high_quality` \| `acceptable` \| `failed`.
+- `overall_status`: `HIGH QUALITY` \| `ACCEPTABLE` \| `FAILED`.
+- `quality_rationale` / `user_tips`: Lists explaining the quality assessment.
+- `quality_passport_path`: YAML path with the full quality block.
 
 ### Python usage
 

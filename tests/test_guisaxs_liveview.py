@@ -25,10 +25,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pytest
-from guisaxs_skills.liveview.jobs import Job, JobStep
+from guisaxs_skills.liveview.pipeline import Job, JobStep, LiveviewJobExecutor
 from guisaxs_skills.core.models import RunRequest
-from guisaxs_skills.liveview.executor import LiveviewJobExecutor
-from guisaxs_skills.liveview.state import LiveviewSessionState
+from guisaxs_skills.liveview.session import LiveviewSessionState
 
 _REPOS = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _TESTS_DIR = os.path.join(_REPOS, "tests")
@@ -89,13 +88,18 @@ def _wait_until_app_idle(app: Any, win: Any, timeout_sec: float) -> bool:
 
     def _idle() -> bool:
         try:
-            runner = getattr(win, "_runner", None)
+            runner = getattr(getattr(win, "_controller", None), "runner", None)
+            if runner is None:
+                runner = getattr(win, "_runner", None)
             if runner is not None and hasattr(runner, "is_running") and runner.is_running():
                 return False
         except Exception:
             pass
         try:
-            ex = getattr(win, "_executor", None)
+            ctrl = getattr(win, "_controller", None)
+            ex = getattr(ctrl, "executor", None) if ctrl is not None else None
+            if ex is None:
+                ex = getattr(win, "_executor", None)
             if ex is not None:
                 if getattr(ex, "_current_incoming", None) is not None:
                     return False
@@ -271,6 +275,16 @@ def _set_form_text_field(form: Any, *, name: str, text: str) -> bool:
     return False
 
 
+def _right_mode_combo(right: Any):
+    """Return the analysis-mode QComboBox (on AnalysisModeSelector after right-panel split)."""
+    selector = getattr(right, "_mode", None)
+    if selector is not None:
+        combo = getattr(selector, "_combo", None)
+        if combo is not None:
+            return combo
+    return getattr(right, "_mode_combo", None)
+
+
 def test_executor_requeues_cancelled_job_before_normal_jobs(tmp_path: Path):
     """
     Unit-ish check: when cancel_current() causes a step to fail, the executor requeues the current job
@@ -335,15 +349,214 @@ def test_executor_requeues_cancelled_job_before_normal_jobs(tmp_path: Path):
     assert j3 is not None and j3.id == "norm"
 
 
+def test_executor_paused_starts_manual_jobs_only(tmp_path: Path):
+    class _DummySignal:
+        def connect(self, _fn):
+            return None
+
+    class _DummyRunner:
+        def __init__(self):
+            self.finished = _DummySignal()
+            self.started: list[RunRequest] = []
+
+        def is_running(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            return None
+
+        def start(self, req) -> None:
+            self.started.append(req)
+
+    runner = _DummyRunner()
+    state = LiveviewSessionState(watchdir=tmp_path)
+    ex = LiveviewJobExecutor(state=state, runner=runner)  # type: ignore[arg-type]
+
+    auto = Job(
+        id="auto",
+        priority=0,
+        steps=[JobStep(name="integrate", request=RunRequest("integrate", [], {}))],
+        context={"tiff_path": str(tmp_path / "a.tif")},
+    )
+    manual = Job(
+        id="manual",
+        priority=150,
+        steps=[JobStep(name="fit_guinier", request=RunRequest("fit_guinier", ["prof.dat"], {}))],
+        context={"manual": True, "monodisperse": True},
+    )
+    ex._jobs.put(auto)  # noqa: SLF001
+    ex._jobs.put(manual)  # noqa: SLF001
+    ex.pause()
+
+    ex._tick()  # noqa: SLF001
+    ex._tick()  # noqa: SLF001
+
+    assert ex._current_job is not None and ex._current_job.id == "manual"  # noqa: SLF001
+    assert runner.started and runner.started[0].skill_name == "fit_guinier"
+    assert len(ex._jobs) == 1  # noqa: SLF001
+    assert ex._jobs.get_nowait().id == "auto"  # noqa: SLF001
+
+
+def test_executor_paused_advances_manual_multi_step_job(tmp_path: Path):
+    class _DummySignal:
+        def connect(self, _fn):
+            return None
+
+    class _DummyRunner:
+        def __init__(self):
+            self.finished = _DummySignal()
+            self.started: list[str] = []
+
+        def is_running(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            return None
+
+        def start(self, req) -> None:
+            self.started.append(req.skill_name)
+
+    runner = _DummyRunner()
+    state = LiveviewSessionState(watchdir=tmp_path)
+    ex = LiveviewJobExecutor(state=state, runner=runner)  # type: ignore[arg-type]
+    ex.pause()
+
+    manual = Job(
+        id="chain",
+        priority=150,
+        steps=[
+            JobStep(name="fit_guinier", request=RunRequest("fit_guinier", ["prof.dat"], {})),
+            JobStep(name="fit_distances", request=RunRequest("fit_distances", ["prof.dat"], {})),
+        ],
+        context={"manual": True, "monodisperse": True},
+    )
+    ex._start_job(manual)  # noqa: SLF001
+    ex._tick()  # noqa: SLF001
+    assert runner.started == ["fit_guinier"]
+
+    from guisaxs_skills.logic.runner_qprocess import RunOutcome
+
+    ex._on_skill_finished(  # noqa: SLF001
+        RunOutcome(success=True, exit_code=0, result={"rg": 1.0}, request=None)
+    )
+    ex._tick()  # noqa: SLF001
+    assert runner.started == ["fit_guinier", "fit_distances"]
+
+
+def test_monodisperse_guinier_opts_fixed_interval_from_spinboxes(tmp_path: Path):
+    class _DummySignal:
+        def connect(self, _fn):
+            return None
+
+    class _DummyRunner:
+        def __init__(self):
+            self.finished = _DummySignal()
+
+        def is_running(self) -> bool:
+            return False
+
+    prof = tmp_path / "sub_sample.dat"
+    prof.write_text("# q I\n", encoding="utf-8")
+    state = LiveviewSessionState(watchdir=tmp_path)
+    state.monodisperse_wizard_params = {"first": 1, "last": 1}
+    ex = LiveviewJobExecutor(state=state, runner=_DummyRunner())  # type: ignore[arg-type]
+
+    steps = ex.monodisperse_steps_guinier_and_distances(
+        str(prof),
+        output_root=tmp_path,
+        fixed_guinier_interval=True,
+        guinier_interval_first=8,
+        guinier_interval_last=32,
+    )
+    g_opts = steps[0].request.options
+    d_opts = steps[1].request.options
+    assert g_opts["first"] == 8
+    assert g_opts["last"] == 32
+    assert d_opts["rg_nm"] == "${fit_guinier.rg}"
+    assert d_opts["first"] == "${fit_guinier.first_point_1based}"
+    # Guinier last must not be forwarded to DATGNOM (window too narrow for p(r)).
+    assert "last" not in d_opts
+
+
+def test_monodisperse_step_shape_dammif_uses_concrete_gnom_path(tmp_path: Path):
+    class _DummySignal:
+        def connect(self, _fn):
+            return None
+
+    class _DummyRunner:
+        def __init__(self):
+            self.finished = _DummySignal()
+
+        def is_running(self) -> bool:
+            return False
+
+    prof = tmp_path / "sub_sample.dat"
+    prof.write_text("# q I\n", encoding="utf-8")
+    gnom_src = (
+        Path(__file__).resolve().parents[2]
+        / "validation/fit_distances_test/ihs30_94.0_sample/datgnom_rg_1.6800.out"
+    )
+    fd = tmp_path / "fit_distances" / "sample"
+    fd.mkdir(parents=True)
+    gnom = fd / "datgnom_rg_1.6800.out"
+    gnom.write_bytes(gnom_src.read_bytes())
+
+    state = LiveviewSessionState(watchdir=tmp_path)
+    ex = LiveviewJobExecutor(state=state, runner=_DummyRunner())  # type: ignore[arg-type]
+
+    step = ex.monodisperse_step_shape(
+        str(prof),
+        output_root=tmp_path,
+        shape_mode="dammif",
+        gnom_out_path=str(gnom),
+    )
+    assert step is not None
+    assert step.name == "fit_dammif"
+    assert step.request.options["gnom_path"] == str(gnom.resolve())
+    assert "${" not in step.request.options["gnom_path"]
+
+    fallback = ex.monodisperse_step_shape(
+        str(prof),
+        output_root=tmp_path,
+        shape_mode="dammif",
+        gnom_out_path=None,
+    )
+    assert fallback is not None
+    assert fallback.name == "fit_dammif"
+    assert fallback.request.options.get("gnom_path") == str(gnom.resolve())
+
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+    prof2 = other_root / "sub_other.dat"
+    prof2.write_text("# q I\n", encoding="utf-8")
+    no_gnom = ex.monodisperse_step_shape(
+        str(prof2),
+        output_root=other_root,
+        shape_mode="dammif",
+        gnom_out_path=None,
+    )
+    assert no_gnom is not None
+    assert "gnom_path" not in no_gnom.request.options
+
+
 def _assert_curves_match_validation(*, integrated_path: Path, subtracted_path: Path) -> None:
     """
     Compare liveview outputs to validation reference .chi / reference_subtracted using the same
     metric+baseline files as test_skills_real_data.
     """
-    from autosaxs.core.utils import integration_comparison_metric, read_chi, read_reference_sub_dat, read_saxs
+    from autosaxs.core.utils import (
+        integration_comparison_metric,
+        read_chi,
+        read_reference_sub_dat,
+        read_saxs,
+        subtraction_comparison_metric,
+    )
     from test_skills_real_data import (
+        METRICS_INTEGRATED_CHI2_CSV,
         METRICS_INTEGRATED_CSV,
+        METRICS_SUBTRACTED_CHI2_CSV,
         METRICS_SUBTRACTED_CSV,
+        _chi2_vs_reference,
         REFERENCE_DIR,
         REFERENCE_SUBTRACTED_DIR,
         _compare_metrics,
@@ -361,7 +574,7 @@ def _assert_curves_match_validation(*, integrated_path: Path, subtracted_path: P
     assert ref_chi_base, f"Could not map {int_base!r} to a reference .chi basename"
     ref_chi_path = Path(REFERENCE_DIR) / (ref_chi_base + ".chi")
     assert ref_chi_path.is_file(), f"Missing reference chi: {ref_chi_path}"
-    q_pipe, I_pipe, _, _ = read_saxs(str(integrated_path))
+    q_pipe, I_pipe, sigma_pipe, _ = read_saxs(str(integrated_path))
     q_ref, I_ref = read_chi(str(ref_chi_path))
     metric_int = integration_comparison_metric(q_pipe, I_pipe, q_ref, I_ref)
     assert metric_int == metric_int, "Integrated comparison metric is NaN"
@@ -377,6 +590,13 @@ def _assert_curves_match_validation(*, integrated_path: Path, subtracted_path: P
         "run the validation pipeline to record metrics."
     )
     assert _compare_metrics(old_int, [row_int], label="guisaxs-liveview integrated (ihs27)")
+    row_int_chi2 = {
+        "reference": ref_chi_base + ".chi",
+        "generated": integrated_path.name,
+        "metric": float(_chi2_vs_reference(q_ref, I_ref, q_pipe, I_pipe, sigma_pipe=sigma_pipe)),
+    }
+    old_int_chi2 = _read_metrics_csv(METRICS_INTEGRATED_CHI2_CSV)
+    assert _compare_metrics(old_int_chi2, [row_int_chi2], label="guisaxs-liveview integrated chi2 (ihs27)")
 
     # Subtracted (sub_<stem>.dat vs reference_subtracted/sub_*.dat selected by Parent sample)
     sub_base = subtracted_path.stem
@@ -395,8 +615,8 @@ def _assert_curves_match_validation(*, integrated_path: Path, subtracted_path: P
             break
     assert best_path is not None and best_path.is_file(), f"No reference_subtracted entry for sample stem {stem!r}"
     q_sub_ref, I_sub_ref, _ = read_reference_sub_dat(str(best_path))
-    q_sub, I_sub, _, _ = read_saxs(str(subtracted_path))
-    metric_sub = integration_comparison_metric(q_sub, I_sub, q_sub_ref, I_sub_ref)
+    q_sub, I_sub, sigma_sub, _ = read_saxs(str(subtracted_path))
+    metric_sub = subtraction_comparison_metric(q_sub_ref, I_sub_ref, q_sub, I_sub)
     assert metric_sub == metric_sub, "Subtracted comparison metric is NaN"
     row_sub = {
         "reference": str(best_name),
@@ -410,6 +630,13 @@ def _assert_curves_match_validation(*, integrated_path: Path, subtracted_path: P
         "run the validation pipeline to record metrics."
     )
     assert _compare_metrics(old_sub, [row_sub], label="guisaxs-liveview subtracted (ihs27)")
+    row_sub_chi2 = {
+        "reference": str(best_name),
+        "generated": subtracted_path.name,
+        "metric": float(_chi2_vs_reference(q_sub_ref, I_sub_ref, q_sub, I_sub, sigma_pipe=sigma_sub)),
+    }
+    old_sub_chi2 = _read_metrics_csv(METRICS_SUBTRACTED_CHI2_CSV)
+    assert _compare_metrics(old_sub_chi2, [row_sub_chi2], label="guisaxs-liveview subtracted chi2 (ihs27)")
 
     _ = sub_base  # keep variable for debugging readability
 
@@ -425,14 +652,12 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
     from PyQt5.QtTest import QTest
     from PyQt5.QtWidgets import QApplication
 
-    from guisaxs_skills.core.event_bus import EventBus
-    from guisaxs_skills.liveview.state import AnalysisMode
+    from guisaxs_skills.liveview.session import AnalysisMode
     from guisaxs_skills.liveview.window import LiveviewMainWindow
 
     created_app = QApplication.instance() is None
     app = QApplication.instance() or QApplication([])
-    bus = EventBus()
-    win = LiveviewMainWindow(bus=bus, watchdir=watchdir)
+    win = LiveviewMainWindow(watchdir=watchdir)
     win.show()
 
     try:
@@ -529,18 +754,20 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
         bw.close()
         _wait_until(app, lambda: not bw.isVisible(), 3.0)
 
-        # --- Enable analysis mode: Monodisperse p(r)
+        # --- Enable analysis mode: Monodisperse analysis
         right = win._right  # noqa: SLF001
-        idx_pr = None
-        for i in range(right._mode_combo.count()):  # noqa: SLF001
-            if right._mode_combo.itemData(i) == AnalysisMode.MONODISPERSE_PR:  # noqa: SLF001
-                idx_pr = i
+        mode_combo = _right_mode_combo(right)
+        assert mode_combo is not None, "Analysis mode combo not found on right panel"
+        idx_mono = None
+        for i in range(mode_combo.count()):
+            if mode_combo.itemData(i) == AnalysisMode.MONODISPERSE:
+                idx_mono = i
                 break
-        assert idx_pr is not None, "Analysis mode 'Monodisperse analysis: p(r)' not found in combo"
-        right._mode_combo.setCurrentIndex(int(idx_pr))  # noqa: SLF001
+        assert idx_mono is not None, "Analysis mode 'Monodisperse analysis' not found in combo"
+        mode_combo.setCurrentIndex(int(idx_mono))
         _process_events(app)
 
-        # --- Upload sample TIFF -> expect subtraction + p(r) artifacts
+        # --- Upload sample TIFF -> expect subtraction + guinier + p(r) artifacts
         sample_src = Path(VALIDATION_RAW) / "ihs27_95.9_sample.tif"
         assert sample_src.is_file()
         _atomic_copy_into_watchdir(sample_src, watchdir)
@@ -559,13 +786,14 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
         assert _wait_until_queue_idle(app, win, timeout), "Queue did not become Idle after sample processing"
         _settle_after_idle(1.0)
 
-        # fit_distances: per-sample subdir under fit_distances/<stem>/.
-        # The p(r) PNG naming is `datgnom_rg_*.png` (not necessarily `*_pr.png`).
+        # fit_guinier + fit_distances: per-sample subdirs under guinier/<stem>/ and fit_distances/<stem>/.
+        guinier_dir = watchdir / "guinier"
         fd_dir = watchdir / "fit_distances"
         sample_token = "ihs27_95.9_sample"
         ok_pr = _wait_until(
             app,
-            lambda: any(p.is_file() and p.stat().st_size > 0 for p in fd_dir.rglob("*_fits.png"))
+            lambda: any(guinier_dir.rglob("*_guinier_region.yml"))
+            and any(p.is_file() and p.stat().st_size > 0 for p in fd_dir.rglob("*_fits.png"))
             and any(
                 p.is_file()
                 and p.stat().st_size > 0
@@ -577,31 +805,22 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
             timeout,
             step_sec=0.1,
         )
-        assert ok_pr, "fit_distances did not produce expected fit + p(r) artifacts"
+        assert ok_pr, "fit_guinier/fit_distances did not produce expected artifacts"
 
         _assert_curves_match_validation(integrated_path=int_sam, subtracted_path=sub_out)
     finally:
-        # Stop live background workers first (watchdog thread + timer ticks + runner subprocess).
         try:
-            try:
-                win._watcher.stop()  # noqa: SLF001
-            except Exception:
-                pass
-            try:
-                win._executor.stop()  # noqa: SLF001
-            except Exception:
-                pass
+            win._controller.shutdown()  # noqa: SLF001
         except Exception:
             pass
         try:
-            # Avoid "QProcess destroyed while process is still running" warnings.
-            try:
-                runner = win._runner  # noqa: SLF001
-                if runner is not None and runner.is_running():
-                    runner.cancel()
-                    _wait_until(app, lambda: not runner.is_running(), 8.0)
-            except Exception:
-                pass
+            runner = win._controller.runner  # noqa: SLF001
+            if runner.is_running():
+                runner.cancel()
+                _wait_until(app, lambda: not runner.is_running(), 8.0)
+        except Exception:
+            pass
+        try:
             win.close()
             try:
                 _wait_until(app, lambda: not win.isVisible(), 3.0)

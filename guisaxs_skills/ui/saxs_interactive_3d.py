@@ -25,121 +25,77 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as Navigatio
 from matplotlib.figure import Figure
 from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  # registers 3d projection
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QWidget
 
-
-def _build_isosurface_poly3d(
-    atoms: Any,
-    *,
-    grid_size: int,
-    r_max: float,
-    isosurface_sigma: float = 1.5,
-    isosurface_level: Optional[float] = None,
-    alpha: float = 0.82,
-    edge_linewidth: float = 0.15,
-) -> tuple[Optional[Poly3DCollection], np.ndarray, np.ndarray]:
-    """
-    Build a single-view isosurface mesh (same recipe as autosaxs ``viewer.py``).
-    Returns (collection_or_none, min_coords, max_coords) in Å.
-    """
-    from matplotlib import cm
-    from matplotlib.colors import Normalize
-
-    from autosaxs.core.utils import calculate_atoms_density_and_isosurface
-
-    density, level, min_coords, max_coords = calculate_atoms_density_and_isosurface(
-        atoms,
-        grid_size=grid_size,
-        isosurface_sigma=isosurface_sigma,
-        isosurface_level=isosurface_level,
-    )
-    try:
-        from skimage.measure import marching_cubes
-    except ImportError:
-        return None, min_coords, max_coords
-
-    com = atoms.get_center_of_mass()
-    norm = Normalize(vmin=0, vmax=r_max)
-    cmap = cm.viridis
-    try:
-        verts, faces, _, _ = marching_cubes(density, level=level)
-    except ValueError:
-        return None, min_coords, max_coords
-
-    scale = (max_coords - min_coords) / (np.array(density.shape) - 1)
-    verts = verts * scale + min_coords
-
-    face_colors: list[tuple[float, float, float, float]] = []
-    for face in faces:
-        face_verts = verts[face]
-        avg_dist = float(np.mean(np.linalg.norm(face_verts - com, axis=1)))
-        face_colors.append(cmap(norm(avg_dist)))
-
-    mesh = Poly3DCollection(
-        verts[faces],
-        alpha=alpha,
-        facecolors=face_colors,
-        edgecolor="k",
-        linewidth=edge_linewidth,
-    )
-    return mesh, min_coords, max_coords
+from .isosurface_mesh_data import (
+    IsosurfaceMeshData,
+    compute_atoms_isosurface_mesh,
+    compute_shape_isosurface_mesh,
+    mesh_data_to_poly3d,
+)
 
 
-def _build_shape_isosurface_poly3d(
-    shape_name: str,
-    shape_params: dict[str, float],
-    *,
-    grid_size: int,
-    r_max: float = 30.0,
-    isosurface_level: Optional[float] = None,
-    alpha: float = 0.82,
-    edge_linewidth: float = 0.15,
-) -> tuple[Optional[Poly3DCollection], np.ndarray, np.ndarray]:
-    """
-    Analytical BODIES shape isosurface (same pipeline as ``PLTViewer.plot_3d_views_and_scattering``).
-    """
-    from matplotlib import cm
-    from matplotlib.colors import Normalize
+class _IsosurfaceWorker(QObject):
+    """Runs CIF read + marching cubes off the GUI thread."""
 
-    from autosaxs.core.utils import calculate_shape_density_and_isosurface
+    finished = pyqtSignal(int, object)  # generation, payload dict
+    failed = pyqtSignal(int, str)
 
-    density, level, min_coords, max_coords = calculate_shape_density_and_isosurface(
-        (shape_name, shape_params),
-        grid_size=grid_size,
-        isosurface_level=isosurface_level,
-    )
-    try:
-        from skimage.measure import marching_cubes
-    except ImportError:
-        return None, min_coords, max_coords
+    def __init__(self) -> None:
+        super().__init__()
+        self._job: Optional[dict[str, Any]] = None
 
-    com = np.array([0.0, 0.0, 0.0], dtype=np.float64)
-    norm = Normalize(vmin=0, vmax=r_max)
-    cmap = cm.viridis
-    try:
-        verts, faces, _, _ = marching_cubes(density, level=level)
-    except ValueError:
-        return None, min_coords, max_coords
+    def configure(self, job: dict[str, Any]) -> None:
+        self._job = dict(job)
 
-    scale = (max_coords - min_coords) / (np.array(density.shape) - 1)
-    verts = verts * scale + min_coords
+    @pyqtSlot()
+    def run(self) -> None:
+        job = self._job or {}
+        gen = int(job.get("gen", 0))
+        try:
+            kind = str(job.get("kind") or "")
+            grid_size = int(job.get("grid_size") or 44)
+            if kind == "cif":
+                path = str(job.get("path") or "")
+                from autosaxs.core.utils import read_bodies_cif
 
-    face_colors: list[tuple[float, float, float, float]] = []
-    for face in faces:
-        face_verts = verts[face]
-        avg_dist = float(np.mean(np.linalg.norm(face_verts - com, axis=1)))
-        face_colors.append(cmap(norm(avg_dist)))
-
-    mesh = Poly3DCollection(
-        verts[faces],
-        alpha=alpha,
-        facecolors=face_colors,
-        edgecolor="k",
-        linewidth=edge_linewidth,
-    )
-    return mesh, min_coords, max_coords
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    atoms = read_bodies_cif(path)
+                mesh = compute_atoms_isosurface_mesh(atoms, grid_size=grid_size, r_max=30.0)
+                pts = np.asarray(atoms.positions, dtype=np.float64)
+                self.finished.emit(
+                    gen,
+                    {
+                        "kind": "cif",
+                        "path": path,
+                        "title": job.get("title") or "",
+                        "mesh": mesh,
+                        "points": pts,
+                    },
+                )
+                return
+            if kind == "bodies":
+                shape_name = str(job.get("shape_name") or "")
+                shape_params = dict(job.get("shape_params") or {})
+                mesh = compute_shape_isosurface_mesh(
+                    shape_name, shape_params, grid_size=grid_size, r_max=30.0
+                )
+                self.finished.emit(
+                    gen,
+                    {
+                        "kind": "bodies",
+                        "shape_name": shape_name,
+                        "shape_params": shape_params,
+                        "title": job.get("title") or "",
+                        "mesh": mesh,
+                    },
+                )
+                return
+            self.failed.emit(gen, f"Unknown isosurface job kind: {kind!r}")
+        except Exception as exc:
+            self.failed.emit(gen, str(exc) or exc.__class__.__name__)
 
 
 class SaxsInteractive3DWidget(QWidget):
@@ -164,6 +120,9 @@ class SaxsInteractive3DWidget(QWidget):
         self._full_view_cb: Optional[Callable[[], None]] = None
         self._click_cid: Optional[int] = None
         self._has_model = False
+        self._load_gen = 0
+        self._mesh_thread: Optional[QThread] = None
+        self._mesh_worker: Optional[_IsosurfaceWorker] = None
 
         figsize = (3.2, 3.0) if embedded else (5.0, 4.5)
         dpi = 100
@@ -322,6 +281,8 @@ class SaxsInteractive3DWidget(QWidget):
             self._canvas.draw_idle()
 
     def clear(self) -> None:
+        self._bump_load_gen()
+        self._stop_mesh_worker()
         self._title = ""
         self._last_cif_path = None
         self._last_bodies_shape = None
@@ -331,57 +292,130 @@ class SaxsInteractive3DWidget(QWidget):
     def cif_path(self) -> Optional[str]:
         return self._last_cif_path
 
-    def load_cif(self, path: str, *, title: Optional[str] = None) -> bool:
-        p = Path(path)
-        if not p.is_file():
-            self.clear()
-            return False
+    def _bump_load_gen(self) -> int:
+        self._load_gen += 1
+        return self._load_gen
+
+    def _stop_mesh_worker(self) -> None:
+        thr = self._mesh_thread
+        self._mesh_thread = None
+        self._mesh_worker = None
+        if thr is None:
+            return
         try:
-            from autosaxs.core.utils import read_bodies_cif
-
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                atoms = read_bodies_cif(str(p))
+            thr.quit()
+            thr.wait(100)
         except Exception:
-            self.clear()
-            return False
-        self._last_cif_path = str(p)
-        self._last_bodies_shape = None
-        self._last_bodies_params = None
-        t = title or p.name
-        return self._load_atoms(atoms, title=t)
+            pass
 
-    def load_bodies_analytical(
-        self,
-        shape_name: str,
-        shape_params: dict[str, float],
-        *,
-        title: Optional[str] = None,
-    ) -> bool:
-        """Isosurface from analytical BODIES shape (``calculate_shape_density_and_isosurface``)."""
-        self._last_cif_path = None
-        self._last_bodies_shape = shape_name
-        self._last_bodies_params = dict(shape_params)
+    def _show_loading(self) -> None:
         self._disconnect_click()
         if self._embedded:
             self._timer.stop()
-
-        mesh, min_c, max_c = _build_shape_isosurface_poly3d(
-            shape_name,
-            shape_params,
-            grid_size=self._grid_size,
-            r_max=30.0,
-            alpha=0.82 if self._embedded else 0.85,
-            edge_linewidth=0.12 if self._embedded else 0.18,
+        self._has_model = False
+        self._ax.clear()
+        self._apply_empty_chrome()
+        self._ax.text2D(
+            0.5,
+            0.5,
+            "Loading 3D…",
+            transform=self._ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=9,
+            color="0.45",
         )
+        self._ax.view_init(elev=self._base_elev, azim=self._base_azim)
+        try:
+            self._ax.set_box_aspect((1, 1, 1))
+        except Exception:
+            pass
+        self._canvas.draw_idle()
 
+    def _start_mesh_job(self, job: dict[str, Any]) -> None:
+        self._stop_mesh_worker()
+        worker = _IsosurfaceWorker()
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        worker.configure(job)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_mesh_finished)
+        worker.failed.connect(self._on_mesh_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._mesh_worker = worker
+        self._mesh_thread = thread
+        thread.start()
+
+    def _on_mesh_failed(self, gen: int, message: str) -> None:
+        if gen != self._load_gen:
+            return
+        self._mesh_thread = None
+        self._mesh_worker = None
+        self._reset_empty_view()
+        self._ax.clear()
+        self._apply_empty_chrome()
+        self._ax.text2D(
+            0.5,
+            0.5,
+            "Could not load 3D",
+            transform=self._ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=9,
+            color="0.45",
+        )
+        self._canvas.draw_idle()
+        _ = message
+
+    def _on_mesh_finished(self, gen: int, payload: object) -> None:
+        if gen != self._load_gen:
+            return
+        self._mesh_thread = None
+        self._mesh_worker = None
+        if not isinstance(payload, dict):
+            self._on_mesh_failed(gen, "invalid payload")
+            return
+        kind = str(payload.get("kind") or "")
+        alpha = 0.82 if self._embedded else 0.85
+        edge_lw = 0.12 if self._embedded else 0.18
+        mesh_data = payload.get("mesh")
+        self._disconnect_click()
+        if self._embedded:
+            self._timer.stop()
         self._ax.clear()
         self._has_model = True
-        center = np.asarray(min_c + max_c, dtype=np.float64) * 0.5
 
-        if mesh is not None:
+        if isinstance(mesh_data, IsosurfaceMeshData):
+            mesh = mesh_data_to_poly3d(mesh_data, alpha=alpha, edge_linewidth=edge_lw)
             self._ax.add_collection3d(mesh)
-            self._set_equal_limits(center, np.asarray(min_c), np.asarray(max_c))
+            center = np.asarray(mesh_data.min_coords + mesh_data.max_coords, dtype=np.float64) * 0.5
+            self._set_equal_limits(center, mesh_data.min_coords, mesh_data.max_coords)
+        elif kind == "cif":
+            pts = np.asarray(payload.get("points"), dtype=np.float64)
+            if pts.ndim != 2 or pts.shape[1] != 3 or pts.shape[0] == 0:
+                self._on_mesh_failed(gen, "empty atoms")
+                return
+            self._ax.scatter(
+                pts[:, 0],
+                pts[:, 1],
+                pts[:, 2],
+                s=7.0 if self._embedded else 10.0,
+                c="#2a6ea6",
+                alpha=0.75,
+                depthshade=True,
+                edgecolors="none",
+            )
+            lo = np.min(pts, axis=0)
+            hi = np.max(pts, axis=0)
+            center = (lo + hi) * 0.5
+            span_v = hi - lo
+            lim = max(float(np.max(span_v)) * 0.5 * 1.08, 1e-6)
+            self._ax.set_xlim(center[0] - lim, center[0] + lim)
+            self._ax.set_ylim(center[1] - lim, center[1] + lim)
+            self._ax.set_zlim(center[2] - lim, center[2] + lim)
         else:
             self._ax.text2D(
                 0.5,
@@ -397,8 +431,18 @@ class SaxsInteractive3DWidget(QWidget):
             self._ax.set_ylim(-1, 1)
             self._ax.set_zlim(-1, 1)
 
-        t = title or f"{shape_name} (analytical)"
-        self._title = "" if self._embedded else t
+        title = str(payload.get("title") or "")
+        if kind == "cif":
+            self._last_cif_path = str(payload.get("path") or "") or None
+            self._last_bodies_shape = None
+            self._last_bodies_params = None
+        elif kind == "bodies":
+            self._last_cif_path = None
+            self._last_bodies_shape = str(payload.get("shape_name") or "") or None
+            params = payload.get("shape_params")
+            self._last_bodies_params = dict(params) if isinstance(params, dict) else None
+
+        self._title = "" if self._embedded else title
         self._apply_scaled_axes_chrome()
         if self._embedded:
             self._anim_phase = 0
@@ -409,12 +453,56 @@ class SaxsInteractive3DWidget(QWidget):
                 self._timer.start()
         else:
             self._ax.view_init(elev=self._base_elev, azim=self._base_azim)
-
         try:
             self._ax.set_box_aspect((1, 1, 1))
         except Exception:
             pass
         self._canvas.draw_idle()
+
+    def load_cif(self, path: str, *, title: Optional[str] = None) -> bool:
+        p = Path(path)
+        if not p.is_file():
+            self.clear()
+            return False
+        gen = self._bump_load_gen()
+        self._last_cif_path = str(p)
+        self._last_bodies_shape = None
+        self._last_bodies_params = None
+        self._show_loading()
+        self._start_mesh_job(
+            {
+                "gen": gen,
+                "kind": "cif",
+                "path": str(p),
+                "title": title or p.name,
+                "grid_size": self._grid_size,
+            }
+        )
+        return True
+
+    def load_bodies_analytical(
+        self,
+        shape_name: str,
+        shape_params: dict[str, float],
+        *,
+        title: Optional[str] = None,
+    ) -> bool:
+        """Isosurface from analytical BODIES shape (async marching cubes)."""
+        gen = self._bump_load_gen()
+        self._last_cif_path = None
+        self._last_bodies_shape = shape_name
+        self._last_bodies_params = dict(shape_params)
+        self._show_loading()
+        self._start_mesh_job(
+            {
+                "gen": gen,
+                "kind": "bodies",
+                "shape_name": shape_name,
+                "shape_params": dict(shape_params),
+                "title": title or f"{shape_name} (analytical)",
+                "grid_size": self._grid_size,
+            }
+        )
         return True
 
     def bodies_model(self) -> tuple[Optional[str], Optional[dict[str, float]]]:
@@ -435,69 +523,6 @@ class SaxsInteractive3DWidget(QWidget):
         self._ax.set_xlim(center[0] - lim, center[0] + lim)
         self._ax.set_ylim(center[1] - lim, center[1] + lim)
         self._ax.set_zlim(center[2] - lim, center[2] + lim)
-
-    def _load_atoms(self, atoms: Any, *, title: str) -> bool:
-        self._disconnect_click()
-        if self._embedded:
-            self._timer.stop()
-
-        mesh, min_c, max_c = _build_isosurface_poly3d(
-            atoms,
-            grid_size=self._grid_size,
-            r_max=30.0,
-            alpha=0.82 if self._embedded else 0.85,
-            edge_linewidth=0.12 if self._embedded else 0.18,
-        )
-
-        self._ax.clear()
-        self._has_model = True
-        center = np.asarray(min_c + max_c, dtype=np.float64) * 0.5
-
-        if mesh is not None:
-            self._ax.add_collection3d(mesh)
-            self._set_equal_limits(center, np.asarray(min_c), np.asarray(max_c))
-        else:
-            pts = np.asarray(atoms.positions, dtype=np.float64)
-            if pts.size == 0:
-                self.clear()
-                return False
-            self._ax.scatter(
-                pts[:, 0],
-                pts[:, 1],
-                pts[:, 2],
-                s=7.0 if self._embedded else 10.0,
-                c="#2a6ea6",
-                alpha=0.75,
-                depthshade=True,
-                edgecolors="none",
-            )
-            lo = np.min(pts, axis=0)
-            hi = np.max(pts, axis=0)
-            center = (lo + hi) * 0.5
-            span_v = hi - lo
-            lim = max(float(np.max(span_v)) * 0.5 * 1.08, 1e-6)
-            self._ax.set_xlim(center[0] - lim, center[0] + lim)
-            self._ax.set_ylim(center[1] - lim, center[1] + lim)
-            self._ax.set_zlim(center[2] - lim, center[2] + lim)
-
-        self._title = "" if self._embedded else (title or "")
-        self._apply_scaled_axes_chrome()
-        if self._embedded:
-            self._anim_phase = 0
-            self._anim_theta_deg = 0.0
-            self._ax.view_init(elev=self._base_elev, azim=self._base_azim)
-            self._click_cid = self._canvas.mpl_connect("button_press_event", self._on_canvas_click)
-            if self.isVisible() and not self._rotation_suspended:
-                self._timer.start()
-        else:
-            self._ax.view_init(elev=self._base_elev, azim=self._base_azim)
-
-        try:
-            self._ax.set_box_aspect((1, 1, 1))
-        except Exception:
-            pass
-        self._canvas.draw_idle()
-        return True
 
     def _tick_embedded_rotation(self) -> None:
         if not self._embedded or not self._has_model or self._rotation_suspended:

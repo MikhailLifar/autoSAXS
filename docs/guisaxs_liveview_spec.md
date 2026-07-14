@@ -22,7 +22,7 @@ This document specifies a new desktop GUI application (“guisaxs-liveview”) f
 
 ### 1.1 Purpose
 
-**One-sentence summary:** **guisaxs-liveview** is a single-window desktop GUI that watches a directory for **new stable `.tif` files**, processes them **sequentially** via `autosaxs` skills, and continuously updates live plots (2D + 1D) and optional **right-column analysis** outputs according to a user-selected analysis mode (monodisperse \(p(r)\), DAM, primitives, polydisperse \(d(r)\), mixture, or off).
+**One-sentence summary:** **guisaxs-liveview** is a single-window desktop GUI that watches a directory for **new stable `.tif` files**, processes them **sequentially** via `autosaxs` skills, and continuously updates live plots (2D + 1D) and optional **right-column analysis** outputs according to a user-selected analysis mode (monodisperse analysis, polydisperse \(d(r)\), mixture, or off).
 
 **Main user goal:** Start a session by choosing a **watch directory**, then iteratively configure processing during the session (calibration → buffer) while the app keeps up with incoming data using a **FIFO queue** and never freezes.
 
@@ -56,7 +56,7 @@ The GUI MUST NOT call `autosaxs.processor`, pyFAI, or subtraction/integration ro
 - `calibrate`
 - `integrate`
 - `subtract`
-- **Analysis skills (right column; subset may run per file depending on selected mode, see §8):** `fit_distances`, `fit_dammif`, `fit_bodies`, `fit_sizes`, `fit_mixture`
+- **Analysis skills (right column; subset may run per file depending on selected mode, see §8):** `fit_guinier`, `fit_distances`, `fit_dammif`, `fit_bodies`, `fit_sizes`, `fit_mixture`
 
 Preview-only reading of existing `.dat`/`.png` files for display is allowed.
 
@@ -301,15 +301,13 @@ The right column is driven by an **analysis mode** drop-down (**`Off` first**, d
 **Drop-down options (fixed order, exact user-visible labels):**
 
 1. **`Off`** — no analysis skills; idle / placeholder when uncalibrated; when calibrated, no post-integration analysis.
-2. **`Monodisperse analysis: p(r)`** — `fit_distances`; **fit comparison** + **\(p(r)\)**.
-3. **`Monodisperse analysis: DAM`** — `fit_distances` then `fit_dammif` (§8.3); **fit comparison** + **\(p(r)\)** + **interactive 3D** (§8.7).
-4. **`Monodisperse analysis: primitives`** — `fit_bodies` (optional **subset of body models**, default all; see §8.6); **experimental vs best-fit** \(I(q)\) comparison + **interactive 3D** of the **winning** shape only.
-5. **`Polydisperse analysis: d(r)`** — `fit_sizes`; **fit comparison** + **\(d(r)\)**.
-6. **`Polydisperse analysis: mixture`** — `fit_mixture`; **fit comparison** + **mixture** UI/plots as produced by the skill.
+2. **`Monodisperse analysis`** — launches a **separate wizard window** (3-pane: Guinier → GNOM → optional shape); auto pipeline runs `fit_guinier` then `fit_distances`; shape (`fit_bodies` / `fit_dammif`) on demand only via **Re-run shape** (default shape mode **None**).
+3. **`Polydisperse analysis: d(r)`** — `fit_sizes`; **fit comparison** + **\(d(r)\)**.
+4. **`Polydisperse analysis: mixture`** — `fit_mixture`; **fit comparison** + **mixture** UI/plots as produced by the skill.
 
 **Common requirements:**
 
-- **Per-mode parameter sections** (show/hide or stack) matching the active option; when `Off`, parameters for analysis skills need not be shown. For **primitives**, include UI to pick a **subset** of body models (passed through to `fit_bodies`; default = all).
+- **Monodisperse wizard:** separate large dialog (not embedded in the right column); plots from structured files (`.dat`, GNOM `.out`, `.fir`, `.cif`) only; wizard control changes **suspend** the TIFF queue until **Resume auto-processing** (enabled when idle).
 - **Latest analysis status** (Idle/Running/Failed) for the active mode.
 - **Changing the selected mode** affects **only subsequent** incoming files after the change (§9.1); the UI MAY update immediately to the new layout, but MUST NOT re-run skills for already processed files.
 
@@ -325,6 +323,10 @@ Under the watch directory, the app MUST create (if missing):
 - `averaged_proxy/` — outputs from State A
 - `averaged/` — integrated q-space outputs from State B/C
 - `subtracted/` — outputs from State C
+- `guinier/` — per-sample Guinier fits (`guinier/<stem>/`; watchdir-level `guinier/guinier.conf` for wizard interval)
+- `fit_distances/` — per-sample GNOM / \(p(r)\) outputs (`fit_distances/<stem>/`)
+- `fit_bodies/` — BODIES shape fits (`fit_bodies/<stem>/`; optional when monodisperse shape mode is BODIES)
+- `dammif/` — DAMMIF shape fits (`dammif/<stem>/`; optional when monodisperse shape mode is DAMMIF)
 - `runs/` — per-run logs/stdout/stderr/result dicts for traceability, consistent with `guisaxs_skills` conventions
 
 **Additional persistence requirement (hard):**
@@ -357,18 +359,20 @@ No mode in this spec uses a different input source than the above.
 
 The GUI MUST treat each skill as a **black box**: display artifacts, logs, and plots produced by the skill (and standard autosaxs run metadata). It MUST NOT reimplement scientific logic in-process.
 
+Cross-pane parameter handoff in the monodisperse wizard (Guinier interval → GNOM, GNOM → shape) is **orchestration**: the GUI reads YAML/metadata from prior skill outputs and passes explicit options into subsequent skill invocations. All fits still run via skills; the wizard does not perform Guinier/GNOM/BODIES/DAMMIF math in-process.
+
 ### 8.3 Per-mode skill sequence and UI mapping
 
 | Drop-down label | Skill(s) (in order) | Right-column content (minimum) |
 |-----------------|---------------------|--------------------------------|
 | `Off` | *(none)* | Mode selector + idle / placeholder |
-| `Monodisperse analysis: p(r)` | `fit_distances` | Fit comparison (\(I(q)\)); \(p(r)\) |
-| `Monodisperse analysis: DAM` | `fit_distances` → `fit_dammif` | Fit comparison; \(p(r)\); interactive 3D |
-| `Monodisperse analysis: primitives` | `fit_bodies` | Exp. vs **best** fit \(I(q)\); interactive 3D of **best** shape (same 3D widget as DAM; §8.7) |
+| `Monodisperse analysis` | `fit_guinier` → `fit_distances` (auto); optional `fit_bodies` / `fit_dammif` (manual) | Separate wizard window: Guinier, GNOM, shape (None/BODIES/DAMMIF) |
 | `Polydisperse analysis: d(r)` | `fit_sizes` | Fit comparison; \(d(r)\) |
 | `Polydisperse analysis: mixture` | `fit_mixture` | Fit comparison; mixture |
 
-**DAM mode (chaining, hard requirement):** `fit_dammif` MUST consume the **GNOM result produced by `fit_distances`** in the same per-file pipeline (same logical run / outputs as defined by autosaxs conventions). If `fit_distances` **fails**, the pipeline MUST **abort** further analysis for that file (do not run `fit_dammif`). If `fit_dammif` fails, treat the file’s analysis as failed per §5.5; aborting the chain on the first failure is acceptable.
+**Monodisperse shape chaining:** When the user selects **BODIES** or **DAMMIF** and presses **Re-run shape**, `fit_dammif` MUST consume the **GNOM result** from the latest `fit_distances` run (`best_gnom_out_path`). `fit_bodies` uses the profile curve plus Guinier/GNOM handoff parameters. Shape skills do **not** run automatically in the TIFF pipeline (default shape mode is **None**).
+
+**Monodisperse queue suspension:** Any wizard control change (Guinier interval, GNOM parameters, shape mode, body checklist) MUST **pause** the FIFO queue, **cancel** the running skill (requeue current job), and allow unlimited re-processing of the **current curve** via manual jobs. Incoming TIFFs remain queued but are not processed until the user presses **Resume auto-processing** (enabled only when no skill is running). This mirrors subtraction-wizard intervention semantics but stays embedded (explicit resume required).
 
 ### 8.4 Performance and queueing
 
@@ -381,20 +385,20 @@ Analysis skills may be slower than integration/subtraction. The implementation M
 
 ### 8.5 Failure policy within a mode
 
-For multi-step modes (e.g. DAM), failure of an earlier step implies later steps are not run for that file. Global per-file failure handling remains §5.5 (skip file, log, continue queue).
+For multi-step monodisperse auto-processing (`fit_guinier` → `fit_distances`), failure of an earlier step implies later steps are not run for that file. Shape fits are manual and do not block the auto queue. Global per-file failure handling remains §5.5 (skip file, log, continue queue).
 
 ### 8.6 `fit_bodies` — body-model subset (skill contract)
 
 The `fit_bodies` skill MUST accept an optional argument specifying which ATSAS **body** models to fit:
 
 - **Default:** `None` (or equivalent) means **all** supported models (the full canonical set used by the skill).
-- **Non-default:** a **subset** of model names (any non-empty subset of that canonical set). The liveview **primitives** mode MUST expose this as user-configurable parameters and pass them into the skill invocation.
+- **Non-default:** a **subset** of model names (any non-empty subset of that canonical set). The monodisperse wizard **BODIES** shape pane MUST expose this as user-configurable parameters and pass them into the skill invocation.
 
 Canonical names are defined in code (`BODIES_SHAPES_LIST` in `repos/autosaxs/skill/fit_bodies.py`); the UI SHOULD list the same names for multi-select.
 
 ### 8.7 Interactive 3D viewer (implementation requirement)
 
-Modes **DAM** and **primitives** require an **interactive 3D** view: the user can **rotate** the model and view it from **different angles**. The **same** 3D viewer component MUST be reused for **both** DAM and primitives (best-shape) so behavior and maintenance stay consistent. It MUST be distinct from existing **2D** curve / image viewers in `guisaxs_skills` (those remain valid for \(I(q)\), \(p(r)\), etc.).
+The monodisperse wizard **shape** pane (BODIES / DAMMIF) requires an **interactive 3D** view: the user can **rotate** the model and view it from **different angles**. The **same** 3D viewer component MUST be reused for **both** DAMMIF (`.cif`) and BODIES (analytical isosurface) so behavior and maintenance stay consistent. It MUST be distinct from existing **2D** curve / image viewers in `guisaxs_skills` (those remain valid for \(I(q)\), \(p(r)\), etc.). Wizard plots are rendered from structured artifacts (`.dat`, GNOM `.out`, `.fir`) only — not from skill-emitted PNG thumbnails.
 
 ---
 

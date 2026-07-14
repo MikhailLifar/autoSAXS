@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -15,6 +16,7 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -22,23 +24,23 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QShortcut,
     QSplitter,
+    QTreeView,
     QVBoxLayout,
     QWidget,
 )
 
-from ..logic.calibration_storage import (
+from ...services.calibration.storage import (
     calibration_subdir,
-    ensure_path_in_calibration,
     ensure_tiff_in_calibration,
 )
-from ...logic.path_normalize import normalize_pathish
-from ...logic.smart_defaults import (
+from ....logic.path_normalize import normalize_pathish
+from ....logic.smart_defaults import (
     anchor_dir_from_resolved_path_list,
     browse_start_dir_for_resolved_paths,
     find_mask_near,
 )
-from ...ui.path_field import PathField
-from .plots import DropTiffImageCanvas, Image2DPlot, mpl_navigation_toolbar
+from ....ui.path_field import PathField
+from ..widgets.plots import DropTiffImageCanvas, Image2DPlot, mpl_navigation_toolbar
 
 
 def _load_tiff_shape(path: str) -> Optional[tuple[int, int]]:
@@ -336,7 +338,6 @@ class MaskCanvas(DropTiffImageCanvas):
         self._model = model
         self._toolbar: Optional[NavigationToolbar2QT] = None
         self._mask_overlay = None
-        self._poly_fill_artists = []
         self._poly_line_artist = None
         self._poly_pts_artist = None
         self._rect_artists = []
@@ -396,12 +397,6 @@ class MaskCanvas(DropTiffImageCanvas):
             self._model.add_point(x_f, y_f)
 
     def _clear_overlay_artists(self) -> None:
-        for a in list(self._poly_fill_artists):
-            try:
-                a.remove()
-            except Exception:
-                pass
-        self._poly_fill_artists = []
         for a in (self._poly_line_artist, self._poly_pts_artist, self._mask_overlay):
             if a is None:
                 continue
@@ -440,28 +435,6 @@ class MaskCanvas(DropTiffImageCanvas):
             except Exception:
                 self._mask_overlay = None
 
-        # Completed polygon outlines
-        for poly in self._model.polygons:
-            if len(poly) < 3:
-                continue
-            xs = [p[0] for p in poly] + [poly[0][0]]
-            ys = [p[1] for p in poly] + [poly[0][1]]
-            try:
-                (ln,) = ax.plot(xs, ys, color="white", linewidth=1.0, alpha=0.9)
-                self._poly_fill_artists.append(ln)
-            except Exception:
-                pass
-
-        # Completed rectangle outlines
-        for x0, y0, x1, y1 in self._model.rects:
-            xs = [x0, x1, x1, x0, x0]
-            ys = [y0, y0, y1, y1, y0]
-            try:
-                (ln,) = ax.plot(xs, ys, color="white", linewidth=1.0, alpha=0.9, linestyle="--")
-                self._rect_artists.append(ln)
-            except Exception:
-                pass
-
         # In-progress rectangle (first corner only)
         if self._model.rect_first is not None:
             x0, y0 = self._model.rect_first
@@ -498,7 +471,6 @@ class MaskWizardDialog(QDialog):
         watchdir: Path,
         default_image_path: str = "",
         default_mask_path: str = "",
-        default_save_dir: Optional[Path] = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -615,7 +587,7 @@ class MaskWizardDialog(QDialog):
         in_lay = QVBoxLayout(grp_in)
         in_lay.addWidget(QLabel("Calibration image (.tif):"))
         in_lay.addWidget(self._image_field)
-        in_lay.addWidget(QLabel("Mask path (save destination; press Load to read a file):"))
+        in_lay.addWidget(QLabel("Mask path (press Load to read an existing file):"))
         in_lay.addWidget(self._mask_field)
         right_lay.addWidget(grp_in)
 
@@ -649,7 +621,6 @@ class MaskWizardDialog(QDialog):
         self.set_defaults(
             image_path=default_image_path,
             mask_path=default_mask_path,
-            default_save_dir=default_save_dir,
         )
         self._update_mode_controls()
 
@@ -679,7 +650,7 @@ class MaskWizardDialog(QDialog):
 
         self._btn_undo_pixel.setVisible(is_pixel)
 
-    def set_defaults(self, *, image_path: str, mask_path: str, default_save_dir: Optional[Path]) -> None:
+    def set_defaults(self, *, image_path: str, mask_path: str) -> None:
         self._applying_defaults = True
         try:
             current_img = self._image_field.text().strip()
@@ -689,12 +660,6 @@ class MaskWizardDialog(QDialog):
                 self._calib_sync_image_path = image_path.strip()
             if mask_path:
                 self._mask_field.set_text(mask_path)
-            if default_save_dir is not None and not self._mask_field.text().strip():
-                try:
-                    default = calibration_subdir(self._watchdir) / "mask.txt"
-                    self._mask_field.set_text(str(default))
-                except Exception:
-                    pass
             self._on_image_field_changed()
         finally:
             self._applying_defaults = False
@@ -904,23 +869,49 @@ class MaskWizardDialog(QDialog):
         self._canvas.refresh_overlays()
         self._mark_dirty()
 
+    def _default_save_mask_path(self) -> Path:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return (self._watchdir / f"mask-{ts}.txt").resolve()
+
+    def _browse_save_mask_path(self) -> Optional[Path]:
+        start = str(self._default_save_mask_path())
+        dlg = QFileDialog(self, "Save mask", start)
+        dlg.setAcceptMode(QFileDialog.AcceptSave)
+        dlg.setOption(QFileDialog.DontUseNativeDialog, True)
+        dlg.setViewMode(QFileDialog.Detail)
+        dlg.setMinimumSize(980, 720)
+        dlg.resize(1100, 760)
+        dlg.setNameFilter("NumPy text mask (*.txt)")
+        dlg.selectFile(Path(start).name)
+        view = dlg.findChild(QTreeView)
+        if view is not None and view.header() is not None:
+            view.header().setStretchLastSection(False)
+            view.header().setSectionResizeMode(view.header().Interactive)
+            view.header().resizeSection(0, 520)
+            view.header().resizeSection(1, 70)
+            view.header().resizeSection(2, 120)
+            view.header().resizeSection(3, 140)
+        if not dlg.exec_():
+            return None
+        selected = dlg.selectedFiles()
+        if not selected:
+            return None
+        raw = (selected[0] or "").strip()
+        if not raw:
+            return None
+        dp = Path(raw).expanduser()
+        if dp.suffix.lower() != ".txt":
+            dp = dp.with_suffix(".txt")
+        return dp.resolve()
+
     def _on_save(self) -> None:
         img = self._image_field.text().strip()
         if not img or not os.path.isfile(img):
             QMessageBox.warning(self, "Mask", "Calibration image path is missing or not a file.")
             return
 
-        dest = self._mask_field.text().strip()
-        if not dest:
-            QMessageBox.warning(self, "Mask", "Mask path is empty. Choose where to save the mask.")
-            return
-        try:
-            dp = ensure_path_in_calibration(self._watchdir, dest, default_name="mask.txt")
-        except Exception as e:
-            QMessageBox.warning(self, "Mask", str(e))
-            return
-        if dp.suffix.lower() != ".txt":
-            QMessageBox.warning(self, "Mask", "For now, please save masks as NumPy .txt.")
+        dp = self._browse_save_mask_path()
+        if dp is None:
             return
 
         m = self._model.mask_for_save()

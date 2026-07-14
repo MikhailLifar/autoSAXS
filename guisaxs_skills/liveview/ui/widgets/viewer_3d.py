@@ -8,8 +8,8 @@ from typing import Optional
 
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from ...logic.path_display import contracted_path_label
-from ...ui.saxs_interactive_3d import Interactive3DViewerDialog, SaxsInteractive3DWidget
+from ....logic.path_display import contracted_path_label
+from ....ui.saxs_interactive_3d import Interactive3DViewerDialog, SaxsInteractive3DWidget
 
 
 class LiveviewViewer3D(QWidget):

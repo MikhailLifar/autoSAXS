@@ -28,14 +28,31 @@ class AnalysisMode(str, Enum):
     """Right-column analysis mode (spec §6.4). First combo item is OFF."""
 
     OFF = "off"
-    MONODISPERSE_PR = "monodisperse_pr"
-    MONODISPERSE_DAM = "monodisperse_dam"
-    MONODISPERSE_BODIES = "monodisperse_bodies"
+    MONODISPERSE = "monodisperse"
     POLYDISPERSE_DR = "polydisperse_dr"
     POLYDISPERSE_MIXTURE = "polydisperse_mixture"
 
     def is_active(self) -> bool:
         return self != AnalysisMode.OFF
+
+    @classmethod
+    def from_legacy_value(cls, raw: str) -> AnalysisMode:
+        """Map removed monodisperse mode ids to ``MONODISPERSE``."""
+        legacy = {
+            "monodisperse_pr": cls.MONODISPERSE,
+            "monodisperse_dam": cls.MONODISPERSE,
+            "monodisperse_bodies": cls.MONODISPERSE,
+        }
+        try:
+            return cls(str(raw))
+        except ValueError:
+            return legacy.get(str(raw).strip().lower(), cls.OFF)
+
+
+class MonodisperseShapeMode(str, Enum):
+    NONE = "none"
+    DAMMIF = "dammif"
+    BODIES = "bodies"
 
 
 @dataclass
@@ -59,8 +76,9 @@ class LiveviewSessionState:
     # Subtract options as a dict (method, q_min/q_max, forms, etc.); also persisted under watchdir.
     subtract_options: Optional[Dict[str, Any]] = None
 
-    # Analysis config (replaces fit_distances-only toggle)
+    # Analysis config
     analysis_mode: AnalysisMode = AnalysisMode.OFF
+    fit_guinier_conf_path: Optional[Path] = None
     fit_distances_conf_path: Optional[Path] = None
     fit_sizes_conf_path: Optional[Path] = None
     # Optional ``mixture/liveview_mixture.yml`` from wizard Apply (persistence only).
@@ -71,6 +89,8 @@ class LiveviewSessionState:
     fit_bodies_conf_path: Optional[Path] = None
     # Subset of BODIES model names; None or [] means pipeline uses DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES.
     fit_bodies_shapes: Optional[List[str]] = None
+    monodisperse_shape_mode: MonodisperseShapeMode = MonodisperseShapeMode.NONE
+    monodisperse_wizard_params: Optional[Dict[str, Any]] = None
 
     def analysis_enabled(self) -> bool:
         return self.analysis_mode.is_active()
@@ -97,6 +117,9 @@ class LiveviewSessionState:
         self.analysis_mode = AnalysisMode.OFF
         self.fit_bodies_shapes = None
         self.fit_bodies_conf_path = None
+        self.fit_guinier_conf_path = None
+        self.monodisperse_shape_mode = MonodisperseShapeMode.NONE
+        self.monodisperse_wizard_params = None
         self.fit_mixture_options = None
 
     def reset_buffer_to_state_b(self) -> None:
@@ -107,6 +130,9 @@ class LiveviewSessionState:
         self.analysis_mode = AnalysisMode.OFF
         self.fit_bodies_shapes = None
         self.fit_bodies_conf_path = None
+        self.fit_guinier_conf_path = None
+        self.monodisperse_shape_mode = MonodisperseShapeMode.NONE
+        self.monodisperse_wizard_params = None
 
     def reset_for_new_watchdir(self, watchdir: Path) -> None:
         """Point session at a new folder and clear in-memory state (then load ``.guisaxs_liveview/`` if present)."""
@@ -120,11 +146,15 @@ class LiveviewSessionState:
         self.subtract_options = None
         self.analysis_mode = AnalysisMode.OFF
         self.fit_distances_conf_path = None
+        self.fit_guinier_conf_path = None
         self.fit_sizes_conf_path = None
         self.fit_mixture_config_path = None
         self.fit_mixture_options = None
         self.fit_bodies_shapes = None
         self.fit_bodies_conf_path = None
+        self.fit_guinier_conf_path = None
+        self.monodisperse_shape_mode = MonodisperseShapeMode.NONE
+        self.monodisperse_wizard_params = None
 
     def default_fit_distances_profile_path(self) -> Optional[Path]:
         """State B/BD: last integrated .dat. State C/CD: last subtracted .dat (else last integrated)."""

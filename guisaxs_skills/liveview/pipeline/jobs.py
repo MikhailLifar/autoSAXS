@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from ..core.models import RunRequest
+from ...core.models import RunRequest
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,11 @@ class JobStep:
 
     name: str
     request: RunRequest
+
+
+def is_manual_job(job: Job) -> bool:
+    """True for user-triggered runs (wizard reruns, calibration, manual fits, …)."""
+    return bool(job.context.get("manual"))
 
 
 @dataclass(frozen=True)

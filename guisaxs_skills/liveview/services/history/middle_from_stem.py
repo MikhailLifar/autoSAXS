@@ -8,12 +8,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict
 
-from ..output_paths import (
+from ...session.output_paths import (
     integrated_dat_path,
     subtracted_dat_path,
     tiff_output_root,
 )
-from ..state import LiveviewSessionState, LiveviewState, LiveviewWatchMode
+from ...session.state import LiveviewSessionState, LiveviewState, LiveviewWatchMode
 
 
 def integrated_dat_for_tiff_stem(

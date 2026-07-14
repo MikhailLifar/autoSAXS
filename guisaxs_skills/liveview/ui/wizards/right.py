@@ -20,12 +20,12 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from ...core.models import RunRequest
-from ...logic.skill_catalog import discover_skills
-from ...logic.session_state import SessionPathHints
-from ...ui.path_field import PathField
-from ...ui.run_controls import RunControls
-from ...ui.skill_form import SkillForm
+from ....core.models import RunRequest
+from ....logic.skill_catalog import discover_skills
+from ....logic.session_state import SessionPathHints
+from ....ui.path_field import PathField
+from ....ui.run_controls import RunControls
+from ....ui.skill_form import SkillForm
 
 try:
     from autosaxs.skill.fit_bodies import BODIES_SHAPES_LIST

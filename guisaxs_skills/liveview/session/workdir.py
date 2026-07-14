@@ -4,8 +4,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from ..core.settings import KEY_LIVEVIEW_LAST_WATCHDIR, liveview_settings
-from ..logic.workdir import select_workdir
+from ...core.settings import KEY_LIVEVIEW_LAST_WATCHDIR, liveview_settings
+from ...logic.workdir import select_workdir
 
 
 def _legacy_last_watchdir_path() -> Path:
