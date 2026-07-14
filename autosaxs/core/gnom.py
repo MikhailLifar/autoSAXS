@@ -18,6 +18,9 @@ def parse_gnom_out(source: Union[str, os.PathLike]) -> Dict[str, Any]:
     - ``total_estimate``: GNOM/DATGNOM Total Estimate, if present.
     - ``suspicious``: whether GNOM marked the solution as suspicious.
     - ``real_space_rmax``: parsed upper real-space range, if present.
+    - ``angular_range``: ``(q_min, q_max)`` from the GNOM fit angular range, if present.
+    - ``real_space_rg``: real-space Rg reported by GNOM, if present.
+    - ``real_space_i0``: real-space I(0) reported by GNOM, if present.
     - ``iq_table``: ``(q, I_exp, sigma, I_fit)`` from the scattering table, if parsed.
     - ``distribution``: ``(r_or_R, values)`` from the last suitable 3-column real-space
       distribution block, if parsed. Interpret as p(r) for DATGNOM and D(R) for
@@ -52,6 +55,43 @@ def parse_gnom_out(source: Union[str, os.PathLike]) -> Dict[str, Any]:
             return float(m.group(1))
         except ValueError:
             return None
+
+    def _parse_scientific_float(m: Optional[re.Match[str]]) -> Optional[float]:
+        if not m:
+            return None
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+
+    def parse_angular_range(text: str) -> Optional[Tuple[float, float]]:
+        m = re.search(
+            r"Angular\s+range:\s*([0-9.eE+-]+)\s*to\s*([0-9.eE+-]+)",
+            text or "",
+            flags=re.IGNORECASE,
+        )
+        if not m:
+            return None
+        try:
+            return float(m.group(1)), float(m.group(2))
+        except ValueError:
+            return None
+
+    def parse_real_space_rg(text: str) -> Optional[float]:
+        m = re.search(
+            r"Real\s+space\s+Rg:\s*([0-9.eE+-]+)",
+            text or "",
+            flags=re.IGNORECASE,
+        )
+        return _parse_scientific_float(m)
+
+    def parse_real_space_i0(text: str) -> Optional[float]:
+        m = re.search(
+            r"Real\s+space\s+I\(0\):\s*([0-9.eE+-]+)",
+            text or "",
+            flags=re.IGNORECASE,
+        )
+        return _parse_scientific_float(m)
 
     def numeric_blocks(
         lines: List[str],
@@ -183,6 +223,9 @@ def parse_gnom_out(source: Union[str, os.PathLike]) -> Dict[str, Any]:
         "total_estimate": parse_total_estimate(out_text),
         "suspicious": bool(re.search(r"SUSPICIOUS", out_text or "", flags=re.IGNORECASE)),
         "real_space_rmax": parse_real_space_rmax(out_text),
+        "angular_range": parse_angular_range(out_text),
+        "real_space_rg": parse_real_space_rg(out_text),
+        "real_space_i0": parse_real_space_i0(out_text),
         "iq_table": parse_iq_table(out_text),
         "distribution": parse_distribution(out_text),
     }

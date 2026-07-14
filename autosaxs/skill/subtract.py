@@ -316,7 +316,7 @@ def subtract_buffer(
 
     if sigma_buff is not None and sigma is not None:
         sigma_buffer_scaled = sigma_buff * scaling_factor
-        sigma_sub = sigma_buffer_scaled + sigma
+        sigma_sub = np.hypot(sigma, sigma_buffer_scaled)
     else:
         sigma_sub = None
 

@@ -19,7 +19,7 @@ from ..common import (
     expand_files_from_unwrapped,
 )
 from ..skill_wrap import _strip_sub_int_prefix, apply_batch, run_with_cache
-from .guinier import run_guinier_analysis
+from .guinier import run_fixed_interval_guinier, run_guinier_analysis, guinier_point_range_1based
 
 
 def fit_guinier(
@@ -27,6 +27,8 @@ def fit_guinier(
     output_dir: str = ".",
     *,
     config_path: Optional[ConfigPathExpressionArg] = None,
+    first: Optional[int] = None,
+    last: Optional[int] = None,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
@@ -41,6 +43,8 @@ def fit_guinier(
 
     - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
     - `output_dir` (str, default `.`): Directory where analysis outputs are written.
+    - `first` (int | None, default `None`): 1-based start point for a fixed-interval Guinier fit (requires `last`).
+    - `last` (int | None, default `None`): 1-based end point (inclusive) for a fixed-interval Guinier fit (requires `first`).
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Returns
@@ -85,6 +89,8 @@ def fit_guinier(
         output_dir=output_dir,
         event_bus=bus,
         use_cache=use_cache,
+        first=first,
+        last=last,
     )
 
 
@@ -92,6 +98,7 @@ def fit_guinier(
 @run_with_cache(
     path_keys_for_hash=["profile"],
     kwargs_for_hash=None,
+    kwargs_for_hash_keys=["first", "last"],
     include_config_in_hash=False,
 )
 def _fit_guinier_paths(
@@ -101,6 +108,8 @@ def _fit_guinier_paths(
     event_bus: Optional[EventBus] = None,
     use_cache: bool = False,
     sample_index: int = 0,
+    first: Optional[int] = None,
+    last: Optional[int] = None,
 ) -> Dict[str, Union[str, List[str]]]:
     _ = config, use_cache, sample_index
     profile = input_paths.get("profile")
@@ -122,7 +131,20 @@ def _fit_guinier_paths(
     q_arr, I_arr, sigma_arr = ensure_q_nm(q_arr, I_arr, sigma_arr)
     write_saxs_atsas_format(atsas_dat_path, q_arr, I_arr, sigma_arr)
 
-    guinier_results = run_guinier_analysis(q_arr, I_arr, sigma_arr, atsas_dat_path=atsas_dat_path)
+    user_first = first
+    user_last = last
+    if (user_first is None) != (user_last is None):
+        raise ValueError("fit_guinier: provide both first and last for fixed-interval mode, or omit both for adaptive.")
+    if user_first is not None and user_last is not None:
+        guinier_results = run_fixed_interval_guinier(
+            q_arr,
+            I_arr,
+            sigma_arr,
+            first_point_1based=int(user_first),
+            last_point_1based=int(user_last),
+        )
+    else:
+        guinier_results = run_guinier_analysis(q_arr, I_arr, sigma_arr, atsas_dat_path=atsas_dat_path)
 
     guinier_region = None
     rg_source = None
@@ -148,7 +170,19 @@ def _fit_guinier_paths(
             "n_candidates": chosen_result.get("n_candidates"),
             "sigma_rg": chosen_result.get("sigma_rg"),
             "sigma_i0": chosen_result.get("sigma_i0"),
+            "i_start": chosen_result.get("i_start"),
+            "first_point_1based": chosen_result.get("first_point_1based"),
+            "last_point_1based": chosen_result.get("last_point_1based"),
         }
+        if user_first is not None and user_last is not None:
+            guinier_region["first_point_1based"] = int(user_first)
+            guinier_region["last_point_1based"] = int(user_last)
+        else:
+            fp, lp = guinier_point_range_1based(guinier_region)
+            if fp is not None:
+                guinier_region["first_point_1based"] = fp
+            if lp is not None:
+                guinier_region["last_point_1based"] = lp
         rg_source = guinier_results["chosen"]
 
         rg_plot = guinier_region.get("rg")
@@ -212,9 +246,8 @@ def _fit_guinier_paths(
         else:
             f.write("  No valid Guinier result chosen.\n")
         f.write("\nAll Guinier methods (Rg, n_points, fit_quality, guinier_interval, validation_r2):\n")
-        for method in ("first5", "first10", "autorg", "adaptive"):
-            r = guinier_results.get(method)
-            mark = " [CHOSEN]" if guinier_results.get("chosen") == method else ""
+        if guinier_results.get("chosen") == "interval":
+            r = guinier_results.get("interval")
             if r is not None:
                 rg = r.get("Rg")
                 np_ = r.get("n_points")
@@ -230,19 +263,41 @@ def _fit_guinier_paths(
                     else "N/A"
                 )
                 val_s = f"{val_r2:.4f}" if val_r2 is not None else "N/A"
-                extra = ""
-                if method == "adaptive":
-                    rmin, rmax = r.get("rg_min"), r.get("rg_max")
-                    qc = r.get("quality_class")
-                    if rmin is not None and rmax is not None:
-                        extra += f", rg_span=[{rmin:.4g},{rmax:.4g}]"
-                    if qc is not None:
-                        extra += f", quality_class={qc}"
                 f.write(
-                    f"  {method}: Rg={rg_s} nm, n_points={np_s}, fit_quality={qq_s}, interval={int_s}, validation_r2={val_s}{extra}{mark}\n"
+                    f"  interval: Rg={rg_s} nm, n_points={np_s}, fit_quality={qq_s}, interval={int_s}, validation_r2={val_s} [CHOSEN]\n"
                 )
-            else:
-                f.write(f"  {method}: (no result)\n")
+        else:
+            for method in ("first5", "first10", "autorg", "adaptive"):
+                r = guinier_results.get(method)
+                mark = " [CHOSEN]" if guinier_results.get("chosen") == method else ""
+                if r is not None:
+                    rg = r.get("Rg")
+                    np_ = r.get("n_points")
+                    qq = r.get("fit_quality")
+                    interval = r.get("guinier_interval")
+                    val_r2 = r.get("validation_r2")
+                    rg_s = f"{rg:.4f}" if rg is not None else "N/A"
+                    np_s = str(np_) if np_ is not None else "N/A"
+                    qq_s = f"{qq:.4f}" if qq is not None else "N/A"
+                    int_s = (
+                        f"[{interval[0]:.5g}, {interval[1]:.5g}]"
+                        if interval and interval[0] is not None and interval[1] is not None
+                        else "N/A"
+                    )
+                    val_s = f"{val_r2:.4f}" if val_r2 is not None else "N/A"
+                    extra = ""
+                    if method == "adaptive":
+                        rmin, rmax = r.get("rg_min"), r.get("rg_max")
+                        qc = r.get("quality_class")
+                        if rmin is not None and rmax is not None:
+                            extra += f", rg_span=[{rmin:.4g},{rmax:.4g}]"
+                        if qc is not None:
+                            extra += f", quality_class={qc}"
+                    f.write(
+                        f"  {method}: Rg={rg_s} nm, n_points={np_s}, fit_quality={qq_s}, interval={int_s}, validation_r2={val_s}{extra}{mark}\n"
+                    )
+                else:
+                    f.write(f"  {method}: (no result)\n")
 
     with open(guinier_region_path, "w") as f:
         yaml.dump(guinier_region or {}, f, default_flow_style=False)

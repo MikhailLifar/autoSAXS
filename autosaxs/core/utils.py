@@ -517,6 +517,43 @@ def integration_comparison_metric(
     return float(np.trapz(integrand, q_common))
 
 
+def subtraction_comparison_metric(
+    q_ref: np.ndarray,
+    I_ref: np.ndarray,
+    q_sub: np.ndarray,
+    I_sub: np.ndarray,
+    q_min: Optional[float] = None,
+    q_max: Union[float, str] = 6.0,
+    eps: float = 1.0,
+) -> float:
+    """
+    Mean symmetric relative disagreement between subtracted curves on [q_min, q_max]:
+
+    (1 / (q_max - q_min)) * ∫ |I_ref - I_sub| / (|I_ref| + |I_sub| + eps) dq
+
+    One curve is interpolated to the other's q; integration uses the trapezoidal rule.
+    q_max: upper limit for integration (default 6.0). Use "auto" for min of the two curves' max q.
+    """
+    if q_min is None:
+        q_min = max(np.min(q_ref), np.min(q_sub))
+    if q_max == "auto":
+        q_max_val = min(np.max(q_ref), np.max(q_sub))
+    else:
+        q_max_val = float(q_max)
+    q_common = np.sort(np.unique(np.concatenate([q_ref, q_sub])))
+    q_common = q_common[(q_common >= q_min) & (q_common <= q_max_val)]
+    if len(q_common) < 2:
+        return np.nan
+    I_ref_interp = np.interp(q_common, q_ref, I_ref)
+    I_sub_interp = np.interp(q_common, q_sub, I_sub)
+    denom = np.abs(I_ref_interp) + np.abs(I_sub_interp) + eps
+    integrand = np.abs(I_ref_interp - I_sub_interp) / denom
+    span = q_max_val - float(q_min)
+    if span <= 0.0:
+        return np.nan
+    return float(np.trapz(integrand, q_common) / span)
+
+
 def _make_yaml_safe(obj):
     """Convert numpy/types to native Python so yaml.dump produces clean YAML."""
     if isinstance(obj, dict):
@@ -902,6 +939,25 @@ def get_image_messages(image_path, text):
 
 def calc_chi2(I0, I1, sigma_exp):
     return 1 / (I0.shape[0] - 1) * np.sum( ((I0 - I1) / sigma_exp) ** 2 )
+
+
+def chi2_average_sigma(
+    I_ref: np.ndarray,
+    I_pipe: np.ndarray,
+    sigma_ref: np.ndarray,
+    sigma_pipe: np.ndarray,
+) -> float:
+    """
+    Reduced chi-squared with quadrature-combined uncertainties:
+
+    sigma_combined = hypot(sigma_ref, sigma_pipe)
+    chi2 = (1 / (N - 1)) * sum(((I_ref - I_pipe) / sigma_combined)^2)
+    """
+    sigma_combined = np.hypot(
+        np.asarray(sigma_ref, dtype=float),
+        np.asarray(sigma_pipe, dtype=float),
+    )
+    return float(calc_chi2(I_ref, I_pipe, sigma_combined))
 
 
 def fit_annulus_min_width(

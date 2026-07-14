@@ -23,6 +23,7 @@ from .common import (
     expand_files_from_unwrapped,
 )
 from autosaxs.core.gnom import candidate_score, parse_gnom_out
+from autosaxs.core.gnom_quality import analyze_dr_quality, write_quality_passport_yaml
 
 from .gnom_fit_common import default_atsas_failure_message
 from .deps import (
@@ -90,6 +91,15 @@ def fit_sizes(
     - `fit_vs_exp_png_path` / `fit_vs_exp_png_error`: Fit-vs-experiment plot output or error message.
     - `best_dr_png_path` / `best_dr_png_error`: \(D(R)\) plot output or error message.
     - `dr_csv_path`: Path to a CSV export of \(D(R)\) (if successfully parsed).
+    - `d_avg_nm` / `d_std_nm` / `pdi`: Mean size, standard deviation, and polydispersity index σ/⟨R⟩ from D(R).
+    - `dr_peak_positions_nm` / `dr_n_peaks`: Peak positions and count in D(R).
+    - `modality_class`: `monodisperse` \| `unimodal_polydisperse` \| `multimodal` \| `unknown`.
+    - `rg_guinier_nm`: Guinier Rg (nm) when `fit_guinier` ran in-process.
+    - `total_estimate`: GNOM Total Estimate of the selected fit.
+    - `sizes_quality_class`: `high_quality` \| `acceptable` \| `failed`.
+    - `overall_status`: `HIGH QUALITY` \| `ACCEPTABLE` \| `FAILED`.
+    - `quality_rationale` / `user_tips`: Lists explaining the quality assessment.
+    - `quality_passport_path`: YAML path with the full quality block.
 
     ### Python usage
 
@@ -135,6 +145,121 @@ def fit_sizes(
         event_bus=bus,
         use_cache=use_cache,
     )
+
+
+def _dr_quality_result_keys() -> List[str]:
+    return [
+        "d_avg_nm",
+        "d_std_nm",
+        "pdi",
+        "dr_peak_positions_nm",
+        "dr_n_peaks",
+        "modality_class",
+        "rg_guinier_nm",
+        "total_estimate",
+        "sizes_quality_class",
+        "overall_status",
+        "quality_rationale",
+        "user_tips",
+        "quality_passport_path",
+    ]
+
+
+def _empty_dr_quality_fields() -> Dict[str, Any]:
+    return {
+        "d_avg_nm": None,
+        "d_std_nm": None,
+        "pdi": None,
+        "dr_peak_positions_nm": [],
+        "dr_n_peaks": 0,
+        "modality_class": "unknown",
+        "rg_guinier_nm": None,
+        "total_estimate": None,
+        "sizes_quality_class": "failed",
+        "overall_status": "FAILED",
+        "quality_rationale": [],
+        "user_tips": [],
+        "quality_passport_path": "",
+    }
+
+
+def _serialize_dr_quality_for_return(quality: Dict[str, Any]) -> Dict[str, Union[str, List[str], float]]:
+    out: Dict[str, Union[str, List[str], float]] = {}
+    for key in _dr_quality_result_keys():
+        val = quality.get(key)
+        if key in ("quality_rationale", "user_tips"):
+            out[key] = [str(x) for x in (val or [])]
+        elif key == "dr_peak_positions_nm":
+            out[key] = [str(float(x)) for x in (val or [])]
+        elif key == "dr_n_peaks":
+            out[key] = int(val or 0)
+        elif isinstance(val, (list, dict)):
+            continue
+        elif val is None:
+            out[key] = ""
+        elif isinstance(val, (int, float)):
+            out[key] = float(val)
+        else:
+            out[key] = str(val)
+    return out
+
+
+def _assess_and_write_dr_quality(
+    *,
+    output_dir: str,
+    base: str,
+    out_text: str,
+    atsas_fit_ok: bool,
+    rg_guinier_nm: Optional[float],
+    shape: str,
+    neg_frac: Optional[float],
+    event_bus: Optional[EventBus],
+) -> Dict[str, Any]:
+    parsed = parse_gnom_out(out_text)
+    quality = analyze_dr_quality(
+        parsed,
+        atsas_fit_ok=atsas_fit_ok,
+        rg_guinier_nm=rg_guinier_nm,
+        shape=shape,
+        neg_frac=neg_frac,
+    )
+    passport_path = os.path.join(output_dir, f"{base}_fit_sizes_quality.yml")
+    write_quality_passport_yaml(
+        passport_path,
+        {"pipeline_step": "8", "overall_status": quality["overall_status"], **quality},
+    )
+    quality["quality_passport_path"] = passport_path
+    if event_bus and quality.get("user_tips"):
+        for tip in quality["user_tips"][:3]:
+            event_bus.publish(EventType.MESSAGE, {"text": f"fit_sizes quality: {tip}"})
+    return quality
+
+
+def _dr_quality_markdown(quality: Dict[str, Any]) -> str:
+    lines = [
+        "\n#### Quality assessment (D(R))\n",
+        f"- **Status:** {quality.get('overall_status', 'FAILED')}",
+        f"\n- **Modality:** {quality.get('modality_class', 'unknown')}",
+    ]
+    te = quality.get("total_estimate")
+    if te is not None:
+        lines.append(f"\n- **Total Estimate:** {float(te):.3f}")
+    pdi = quality.get("pdi")
+    if pdi is not None:
+        lines.append(f"\n- **PDI:** {float(pdi):.3f}")
+    d_avg = quality.get("d_avg_nm")
+    d_std = quality.get("d_std_nm")
+    if d_avg is not None:
+        if d_std is not None:
+            lines.append(f"\n- **⟨R⟩:** {float(d_avg):.3g} ± {float(d_std):.3g} nm")
+        else:
+            lines.append(f"\n- **⟨R⟩:** {float(d_avg):.3g} nm")
+    tips = quality.get("user_tips") or []
+    if tips:
+        lines.append("\n\n**Notes:**\n")
+        for t in tips:
+            lines.append(f"- {t}\n")
+    return "".join(lines)
 
 
 def _shape_to_system(shape: str) -> int:
@@ -448,6 +573,7 @@ def _finalize_fit_sizes_failure(
     guinier_summary: Optional[Dict[str, Any]],
     event_bus: Optional[EventBus],
     detail: str = "",
+    rg_guinier_nm: Optional[float] = None,
 ) -> Dict[str, Union[str, List[str]]]:
     os.makedirs(output_dir, exist_ok=True)
     message = default_atsas_failure_message("fit_sizes")
@@ -542,6 +668,20 @@ def _finalize_fit_sizes_failure(
         summary_extra={"atsas_fit_ok": False, "failure_reason": failure_reason},
     )
 
+    quality = _assess_and_write_dr_quality(
+        output_dir=output_dir,
+        base=base,
+        out_text="",
+        atsas_fit_ok=False,
+        rg_guinier_nm=rg_guinier_nm,
+        shape=shape,
+        neg_frac=None,
+        event_bus=event_bus,
+    )
+    quality["user_tips"] = list(quality.get("user_tips") or []) + [
+        f"GNOM failed ({failure_reason})."
+    ]
+
     warn = f"fit_sizes: {message}"
     if event_bus:
         event_bus.publish(EventType.MESSAGE, {"text": f"WARNING: {warn}"})
@@ -566,6 +706,7 @@ def _finalize_fit_sizes_failure(
         "best_dr_png_path": "",
         "best_dr_png_error": message,
         "dr_csv_path": "",
+        **_serialize_dr_quality_for_return(quality),
     }
 
 
@@ -645,6 +786,13 @@ def _fit_sizes_paths(
             "chosen_interval": guinier_info.get("chosen_interval"),
             "quality_class": guinier_info.get("quality_class"),
         }
+
+    rg_guinier_nm_val: Optional[float] = None
+    if guinier_info is not None and guinier_info.get("rg") is not None:
+        try:
+            rg_guinier_nm_val = float(guinier_info["rg"])
+        except (TypeError, ValueError):
+            rg_guinier_nm_val = None
 
     if user_first is not None:
         first_pt = int(user_first)
@@ -729,6 +877,7 @@ def _fit_sizes_paths(
                 guinier_summary=guinier_summary,
                 event_bus=event_bus,
                 detail=str(exc),
+                rg_guinier_nm=rg_guinier_nm_val,
             )
         failures.extend(rmax_failures)
         candidates.extend(rmax_trials)
@@ -790,6 +939,7 @@ def _fit_sizes_paths(
             guinier_summary=guinier_summary,
             event_bus=event_bus,
             detail=stderr,
+            rg_guinier_nm=rg_guinier_nm_val,
         )
     gnom_out_paths = [best_gnom_out_path]
     best = _candidate_from_gnom_out(
@@ -809,6 +959,17 @@ def _fit_sizes_paths(
         intermediate=False,
     )
     candidates.append(best)
+
+    dr_quality = _assess_and_write_dr_quality(
+        output_dir=output_dir,
+        base=base,
+        out_text=out_text_final,
+        atsas_fit_ok=True,
+        rg_guinier_nm=rg_guinier_nm_val,
+        shape=shape,
+        neg_frac=best.get("neg_frac"),
+        event_bus=event_bus,
+    )
 
     if eval_tmp_path:
         try:
@@ -935,10 +1096,13 @@ def _fit_sizes_paths(
             ax.set_xlabel("R (nm)")
             ax.set_ylabel("D(R)")
             te = best.get("total_estimate")
+            title_parts = [f"GNOM D(R), system={system}"]
             if te is not None:
-                ax.set_title(f"GNOM D(R): system={system}, Total Estimate={float(te):.3f}")
-            else:
-                ax.set_title(f"GNOM D(R): system={system}")
+                title_parts.append(f"TE={float(te):.3f}")
+            pdi = dr_quality.get("pdi")
+            if pdi is not None and np.isfinite(float(pdi)):
+                title_parts.append(f"PDI={float(pdi):.3f}")
+            ax.set_title(", ".join(title_parts))
             ax.grid(True, alpha=0.25)
             fig.tight_layout()
             fig.savefig(png_path, dpi=150, bbox_inches="tight")
@@ -1021,6 +1185,7 @@ def _fit_sizes_paths(
         "best_dr_png_path": best_dr_png_path,
         "best_dr_png_error": best_dr_png_error,
         "dr_csv_path": dr_csv_path,
+        "quality": dr_quality,
     }
     with open(best_summary_path, "w") as f:
         yaml.dump(summary, f, default_flow_style=False)
@@ -1032,6 +1197,7 @@ def _fit_sizes_paths(
         md_parts.append(f"![Selected GNOM fit vs data]({os.path.basename(fit_vs_exp_png_path)})\n")
     if best_dr_png_path and os.path.isfile(best_dr_png_path):
         md_parts.append(f"![D(R)]({os.path.basename(best_dr_png_path)})\n")
+    md_parts.append(_dr_quality_markdown(dr_quality))
     summary_refs = [
         {"role": "fit_sizes_summary", "path": os.path.basename(best_summary_path), "format": "text"},
     ]
@@ -1043,6 +1209,11 @@ def _fit_sizes_paths(
         "fit_sizes",
         "".join(md_parts),
         summary_references=summary_refs,
+        summary_extra={
+            "sizes_quality_class": dr_quality.get("sizes_quality_class"),
+            "overall_status": dr_quality.get("overall_status"),
+            "modality_class": dr_quality.get("modality_class"),
+        },
     )
 
     return {
@@ -1059,5 +1230,6 @@ def _fit_sizes_paths(
         "best_dr_png_path": best_dr_png_path or "",
         "best_dr_png_error": best_dr_png_error or "",
         "dr_csv_path": dr_csv_path or "",
+        **_serialize_dr_quality_for_return(dr_quality),
     }
 

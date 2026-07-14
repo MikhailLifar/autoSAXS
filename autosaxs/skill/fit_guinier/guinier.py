@@ -5,7 +5,7 @@ Pure Guinier math lives in ``autosaxs.core.guinier``.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 import os
 import re
 import subprocess
@@ -18,14 +18,48 @@ from autosaxs.core.guinier import (  # noqa: F401
     ADAPTIVE_I_START_Q_MAX_NM,
     ADAPTIVE_N_MIN,
     _adaptive_i_start_allowed,
+    _classification_guinier,
     _enumerate_adaptive_candidates,
+    _fit_guinier_interval_raw,
     _guinier_fit_n_points,
+    _quality_class_from_selection,
     _select_adaptive_candidate,
     _validation_r2_or_nan,
     find_guinier_region,
     get_guinier_candidates,
     run_adaptive_guinier,
 )
+
+
+def guinier_point_range_1based(data: Optional[Dict[str, Any]]) -> Tuple[Optional[int], Optional[int]]:
+    """Derive inclusive 1-based [first, last] point indices for downstream GNOM handoff."""
+    if not isinstance(data, dict):
+        return None, None
+    fp = data.get("first_point_1based")
+    lp = data.get("last_point_1based")
+    if fp is not None and lp is not None:
+        try:
+            return int(fp), int(lp)
+        except (TypeError, ValueError):
+            pass
+    i_start = data.get("i_start")
+    n_pts = data.get("n_points")
+    if i_start is not None and n_pts is not None:
+        try:
+            i0 = int(i_start)
+            n = int(n_pts)
+            if n > 0:
+                return i0 + 1, i0 + n
+        except (TypeError, ValueError):
+            pass
+    if n_pts is not None:
+        try:
+            n = int(n_pts)
+            if n > 0:
+                return 1, n
+        except (TypeError, ValueError):
+            pass
+    return None, None
 
 
 def parse_autorg_output(text: str, q: np.ndarray) -> Optional[Dict[str, Any]]:
@@ -202,4 +236,86 @@ def run_guinier_analysis(
         out["rg_min"] = r.get("rg_min")
         out["rg_max"] = r.get("rg_max")
 
+    return out
+
+
+def run_fixed_interval_guinier(
+    q: np.ndarray,
+    I: np.ndarray,
+    sigma: Optional[np.ndarray] = None,
+    *,
+    first_point_1based: int,
+    last_point_1based: int,
+) -> Dict[str, Any]:
+    """
+    Single Guinier linear fit on a fixed 1-based point interval [first, last] (inclusive).
+
+    Returns a unified result dict compatible with ``run_guinier_analysis`` (``chosen`` = ``interval``).
+    """
+    out: Dict[str, Any] = {
+        "chosen": None,
+        "chosen_Rg": None,
+        "chosen_I0": None,
+        "chosen_quality": None,
+        "chosen_n_points": None,
+        "chosen_interval": None,
+        "chosen_validation_r2": None,
+        "classification": None,
+        "quality_class": None,
+        "selection_mode": "fixed_interval",
+        "rg_min": None,
+        "rg_max": None,
+        "interval": None,
+    }
+    first = int(first_point_1based)
+    last = int(last_point_1based)
+    if first < 1 or last < first:
+        return out
+    i_start = first - 1
+    n_pts = last - first + 1
+    fit = _fit_guinier_interval_raw(q, I, sigma, i_start, n_pts)
+    if fit is None:
+        return out
+    rg = float(fit["rg"])
+    i0 = float(fit["i0"])
+    interval_r2 = float(fit.get("interval_r2", fit.get("r_squared", 0.0)))
+    val_r2 = _validation_r2_or_nan(q, I, rg, i0)
+    val_r2_out: Optional[float]
+    if isinstance(val_r2, float) and np.isnan(val_r2):
+        val_r2_out = None
+    else:
+        val_r2_out = float(val_r2)
+    classification = _classification_guinier(q, I, rg, i0)
+    quality_class = _quality_class_from_selection(
+        "interval_r2",
+        float(val_r2) if not np.isnan(val_r2) else float("nan"),
+        interval_r2,
+        degenerate=False,
+    )
+    interval = (float(fit["q_min"]), float(fit["q_max"]))
+    interval_result = {
+        "Rg": rg,
+        "I0": i0,
+        "n_points": int(fit["n_points"]),
+        "fit_quality": interval_r2,
+        "guinier_interval": interval,
+        "interval_r2": interval_r2,
+        "validation_r2": val_r2_out,
+        "sigma_rg": fit.get("sigma_rg"),
+        "sigma_i0": fit.get("sigma_i0"),
+        "first_point_1based": first,
+        "last_point_1based": last,
+    }
+    out["interval"] = interval_result
+    out["chosen"] = "interval"
+    out["chosen_Rg"] = rg
+    out["chosen_I0"] = i0
+    out["chosen_quality"] = interval_r2
+    out["chosen_n_points"] = int(fit["n_points"])
+    out["chosen_interval"] = interval
+    out["chosen_validation_r2"] = val_r2_out
+    out["classification"] = classification
+    out["quality_class"] = quality_class
+    out["rg_min"] = rg
+    out["rg_max"] = rg
     return out

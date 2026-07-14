@@ -17,6 +17,7 @@ import numpy as np
 import yaml
 
 from autosaxs.core.gnom import candidate_score, parse_gnom_out
+from autosaxs.core.gnom_quality import analyze_pr_quality, write_quality_passport_yaml
 
 from .gnom_fit_common import default_atsas_failure_message
 from .deps import (
@@ -75,6 +76,17 @@ def fit_distances(
     - `fits_csv_path`: Path to a CSV containing candidate scores/metadata.
     - `fit_vs_exp_png_path` / `fit_vs_exp_png_error`: Fit-vs-experiment plot output or error message.
     - `best_pr_png_path` / `best_pr_png_error`: \(p(r)\) plot output or error message.
+    - `dmax_nm`: Maximum real-space size D_max (nm) from the selected GNOM/DATGNOM fit.
+    - `rg_pr_nm` / `i0_pr`: Integral Rg and I(0) from p(r) (GNOM-reported or computed from the distribution).
+    - `rg_guinier_nm`: Guinier Rg (nm) from in-process `fit_guinier` or user `rg_nm`.
+    - `q_min_fit_nm`: Low-q bound (nm⁻¹) used in the GNOM fit (from the `.out` angular range when available).
+    - `total_estimate`: GNOM Total Estimate of the selected fit.
+    - `delta_rg_pct`: \|Rg_Guinier − Rg_P(r)\| / Rg_Guinier × 100.
+    - `shannon_s_min`, `shannon_class`, `shannon_ok`, `shannon_tip`: Shannon sampling metrics and interpretation guide.
+    - `pr_quality_class`: `high_quality` \| `acceptable` \| `failed`.
+    - `overall_status`: `HIGH QUALITY` \| `ACCEPTABLE` \| `FAILED` (quality passport label).
+    - `quality_rationale` / `user_tips`: Lists explaining the quality assessment.
+    - `quality_passport_path`: YAML path with the full quality block.
 
     ### Python usage
 
@@ -114,6 +126,133 @@ def fit_distances(
         event_bus=bus,
         use_cache=use_cache,
     )
+
+
+def _pr_quality_result_keys() -> List[str]:
+    return [
+        "dmax_nm",
+        "rg_pr_nm",
+        "i0_pr",
+        "rg_guinier_nm",
+        "q_min_fit_nm",
+        "total_estimate",
+        "delta_rg_pct",
+        "shannon_s_min",
+        "shannon_class",
+        "shannon_ok",
+        "shannon_tip",
+        "pr_quality_class",
+        "overall_status",
+        "quality_rationale",
+        "user_tips",
+        "quality_passport_path",
+    ]
+
+
+def _empty_pr_quality_fields() -> Dict[str, Any]:
+    return {
+        "dmax_nm": None,
+        "rg_pr_nm": None,
+        "i0_pr": None,
+        "rg_guinier_nm": None,
+        "q_min_fit_nm": None,
+        "total_estimate": None,
+        "delta_rg_pct": None,
+        "shannon_s_min": None,
+        "shannon_class": "unknown",
+        "shannon_ok": None,
+        "shannon_tip": "",
+        "pr_quality_class": "failed",
+        "overall_status": "FAILED",
+        "quality_rationale": [],
+        "user_tips": [],
+        "quality_passport_path": "",
+    }
+
+
+def _serialize_quality_for_return(quality: Dict[str, Any]) -> Dict[str, Union[str, List[str], float]]:
+    out: Dict[str, Union[str, List[str], float]] = {}
+    for key in _pr_quality_result_keys():
+        val = quality.get(key)
+        if key in ("quality_rationale", "user_tips"):
+            out[key] = [str(x) for x in (val or [])]
+        elif key == "shannon_ok":
+            if val is None:
+                out[key] = ""
+            else:
+                out[key] = "true" if val else "false"
+        elif isinstance(val, (list, dict)):
+            continue
+        elif val is None:
+            out[key] = ""
+        elif isinstance(val, (int, float)):
+            out[key] = float(val)
+        else:
+            out[key] = str(val)
+    return out
+
+
+def _assess_and_write_pr_quality(
+    *,
+    output_dir: str,
+    base: str,
+    out_text: str,
+    atsas_fit_ok: bool,
+    rg_guinier_nm: Optional[float],
+    q_nm: np.ndarray,
+    first_pt: Optional[int],
+    suspicious: bool,
+    event_bus: Optional[EventBus],
+) -> Dict[str, Any]:
+    parsed = parse_gnom_out(out_text)
+    quality = analyze_pr_quality(
+        parsed,
+        atsas_fit_ok=atsas_fit_ok,
+        rg_guinier_nm=rg_guinier_nm,
+        q_nm=q_nm,
+        first_pt_1based=first_pt,
+        suspicious=suspicious,
+    )
+    passport_path = os.path.join(output_dir, f"{base}_fit_distances_quality.yml")
+    passport_doc = {
+        "pipeline_step": "6-7",
+        "overall_status": quality["overall_status"],
+        **quality,
+    }
+    write_quality_passport_yaml(passport_path, passport_doc)
+    quality["quality_passport_path"] = passport_path
+    if event_bus and quality.get("user_tips"):
+        for tip in quality["user_tips"][:3]:
+            event_bus.publish(EventType.MESSAGE, {"text": f"fit_distances quality: {tip}"})
+    return quality
+
+
+def _pr_quality_markdown(quality: Dict[str, Any]) -> str:
+    lines = [
+        "\n#### Quality assessment (p(r))\n",
+        f"- **Status:** {quality.get('overall_status', 'FAILED')}",
+    ]
+    te = quality.get("total_estimate")
+    if te is not None:
+        lines.append(f"\n- **Total Estimate:** {float(te):.3f}")
+    drg = quality.get("delta_rg_pct")
+    if drg is not None:
+        lines.append(f"\n- **ΔRg:** {float(drg):.1f}%")
+    s_min = quality.get("shannon_s_min")
+    if s_min is not None:
+        lines.append(
+            f"\n- **Shannon s_min:** {float(s_min):.3f} ({quality.get('shannon_class', 'unknown')})"
+        )
+    tip = quality.get("shannon_tip")
+    if isinstance(tip, str) and tip.strip():
+        lines.append(f"\n\n{tip.strip()}\n")
+    tips = quality.get("user_tips") or []
+    other = [t for t in tips if t != tip]
+    if other:
+        lines.append("\n**Notes:**\n")
+        for t in other:
+            lines.append(f"- {t}\n")
+    return "".join(lines)
 
 
 def _pr_metrics(r: np.ndarray, p: np.ndarray) -> Dict[str, Any]:
@@ -452,6 +591,9 @@ def _finalize_fit_distances_failure(
     guinier_summary: Optional[Dict[str, Any]],
     event_bus: Optional[EventBus],
     detail: str = "",
+    q_nm: Optional[np.ndarray] = None,
+    first_pt: Optional[int] = None,
+    rg_guinier_nm: Optional[float] = None,
 ) -> Dict[str, Union[str, List[str]]]:
     """Write failure artifacts and return a non-throwing skill result dict."""
     os.makedirs(output_dir, exist_ok=True)
@@ -547,6 +689,23 @@ def _finalize_fit_distances_failure(
         summary_extra={"atsas_fit_ok": False, "failure_reason": failure_reason},
     )
 
+    quality = _empty_pr_quality_fields()
+    if q_nm is not None:
+        quality = _assess_and_write_pr_quality(
+            output_dir=output_dir,
+            base=base,
+            out_text="",
+            atsas_fit_ok=False,
+            rg_guinier_nm=rg_guinier_nm,
+            q_nm=np.asarray(q_nm, dtype=float),
+            first_pt=first_pt,
+            suspicious=False,
+            event_bus=event_bus,
+        )
+        quality["user_tips"] = list(quality.get("user_tips") or []) + [
+            f"DATGNOM failed ({failure_reason})."
+        ]
+
     warn = f"fit_distances: {message}"
     if event_bus:
         event_bus.publish(EventType.MESSAGE, {"text": f"WARNING: {warn}"})
@@ -570,6 +729,7 @@ def _finalize_fit_distances_failure(
         "fit_vs_exp_png_error": message,
         "best_pr_png_path": "",
         "best_pr_png_error": message,
+        **_serialize_quality_for_return(quality),
     }
 
 
@@ -636,6 +796,13 @@ def _fit_distances_paths(
             "chosen_interval": guinier_info.get("chosen_interval"),
             "quality_class": guinier_info.get("quality_class"),
         }
+
+    rg_guinier_nm_val: Optional[float] = None
+    if guinier_info is not None and guinier_info.get("rg") is not None:
+        try:
+            rg_guinier_nm_val = float(guinier_info["rg"])
+        except (TypeError, ValueError):
+            rg_guinier_nm_val = None
 
     if user_first is not None:
         first_pt = int(user_first)
@@ -706,6 +873,9 @@ def _fit_distances_paths(
                 guinier_summary=guinier_summary,
                 event_bus=event_bus,
                 detail=str(exc),
+                q_nm=q_nm,
+                first_pt=first_pt,
+                rg_guinier_nm=rg_guinier_nm_val,
             )
         failures.extend(rg_failures)
         candidates.extend(rg_trials)
@@ -763,6 +933,9 @@ def _fit_distances_paths(
             guinier_summary=guinier_summary,
             event_bus=event_bus,
             detail=stderr,
+            q_nm=q_nm,
+            first_pt=first_pt,
+            rg_guinier_nm=rg_guinier_nm_val,
         )
     gnom_out_paths.append(out_path_final)
     best_gnom_out_path = out_path_final
@@ -778,6 +951,18 @@ def _fit_distances_paths(
         intermediate=False,
     )
     candidates.append(best)
+
+    pr_quality = _assess_and_write_pr_quality(
+        output_dir=output_dir,
+        base=base,
+        out_text=out_text,
+        atsas_fit_ok=True,
+        rg_guinier_nm=rg_guinier_nm_val,
+        q_nm=q_nm,
+        first_pt=first_pt,
+        suspicious=bool(best.get("suspicious")),
+        event_bus=event_bus,
+    )
 
     if eval_tmp_path:
         try:
@@ -929,12 +1114,15 @@ def _fit_distances_paths(
             ax.set_ylabel("p(r)")
             rg_nm_v = c.get("rg_nm")
             te = c.get("total_estimate")
-            if rg_nm_v is not None and te is not None:
-                ax.set_title(f"DATGNOM p(r): Rg={float(rg_nm_v):.4f} nm, Total Estimate={float(te):.3f}")
-            elif rg_nm_v is not None:
-                ax.set_title(f"DATGNOM p(r): Rg={float(rg_nm_v):.4f} nm")
-            else:
-                ax.set_title("DATGNOM p(r)")
+            title_parts = ["DATGNOM p(r)"]
+            if rg_nm_v is not None:
+                title_parts.append(f"Rg={float(rg_nm_v):.4f} nm")
+            if te is not None:
+                title_parts.append(f"TE={float(te):.3f}")
+            drg = pr_quality.get("delta_rg_pct")
+            if drg is not None and np.isfinite(float(drg)):
+                title_parts.append(f"ΔRg={float(drg):.1f}%")
+            ax.set_title(", ".join(title_parts))
             ax.grid(True, alpha=0.25)
             fig.tight_layout()
             fig.savefig(png_path, dpi=150, bbox_inches="tight")
@@ -1022,6 +1210,7 @@ def _fit_distances_paths(
         "fit_vs_exp_png_error": fit_vs_exp_png_error,
         "best_pr_png_path": best_pr_png_path,
         "best_pr_png_error": best_pr_png_error,
+        "quality": pr_quality,
     }
     with open(best_summary_path, "w") as f:
         yaml.dump(summary, f, default_flow_style=False)
@@ -1033,6 +1222,7 @@ def _fit_distances_paths(
         md_parts.append(f"![Fit vs experiment]({os.path.basename(fit_vs_exp_png_path)})\n")
     if best_pr_png_path and os.path.isfile(best_pr_png_path):
         md_parts.append(f"![p(r)]({os.path.basename(best_pr_png_path)})\n")
+    md_parts.append(_pr_quality_markdown(pr_quality))
     summary_refs = [
         {"role": "fit_distances_summary", "path": os.path.basename(best_summary_path), "format": "text"},
         {
@@ -1049,6 +1239,10 @@ def _fit_distances_paths(
         "fit_distances",
         "".join(md_parts),
         summary_references=summary_refs,
+        summary_extra={
+            "pr_quality_class": pr_quality.get("pr_quality_class"),
+            "overall_status": pr_quality.get("overall_status"),
+        },
     )
 
     return {
@@ -1064,5 +1258,6 @@ def _fit_distances_paths(
         "fit_vs_exp_png_error": fit_vs_exp_png_error or "",
         "best_pr_png_path": best_pr_png_path or "",
         "best_pr_png_error": best_pr_png_error or "",
+        **_serialize_quality_for_return(pr_quality),
     }
 
