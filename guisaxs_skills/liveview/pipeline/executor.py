@@ -23,27 +23,32 @@ from ..ingest.tiff_revision import (
 from ..session.output_paths import (
     averaged_dir,
     averaged_proxy_dir,
-    fit_sizes_dir,
     integrated_dat_path,
-    mixture_dir,
     subtracted_dat_path,
     subtracted_dir,
     tiff_output_root,
 )
 from ..session.state import (
-    AnalysisMode,
     LiveviewSessionState,
     LiveviewState,
     LiveviewWatchMode,
     MonodisperseShapeMode,
+    PolydisperseMixtureMode,
 )
 from ..services.artifacts import merge_fit_distances_quality_fields
 from .jobs import Job, JobStep, PlaceholderError, is_manual_job, resolve_request_placeholders
 from .monodisperse_pipeline import (
+    FIT_GUINIER_MONO_STEP,
+    FIT_GUINIER_POLY_STEP,
     MonodispersePipelineParts,
     build_monodisperse_steps,
     job_includes_shape,
     profile_sample_stem,
+)
+from .polydisperse_pipeline import (
+    PolydispersePipelineParts,
+    build_polydisperse_steps,
+    job_includes_mixture,
 )
 from .queue import FIFOQueue, JobQueue, QueueItem, RevisionEnqueueResult
 
@@ -253,19 +258,22 @@ class LiveviewJobExecutor(QObject):
         buffer_dat: str,
         scaling_factor: float,
         priority: int = 100,
+        use_ui_params: bool = False,
     ) -> Job:
         """
         Build a high-priority job to rerun subtraction for a single displayed file and optionally rerun analysis.
 
         `sample_dat` is expected to be `averaged/int_<stem>.dat`.
         Output overwrites `subtracted/sub_<stem>.dat` by autosaxs naming convention.
+
+        When ``use_ui_params`` is True, analysis steps use pane/session values already synced
+        from the open analysis windows (explicit Guinier interval when set; omit when auto).
         """
         sp = (sample_dat or "").strip()
         bp = (buffer_dat or "").strip()
         stem = Path(sp).stem
         if stem.startswith("int_"):
             stem = stem[len("int_") :]
-        wd = self._state.watchdir
         root = self._subtraction_output_root(sample_dat=sp)
         subdir = subtracted_dir(root)
         subdir.mkdir(parents=True, exist_ok=True)
@@ -283,12 +291,18 @@ class LiveviewJobExecutor(QObject):
             )
         ]
         profile = str(subtracted_dat_path(root=root, stem=stem).resolve())
-        steps.extend(self._analysis_steps_for_profile(profile, output_root=root))
+        steps.extend(
+            self._analysis_steps_for_profile(
+                profile,
+                output_root=root,
+                use_ui_params=bool(use_ui_params),
+            )
+        )
         return Job(
             id=f"rerun_sub:{stem}:{time.time_ns()}",
             priority=int(priority),
             steps=steps,
-            context={"tiff_stem": stem, "profile_path": profile},
+            context={"manual": True, "tiff_stem": stem, "profile_path": profile},
         )
 
     def _append_session_tiff(self, path: str) -> None:
@@ -438,6 +452,8 @@ class LiveviewJobExecutor(QObject):
             self.session_file_completed.emit(tiff_path)
             self._last_processed = tiff_path
         followup = self._shape_followup_job_if_needed(job=job, ok=ok)
+        if followup is None:
+            followup = self._mixture_followup_job_if_needed(job=job, ok=ok)
         self._current_job = None
         self._job_step_idx = 0
         self._pending_step_name = None
@@ -452,7 +468,7 @@ class LiveviewJobExecutor(QObject):
         """
         if not ok or is_manual_job(job):
             return None
-        if self._state.analysis_mode != AnalysisMode.MONODISPERSE:
+        if not self._state.monodisperse_armed:
             return None
         if self._state.monodisperse_shape_mode == MonodisperseShapeMode.NONE:
             return None
@@ -464,7 +480,7 @@ class LiveviewJobExecutor(QObject):
         prof = str(job.context.get("profile_path") or "").strip()
         if not prof:
             for step in job.steps:
-                if step.name in ("fit_guinier", "fit_distances") and step.request.positional:
+                if step.name in (FIT_GUINIER_MONO_STEP, "fit_distances") and step.request.positional:
                     prof = str(step.request.positional[0]).strip()
                     break
         if not prof:
@@ -499,6 +515,63 @@ class LiveviewJobExecutor(QObject):
             context={
                 "monodisperse": True,
                 "shape_followup": True,
+                "profile_path": str(Path(prof).expanduser().resolve()),
+                "tiff_stem": stem,
+                "output_root": str(root),
+                "tiff_path": str(job.context.get("tiff_path") or "").strip(),
+            },
+        )
+
+    def _mixture_followup_job_if_needed(self, *, job: Job, ok: bool) -> Optional[Job]:
+        """
+        If an auto job finished without a mixture step but mixture mode is now set
+        (e.g. user enabled Mixture mid-run), enqueue a mixture-only follow-up.
+        """
+        if not ok or is_manual_job(job):
+            return None
+        if not self._state.polydisperse_armed:
+            return None
+        if self._state.polydisperse_mixture_mode == PolydisperseMixtureMode.NONE:
+            return None
+        if job_includes_mixture(list(job.steps)):
+            return None
+        fs = self._step_results.get("fit_sizes")
+        if not isinstance(fs, dict) or not is_atsas_fit_ok(fs):
+            return None
+        prof = str(job.context.get("profile_path") or "").strip()
+        if not prof:
+            for step in job.steps:
+                if step.name in (FIT_GUINIER_POLY_STEP, FIT_GUINIER_MONO_STEP, "fit_sizes") and step.request.positional:
+                    prof = str(step.request.positional[0]).strip()
+                    break
+        if not prof:
+            return None
+        try:
+            root_raw = job.context.get("output_root")
+            root = (
+                Path(str(root_raw)).expanduser().resolve()
+                if root_raw
+                else self._state.watchdir.expanduser().resolve()
+            )
+        except OSError:
+            root = self._state.watchdir.expanduser().resolve()
+        steps = build_polydisperse_steps(
+            prof,
+            output_root=root,
+            state=self._state,
+            parts=PolydispersePipelineParts.MIXTURE_ONLY,
+            load_yaml=self._load_yaml_options,
+        )
+        if not steps:
+            return None
+        stem = profile_sample_stem(prof)
+        return Job(
+            id=f"poly_mixture_followup:{stem}:{time.time_ns()}",
+            priority=0,
+            steps=steps,
+            context={
+                "polydisperse": True,
+                "mixture_followup": True,
                 "profile_path": str(Path(prof).expanduser().resolve()),
                 "tiff_stem": stem,
                 "output_root": str(root),
@@ -624,12 +697,11 @@ class LiveviewJobExecutor(QObject):
         if isinstance(or_raw, str) and or_raw.strip():
             bases.append(Path(or_raw.strip()).expanduser().resolve())
         for step in job.steps:
-            if step.name != "fit_guinier":
+            if step.name not in (FIT_GUINIER_MONO_STEP, FIT_GUINIER_POLY_STEP):
                 continue
             od = (step.request.options or {}).get("output_dir")
             if isinstance(od, str) and od.strip():
                 bases.append(Path(od.strip()).expanduser().resolve())
-            break
         bases.append(self._state.watchdir.expanduser().resolve())
         seen: set[str] = set()
         out: List[Path] = []
@@ -677,6 +749,30 @@ class LiveviewJobExecutor(QObject):
         if lp is not None:
             out["last_point_1based"] = lp
         return out
+
+    def build_polydisperse_manual_job(
+        self,
+        *,
+        profile_abs: str,
+        steps: List[JobStep],
+        output_root: Optional[Path] = None,
+        priority: int = 150,
+    ) -> Job:
+        prof = str(Path(profile_abs).expanduser().resolve())
+        stem = profile_sample_stem(prof)
+        root = (output_root or self._state.watchdir).expanduser().resolve()
+        return Job(
+            id=f"poly_manual:{stem}:{time.time_ns()}",
+            priority=int(priority),
+            steps=steps,
+            context={
+                "manual": True,
+                "polydisperse": True,
+                "profile_path": prof,
+                "tiff_stem": stem,
+                "output_root": str(root),
+            },
+        )
 
     def build_monodisperse_manual_job(
         self,
@@ -806,7 +902,10 @@ class LiveviewJobExecutor(QObject):
         self._handling_skill_outcome = True
         try:
             # Push raw result to UI for job-driven steps.
-            self.latest_artifacts.emit(outcome.result)
+            ui_result = dict(outcome.result or {})
+            if step_name:
+                ui_result["_liveview_step"] = step_name
+            self.latest_artifacts.emit(ui_result)
             self._sync_last_paths_from_result(outcome.result)
             self.skill_finished.emit(outcome)
 
@@ -814,7 +913,7 @@ class LiveviewJobExecutor(QObject):
             res = dict(outcome.result or {})
             if step_name == "fit_distances":
                 res = self._enrich_fit_distances_result(res)
-            if step_name == "fit_guinier":
+            if step_name in (FIT_GUINIER_MONO_STEP, FIT_GUINIER_POLY_STEP):
                 res = self._enrich_fit_guinier_result(res, resolve_bases=self._artifact_resolve_bases_for_job())
             if step_name:
                 self._step_results[step_name] = res
@@ -950,51 +1049,47 @@ class LiveviewJobExecutor(QObject):
             context={"tiff_path": tp, "tiff_stem": stem, "output_root": str(root.resolve())},
         )
 
-    def _analysis_steps_for_profile(self, profile_abs: str, *, output_root: Path) -> List[JobStep]:
-        mode = self._state.analysis_mode
-        if not mode.is_active():
+    def _analysis_steps_for_profile(
+        self,
+        profile_abs: str,
+        *,
+        output_root: Path,
+        use_ui_params: bool = False,
+    ) -> List[JobStep]:
+        if not self._state.analysis_enabled():
             return []
-        wd = self._state.watchdir
         prof = str(Path(profile_abs).expanduser().resolve())
-
-        if mode == AnalysisMode.MONODISPERSE:
-            return build_monodisperse_steps(
-                prof,
-                output_root=output_root,
-                state=self._state,
-                parts=MonodispersePipelineParts.FULL,
-                load_yaml=self._load_yaml_options,
-                guinier_handoff=None,
-            )
-
-        if mode == AnalysisMode.POLYDISPERSE_DR:
-            outdir = fit_sizes_dir(output_root)
-            outdir.mkdir(parents=True, exist_ok=True)
-            opts: dict = {}
-            if self._state.fit_sizes_conf_path is not None:
-                opts.update(self._load_yaml_options(self._state.fit_sizes_conf_path))
-            opts.pop("output_dir", None)
-            opts.pop("use_cache", None)
-            opts["output_dir"] = str(outdir.resolve())
-            opts["use_cache"] = False
-            return [JobStep(name="fit_sizes", request=RunRequest("fit_sizes", [prof], opts))]
-
-        if mode == AnalysisMode.POLYDISPERSE_MIXTURE:
-            outdir = mixture_dir(output_root)
-            outdir.mkdir(parents=True, exist_ok=True)
-            opts: dict = {"output_dir": str(outdir.resolve()), "use_cache": False}
-            opts.update(self._fit_mixture_run_options())
-            return [
-                JobStep(
-                    name="fit_mixture",
-                    request=RunRequest("fit_mixture", [prof], opts),
+        steps: List[JobStep] = []
+        # When driven from open analysis panes, pass fixed_guinier_interval so
+        # explicit first/last from session are used; omit when still (auto).
+        fixed = bool(use_ui_params)
+        if self._state.monodisperse_armed:
+            steps.extend(
+                build_monodisperse_steps(
+                    prof,
+                    output_root=output_root,
+                    state=self._state,
+                    parts=MonodispersePipelineParts.FULL,
+                    load_yaml=self._load_yaml_options,
+                    guinier_handoff=None,
+                    fixed_guinier_interval=fixed,
                 )
-            ]
-
-        return []
+            )
+        if self._state.polydisperse_armed:
+            steps.extend(
+                build_polydisperse_steps(
+                    prof,
+                    output_root=output_root,
+                    state=self._state,
+                    parts=PolydispersePipelineParts.FULL,
+                    load_yaml=self._load_yaml_options,
+                    fixed_guinier_interval=fixed,
+                )
+            )
+        return steps
 
     def _fit_mixture_run_options(self) -> dict:
-        """Skill options from wizard Apply; omit empty values and persistence-only keys."""
+        """Skill options from window Apply; omit empty values and persistence-only keys."""
         raw = self._state.fit_mixture_options
         if not isinstance(raw, dict):
             return {}

@@ -6,7 +6,7 @@ from typing import Any
 
 import yaml
 
-from .....session.output_paths import fit_distances_dir, guinier_dir
+from .....session.output_paths import fit_distances_dir, guinier_mono_dir
 from .....session.state import LiveviewSessionState, MonodisperseShapeMode
 
 
@@ -18,8 +18,12 @@ class MonodisperseConfigSync:
     def sync_params_to_state(self) -> None:
         wp = dict(self._state.monodisperse_wizard_params or {})
         g_first, g_last = self._wizard.guinier_pane.first_last()
-        wp["guinier_first"] = g_first
-        wp["guinier_last"] = g_last
+        if g_first is None or g_last is None:
+            wp.pop("guinier_first", None)
+            wp.pop("guinier_last", None)
+        else:
+            wp["guinier_first"] = g_first
+            wp["guinier_last"] = g_last
         # Drop legacy shared keys so Guinier interval cannot leak into DATGNOM.
         wp.pop("first", None)
         wp.pop("last", None)
@@ -37,7 +41,7 @@ class MonodisperseConfigSync:
 
     def persist_confs(self) -> None:
         wd = self._state.watchdir
-        gdir = guinier_dir(wd)
+        gdir = guinier_mono_dir(wd)
         gdir.mkdir(parents=True, exist_ok=True)
         gpath = gdir / "guinier.conf"
         dpath = fit_distances_dir(wd) / "fit_distances.conf"
@@ -52,10 +56,9 @@ class MonodisperseConfigSync:
             except Exception:
                 g_first, g_last = None, None
         gopts = {}
-        if g_first is not None:
-            gopts["first"] = g_first
-        if g_last is not None:
-            gopts["last"] = g_last
+        if g_first is not None and g_last is not None:
+            gopts["first"] = int(g_first)
+            gopts["last"] = int(g_last)
         # Always take DATGNOM options from the GNOM pane so Guinier interval cannot leak in.
         try:
             dopts = dict(self._wizard.gnom_pane.gnom_params())
@@ -63,7 +66,7 @@ class MonodisperseConfigSync:
             dopts = {k: wp[k] for k in ("rg_nm", "first", "last", "smooth") if wp.get(k) is not None}
         try:
             gpath.write_text(yaml.safe_dump(gopts, sort_keys=True), encoding="utf-8")
-            self._state.fit_guinier_conf_path = gpath
+            self._state.fit_guinier_mono_conf_path = gpath
         except OSError:
             pass
         try:

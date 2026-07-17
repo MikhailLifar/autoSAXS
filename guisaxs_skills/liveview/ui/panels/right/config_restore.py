@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 import yaml
 
-from ....session.state import AnalysisMode, LiveviewSessionState
+from ....session.state import LiveviewSessionState
 from ...wizards.right import LIVEVIEW_MIXTURE_YML_NAME
 
 try:
@@ -56,18 +56,46 @@ class RightPanelConfigRestore:
 
     def restore_fit_guinier(self) -> None:
         wd = self._state.watchdir
-        if self._state.fit_guinier_conf_path is None:
-            for conf in (wd / "guinier" / "guinier.conf", wd / "runs" / "guinier.conf"):
+        if self._state.fit_guinier_mono_conf_path is None:
+            for conf in (
+                wd / "guinier_mono" / "guinier.conf",
+                wd / "guinier" / "guinier.conf",
+                wd / "runs" / "guinier.conf",
+            ):
                 if conf.is_file():
-                    self._state.fit_guinier_conf_path = conf
+                    self._state.fit_guinier_mono_conf_path = conf
                     break
-        gpath = self._state.fit_guinier_conf_path
+        gpath = self._state.fit_guinier_mono_conf_path
         if gpath is not None and gpath.is_file():
             self._merge_monodisperse_conf(
                 gpath,
                 keys=("first", "last"),
                 rename={"first": "guinier_first", "last": "guinier_last"},
             )
+
+        if self._state.fit_guinier_poly_conf_path is None:
+            for conf in (wd / "guinier_poly" / "guinier.conf",):
+                if conf.is_file():
+                    self._state.fit_guinier_poly_conf_path = conf
+                    break
+        ppath = self._state.fit_guinier_poly_conf_path
+        if ppath is not None and ppath.is_file():
+            self._merge_polydisperse_guinier_conf(ppath)
+
+    def _merge_polydisperse_guinier_conf(self, path: Path) -> None:
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, TypeError, yaml.YAMLError):
+            return
+        if not isinstance(data, dict):
+            return
+        wp = dict(self._state.polydisperse_window_params or {})
+        if data.get("first") is not None:
+            wp["guinier_first"] = data["first"]
+        if data.get("last") is not None:
+            wp["guinier_last"] = data["last"]
+        if wp:
+            self._state.polydisperse_window_params = wp
 
     def restore_fit_distances(self) -> None:
         if self._state.fit_distances_conf_path is not None:
@@ -101,11 +129,29 @@ class RightPanelConfigRestore:
             self._state.monodisperse_wizard_params = wp
 
     def restore_fit_sizes(self) -> None:
-        if self._state.fit_sizes_conf_path is not None:
+        wd = self._state.watchdir
+        if self._state.fit_sizes_conf_path is None:
+            p = wd / "fit_sizes" / "fit_sizes.conf"
+            if p.is_file():
+                self._state.fit_sizes_conf_path = p
+        spath = self._state.fit_sizes_conf_path
+        if spath is not None and spath.is_file():
+            self._merge_polydisperse_sizes_conf(spath)
+
+    def _merge_polydisperse_sizes_conf(self, path: Path) -> None:
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, TypeError, yaml.YAMLError):
             return
-        p = self._state.watchdir / "fit_sizes" / "fit_sizes.conf"
-        if p.is_file():
-            self._state.fit_sizes_conf_path = p
+        if not isinstance(data, dict):
+            return
+        wp = dict(self._state.polydisperse_window_params or {})
+        for key in ("first", "last", "rmin_nm", "rmax_nm", "alpha"):
+            if data.get(key) is not None:
+                wp[key] = data[key]
+        if wp.get("first") is None:
+            wp["first"] = 1
+        self._state.polydisperse_window_params = wp
 
     def restore_bodies(self) -> None:
         if self._state.fit_bodies_conf_path is not None:
@@ -173,7 +219,13 @@ class RightPanelConfigRestore:
             if not isinstance(m, dict):
                 return
             self._state.fit_mixture_options = {str(k): v for k, v in m.items()}
-            keys = ("max_nph", "maxit", "r_min", "r_max", "poly_min", "poly_max")
+            # Pane exposes max_nph, optional r_max/poly_max, optional q bounds.
+            keys = ("max_nph", "r_max", "poly_max")
             self._fit_mixture_saved_mixture_params = {k: m[k] for k in keys if k in m}
+            wp = dict(self._state.polydisperse_window_params or {})
+            mix = {k: m[k] for k in (*keys, "q_min_nm", "q_max_nm") if k in m}
+            if mix:
+                wp["mixture"] = mix
+                self._state.polydisperse_window_params = wp
         except Exception:
             pass

@@ -24,35 +24,15 @@ class LiveviewWatchMode(str, Enum):
     TREE = "tree"
 
 
-class AnalysisMode(str, Enum):
-    """Right-column analysis mode (spec §6.4). First combo item is OFF."""
-
-    OFF = "off"
-    MONODISPERSE = "monodisperse"
-    POLYDISPERSE_DR = "polydisperse_dr"
-    POLYDISPERSE_MIXTURE = "polydisperse_mixture"
-
-    def is_active(self) -> bool:
-        return self != AnalysisMode.OFF
-
-    @classmethod
-    def from_legacy_value(cls, raw: str) -> AnalysisMode:
-        """Map removed monodisperse mode ids to ``MONODISPERSE``."""
-        legacy = {
-            "monodisperse_pr": cls.MONODISPERSE,
-            "monodisperse_dam": cls.MONODISPERSE,
-            "monodisperse_bodies": cls.MONODISPERSE,
-        }
-        try:
-            return cls(str(raw))
-        except ValueError:
-            return legacy.get(str(raw).strip().lower(), cls.OFF)
-
-
 class MonodisperseShapeMode(str, Enum):
     NONE = "none"
     DAMMIF = "dammif"
     BODIES = "bodies"
+
+
+class PolydisperseMixtureMode(str, Enum):
+    NONE = "none"
+    MIXTURE = "mixture"
 
 
 @dataclass
@@ -76,9 +56,11 @@ class LiveviewSessionState:
     # Subtract options as a dict (method, q_min/q_max, forms, etc.); also persisted under watchdir.
     subtract_options: Optional[Dict[str, Any]] = None
 
-    # Analysis config
-    analysis_mode: AnalysisMode = AnalysisMode.OFF
-    fit_guinier_conf_path: Optional[Path] = None
+    # Analysis arming: True while the corresponding analysis window is open.
+    monodisperse_armed: bool = False
+    polydisperse_armed: bool = False
+    fit_guinier_mono_conf_path: Optional[Path] = None
+    fit_guinier_poly_conf_path: Optional[Path] = None
     fit_distances_conf_path: Optional[Path] = None
     fit_sizes_conf_path: Optional[Path] = None
     # Optional ``mixture/liveview_mixture.yml`` from wizard Apply (persistence only).
@@ -91,9 +73,11 @@ class LiveviewSessionState:
     fit_bodies_shapes: Optional[List[str]] = None
     monodisperse_shape_mode: MonodisperseShapeMode = MonodisperseShapeMode.NONE
     monodisperse_wizard_params: Optional[Dict[str, Any]] = None
+    polydisperse_mixture_mode: PolydisperseMixtureMode = PolydisperseMixtureMode.NONE
+    polydisperse_window_params: Optional[Dict[str, Any]] = None
 
     def analysis_enabled(self) -> bool:
-        return self.analysis_mode.is_active()
+        return bool(self.monodisperse_armed or self.polydisperse_armed)
 
     def current_state(self) -> LiveviewState:
         calibrated = self.integrator_dir is not None
@@ -106,7 +90,7 @@ class LiveviewSessionState:
         return LiveviewState.BD if ae else LiveviewState.B
 
     def reset_calibration_to_state_a(self) -> None:
-        """Clear calibration (and buffer); session becomes state A; call sites should set analysis to Off."""
+        """Clear calibration (and buffer); session becomes state A; disarm analysis windows."""
         self.integrator_dir = None
         self.calibration_curve_plot_path = None
         self.calibration_refined_yml_path = None
@@ -114,25 +98,33 @@ class LiveviewSessionState:
         self.subtract_options = None
         self.last_integrated_dat_path = None
         self.last_subtracted_dat_path = None
-        self.analysis_mode = AnalysisMode.OFF
+        self.monodisperse_armed = False
+        self.polydisperse_armed = False
         self.fit_bodies_shapes = None
         self.fit_bodies_conf_path = None
-        self.fit_guinier_conf_path = None
+        self.fit_guinier_mono_conf_path = None
+        self.fit_guinier_poly_conf_path = None
         self.monodisperse_shape_mode = MonodisperseShapeMode.NONE
         self.monodisperse_wizard_params = None
+        self.polydisperse_mixture_mode = PolydisperseMixtureMode.NONE
+        self.polydisperse_window_params = None
         self.fit_mixture_options = None
 
     def reset_buffer_to_state_b(self) -> None:
-        """Clear buffer/subtract settings; analysis Off; remain calibrated (state B if integrator is set)."""
+        """Clear buffer/subtract settings; disarm analysis; remain calibrated (state B if integrator is set)."""
         self.buffer_dat_path = None
         self.subtract_options = None
         self.last_subtracted_dat_path = None
-        self.analysis_mode = AnalysisMode.OFF
+        self.monodisperse_armed = False
+        self.polydisperse_armed = False
         self.fit_bodies_shapes = None
         self.fit_bodies_conf_path = None
-        self.fit_guinier_conf_path = None
+        self.fit_guinier_mono_conf_path = None
+        self.fit_guinier_poly_conf_path = None
         self.monodisperse_shape_mode = MonodisperseShapeMode.NONE
         self.monodisperse_wizard_params = None
+        self.polydisperse_mixture_mode = PolydisperseMixtureMode.NONE
+        self.polydisperse_window_params = None
 
     def reset_for_new_watchdir(self, watchdir: Path) -> None:
         """Point session at a new folder and clear in-memory state (then load ``.guisaxs_liveview/`` if present)."""
@@ -144,17 +136,20 @@ class LiveviewSessionState:
         self.last_subtracted_dat_path = None
         self.buffer_dat_path = None
         self.subtract_options = None
-        self.analysis_mode = AnalysisMode.OFF
+        self.monodisperse_armed = False
+        self.polydisperse_armed = False
         self.fit_distances_conf_path = None
-        self.fit_guinier_conf_path = None
+        self.fit_guinier_mono_conf_path = None
+        self.fit_guinier_poly_conf_path = None
         self.fit_sizes_conf_path = None
         self.fit_mixture_config_path = None
         self.fit_mixture_options = None
         self.fit_bodies_shapes = None
         self.fit_bodies_conf_path = None
-        self.fit_guinier_conf_path = None
         self.monodisperse_shape_mode = MonodisperseShapeMode.NONE
         self.monodisperse_wizard_params = None
+        self.polydisperse_mixture_mode = PolydisperseMixtureMode.NONE
+        self.polydisperse_window_params = None
 
     def default_fit_distances_profile_path(self) -> Optional[Path]:
         """State B/BD: last integrated .dat. State C/CD: last subtracted .dat (else last integrated)."""

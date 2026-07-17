@@ -184,6 +184,11 @@ def _parse_fit_file(fit_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]
     return q_nm, data[:, 1], data[:, 2]
 
 
+def parse_mixture_fit_file(fit_path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Public wrapper: return (q_nm, I_exp, I_fit) from a MIXTURE .fit file."""
+    return _parse_fit_file(Path(fit_path))
+
+
 def _extract_sphere_params_from_log(log_path: Path, n_phases: int) -> list[dict]:
     if not log_path.exists():
         return []
@@ -373,16 +378,13 @@ def _plot_distributions(results: list[dict], out_path: Path, *, r_min: float, r_
     R_plot_nm = R_plot_Ang / 10.0
     colors = plt.cm.tab10(np.linspace(0, 1, 10))
     for idx, r in enumerate(results):
-        spheres = r.get("spheres") or []
-        dist_name = r.get("dist", "?")
-        total = np.zeros_like(R_plot_Ang)
-        for s in spheres:
-            R0, dR, vol = s["Rout"], s["dRout"], s["vol"]
-            y = gaussian_pdf(R_plot_Ang, R0, dR) if dist_name == "Gauss" else schultz_pdf(R_plot_Ang, R0, dR)
-            y = y / (np.trapezoid(y, R_plot_Ang) + 1e-20) * vol
-            total += y
+        R_nm, total = distribution_curve_for_model(
+            r, r_min_ang=r_lo, r_max_ang=r_hi, n_points=600,
+        )
+        if R_nm is None or total is None:
+            continue
         lab = _fit_label(r, key="BIC_chi2")
-        ax.plot(R_plot_nm, total, "-", color=colors[idx % len(colors)], lw=1.8, label=lab)
+        ax.plot(R_nm, total, "-", color=colors[idx % len(colors)], lw=1.8, label=lab)
     ax.set_xlabel(r"$R$ (nm)")
     ax.set_ylabel("P(R) (arb.)")
     ax.set_xlim(max(0.0, r_lo / 10.0), r_hi / 10.0)
@@ -393,6 +395,50 @@ def _plot_distributions(results: list[dict], out_path: Path, *, r_min: float, r_
     fig.tight_layout()
     fig.savefig(out_path, dpi=400, bbox_inches="tight")
     plt.close(fig)
+
+
+def distribution_curve_for_model(
+    model: dict,
+    *,
+    r_min_ang: float = 5.0,
+    r_max_ang: float = 120.0,
+    n_points: int = 600,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """
+    Build P(R) curve (R in nm, P arb.) for one MIXTURE model.
+
+    ``model`` may be a fit-result dict (with ``spheres`` list) or a CSV row
+    (``dist``, ``vol_i``, ``Rout_Ang_i``, ``dRout_Ang_i``).
+    """
+    r_lo = max(0.0, float(r_min_ang))
+    r_hi = max(r_lo + 1.0, float(r_max_ang))
+    R_plot_Ang = np.linspace(max(1.0, r_lo), r_hi, int(n_points))
+    R_plot_nm = R_plot_Ang / 10.0
+    dist_name = str(model.get("dist") or model.get("dist_name") or "?")
+    spheres = model.get("spheres")
+    if not spheres:
+        spheres = []
+        for i in range(1, 8):
+            vol = model.get(f"vol_{i}")
+            rout = model.get(f"Rout_Ang_{i}")
+            drout = model.get(f"dRout_Ang_{i}")
+            if vol is None or rout is None or drout is None:
+                break
+            try:
+                if not (np.isfinite(float(vol)) and np.isfinite(float(rout)) and np.isfinite(float(drout))):
+                    break
+            except (TypeError, ValueError):
+                break
+            spheres.append({"vol": float(vol), "Rout": float(rout), "dRout": float(drout)})
+    if not spheres:
+        return None, None
+    total = np.zeros_like(R_plot_Ang)
+    for s in spheres:
+        R0, dR, vol = s["Rout"], s["dRout"], s["vol"]
+        y = gaussian_pdf(R_plot_Ang, R0, dR) if dist_name == "Gauss" else schultz_pdf(R_plot_Ang, R0, dR)
+        y = y / (np.trapezoid(y, R_plot_Ang) + 1e-20) * vol
+        total += y
+    return R_plot_nm, total
 
 
 def _save_results_csv(results: list[dict], out_path: Path) -> None:

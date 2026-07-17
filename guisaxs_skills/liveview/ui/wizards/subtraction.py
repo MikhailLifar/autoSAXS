@@ -85,6 +85,7 @@ class SubtractionWizardDialog(QDialog):
         self._scale.valueChanged.connect(self._on_scale_changed)
         row.addWidget(self._scale, 1)
         self._apply = QPushButton("Apply")
+        self._apply.setEnabled(False)
         self._apply.clicked.connect(self._on_apply_clicked)
         self._close = QPushButton("Close")
         self._close.clicked.connect(self.close)
@@ -92,13 +93,14 @@ class SubtractionWizardDialog(QDialog):
         row.addWidget(self._close, 0)
         lay.addLayout(row, 0)
 
+        self._scale_touched = False
         self._seed_initial_scale()
         self._validate_paths_and_update_ui()
         self._refresh_plots()
 
     def set_running(self, running: bool) -> None:
         r = bool(running)
-        self._apply.setEnabled(not r)
+        self._apply.setEnabled((not r) and self._scale_touched and self._paths_ok())
         self._close.setEnabled(not r)
         self._scale.setEnabled(not r)
         if r:
@@ -115,13 +117,16 @@ class SubtractionWizardDialog(QDialog):
     def scale_value(self) -> float:
         return float(self._scale.value())
 
-    def _validate_paths_and_update_ui(self) -> None:
-        ok = True
+    def _paths_ok(self) -> bool:
         if not self._sample_dat or not os.path.isfile(self._sample_dat):
-            ok = False
+            return False
         if not self._buffer_dat or not os.path.isfile(self._buffer_dat):
-            ok = False
-        self._apply.setEnabled(ok)
+            return False
+        return True
+
+    def _validate_paths_and_update_ui(self) -> None:
+        ok = self._paths_ok()
+        self._apply.setEnabled(ok and self._scale_touched)
         if not ok:
             self._compare_plot.clear()
             self._sub_plot.clear()
@@ -167,6 +172,8 @@ class SubtractionWizardDialog(QDialog):
         self._scale.setSingleStep(step)
 
     def _on_scale_changed(self, _val: float) -> None:
+        self._scale_touched = True
+        self._apply.setEnabled(self._paths_ok())
         self._set_step_relative()
         self._refresh_plots()
         self.preview_scale_changed.emit(float(self._scale.value()))

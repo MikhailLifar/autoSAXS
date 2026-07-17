@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from ...core.models import RunRequest
-from ..session.output_paths import dammif_dir, fit_bodies_dir, fit_distances_dir, guinier_dir
+from ..session.output_paths import dammif_dir, fit_bodies_dir, fit_distances_dir, guinier_mono_dir
 from ..session.state import (
     DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES,
     LiveviewSessionState,
@@ -17,6 +17,10 @@ from ..services.artifacts import discover_gnom_out_path
 from .jobs import JobStep
 
 YamlOptionsLoader = Callable[[Optional[Path]], dict]
+
+# Job step name for monodisperse Guinier (poly uses fit_guinier_poly when both armed).
+FIT_GUINIER_MONO_STEP = "fit_guinier"
+FIT_GUINIER_POLY_STEP = "fit_guinier_poly"
 
 
 class MonodispersePipelineParts(str, Enum):
@@ -54,10 +58,22 @@ def guinier_opts(
     fixed_interval: bool = False,
     interval_first: Optional[int] = None,
     interval_last: Optional[int] = None,
+    guinier_root: Optional[Path] = None,
+    conf_path: Optional[Path] = None,
+    window_params: Optional[Dict[str, Any]] = None,
 ) -> dict:
+    """
+    Build fit_guinier options.
+
+    ``guinier_root`` defaults to ``guinier_mono/<stem>``. Poly chain passes ``guinier_poly_dir``.
+    ``conf_path`` / ``window_params`` default to mono session fields when omitted.
+    """
     stem = profile_sample_stem(profile_abs)
-    out_sub = guinier_dir(output_root) / stem
+    root = guinier_root if guinier_root is not None else guinier_mono_dir(output_root)
+    out_sub = root / stem
     out_sub.mkdir(parents=True, exist_ok=True)
+    conf = conf_path if conf_path is not None else state.fit_guinier_mono_conf_path
+    wp = window_params if window_params is not None else state.monodisperse_wizard_params
     opts: dict = {}
     if fixed_interval:
         first_i = coerce_opt_int(interval_first)
@@ -66,18 +82,25 @@ def guinier_opts(
             opts["first"] = first_i
             opts["last"] = last_i
         else:
-            if state.fit_guinier_conf_path is not None:
-                conf = load_yaml(state.fit_guinier_conf_path)
-                for key in ("first", "last"):
-                    val = coerce_opt_int(conf.get(key))
-                    if val is not None:
-                        opts[key] = val
-            wp = state.monodisperse_wizard_params
+            cand_first: Optional[int] = None
+            cand_last: Optional[int] = None
+            if conf is not None:
+                conf_opts = load_yaml(conf)
+                cand_first = coerce_opt_int(conf_opts.get("first"))
+                cand_last = coerce_opt_int(conf_opts.get("last"))
             if isinstance(wp, dict):
-                for key in ("first", "last"):
-                    val = coerce_opt_int(wp.get(key))
-                    if val is not None:
-                        opts[key] = val
+                if cand_first is None:
+                    cand_first = coerce_opt_int(wp.get("guinier_first"))
+                    if cand_first is None:
+                        cand_first = coerce_opt_int(wp.get("first"))
+                if cand_last is None:
+                    cand_last = coerce_opt_int(wp.get("guinier_last"))
+                    if cand_last is None:
+                        cand_last = coerce_opt_int(wp.get("last"))
+            # Require both ends so a lone placeholder cannot become first=1,last=1.
+            if cand_first is not None and cand_last is not None:
+                opts["first"] = cand_first
+                opts["last"] = cand_last
     opts.pop("output_dir", None)
     opts.pop("use_cache", None)
     opts["output_dir"] = str(out_sub.resolve())
@@ -213,6 +236,9 @@ def build_monodisperse_steps(
             fixed_interval=fixed_guinier_interval,
             interval_first=guinier_interval_first,
             interval_last=guinier_interval_last,
+            guinier_root=guinier_mono_dir(root),
+            conf_path=state.fit_guinier_mono_conf_path,
+            window_params=state.monodisperse_wizard_params,
         )
         d_opts = fit_distances_opts(
             state=state,
@@ -221,7 +247,12 @@ def build_monodisperse_steps(
             guinier_handoff=guinier_handoff,
             use_guinier_placeholders=use_placeholders,
         )
-        steps.append(JobStep(name="fit_guinier", request=RunRequest("fit_guinier", [prof], g_opts)))
+        steps.append(
+            JobStep(
+                name=FIT_GUINIER_MONO_STEP,
+                request=RunRequest("fit_guinier", [prof], g_opts),
+            )
+        )
         steps.append(JobStep(name="fit_distances", request=RunRequest("fit_distances", [prof], d_opts)))
 
     if parts == MonodispersePipelineParts.DISTANCES_ONLY:

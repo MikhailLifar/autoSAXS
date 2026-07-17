@@ -749,8 +749,16 @@ def test_fit_mixture_contract_with_mock_mixture(monkeypatch):
             "comparison_log_path",
             "distributions_path",
             "results_csv_path",
+            "r_max_nm",
+            "poly_max_nm",
         ):
             assert key in result, f"fit_mixture must return {key}"
+
+        def _scalar(v):
+            return v[0] if isinstance(v, list) and len(v) == 1 else v
+
+        assert float(_scalar(result["r_max_nm"])) == pytest.approx(8.0)
+        assert float(_scalar(result["poly_max_nm"])) == pytest.approx(4.0)
 
         # plot_I_q / plot_logI_logq default to False → empty paths, not missing files.
         assert result["comparison_path"] == ""
@@ -801,6 +809,11 @@ def test_fit_mixture_without_config_path_uses_bundled_defaults(monkeypatch):
         out_dir = os.path.join(tmp, "mixture_out")
         result = fit_mixture(profile_path, output_dir=out_dir, use_cache=False)
         assert os.path.isfile(str(result["results_csv_path"]))
+        def _scalar(v):
+            return v[0] if isinstance(v, list) and len(v) == 1 else v
+
+        assert float(_scalar(result["r_max_nm"])) == pytest.approx(12.0)
+        assert float(_scalar(result["poly_max_nm"])) == pytest.approx(6.0)
 
 
 def test_fit_mixture_radius_params_use_nm_externally():

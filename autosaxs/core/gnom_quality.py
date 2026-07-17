@@ -485,6 +485,8 @@ def analyze_dr_quality(
     shape: str,
     neg_frac: Optional[float] = None,
     thresholds: Optional[DrQualityThresholds] = None,
+    q_nm: Optional[np.ndarray] = None,
+    first_pt_1based: Optional[int] = None,
 ) -> Dict[str, Any]:
     t = thresholds or DrQualityThresholds()
     dr = parsed.get("distribution")
@@ -497,6 +499,19 @@ def analyze_dr_quality(
         d_arr = np.asarray(d, dtype=float)
         moments = dr_distribution_moments(r_arr, d_arr)
         peaks = _find_local_maxima(r_arr, d_arr)
+
+    dmax_nm = parsed.get("real_space_rmax")
+    q_min_fit_nm = q_min_from_gnom_fit(
+        parsed, q_nm=q_nm, first_pt_1based=first_pt_1based,
+    )
+    s_min = None
+    s_class = "unknown"
+    s_ok = None
+    if dmax_nm is not None and q_min_fit_nm is not None:
+        s_min = shannon_s_min(q_min_fit_nm, float(dmax_nm))
+        s_class = classify_shannon(s_min)
+        s_ok = shannon_ok(q_min_fit_nm, float(dmax_nm))
+    s_tip = shannon_tip(s_min, s_class)
 
     modality = classify_modality(len(peaks), moments.get("pdi"), t)
     sizes_class, rationale = classify_sizes_quality(
@@ -516,6 +531,8 @@ def analyze_dr_quality(
         shape=shape,
         thresholds=t,
     )
+    if s_tip:
+        user_tips = list(user_tips) + [s_tip]
 
     return {
         "d_avg_nm": moments.get("d_avg_nm"),
@@ -525,7 +542,13 @@ def analyze_dr_quality(
         "dr_n_peaks": len(peaks),
         "modality_class": modality,
         "rg_guinier_nm": rg_guinier_nm,
+        "dmax_nm": dmax_nm,
+        "q_min_fit_nm": q_min_fit_nm,
         "total_estimate": parsed.get("total_estimate"),
+        "shannon_s_min": s_min,
+        "shannon_class": s_class,
+        "shannon_ok": s_ok,
+        "shannon_tip": s_tip,
         "sizes_quality_class": sizes_class,
         "overall_status": overall_status_from_class(sizes_class),
         "quality_rationale": rationale,

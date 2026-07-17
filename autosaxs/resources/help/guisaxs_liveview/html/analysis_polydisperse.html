@@ -7,12 +7,30 @@
 </head>
 <body>
 <h1>Polydisperse analysis</h1>
-<h2>d(r)</h2>
-<p><b>fit_sizes</b> — polydisperse size distribution. Options: <code>fit_sizes/fit_sizes.conf</code>.
-Per-TIFF: <code>fit_sizes/&lt;stem&gt;/</code> — fit and d(r) PNGs.</p>
-<h2>Mixture</h2>
-<p><b>fit_mixture</b> — multi-component modeling. Liveview YAML:
-<code>mixture/liveview_mixture.yml</code>. Per-TIFF: <code>mixture/&lt;stem&gt;/</code> —
-comparison and distribution plots, results CSV.</p>
+<p>Open the <b>Polydisperse analysis</b> window from the right-column icon (same chrome pattern as monodisperse).
+While it is open, new TIFFs run that chain automatically. Guinier for this window is independent of monodisperse
+and is stored under <code>guinier_poly/</code>.</p>
+
+<h2>Window panes</h2>
+<ol>
+<li><b>Guinier</b> — runs <code>fit_guinier</code> independently for display / quality.
+Interval edits do <b>not</b> feed <code>fit_sizes</code> (polydisperse Guinier is often poor; that is expected).</li>
+<li><b>fit_sizes (D(R))</b> — ATSAS GNOM system=1 (spheres). Default <code>first=1</code> (editable).
+Shows I(q) and D(R) from source data (<code>.out</code>, D(R) CSV), plus Shannon <code>s_min</code> diagnostics.
+Param edits re-run <code>fit_sizes</code> (debounced).</li>
+<li><b>fit_mixture</b> — optional (radio None / Mixture; default None).
+When enabled, auto TIFF jobs include <code>fit_mixture</code>.
+<code>r_max</code> / <code>poly_max</code> start as <b>(auto)</b> (skill derives them; controls update after the run).
+Use the model selector to explore individual MIXTURE fits (best selected by default).</li>
+</ol>
+
+<h2>Outputs (per TIFF)</h2>
+<ul>
+<li><code>guinier_poly/&lt;stem&gt;/</code> — Guinier region YAML</li>
+<li><code>fit_sizes/&lt;stem&gt;/</code> — GNOM <code>.out</code>, D(R) CSV, quality YAML</li>
+<li><code>mixture/&lt;stem&gt;/</code> — per-model work dirs, <code>mixture_results.csv</code> (when mixture enabled)</li>
+</ul>
+
+<p><a href="analysis_overview.html">← Analysis overview</a></p>
 </body>
 </html>

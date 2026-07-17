@@ -276,13 +276,14 @@ def _set_form_text_field(form: Any, *, name: str, text: str) -> bool:
 
 
 def _right_mode_combo(right: Any):
-    """Return the analysis-mode QComboBox (on AnalysisModeSelector after right-panel split)."""
-    selector = getattr(right, "_mode", None)
-    if selector is not None:
-        combo = getattr(selector, "_combo", None)
-        if combo is not None:
-            return combo
-    return getattr(right, "_mode_combo", None)
+    """Deprecated — analysis mode combo removed; kept as None for old callers."""
+    return None
+
+
+def _arm_monodisperse(right: Any) -> None:
+    """Open/arm monodisperse analysis window (window-open arming model)."""
+    right.show_monodisperse_wizard()
+
 
 
 def test_executor_requeues_cancelled_job_before_normal_jobs(tmp_path: Path):
@@ -478,6 +479,151 @@ def test_monodisperse_guinier_opts_fixed_interval_from_spinboxes(tmp_path: Path)
     assert "last" not in d_opts
 
 
+def test_analysis_steps_both_armed_separate_guinier(tmp_path: Path):
+    from guisaxs_skills.liveview.pipeline.executor import LiveviewJobExecutor
+    from guisaxs_skills.liveview.pipeline.monodisperse_pipeline import (
+        FIT_GUINIER_MONO_STEP,
+        FIT_GUINIER_POLY_STEP,
+    )
+
+    class _DummySignal:
+        def connect(self, _fn):
+            return None
+
+    class _DummyRunner:
+        def __init__(self):
+            self.finished = _DummySignal()
+
+        def is_running(self) -> bool:
+            return False
+
+    prof = tmp_path / "int_sample.dat"
+    prof.write_text("# q I\n", encoding="utf-8")
+    state = LiveviewSessionState(watchdir=tmp_path)
+    state.monodisperse_armed = True
+    state.polydisperse_armed = True
+    ex = LiveviewJobExecutor(state=state, runner=_DummyRunner())  # type: ignore[arg-type]
+    steps = ex._analysis_steps_for_profile(str(prof), output_root=tmp_path)  # noqa: SLF001
+    names = [s.name for s in steps]
+    assert FIT_GUINIER_MONO_STEP in names
+    assert FIT_GUINIER_POLY_STEP in names
+    assert "fit_distances" in names
+    assert "fit_sizes" in names
+    g_mono = next(s for s in steps if s.name == FIT_GUINIER_MONO_STEP)
+    g_poly = next(s for s in steps if s.name == FIT_GUINIER_POLY_STEP)
+    assert "guinier_mono" in str(g_mono.request.options.get("output_dir", "")).replace("\\", "/")
+    assert "guinier_poly" in str(g_poly.request.options.get("output_dir", "")).replace("\\", "/")
+
+
+def test_polydisperse_steps_full_defaults(tmp_path: Path):
+    from guisaxs_skills.liveview.pipeline.polydisperse_pipeline import (
+        PolydispersePipelineParts,
+        build_polydisperse_steps,
+    )
+    from guisaxs_skills.liveview.pipeline.monodisperse_pipeline import FIT_GUINIER_POLY_STEP
+    from guisaxs_skills.liveview.session.state import PolydisperseMixtureMode
+
+    class _DummySignal:
+        def connect(self, _fn):
+            return None
+
+    class _DummyRunner:
+        def __init__(self):
+            self.finished = _DummySignal()
+
+        def is_running(self) -> bool:
+            return False
+
+    prof = tmp_path / "sub_sample.dat"
+    prof.write_text("# q I\n", encoding="utf-8")
+    state = LiveviewSessionState(watchdir=tmp_path)
+    ex = LiveviewJobExecutor(state=state, runner=_DummyRunner())  # type: ignore[arg-type]
+
+    steps = build_polydisperse_steps(
+        str(prof),
+        output_root=tmp_path,
+        state=state,
+        parts=PolydispersePipelineParts.FULL,
+        load_yaml=ex._load_yaml_options,  # noqa: SLF001
+    )
+    assert [s.name for s in steps] == [FIT_GUINIER_POLY_STEP, "fit_sizes"]
+    s_opts = steps[1].request.options
+    assert s_opts["shape"] == "spheres"
+    assert s_opts["first"] == 1
+
+    state.polydisperse_mixture_mode = PolydisperseMixtureMode.MIXTURE
+    steps2 = build_polydisperse_steps(
+        str(prof),
+        output_root=tmp_path,
+        state=state,
+        parts=PolydispersePipelineParts.FULL,
+        load_yaml=ex._load_yaml_options,  # noqa: SLF001
+    )
+    assert [s.name for s in steps2] == [FIT_GUINIER_POLY_STEP, "fit_sizes", "fit_mixture"]
+    m_opts = steps2[2].request.options
+    assert "r_max" not in m_opts
+    assert "poly_max" not in m_opts
+    assert "r_min" not in m_opts
+    assert "poly_min" not in m_opts
+    assert "maxit" not in m_opts
+
+
+def test_polydisperse_mixture_opts_include_explicit_bounds(tmp_path: Path):
+    from guisaxs_skills.liveview.pipeline.polydisperse_pipeline import fit_mixture_opts
+
+    state = LiveviewSessionState(watchdir=tmp_path)
+    state.polydisperse_window_params = {
+        "mixture": {"max_nph": 2, "r_max": 9.5, "poly_max": 3.0},
+    }
+    opts = fit_mixture_opts(state=state, output_root=tmp_path)
+    assert opts["max_nph"] == 2
+    assert opts["r_max"] == 9.5
+    assert opts["poly_max"] == 3.0
+
+
+def test_polydisperse_guinier_only_no_sizes_first_handoff(tmp_path: Path):
+    from guisaxs_skills.liveview.pipeline.polydisperse_pipeline import (
+        PolydispersePipelineParts,
+        build_polydisperse_steps,
+        fit_sizes_opts,
+    )
+
+    class _DummySignal:
+        def connect(self, _fn):
+            return None
+
+    class _DummyRunner:
+        def __init__(self):
+            self.finished = _DummySignal()
+
+        def is_running(self) -> bool:
+            return False
+
+    prof = tmp_path / "sub_sample.dat"
+    prof.write_text("# q I\n", encoding="utf-8")
+    state = LiveviewSessionState(watchdir=tmp_path)
+    state.polydisperse_window_params = {"guinier_first": 5, "guinier_last": 20, "first": 1}
+    ex = LiveviewJobExecutor(state=state, runner=_DummyRunner())  # type: ignore[arg-type]
+
+    steps = build_polydisperse_steps(
+        str(prof),
+        output_root=tmp_path,
+        state=state,
+        parts=PolydispersePipelineParts.GUINIER_ONLY,
+        load_yaml=ex._load_yaml_options,  # noqa: SLF001
+        fixed_guinier_interval=True,
+        guinier_interval_first=5,
+        guinier_interval_last=20,
+    )
+    assert [s.name for s in steps] == ["fit_guinier_poly"]
+    assert steps[0].request.options["first"] == 5
+    assert steps[0].request.options["last"] == 20
+
+    s_opts = fit_sizes_opts(state=state, output_root=tmp_path, load_yaml=ex._load_yaml_options)  # noqa: SLF001
+    assert s_opts["first"] == 1
+    assert s_opts["shape"] == "spheres"
+
+
 def test_monodisperse_step_shape_dammif_uses_concrete_gnom_path(tmp_path: Path):
     class _DummySignal:
         def connect(self, _fn):
@@ -652,7 +798,6 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
     from PyQt5.QtTest import QTest
     from PyQt5.QtWidgets import QApplication
 
-    from guisaxs_skills.liveview.session import AnalysisMode
     from guisaxs_skills.liveview.window import LiveviewMainWindow
 
     created_app = QApplication.instance() is None
@@ -754,17 +899,10 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
         bw.close()
         _wait_until(app, lambda: not bw.isVisible(), 3.0)
 
-        # --- Enable analysis mode: Monodisperse analysis
+        # --- Arm monodisperse analysis (open window)
         right = win._right  # noqa: SLF001
-        mode_combo = _right_mode_combo(right)
-        assert mode_combo is not None, "Analysis mode combo not found on right panel"
-        idx_mono = None
-        for i in range(mode_combo.count()):
-            if mode_combo.itemData(i) == AnalysisMode.MONODISPERSE:
-                idx_mono = i
-                break
-        assert idx_mono is not None, "Analysis mode 'Monodisperse analysis' not found in combo"
-        mode_combo.setCurrentIndex(int(idx_mono))
+        _arm_monodisperse(right)
+        assert right._state.monodisperse_armed  # noqa: SLF001
         _process_events(app)
 
         # --- Upload sample TIFF -> expect subtraction + guinier + p(r) artifacts
@@ -786,8 +924,8 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
         assert _wait_until_queue_idle(app, win, timeout), "Queue did not become Idle after sample processing"
         _settle_after_idle(1.0)
 
-        # fit_guinier + fit_distances: per-sample subdirs under guinier/<stem>/ and fit_distances/<stem>/.
-        guinier_dir = watchdir / "guinier"
+        # fit_guinier + fit_distances: per-sample subdirs under guinier_mono/<stem>/ and fit_distances/<stem>/.
+        guinier_dir = watchdir / "guinier_mono"
         fd_dir = watchdir / "fit_distances"
         sample_token = "ihs27_95.9_sample"
         ok_pr = _wait_until(

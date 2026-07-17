@@ -22,7 +22,7 @@ This document specifies a new desktop GUI application (“guisaxs-liveview”) f
 
 ### 1.1 Purpose
 
-**One-sentence summary:** **guisaxs-liveview** is a single-window desktop GUI that watches a directory for **new stable `.tif` files**, processes them **sequentially** via `autosaxs` skills, and continuously updates live plots (2D + 1D) and optional **right-column analysis** outputs according to a user-selected analysis mode (monodisperse analysis, polydisperse \(d(r)\), mixture, or off).
+**One-sentence summary:** **guisaxs-liveview** is a single-window desktop GUI that watches a directory for **new stable `.tif` files**, processes them **sequentially** via `autosaxs` skills, and continuously updates live plots (2D + 1D) and optional **right-column analysis** outputs according to a user-selected analysis mode (monodisperse analysis, polydisperse analysis, or off).
 
 **Main user goal:** Start a session by choosing a **watch directory**, then iteratively configure processing during the session (calibration → buffer) while the app keeps up with incoming data using a **FIFO queue** and never freezes.
 
@@ -302,8 +302,7 @@ The right column is driven by an **analysis mode** drop-down (**`Off` first**, d
 
 1. **`Off`** — no analysis skills; idle / placeholder when uncalibrated; when calibrated, no post-integration analysis.
 2. **`Monodisperse analysis`** — launches a **separate wizard window** (3-pane: Guinier → GNOM → optional shape); auto pipeline runs `fit_guinier` then `fit_distances`; shape (`fit_bodies` / `fit_dammif`) on demand only via **Re-run shape** (default shape mode **None**).
-3. **`Polydisperse analysis: d(r)`** — `fit_sizes`; **fit comparison** + **\(d(r)\)**.
-4. **`Polydisperse analysis: mixture`** — `fit_mixture`; **fit comparison** + **mixture** UI/plots as produced by the skill.
+3. **`Polydisperse analysis`** — launches a **separate analysis window** (3-pane: Guinier → fit_sizes / D(R) → optional fit_mixture); auto pipeline runs `fit_guinier` then `fit_sizes` (spheres, `first` default 1); mixture on demand when enabled (default **None**). Guinier is display-only and **not** handed off to fit_sizes.
 
 **Common requirements:**
 
@@ -367,10 +366,11 @@ Cross-pane parameter handoff in the monodisperse wizard (Guinier interval → GN
 |-----------------|---------------------|--------------------------------|
 | `Off` | *(none)* | Mode selector + idle / placeholder |
 | `Monodisperse analysis` | `fit_guinier` → `fit_distances` (auto); optional `fit_bodies` / `fit_dammif` (manual) | Separate wizard window: Guinier, GNOM, shape (None/BODIES/DAMMIF) |
-| `Polydisperse analysis: d(r)` | `fit_sizes` | Fit comparison; \(d(r)\) |
-| `Polydisperse analysis: mixture` | `fit_mixture` | Fit comparison; mixture |
+| `Polydisperse analysis` | `fit_guinier` → `fit_sizes` (auto); optional `fit_mixture` (when enabled) | Separate analysis window: Guinier (independent), fit_sizes / D(R), optional mixture |
 
 **Monodisperse shape chaining:** When the user selects **BODIES** or **DAMMIF** and presses **Re-run shape**, `fit_dammif` MUST consume the **GNOM result** from the latest `fit_distances` run (`best_gnom_out_path`). `fit_bodies` uses the profile curve plus Guinier/GNOM handoff parameters. Shape skills do **not** run automatically in the TIFF pipeline (default shape mode is **None**).
+
+**Polydisperse chaining:** Guinier pane edits re-run **only** `fit_guinier` (no handoff into `fit_sizes`). `fit_sizes` always uses `shape=spheres` and an explicit `first` (default **1**). When mixture mode is **Mixture**, auto TIFF jobs append `fit_mixture`; enabling mixture mid-run may enqueue a mixture-only follow-up after a successful `fit_sizes`. Mixture `r_max` / `poly_max` start unset (skill-derived) and the pane controls update from the resolved values after a run (same pattern as fit_sizes `last`). Window panes use **data-driven matplotlib viewers** (`.dat`, GNOM `.out`, `dr_csv`, MIXTURE `.fit` / CSV) — not PNG thumbnails.
 
 **Monodisperse queue suspension:** Any wizard control change (Guinier interval, GNOM parameters, shape mode, body checklist) MUST **pause** the FIFO queue, **cancel** the running skill (requeue current job), and allow unlimited re-processing of the **current curve** via manual jobs. Incoming TIFFs remain queued but are not processed until the user presses **Resume auto-processing** (enabled only when no skill is running). This mirrors subtraction-wizard intervention semantics but stays embedded (explicit resume required).
 

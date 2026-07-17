@@ -269,3 +269,81 @@ def merge_fit_distances_quality_fields(result: dict, *, watchdir: Path) -> dict[
                 val = val[0]
             out[key] = val
     return out
+
+
+_FIT_SIZES_QUALITY_KEYS = (
+    "d_avg_nm",
+    "d_std_nm",
+    "pdi",
+    "dr_peak_positions_nm",
+    "dr_n_peaks",
+    "modality_class",
+    "rg_guinier_nm",
+    "dmax_nm",
+    "q_min_fit_nm",
+    "total_estimate",
+    "shannon_s_min",
+    "shannon_class",
+    "shannon_ok",
+    "shannon_tip",
+    "sizes_quality_class",
+    "overall_status",
+    "quality_passport_path",
+    "best_summary_path",
+    "fit_params_path",
+    "dr_csv_path",
+    "best_gnom_out_path",
+)
+
+
+def merge_fit_sizes_quality_fields(result: dict, *, watchdir: Path) -> dict[str, Any]:
+    """Fill D(R) / Shannon diagnostics missing from skill stdout (key=value lines)."""
+    out = dict(result or {})
+    candidates: list[Path] = []
+    qp = norm_artifact_path(out.get("quality_passport_path"))
+    if qp:
+        candidates.append(_resolve_under_watchdir(qp, watchdir))
+    sub = norm_artifact_path(out.get("output_subdir"))
+    if sub:
+        sd = _resolve_under_watchdir(sub, watchdir)
+        if sd.is_dir():
+            candidates.extend(
+                sorted(sd.glob("*_fit_sizes_quality.yml"), key=lambda p: p.stat().st_mtime, reverse=True)
+            )
+    bs = norm_artifact_path(out.get("best_summary_path"))
+    if bs:
+        candidates.append(_resolve_under_watchdir(bs, watchdir))
+    seen: set[str] = set()
+    quality: dict[str, Any] = {}
+    for cand in candidates:
+        key = str(cand)
+        if key in seen or not cand.is_file():
+            continue
+        seen.add(key)
+        if cand.name.endswith("_fit_sizes_quality.yml"):
+            quality.update(_read_fit_distances_quality_yaml(cand))
+            out.setdefault("quality_passport_path", str(cand.resolve()))
+            continue
+        if cand.name.endswith("_fit_sizes_best.yml"):
+            summary = _read_fit_distances_quality_yaml(cand)
+            sel = summary.get("selected")
+            if isinstance(sel, dict):
+                for k in ("first", "last"):
+                    if sel.get(k) is not None and out.get(f"selected_{k}") is None:
+                        out[f"selected_{k}"] = sel[k]
+                if sel.get("out_path") and out.get("best_gnom_out_path") in (None, "", []):
+                    out["best_gnom_out_path"] = sel["out_path"]
+            qdoc = summary.get("quality")
+            if isinstance(qdoc, dict):
+                quality.update(qdoc)
+            out.setdefault("best_summary_path", str(cand.resolve()))
+            for path_key in ("dr_csv_path", "fit_params_path", "best_gnom_out_path"):
+                if summary.get(path_key) and out.get(path_key) in (None, "", []):
+                    out[path_key] = summary[path_key]
+    for key in _FIT_SIZES_QUALITY_KEYS:
+        if key in quality and quality[key] is not None and out.get(key) in (None, "", []):
+            val = quality[key]
+            if isinstance(val, list) and len(val) == 1:
+                val = val[0]
+            out[key] = val
+    return out

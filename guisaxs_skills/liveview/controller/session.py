@@ -47,7 +47,7 @@ class LiveviewSessionHandler:
             left.sync_buffer_preview_from_state()
             left.reset_calibration_wizard_form()
         if right is not None:
-            right.force_analysis_mode_off()
+            right.force_analysis_disarmed()
             right.clear_output_previews()
             right.sync_modeling_ui_to_session_state()
         self._refresh_middle_for_state()
@@ -61,7 +61,7 @@ class LiveviewSessionHandler:
             left.sync_buffer_preview_from_state()
             left.reset_buffer_wizard_form()
         if right is not None:
-            right.force_analysis_mode_off()
+            right.force_analysis_disarmed()
             right.clear_output_previews()
             right.sync_modeling_ui_to_session_state()
         self._refresh_middle_for_state()
@@ -106,33 +106,33 @@ class LiveviewSkillRunsHandler:
         self._c.executor.cancel_running(requeue=False)
 
     def run_fit_sizes(self) -> None:
-        self._run_manual_fit(
-            skill_label="fit_sizes",
-            has_profile=lambda wd: self._c.right.fit_sizes_wizard_has_existing_profile_file(wd) if self._c.right else False,
-            save_conf=lambda: self._c.right.save_fit_sizes_conf_from_open_wizard(enable_modeling=True) if self._c.right else None,
-            build_request=lambda: self._c.right.build_fit_sizes_request_from_wizard() if self._c.right else None,
-            default_output_subdir="fit_sizes",
-        )
+        """Deprecated: polydisperse window drives fit_sizes reruns."""
+        return
 
     def run_fit_mixture(self) -> None:
-        self._run_manual_fit(
-            skill_label="fit_mixture",
-            has_profile=lambda wd: self._c.right.fit_mixture_wizard_has_existing_profile_file(wd) if self._c.right else False,
-            save_conf=lambda: self._c.right.save_fit_mixture_conf_from_open_wizard(enable_modeling=True) if self._c.right else None,
-            build_request=lambda: self._c.right.build_fit_mixture_request_from_wizard() if self._c.right else None,
-            default_output_subdir="mixture",
-        )
+        """Deprecated: polydisperse window drives fit_mixture reruns."""
+        return
 
     def apply_subtraction_rerun(self, *, scaling_factor: float, sample_dat: str, buffer_dat: str) -> None:
+        # Sync live pane numbers into session before building the after-subtract chain.
+        right = self._c.right
+        if right is not None:
+            if self._c.state.monodisperse_armed:
+                right.monodisperse_coordinator.sync_params_to_state()
+            if self._c.state.polydisperse_armed:
+                right.polydisperse_coordinator.sync_params_to_state()
+        self._c.processing_mode.stop()
         self._c.executor.cancel_current()
         job = self._c.executor.build_rerun_subtraction_job(
             sample_dat=sample_dat,
             buffer_dat=buffer_dat,
             scaling_factor=float(scaling_factor),
             priority=100,
+            use_ui_params=True,
         )
         self._c.executor.enqueue_job(job)
-        self._c.executor.resume()
+        if not (self._c.state.monodisperse_armed or self._c.state.polydisperse_armed):
+            self._c.processing_mode.resume()
 
     def _run_manual_fit(
         self,
@@ -184,11 +184,13 @@ class LiveviewSkillOutcomesHandler:
         self._c = controller
 
     def on_started(self, skill_name: str) -> None:
-        _ = skill_name
         if self._c.left is not None:
             self._c.left.set_calibration_running(True)
         if self._c.right is not None:
             self._c.right.set_analysis_busy(True)
+            if skill_name:
+                self._c.right.log_panel.append_app(f"Started {skill_name}")
+        self._c.processing_mode.sync_ui()
 
     def on_finished(self, outcome: RunOutcome) -> None:
         if self._c.left is not None:
@@ -197,9 +199,7 @@ class LiveviewSkillOutcomesHandler:
             self._c.right.set_analysis_busy(False)
         self._handle_failure(outcome)
         self._handle_success(outcome)
-        if self._c.right is not None:
-            self._c.right.sync_modeling_ui_to_session_state()
-        self._c.monodisperse.refresh_queue_ui()
+        self._c.processing_mode.sync_ui()
 
     def on_latest_artifacts(self, result: dict) -> None:
         middle, right = self._c.middle, self._c.right
@@ -216,6 +216,7 @@ class LiveviewSkillOutcomesHandler:
             if self._c.history.middle_updates_follow_pipeline():
                 right.ingest_skill_result(result, skill_name=str(result.get("skill_name") or ""))
             self._c.monodisperse.update_profile_from_artifacts(result)
+            self._c.polydisperse.update_profile_from_artifacts(result)
         finally:
             right.sync_modeling_ui_to_session_state()
 
@@ -271,11 +272,14 @@ class LiveviewSkillOutcomesHandler:
         except Exception:
             pass
         parent = self._c.parent_widget
+        msg = f"Skill failed (exit code {outcome.exit_code}).{detail}"
+        if self._c.right is not None:
+            self._c.right.log_panel.append_app(f"{outcome.request.skill_name}: {msg.strip()}")
         if parent is not None:
             QMessageBox.critical(
                 parent,
                 outcome.request.skill_name,
-                f"Skill failed (exit code {outcome.exit_code}).{detail}",
+                msg,
             )
 
     def _handle_success(self, outcome: RunOutcome) -> None:
@@ -291,9 +295,10 @@ class LiveviewSkillOutcomesHandler:
             "fit_mixture",
         ):
             self._c.monodisperse.sync_wizard_context_before_ingest(outcome)
+            self._c.polydisperse.sync_window_context_before_ingest(outcome)
             if self._c.right is not None:
                 self._c.right.ingest_skill_result(outcome.result or {}, skill_name=skill)
-        self._c.monodisperse.refresh_queue_ui()
+        self._c.processing_mode.sync_ui()
         if skill in ("fit_distances", "fit_sizes") and not is_atsas_fit_ok(outcome.result):
             parent = self._c.parent_widget
             if parent is not None:

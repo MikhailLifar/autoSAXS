@@ -28,7 +28,16 @@ def subtracted_dir(root: Path) -> Path:
 
 
 def guinier_dir(root: Path) -> Path:
+    """Legacy shared Guinier tree (pre per-chain split). Prefer guinier_mono_dir / guinier_poly_dir."""
     return root / "guinier"
+
+
+def guinier_mono_dir(root: Path) -> Path:
+    return root / "guinier_mono"
+
+
+def guinier_poly_dir(root: Path) -> Path:
+    return root / "guinier_poly"
 
 
 def fit_distances_dir(root: Path) -> Path:

@@ -15,6 +15,8 @@ from ..ui.panels import LiveviewLeftPanel, LiveviewMiddlePanel, LiveviewRightPan
 from .history import LiveviewHistoryHandler
 from .ingest import LiveviewIngestHandler, LiveviewWatchdirHandler
 from .monodisperse import LiveviewMonodisperseHandler
+from .polydisperse import LiveviewPolydisperseHandler
+from .processing_mode import ProcessingModeGate
 from .session import (
     LiveviewSessionHandler,
     LiveviewSkillOutcomesHandler,
@@ -41,6 +43,7 @@ class LiveviewController(QObject):
         self._watchdir = watchdir.resolve()
         self._runner = SkillRunner(workdir=watchdir)
         self._executor = LiveviewJobExecutor(state=self._state, runner=self._runner)
+        self.processing_mode = ProcessingModeGate(self._executor)
 
         self._left: Optional[LiveviewLeftPanel] = None
         self._middle: Optional[LiveviewMiddlePanel] = None
@@ -54,6 +57,7 @@ class LiveviewController(QObject):
         self.skill_runs = LiveviewSkillRunsHandler(self)
         self.outcomes = LiveviewSkillOutcomesHandler(self)
         self.monodisperse = LiveviewMonodisperseHandler(self)
+        self.polydisperse = LiveviewPolydisperseHandler(self)
 
         self._connect_executor(self._executor)
         self._executor.start()
@@ -102,8 +106,33 @@ class LiveviewController(QObject):
         self._middle = middle
         self._right = right
         self._parent_widget = parent
+        self.processing_mode.bind_right_panel(right)
+        self._wire_log_streams()
         self.session.apply_loaded_to_ui()
         self.history.refresh_chrome()
+
+    def _wire_log_streams(self) -> None:
+        if self._right is None:
+            return
+        log = self._right.log_panel
+        self._runner.stdout.connect(
+            lambda t: log.append_skill_stdout(t, skill=self._runner_skill_label())
+        )
+        self._runner.stderr.connect(
+            lambda t: log.append_skill_stderr(t, skill=self._runner_skill_label())
+        )
+
+    def _runner_skill_label(self) -> str:
+        try:
+            job = self._executor._current_job
+            name = getattr(self._executor, "_pending_step_name", None) or ""
+            if name:
+                return str(name)
+            if job is not None and job.steps:
+                return str(job.steps[0].request.skill_name)
+        except Exception:
+            pass
+        return ""
 
     def shutdown(self) -> None:
         self.persist_session_settings()
@@ -180,11 +209,14 @@ class LiveviewController(QObject):
             buffer_dat=buffer_dat,
         )
 
-    def pause_executor(self, *, source: str = "default") -> None:
-        self._executor.pause(source=source)
+    def on_subtraction_control_changed(self) -> None:
+        """Scale spinbox touched — enter Manual (idempotent)."""
+        self.processing_mode.stop()
 
-    def resume_executor(self, *, source: str | None = None) -> None:
-        self._executor.resume(source=source)
+    def on_subtraction_wizard_closed(self) -> None:
+        """Close without Apply: resume Auto only when no analysis windows are armed."""
+        if not (self._state.monodisperse_armed or self._state.polydisperse_armed):
+            self.processing_mode.resume()
 
     def middle_subtraction_context(self) -> dict:
         if self._middle is None:
@@ -201,9 +233,17 @@ class LiveviewController(QObject):
     def process_history_file(self) -> None:
         self.history.process_current_file()
 
-    def on_analysis_mode_changed(self) -> None:
+    def on_analysis_arming_changed(self) -> None:
         self.history.refresh_right_outputs()
-        self.monodisperse.refresh_queue_ui()
+        self.processing_mode.sync_ui()
+
+    def on_analysis_mode_changed(self) -> None:
+        """Deprecated alias."""
+        self.on_analysis_arming_changed()
+
+    def append_app_log(self, text: str) -> None:
+        if self._right is not None:
+            self._right.log_panel.append_app(text)
 
     def on_monodisperse_wizard_open(self) -> None:
         self.history.refresh_right_outputs()
@@ -229,10 +269,37 @@ class LiveviewController(QObject):
     def on_monodisperse_stop_queue(self) -> None:
         self.monodisperse.on_stop_queue()
 
+    def on_polydisperse_window_open(self) -> None:
+        self.history.refresh_right_outputs()
+
+    def on_polydisperse_intervention(self) -> None:
+        self.polydisperse.on_intervention()
+
+    def on_polydisperse_mixture_config(self) -> None:
+        self.polydisperse.on_mixture_config_changed()
+
+    def on_polydisperse_guinier_rerun(self) -> None:
+        self.polydisperse.on_guinier_rerun()
+
+    def on_polydisperse_sizes_rerun(self) -> None:
+        self.polydisperse.on_sizes_rerun()
+
+    def on_polydisperse_mixture_rerun(self) -> None:
+        self.polydisperse.on_mixture_rerun()
+
+    def on_polydisperse_resume_queue(self) -> None:
+        self.polydisperse.on_resume_queue()
+
+    def on_polydisperse_stop_queue(self) -> None:
+        self.polydisperse.on_stop_queue()
+
     def on_queue_status(self, status: LiveviewQueueStatus) -> None:
         if self._middle is not None:
             self._middle.set_queue_status(status)
 
     def on_error(self, text: str) -> None:
-        if self._parent_widget is not None and text.strip():
+        msg = (text or "").strip()
+        if msg and self._right is not None:
+            self._right.log_panel.append_app(f"Error: {msg}")
+        if self._parent_widget is not None and msg:
             QMessageBox.warning(self._parent_widget, "Live pipeline", text)

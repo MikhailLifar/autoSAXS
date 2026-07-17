@@ -838,6 +838,8 @@ Important constraint:
 - `comparison_log_path`: Path to the log I vs q comparison plot (empty when `plot_logI_q=False`).
 - `distributions_path`: Path to the MIXTURE size distributions plot.
 - `results_csv_path`: Path to the MIXTURE results CSV.
+- `r_max_nm` / `poly_max_nm`: Resolved MIXTURE radius bounds (nm), including defaults when omitted.
+- `r_min_nm` / `poly_min_nm`: Resolved MIXTURE radius/polydispersity floors (nm).
 
 ### Python usage
 

@@ -12,7 +12,7 @@ from .....session.output_paths import (
     dammif_dir,
     fit_bodies_dir,
     fit_distances_dir,
-    guinier_dir,
+    guinier_mono_dir,
     tiff_output_root,
 )
 from .....session.state import LiveviewSessionState, LiveviewWatchMode, MonodisperseShapeMode
@@ -343,7 +343,7 @@ class MonodisperseArtifactPresenter:
     ) -> None:
         root = tiff_output_root(watchdir=watchdir, tiff_path=tiff_path, mode=watch_mode)
         self.set_context(profile_path=self._profile_path, output_root=root, tiff_path=tiff_path, watch_mode=watch_mode)
-        gstem = guinier_dir(root) / stem
+        gstem = guinier_mono_dir(root) / stem
         if gstem.is_dir():
             for yml in sorted(gstem.glob("*_guinier_region.yml"), key=lambda p: p.stat().st_mtime, reverse=True):
                 self._ingest_guinier({"guinier_region_path": str(yml)})

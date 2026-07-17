@@ -4,7 +4,6 @@ from .persistence import (
     session_settings_path,
 )
 from .state import (
-    AnalysisMode,
     DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES,
     LiveviewSessionState,
     LiveviewState,
@@ -13,7 +12,6 @@ from .state import (
 from .workdir import default_watchdir, load_last_watchdir, save_last_watchdir, select_watchdir
 
 __all__ = [
-    "AnalysisMode",
     "DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES",
     "LiveviewSessionState",
     "LiveviewState",

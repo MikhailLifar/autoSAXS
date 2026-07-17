@@ -146,7 +146,8 @@ class LiveviewHistoryHandler:
             right,
             watchdir=self._c.watchdir,
             tiff_stem=stem,
-            mode=self._c.state.analysis_mode,
+            monodisperse_armed=self._c.state.monodisperse_armed,
+            polydisperse_armed=self._c.state.polydisperse_armed,
             tiff_path=hist[idx],
             watch_mode=self._c.state.watch_mode,
         )

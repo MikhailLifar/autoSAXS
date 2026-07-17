@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from PyQt5.QtCore import QTimer, pyqtSignal
 from PyQt5.QtWidgets import QFormLayout, QLabel, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
 
@@ -19,12 +21,17 @@ class GuinierPane(QWidget):
         self._lbl_class = QLabel("—")
         self._lbl_class.setWordWrap(True)
         self._lbl_rg = QLabel("—")
+        # Minimum 0 + special value text ⇒ unset / skill-chosen interval.
         self._first = QSpinBox()
-        self._first.setMinimum(1)
+        self._first.setMinimum(0)
         self._first.setMaximum(99999)
+        self._first.setSpecialValueText("(auto)")
+        self._first.setValue(0)
         self._last = QSpinBox()
-        self._last.setMinimum(1)
+        self._last.setMinimum(0)
         self._last.setMaximum(99999)
+        self._last.setSpecialValueText("(auto)")
+        self._last.setValue(0)
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(300)
@@ -61,15 +68,30 @@ class GuinierPane(QWidget):
     def set_range(self, first: int, last: int, *, emit: bool = False) -> None:
         self._block_range = True
         try:
-            self._first.setValue(max(1, int(first)))
-            self._last.setValue(max(int(first), int(last)))
+            f = max(1, int(first))
+            self._first.setValue(f)
+            self._last.setValue(max(f, int(last)))
         finally:
             self._block_range = False
         if emit:
             self._emit_range()
 
-    def first_last(self) -> tuple[int, int]:
-        return int(self._first.value()), int(self._last.value())
+    def clear_interval(self) -> None:
+        """Reset first/last to (auto) without emitting range_changed."""
+        self._block_range = True
+        try:
+            self._first.setValue(0)
+            self._last.setValue(0)
+        finally:
+            self._block_range = False
+
+    def first_last(self) -> tuple[Optional[int], Optional[int]]:
+        """Return explicit indices, or (None, None) / partial Nones when still (auto)."""
+        f = int(self._first.value())
+        l = int(self._last.value())
+        first = None if f <= 0 else f
+        last = None if l <= 0 else l
+        return first, last
 
     def set_diagnostics(
         self,
@@ -89,11 +111,13 @@ class GuinierPane(QWidget):
     def clear_view(self) -> None:
         self._plot.clear_plot()
         self.set_diagnostics()
+        self.clear_interval()
 
     def _on_range_spin(self, _v: int) -> None:
         if self._block_range:
             return
-        if self._last.value() < self._first.value():
+        # Keep last >= first when both are explicit.
+        if self._first.value() > 0 and self._last.value() > 0 and self._last.value() < self._first.value():
             self._block_range = True
             try:
                 self._last.setValue(self._first.value())
@@ -104,4 +128,7 @@ class GuinierPane(QWidget):
     def _emit_range(self) -> None:
         if self._block_range:
             return
-        self.range_changed.emit(int(self._first.value()), int(self._last.value()))
+        first, last = self.first_last()
+        if first is None or last is None:
+            return
+        self.range_changed.emit(int(first), int(last))

@@ -63,6 +63,7 @@ class LiveviewMainWindow(QMainWindow):
         self._controller.bind_panels(left=self._left, middle=self._middle, right=self._right, parent=self)
         self._wire_ui()
         self._sub_wizard: SubtractionWizardDialog | None = None
+        self._sub_apply_pending = False
 
     def _enforce_column_width_ratio(self) -> None:
         sp = self._splitter
@@ -187,8 +188,6 @@ class LiveviewMainWindow(QMainWindow):
         self._left.calibration_reset_requested.connect(self._controller.reset_calibration)
         self._left.buffer_reset_requested.connect(self._controller.reset_buffer)
         self._left.subtract_config_changed.connect(self._controller.on_subtract_config_changed)
-        self._right.fit_sizes_run_requested.connect(self._controller.run_fit_sizes)
-        self._right.fit_mixture_run_requested.connect(self._controller.run_fit_mixture)
         self._right.monodisperse_wizard_open_requested.connect(self._controller.on_monodisperse_wizard_open)
         self._right.monodisperse_intervention.connect(self._controller.on_monodisperse_intervention)
         self._right.monodisperse_shape_config.connect(self._controller.on_monodisperse_shape_config)
@@ -197,15 +196,22 @@ class LiveviewMainWindow(QMainWindow):
         self._right.monodisperse_shape_rerun.connect(self._controller.on_monodisperse_shape_rerun)
         self._right.monodisperse_resume_queue.connect(self._controller.on_monodisperse_resume_queue)
         self._right.monodisperse_stop_queue.connect(self._controller.on_monodisperse_stop_queue)
+        self._right.polydisperse_window_open_requested.connect(self._controller.on_polydisperse_window_open)
+        self._right.polydisperse_intervention.connect(self._controller.on_polydisperse_intervention)
+        self._right.polydisperse_mixture_config.connect(self._controller.on_polydisperse_mixture_config)
+        self._right.polydisperse_guinier_rerun.connect(self._controller.on_polydisperse_guinier_rerun)
+        self._right.polydisperse_sizes_rerun.connect(self._controller.on_polydisperse_sizes_rerun)
+        self._right.polydisperse_mixture_rerun.connect(self._controller.on_polydisperse_mixture_rerun)
+        self._right.polydisperse_resume_queue.connect(self._controller.on_polydisperse_resume_queue)
+        self._right.polydisperse_stop_queue.connect(self._controller.on_polydisperse_stop_queue)
         self._middle.tiff_files_dropped.connect(self._on_tiff_files_dropped)
         self._middle.history_step.connect(self._controller.history_step)
         self._middle.process_history_file_requested.connect(self._controller.process_history_file)
         self._middle.subtraction_wizard_requested.connect(self._open_subtraction_wizard)
-        self._right.analysis_mode_changed.connect(self._controller.on_analysis_mode_changed)
+        self._right.analysis_arming_changed.connect(self._controller.on_analysis_arming_changed)
 
     def _open_subtraction_wizard(self) -> None:
-        from ..session.state import LiveviewState
-        from .controller.monodisperse import PAUSE_SOURCE_SUBTRACTION
+        from .session.state import LiveviewState
 
         st = self._state.current_state()
         if st not in (LiveviewState.C, LiveviewState.CD):
@@ -233,7 +239,7 @@ class LiveviewMainWindow(QMainWindow):
                 self._sub_wizard.close()
             except Exception:
                 pass
-        self._controller.pause_executor(source=PAUSE_SOURCE_SUBTRACTION)
+        self._sub_apply_pending = False
         self._sub_wizard = SubtractionWizardDialog(
             sample_dat=sample_dat,
             buffer_dat=buffer_dat,
@@ -241,7 +247,7 @@ class LiveviewMainWindow(QMainWindow):
             subtract_options=subtract_options,
             parent=self,
         )
-        self._sub_wizard.preview_scale_changed.connect(self._controller.preview_manual_subtraction_scale)
+        self._sub_wizard.preview_scale_changed.connect(self._on_subtraction_scale_changed)
         self._sub_wizard.apply_requested.connect(self._on_subtraction_apply_requested)
         try:
             self._sub_wizard.finished.connect(self._on_subtraction_wizard_finished)  # type: ignore[attr-defined]
@@ -251,10 +257,15 @@ class LiveviewMainWindow(QMainWindow):
         self._sub_wizard.raise_()
         self._sub_wizard.activateWindow()
 
-    def _on_subtraction_wizard_finished(self, _code: int) -> None:
-        from .controller.monodisperse import PAUSE_SOURCE_SUBTRACTION
+    def _on_subtraction_scale_changed(self, scale: float) -> None:
+        self._controller.on_subtraction_control_changed()
+        self._controller.preview_manual_subtraction_scale(scale)
 
-        self._controller.resume_executor(source=PAUSE_SOURCE_SUBTRACTION)
+    def _on_subtraction_wizard_finished(self, _code: int) -> None:
+        if self._sub_apply_pending:
+            self._sub_apply_pending = False
+            return
+        self._controller.on_subtraction_wizard_closed()
 
     def _on_subtraction_apply_requested(self, scaling_factor: float) -> None:
         ctx = self._controller.middle_subtraction_context()
@@ -263,11 +274,13 @@ class LiveviewMainWindow(QMainWindow):
         if not sample_dat or not buffer_dat:
             QMessageBox.warning(self, "Subtraction", "Missing sample/buffer curves for the current file.")
             return
+        self._sub_apply_pending = True
         try:
             if self._sub_wizard is not None:
                 self._sub_wizard.close()
         except Exception:
-            pass
+            self._sub_apply_pending = False
+            raise
         self._controller.apply_subtraction_rerun(
             scaling_factor=float(scaling_factor),
             sample_dat=sample_dat,

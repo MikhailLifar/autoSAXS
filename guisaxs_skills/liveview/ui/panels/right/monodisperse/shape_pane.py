@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....widgets.viewer_3d import LiveviewViewer3D
+from .....session.state import DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES
 from .plots import ShapeFitPlot
 
 try:
@@ -76,10 +77,11 @@ class ShapePane(QWidget):
         self._lbl_models = QLabel("Body models")
         ctrl_lay.addWidget(self._lbl_models)
         self._shapes = QListWidget()
+        default_shapes = set(DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES)
         for name in BODIES_SHAPES_LIST:
             item = QListWidgetItem(name)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked)
+            item.setCheckState(Qt.Checked if name in default_shapes else Qt.Unchecked)
             self._shapes.addItem(item)
         self._shapes.itemChanged.connect(lambda *_: self.mode_changed.emit(self.shape_mode()))
         ctrl_lay.addWidget(self._shapes, 1)
@@ -130,10 +132,11 @@ class ShapePane(QWidget):
         return out
 
     def set_selected_shapes(self, shapes: Optional[List[str]]) -> None:
-        want = set(shapes or [])
+        """Apply checklist; empty/None → default (ellipsoid only)."""
+        want = set(shapes) if shapes else set(DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES)
         for i in range(self._shapes.count()):
             item = self._shapes.item(i)
-            item.setCheckState(Qt.Checked if not want or item.text() in want else Qt.Unchecked)
+            item.setCheckState(Qt.Checked if item.text() in want else Qt.Unchecked)
 
     def set_running(self, running: bool) -> None:
         # Global busy: lock Re-run and BODIES checklist; keep mode radios enabled (config).

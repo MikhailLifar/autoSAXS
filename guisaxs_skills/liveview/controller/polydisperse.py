@@ -6,16 +6,16 @@ from typing import TYPE_CHECKING, Optional
 
 from PyQt5.QtWidgets import QMessageBox
 
-from ..pipeline.monodisperse_pipeline import MonodispersePipelineParts, build_monodisperse_steps
+from ..pipeline.polydisperse_pipeline import PolydispersePipelineParts, build_polydisperse_steps
 from ..session.output_paths import tiff_output_root
-from ..session.state import MonodisperseShapeMode
+from ..session.state import PolydisperseMixtureMode
 from ...logic.runner_qprocess import RunOutcome
 
 if TYPE_CHECKING:
     from .controller import LiveviewController
 
 
-class LiveviewMonodisperseHandler:
+class LiveviewPolydisperseHandler:
     def __init__(self, controller: LiveviewController) -> None:
         self._c = controller
 
@@ -26,11 +26,11 @@ class LiveviewMonodisperseHandler:
         self._c.processing_mode.stop()
         self._c.executor.cancel_current()
 
-    def on_shape_config_changed(self) -> None:
-        """Shape mode / BODIES list: configuration only — no pause."""
+    def on_mixture_config_changed(self) -> None:
+        """Mixture mode: configuration only — no pause."""
         right = self._c.right
         if right is not None:
-            right.monodisperse_coordinator.sync_params_to_state()
+            right.polydisperse_coordinator.sync_params_to_state()
         self.refresh_queue_ui()
 
     def on_stop_queue(self) -> None:
@@ -55,7 +55,7 @@ class LiveviewMonodisperseHandler:
         )
         right = self._c.right
         if right is not None:
-            right.monodisperse_coordinator.set_context(
+            right.polydisperse_coordinator.set_context(
                 profile_path=str(prof.resolve()),
                 output_root=root,
                 tiff_path=tiff_path,
@@ -67,27 +67,7 @@ class LiveviewMonodisperseHandler:
         prof, root, _tp = self._profile_root_and_tiff()
         return prof, root
 
-    def _enqueue_manual(self, steps) -> bool:
-        prof, root = self._profile_and_root()
-        if not prof or root is None:
-            parent = self._c.parent_widget
-            if parent is not None:
-                QMessageBox.warning(parent, "Monodisperse", "No profile curve available for the current file.")
-            return False
-        if self._c.runner.is_running():
-            self._c.executor.cancel_current()
-        right = self._c.right
-        if right is not None:
-            right.monodisperse_coordinator.sync_params_to_state()
-        job = self._c.executor.build_monodisperse_manual_job(
-            profile_abs=prof,
-            steps=steps,
-            output_root=root,
-        )
-        self._c.executor.enqueue_job(job)
-        return True
-
-    def on_guinier_chain(self) -> None:
+    def on_guinier_rerun(self) -> None:
         prof, root = self._profile_and_root()
         if not prof or root is None:
             return
@@ -95,26 +75,25 @@ class LiveviewMonodisperseHandler:
         first_i: Optional[int] = None
         last_i: Optional[int] = None
         if right is not None:
-            right.monodisperse_coordinator.sync_params_to_state()
-            first_i, last_i = right.monodisperse_wizard.guinier_pane.first_last()
+            right.polydisperse_coordinator.sync_params_to_state()
+            first_i, last_i = right.polydisperse_window.guinier_pane.first_last()
         fixed = first_i is not None and last_i is not None
-        steps = build_monodisperse_steps(
+        steps = build_polydisperse_steps(
             prof,
             output_root=root,
             state=self._c.state,
-            parts=MonodispersePipelineParts.GUINIER_AND_DISTANCES,
+            parts=PolydispersePipelineParts.GUINIER_ONLY,
             load_yaml=self._c.executor._load_yaml_options,
             fixed_guinier_interval=fixed,
             guinier_interval_first=first_i,
             guinier_interval_last=last_i,
         )
         if not fixed:
-            # User edited spins but interval still incomplete / still (auto).
             parent = self._c.parent_widget
             if parent is not None:
                 QMessageBox.warning(
                     parent,
-                    "Monodisperse",
+                    "Polydisperse",
                     "Guinier interval is incomplete (need both first and last point indices).",
                 )
             return
@@ -124,74 +103,59 @@ class LiveviewMonodisperseHandler:
             if parent is not None:
                 QMessageBox.warning(
                     parent,
-                    "Monodisperse",
+                    "Polydisperse",
                     "Guinier interval is incomplete (need both first and last point indices).",
                 )
             return
-        job = self._c.executor.build_monodisperse_manual_job(profile_abs=prof, steps=steps, output_root=root)
-        self._c.executor.enqueue_job(job)
-
-    def on_gnom_rerun(self) -> None:
-        prof, root = self._profile_and_root()
-        if not prof or root is None:
-            return
-        right = self._c.right
-        handoff = right.monodisperse_coordinator.last_guinier_handoff if right is not None else {}
-        if right is not None:
-            right.monodisperse_coordinator.sync_params_to_state()
-        steps = build_monodisperse_steps(
-            prof,
-            output_root=root,
-            state=self._c.state,
-            parts=MonodispersePipelineParts.DISTANCES_ONLY,
-            load_yaml=self._c.executor._load_yaml_options,
-            guinier_handoff=handoff or None,
+        job = self._c.executor.build_polydisperse_manual_job(
+            profile_abs=prof, steps=steps, output_root=root
         )
-        job = self._c.executor.build_monodisperse_manual_job(profile_abs=prof, steps=steps, output_root=root)
         self._c.executor.enqueue_job(job)
 
-    def on_shape_rerun(self) -> None:
+    def on_sizes_rerun(self) -> None:
         prof, root = self._profile_and_root()
         if not prof or root is None:
             return
-        mode = self._c.state.monodisperse_shape_mode
-        if mode == MonodisperseShapeMode.NONE:
-            return
         right = self._c.right
         if right is not None:
-            right.monodisperse_coordinator.sync_params_to_state()
-        gnom_out = ""
-        if mode == MonodisperseShapeMode.DAMMIF:
-            if right is not None:
-                gnom_out = (right.monodisperse_coordinator.gnom_out_for_dammif() or "").strip()
-            if not gnom_out:
-                parent = self._c.parent_widget
-                if parent is not None:
-                    QMessageBox.warning(
-                        parent,
-                        "Monodisperse",
-                        "No usable GNOM .out found. Run fit_distances first, then re-run DAMMIF.",
-                    )
-                return
-        steps = build_monodisperse_steps(
+            right.polydisperse_coordinator.sync_params_to_state()
+        steps = build_polydisperse_steps(
             prof,
             output_root=root,
             state=self._c.state,
-            parts=MonodispersePipelineParts.SHAPE_ONLY,
+            parts=PolydispersePipelineParts.SIZES_ONLY,
             load_yaml=self._c.executor._load_yaml_options,
-            gnom_out_path=gnom_out or None,
+        )
+        job = self._c.executor.build_polydisperse_manual_job(
+            profile_abs=prof, steps=steps, output_root=root
+        )
+        self._c.executor.enqueue_job(job)
+
+    def on_mixture_rerun(self) -> None:
+        prof, root = self._profile_and_root()
+        if not prof or root is None:
+            return
+        if self._c.state.polydisperse_mixture_mode == PolydisperseMixtureMode.NONE:
+            return
+        right = self._c.right
+        if right is not None:
+            right.polydisperse_coordinator.sync_params_to_state()
+        steps = build_polydisperse_steps(
+            prof,
+            output_root=root,
+            state=self._c.state,
+            parts=PolydispersePipelineParts.MIXTURE_ONLY,
+            load_yaml=self._c.executor._load_yaml_options,
         )
         if not steps:
             return
-        job = self._c.executor.build_monodisperse_manual_job(
-            profile_abs=prof,
-            steps=steps,
-            output_root=root,
+        job = self._c.executor.build_polydisperse_manual_job(
+            profile_abs=prof, steps=steps, output_root=root
         )
         self._c.executor.enqueue_job(job)
 
     def update_profile_from_artifacts(self, result: dict) -> None:
-        if not self._c.state.monodisperse_armed:
+        if not self._c.state.polydisperse_armed:
             return
         sub = result.get("subtracted_1d")
         integ = result.get("integrated_1d")
@@ -217,16 +181,15 @@ class LiveviewMonodisperseHandler:
                 tiff_path=tiff_path,
                 mode=self._c.state.watch_mode,
             )
-        right.monodisperse_coordinator.set_context(
+        right.polydisperse_coordinator.set_context(
             profile_path=path,
             output_root=root,
             tiff_path=tiff_path,
             watch_mode=self._c.state.watch_mode,
         )
 
-    def sync_wizard_context_before_ingest(self, outcome: RunOutcome) -> None:
-        """Ensure monodisperse wizard has profile/output_root before skill result ingestion."""
-        if not self._c.state.monodisperse_armed:
+    def sync_window_context_before_ingest(self, outcome: RunOutcome) -> None:
+        if not self._c.state.polydisperse_armed:
             return
         right = self._c.right
         if right is None or outcome.request is None:
@@ -254,7 +217,7 @@ class LiveviewMonodisperseHandler:
             if p is not None and p.is_file():
                 prof = str(p.resolve())
         if prof:
-            right.monodisperse_coordinator.set_context(
+            right.polydisperse_coordinator.set_context(
                 profile_path=prof,
                 output_root=root,
                 tiff_path=tiff_path,

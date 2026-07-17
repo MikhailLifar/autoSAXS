@@ -20,10 +20,15 @@ from ..common import (
 )
 
 NM_TO_ANGSTROM = 10.0
+ANGSTROM_TO_NM = 0.1
 
 
 def _nm_to_angstrom(value_nm: float) -> float:
     return float(value_nm) * NM_TO_ANGSTROM
+
+
+def _angstrom_to_nm(value_ang: float) -> float:
+    return float(value_ang) * ANGSTROM_TO_NM
 
 
 def _resolve_config_path(config_path: Optional[ConfigPathExpressionArg]) -> Optional[str]:
@@ -168,6 +173,8 @@ def fit_mixture(
     - `comparison_log_path`: Path to the log I vs q comparison plot (empty when `plot_logI_q=False`).
     - `distributions_path`: Path to the MIXTURE size distributions plot.
     - `results_csv_path`: Path to the MIXTURE results CSV.
+    - `r_max_nm` / `poly_max_nm`: Resolved MIXTURE radius bounds (nm), including defaults when omitted.
+    - `r_min_nm` / `poly_min_nm`: Resolved MIXTURE radius/polydispersity floors (nm).
 
     ### Python usage
 
@@ -347,6 +354,11 @@ def _fit_mixture_paths(
         "comparison_log_path": result.get("comparison_log_path", ""),
         "distributions_path": result["distributions_path"],
         "results_csv_path": result["results_csv_path"],
+        "best_label": result.get("best_label", ""),
+        "r_min_nm": _angstrom_to_nm(mixture_params["r_min"]),
+        "r_max_nm": _angstrom_to_nm(mixture_params["r_max"]),
+        "poly_min_nm": _angstrom_to_nm(mixture_params["poly_min"]),
+        "poly_max_nm": _angstrom_to_nm(mixture_params["poly_max"]),
     }
 
 

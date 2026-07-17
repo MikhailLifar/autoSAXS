@@ -156,7 +156,13 @@ def _dr_quality_result_keys() -> List[str]:
         "dr_n_peaks",
         "modality_class",
         "rg_guinier_nm",
+        "dmax_nm",
+        "q_min_fit_nm",
         "total_estimate",
+        "shannon_s_min",
+        "shannon_class",
+        "shannon_ok",
+        "shannon_tip",
         "sizes_quality_class",
         "overall_status",
         "quality_rationale",
@@ -174,7 +180,13 @@ def _empty_dr_quality_fields() -> Dict[str, Any]:
         "dr_n_peaks": 0,
         "modality_class": "unknown",
         "rg_guinier_nm": None,
+        "dmax_nm": None,
+        "q_min_fit_nm": None,
         "total_estimate": None,
+        "shannon_s_min": None,
+        "shannon_class": "unknown",
+        "shannon_ok": None,
+        "shannon_tip": "",
         "sizes_quality_class": "failed",
         "overall_status": "FAILED",
         "quality_rationale": [],
@@ -193,6 +205,11 @@ def _serialize_dr_quality_for_return(quality: Dict[str, Any]) -> Dict[str, Union
             out[key] = [str(float(x)) for x in (val or [])]
         elif key == "dr_n_peaks":
             out[key] = int(val or 0)
+        elif key == "shannon_ok":
+            if val is None:
+                out[key] = ""
+            else:
+                out[key] = "true" if bool(val) else "false"
         elif isinstance(val, (list, dict)):
             continue
         elif val is None:
@@ -214,6 +231,8 @@ def _assess_and_write_dr_quality(
     shape: str,
     neg_frac: Optional[float],
     event_bus: Optional[EventBus],
+    q_nm: Optional[np.ndarray] = None,
+    first_pt_1based: Optional[int] = None,
 ) -> Dict[str, Any]:
     parsed = parse_gnom_out(out_text)
     quality = analyze_dr_quality(
@@ -222,6 +241,8 @@ def _assess_and_write_dr_quality(
         rg_guinier_nm=rg_guinier_nm,
         shape=shape,
         neg_frac=neg_frac,
+        q_nm=q_nm,
+        first_pt_1based=first_pt_1based,
     )
     passport_path = os.path.join(output_dir, f"{base}_fit_sizes_quality.yml")
     write_quality_passport_yaml(
@@ -244,6 +265,14 @@ def _dr_quality_markdown(quality: Dict[str, Any]) -> str:
     te = quality.get("total_estimate")
     if te is not None:
         lines.append(f"\n- **Total Estimate:** {float(te):.3f}")
+    s_min = quality.get("shannon_s_min")
+    if s_min is not None:
+        lines.append(
+            f"\n- **Shannon s_min:** {float(s_min):.3f} ({quality.get('shannon_class', 'unknown')})"
+        )
+    tip = quality.get("shannon_tip")
+    if tip:
+        lines.append(f"\n- **Shannon tip:** {tip}")
     pdi = quality.get("pdi")
     if pdi is not None:
         lines.append(f"\n- **PDI:** {float(pdi):.3f}")
@@ -677,6 +706,8 @@ def _finalize_fit_sizes_failure(
         shape=shape,
         neg_frac=None,
         event_bus=event_bus,
+        q_nm=None,
+        first_pt_1based=None,
     )
     quality["user_tips"] = list(quality.get("user_tips") or []) + [
         f"GNOM failed ({failure_reason})."
@@ -969,6 +1000,8 @@ def _fit_sizes_paths(
         shape=shape,
         neg_frac=best.get("neg_frac"),
         event_bus=event_bus,
+        q_nm=q_nm,
+        first_pt_1based=first_pt,
     )
 
     if eval_tmp_path:
