@@ -10,7 +10,8 @@ import yaml
 
 from .....session.output_paths import (
     dammif_dir,
-    fit_bodies_dir,
+    denss_dir,
+    model_bodies_dir,
     fit_distances_dir,
     guinier_mono_dir,
     tiff_output_root,
@@ -24,6 +25,8 @@ from .....services.artifacts import (
     norm_artifact_path,
     resolve_artifact_path,
 )
+from .....services.dam_models import build_dam_model_catalog
+from .....services.denss_models import build_denss_model_catalog
 from .format_display import format_display_number, scalar_value
 from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
 
@@ -122,7 +125,7 @@ class MonodisperseArtifactPresenter:
             self._ingest_guinier(result)
         elif sn == "fit_distances" or self._looks_like_fit_distances(result):
             self._ingest_gnom(result)
-        elif sn in ("fit_dammif", "fit_bodies") or result.get("output_subdir"):
+        elif sn in ("model_dam", "model_bodies", "model_density") or result.get("output_subdir"):
             self._ingest_shape(result, skill_name=sn)
 
     def _looks_like_fit_distances(self, result: dict) -> bool:
@@ -289,10 +292,18 @@ class MonodisperseArtifactPresenter:
         sd = Path(sub.strip()).expanduser()
         if not sd.is_absolute():
             sd = (self._state.watchdir / sd).resolve()
-        if (sd / "bodies_fits.yml").is_file() or skill_name == "fit_bodies":
+        if (sd / "bodies_fits.yml").is_file() or skill_name == "model_bodies":
             self._ingest_bodies(sd)
-        elif any(sd.glob("dammif-*.cif")) or (sd / "dammif_fits.yml").is_file() or skill_name == "fit_dammif":
+        elif any(sd.glob("dammif-*.cif")) or (sd / "dammif_fits.yml").is_file() or skill_name == "model_dam":
             self._ingest_dammif(sd)
+        elif (
+            skill_name == "model_density"
+            or result.get("density_map_path")
+            or any(sd.glob("*_avg.mrc"))
+            or any(sd.glob("*_refined.mrc"))
+            or any(sd.glob("*_denss_input.dat"))
+        ):
+            self._ingest_denss(sd, result=result)
 
     def _ingest_bodies(self, sd: Path) -> None:
         best_shape, best_params, csv_p = bodies_best_fit(sd)
@@ -325,13 +336,71 @@ class MonodisperseArtifactPresenter:
             self._wizard.shape_pane.set_status("No BODIES fit")
 
     def _ingest_dammif(self, sd: Path) -> None:
-        cif = best_dammif_cif(sd)
-        if cif:
-            self._wizard.shape_pane.viewer.set_model_path(cif)
-        fir_cands = sorted(sd.glob("*.fir"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if fir_cands:
-            self._wizard.shape_pane.show_fir(str(fir_cands[0]), label="DAMMIF")
-        self._wizard.shape_pane.set_status(str(sd.name))
+        catalog = build_dam_model_catalog(sd)
+        best = catalog.best()
+        if best is not None:
+            self._wizard.shape_pane.viewer.set_dam_catalog(catalog)
+            if best.fir_path and os.path.isfile(best.fir_path):
+                self._wizard.shape_pane.show_fir(best.fir_path, label="DAMMIF (most probable)")
+            else:
+                fir_cands = sorted(sd.glob("*.fir"), key=lambda p: p.stat().st_mtime, reverse=True)
+                if fir_cands:
+                    self._wizard.shape_pane.show_fir(str(fir_cands[0]), label="DAMMIF")
+            n_models = sum(1 for e in catalog.entries if e.kind == "dam" and e.key.startswith("run-"))
+            has_occ = any(e.kind == "occupancy" for e in catalog.entries)
+            bits = [sd.name, best.label]
+            if n_models:
+                bits.append(f"{n_models} run(s)")
+            if has_occ:
+                bits.append("occupancy map")
+            self._wizard.shape_pane.set_status(" · ".join(bits))
+        else:
+            cif = best_dammif_cif(sd)
+            if cif:
+                self._wizard.shape_pane.viewer.set_model_path(cif)
+            fir_cands = sorted(sd.glob("*.fir"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if fir_cands:
+                self._wizard.shape_pane.show_fir(str(fir_cands[0]), label="DAMMIF")
+            self._wizard.shape_pane.set_status(str(sd.name))
+
+    def _ingest_denss(self, sd: Path, *, result: Optional[dict] = None) -> None:
+        catalog = build_denss_model_catalog(sd)
+        best = catalog.best()
+        if best is None and result:
+            # Fallback: skill returned absolute paths before nesting settled.
+            dens = (result or {}).get("density_map_path") or ""
+            if isinstance(dens, str) and dens.strip() and Path(dens).is_file():
+                from .....services.denss_models import DenssModelCatalog, DenssModelEntry
+
+                sig = (result or {}).get("sigma_map_path") or ""
+                fit = (result or {}).get("map_fit_path") or ""
+                catalog = DenssModelCatalog(
+                    entries=[
+                        DenssModelEntry(
+                            key="primary",
+                            label=Path(dens).name,
+                            mrc_path=str(Path(dens).resolve()),
+                            kind="density",
+                            fit_path=str(Path(fit).resolve()) if fit and Path(fit).is_file() else None,
+                            sigma_path=str(Path(sig).resolve()) if sig and Path(sig).is_file() else None,
+                            is_primary=True,
+                        )
+                    ],
+                    best_key="primary",
+                    output_subdir=str(sd.resolve()),
+                )
+                best = catalog.best()
+        if best is not None:
+            self._wizard.shape_pane.viewer.set_denss_catalog(catalog)
+            fit = best.fit_path
+            if fit and os.path.isfile(fit):
+                self._wizard.shape_pane.show_map_fit(fit, label="DENSS")
+            bits = [sd.name, best.label]
+            if best.sigma_path:
+                bits.append("σ map")
+            self._wizard.shape_pane.set_status(" · ".join(bits))
+        else:
+            self._wizard.shape_pane.set_status(f"No DENSS density in {sd.name}")
 
     def load_from_disk(
         self,
@@ -358,18 +427,28 @@ class MonodisperseArtifactPresenter:
         mode = self._state.monodisperse_shape_mode
         if mode == MonodisperseShapeMode.NONE:
             dam = dammif_dir(root) / stem
-            fb = fit_bodies_dir(root) / stem
+            fb = model_bodies_dir(root) / stem
+            dens = denss_dir(root) / stem
             has_dam = dam.is_dir() and (
                 any(dam.glob("dammif-*.cif")) or (dam / "dammif_fits.yml").is_file()
             )
             has_bod = fb.is_dir() and (
                 (fb / "bodies_fits.yml").is_file() or any(fb.glob("*.fir"))
             )
-            if has_dam and not has_bod:
+            has_denss = dens.is_dir() and (
+                any(dens.glob("*.mrc"))
+                or any(dens.glob("*_denss_input.dat"))
+                or any(p.is_dir() and any(p.glob("*_avg.mrc")) for p in dens.iterdir() if p.is_dir())
+            )
+            if has_denss and not has_dam and not has_bod:
+                mode = MonodisperseShapeMode.DENSS
+                self._state.monodisperse_shape_mode = mode
+                self._wizard.shape_pane.set_shape_mode("denss")
+            elif has_dam and not has_bod and not has_denss:
                 mode = MonodisperseShapeMode.DAMMIF
                 self._state.monodisperse_shape_mode = mode
                 self._wizard.shape_pane.set_shape_mode("dammif")
-            elif has_bod and not has_dam:
+            elif has_bod and not has_dam and not has_denss:
                 mode = MonodisperseShapeMode.BODIES
                 self._state.monodisperse_shape_mode = mode
                 self._wizard.shape_pane.set_shape_mode("bodies")
@@ -378,9 +457,13 @@ class MonodisperseArtifactPresenter:
             if dam.is_dir():
                 self._ingest_dammif(dam)
         elif mode == MonodisperseShapeMode.BODIES:
-            fb = fit_bodies_dir(root) / stem
+            fb = model_bodies_dir(root) / stem
             if fb.is_dir():
                 self._ingest_bodies(fb)
+        elif mode == MonodisperseShapeMode.DENSS:
+            dens = denss_dir(root) / stem
+            if dens.is_dir():
+                self._ingest_denss(dens)
 
     @property
     def last_guinier_handoff(self) -> Dict[str, Any]:

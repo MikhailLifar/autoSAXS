@@ -10,6 +10,8 @@ from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidg
 
 from ....logic.path_display import contracted_path_label
 from ....ui.saxs_interactive_3d import Interactive3DViewerDialog, SaxsInteractive3DWidget
+from ...services.dam_models import DamModelCatalog
+from ...services.denss_models import DenssModelCatalog, DenssModelEntry
 
 
 class LiveviewViewer3D(QWidget):
@@ -24,6 +26,8 @@ class LiveviewViewer3D(QWidget):
         self._bodies_shape: Optional[str] = None
         self._bodies_params: Optional[dict[str, float]] = None
         self._open_folder: Optional[Path] = None
+        self._dam_catalog: Optional[DamModelCatalog] = None
+        self._denss_catalog: Optional[DenssModelCatalog] = None
         self._plot = SaxsInteractive3DWidget(self, embedded=True)
         self._plot.set_full_view_callback(self._open_full_3d_dialog)
         self._full_3d: Optional[Interactive3DViewerDialog] = None
@@ -48,10 +52,50 @@ class LiveviewViewer3D(QWidget):
         self._bodies_shape = None
         self._bodies_params = None
         self._open_folder = None
+        self._dam_catalog = None
+        self._denss_catalog = None
         self._plot.setToolTip("")
         self._open_btn.setToolTip("")
         self._open_btn.setEnabled(False)
         self._plot.clear()
+
+    def set_dam_catalog(self, catalog: Optional[DamModelCatalog]) -> None:
+        """Attach ensemble catalog for the dedicated dialog; embedded view stays on best."""
+        self._dam_catalog = catalog
+        self._denss_catalog = None
+        if catalog is None:
+            return
+        best = catalog.best()
+        if best is not None:
+            self.set_model_path(best.cif_path)
+            tip = best.label
+            self._hint.setText(f"{tip}. Click preview for interactive 3D.")
+            if catalog.output_subdir:
+                self._open_folder = Path(catalog.output_subdir)
+                self._open_btn.setEnabled(self._open_folder.is_dir())
+
+    def set_denss_catalog(self, catalog: Optional[DenssModelCatalog]) -> None:
+        """Attach DENSS catalog; embedded view shows primary density as a point cloud."""
+        self._denss_catalog = catalog
+        self._dam_catalog = None
+        self._cif_path = None
+        self._bodies_shape = None
+        self._bodies_params = None
+        if catalog is None:
+            return
+        best = catalog.best()
+        if best is None:
+            return
+        self._open_folder = Path(catalog.output_subdir) if catalog.output_subdir else Path(best.mrc_path).parent
+        self._open_btn.setEnabled(self._open_folder.is_dir())
+        tip = best.label
+        self._open_btn.setToolTip(tip)
+        self._plot.setToolTip(tip)
+        ok = self._plot.load_mrc(best.mrc_path, sigma_path=best.sigma_path, title=best.label)
+        if not ok:
+            self._hint.setText("Could not load DENSS density. Open folder for files.")
+        else:
+            self._hint.setText(f"{tip}. Click preview for interactive 3D (ρ/σ toggle).")
 
     def set_model_path(self, path: Optional[str]) -> None:
         """Load ``.cif`` for 3D; directories enable “open folder” without a loaded model."""
@@ -59,6 +103,10 @@ class LiveviewViewer3D(QWidget):
         self._cif_path = None
         self._bodies_shape = None
         self._bodies_params = None
+        # Keep denss catalog unless clearing entirely via clear().
+        if not p:
+            self._dam_catalog = None
+            self._denss_catalog = None
         self._open_folder = None
 
         pp = Path(p) if p else None
@@ -69,6 +117,7 @@ class LiveviewViewer3D(QWidget):
                 self._open_folder = pp.resolve()
 
         if p and os.path.isfile(p) and p.lower().endswith(".cif"):
+            self._denss_catalog = None
             self._cif_path = p
             short, full = contracted_path_label(p)
             self._open_btn.setEnabled(True)
@@ -115,6 +164,8 @@ class LiveviewViewer3D(QWidget):
     ) -> None:
         """3D preview from analytical BODIES shape (isosurface), not damstart ``.cif``."""
         self._cif_path = None
+        self._dam_catalog = None
+        self._denss_catalog = None
         self._bodies_shape = shape
         self._bodies_params = dict(params)
         if folder is not None:
@@ -133,19 +184,51 @@ class LiveviewViewer3D(QWidget):
             self._full_3d = Interactive3DViewerDialog(self)
             self._full_3d.finished.connect(self._on_full_3d_dialog_closed)
         self._plot.pause_embedded_rotation()
-        p = self._cif_path
-        if p and os.path.isfile(p) and p.lower().endswith(".cif"):
-            short, _full = contracted_path_label(p)
-            self._full_3d.set_cif_path(p, window_title=f"3D — {short}")
-        elif self._bodies_shape is not None and self._bodies_params is not None:
-            self._full_3d.set_bodies_analytical(
-                self._bodies_shape,
-                self._bodies_params,
-                window_title=f"3D — {self._bodies_shape} (analytical)",
+        if self._denss_catalog is not None and self._denss_catalog.entries:
+            ok = self._full_3d.set_denss_catalog(
+                self._denss_catalog, select_key=self._denss_catalog.best_key
             )
+            if not ok:
+                self._plot.resume_embedded_rotation_if_visible()
+                return
+        elif self._dam_catalog is not None and self._dam_catalog.entries:
+            ok = self._full_3d.set_dam_catalog(self._dam_catalog, select_key=self._dam_catalog.best_key)
+            if not ok:
+                self._plot.resume_embedded_rotation_if_visible()
+                return
         else:
-            self._plot.resume_embedded_rotation_if_visible()
-            return
+            p = self._cif_path
+            if p and os.path.isfile(p) and p.lower().endswith(".cif"):
+                short, _full = contracted_path_label(p)
+                self._full_3d.set_cif_path(p, window_title=f"3D — {short}")
+            elif self._bodies_shape is not None and self._bodies_params is not None:
+                self._full_3d.set_bodies_analytical(
+                    self._bodies_shape,
+                    self._bodies_params,
+                    window_title=f"3D — {self._bodies_shape} (analytical)",
+                )
+            else:
+                mrc, sig = self._plot.mrc_model()
+                if mrc and os.path.isfile(mrc):
+                    self._full_3d.set_denss_catalog(
+                        DenssModelCatalog(
+                            entries=[
+                                DenssModelEntry(
+                                    key="primary",
+                                    label=Path(mrc).name,
+                                    mrc_path=mrc,
+                                    kind="density",
+                                    sigma_path=sig,
+                                    is_primary=True,
+                                )
+                            ],
+                            best_key="primary",
+                            output_subdir=str(Path(mrc).parent),
+                        )
+                    )
+                else:
+                    self._plot.resume_embedded_rotation_if_visible()
+                    return
         self._full_3d.show()
         self._full_3d.raise_()
         self._full_3d.activateWindow()

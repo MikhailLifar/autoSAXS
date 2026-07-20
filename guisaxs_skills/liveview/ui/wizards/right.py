@@ -28,7 +28,7 @@ from ....ui.run_controls import RunControls
 from ....ui.skill_form import SkillForm
 
 try:
-    from autosaxs.skill.fit_bodies import BODIES_SHAPES_LIST
+    from autosaxs.skill.model_bodies import BODIES_SHAPES_LIST
 except Exception:
     BODIES_SHAPES_LIST = [
         "cylinder",
@@ -191,7 +191,7 @@ class FitDistancesWizardDialog(QDialog):
 
 
 class FitBodiesWizardDialog(QDialog):
-    """Choose ATSAS BODIES shapes for liveview primitives mode (saved to fit_bodies/fit_bodies.conf)."""
+    """Choose ATSAS BODIES shapes for liveview primitives mode (saved to model_bodies/model_bodies.conf)."""
 
     def __init__(
         self,
@@ -201,7 +201,7 @@ class FitBodiesWizardDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Set fit_bodies (shapes)")
+        self.setWindowTitle("Set model_bodies (shapes)")
         self.setMinimumWidth(480)
         self.resize(520, 420)
         self._watchdir = watchdir
@@ -221,8 +221,8 @@ class FitBodiesWizardDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.addWidget(
             QLabel(
-                "Select body models to fit (default: ellipsoid). Run/Apply writes fit_bodies/fit_bodies.conf. "
-                "The live queue runs fit_bodies only; --first comes from in-process Guinier (fit_guinier)."
+                "Select body models to fit (default: ellipsoid). Run/Apply writes model_bodies/model_bodies.conf. "
+                "The live queue runs model_bodies only; --first comes from in-process Guinier (fit_guinier)."
             )
         )
         lay.addWidget(self._list, 1)
@@ -263,8 +263,8 @@ class FitBodiesWizardDialog(QDialog):
 
     def _on_run_clicked(self) -> None:
         parent = self.parent()
-        if parent is not None and hasattr(parent, "fit_bodies_run_requested"):
-            getattr(parent, "fit_bodies_run_requested").emit()
+        if parent is not None and hasattr(parent, "model_bodies_run_requested"):
+            getattr(parent, "model_bodies_run_requested").emit()
 
     def _on_cancel_clicked(self) -> None:
         parent = self.parent()
@@ -379,7 +379,7 @@ class FitSizesWizardDialog(QDialog):
         QGuiApplication.clipboard().setText(text)
 
 
-# Written under watchdir/mixture/ for persistence (``fit_mixture:`` section; queue uses CLI options).
+# Written under watchdir/mixture/ for persistence (``model_mixture:`` section; queue uses CLI options).
 LIVEVIEW_MIXTURE_YML_NAME = "liveview_mixture.yml"
 
 
@@ -401,7 +401,7 @@ def _mixture_skill_options_from_form(form: SkillForm) -> dict[str, Any]:
     return out
 
 
-def fit_mixture_run_options_from_wizard(wizard: FitMixtureWizardDialog) -> dict[str, Any]:
+def model_mixture_run_options_from_wizard(wizard: FitMixtureWizardDialog) -> dict[str, Any]:
     """MIXTURE spinbox params plus q-range (and related) fields from the skill form."""
     merged = dict(wizard.mixture_params())
     merged.update(_mixture_skill_options_from_form(wizard._form))  # type: ignore[attr-defined]
@@ -409,7 +409,7 @@ def fit_mixture_run_options_from_wizard(wizard: FitMixtureWizardDialog) -> dict[
 
 
 class FitMixtureWizardDialog(QDialog):
-    """MIXTURE model parameters + fit_mixture options (q range); profile and config path are implicit."""
+    """MIXTURE model parameters + model_mixture options (q range); profile and config path are implicit."""
 
     def __init__(
         self,
@@ -421,13 +421,13 @@ class FitMixtureWizardDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Set fit_mixture (MIXTURE)")
+        self.setWindowTitle("Set model_mixture (MIXTURE)")
         self.setMinimumWidth(560)
         self.resize(720, 640)
         self._watchdir = watchdir
 
         skills = {m.name: m for m in discover_skills()}
-        meta = skills.get("fit_mixture")
+        meta = skills.get("model_mixture")
         self._form = SkillForm()
         self._controls = RunControls()
         self._controls.run_button.setText("Run/Apply")
@@ -491,7 +491,7 @@ class FitMixtureWizardDialog(QDialog):
             if saved_mixture_params:
                 self.set_mixture_params(saved_mixture_params)
         else:
-            lay.addWidget(QLabel("fit_mixture skill is not available."))
+            lay.addWidget(QLabel("model_mixture skill is not available."))
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.close)
@@ -539,7 +539,7 @@ class FitMixtureWizardDialog(QDialog):
 
     def write_mixture_config_yaml(self) -> Path:
         path = self.mixture_config_yaml_path()
-        doc = {"fit_mixture": fit_mixture_run_options_from_wizard(self)}
+        doc = {"model_mixture": model_mixture_run_options_from_wizard(self)}
         path.write_text(yaml.safe_dump(doc, sort_keys=True, allow_unicode=True), encoding="utf-8")
         return path
 
@@ -550,8 +550,8 @@ class FitMixtureWizardDialog(QDialog):
         saved = None
         mix_saved: Optional[dict[str, Any]] = None
         if par is not None:
-            saved = getattr(par, "_fit_mixture_saved_form", None)  # noqa: SLF001
-            mix_saved = getattr(par, "_fit_mixture_saved_mixture_params", None)  # noqa: SLF001
+            saved = getattr(par, "_model_mixture_saved_form", None)  # noqa: SLF001
+            mix_saved = getattr(par, "_model_mixture_saved_mixture_params", None)  # noqa: SLF001
         out = self._watchdir / "mixture"
         out.mkdir(parents=True, exist_ok=True)
         self._form.set_skill(
@@ -568,11 +568,11 @@ class FitMixtureWizardDialog(QDialog):
         if isinstance(mix_saved, dict) and mix_saved:
             self.set_mixture_params(mix_saved)
 
-    def build_fit_mixture_request(self) -> RunRequest:
+    def build_model_mixture_request(self) -> RunRequest:
         if self._meta is None:
-            raise RuntimeError("fit_mixture skill is not available")
+            raise RuntimeError("model_mixture skill is not available")
         req = self._form.build_request()
-        opts = fit_mixture_run_options_from_wizard(self)
+        opts = model_mixture_run_options_from_wizard(self)
         opts.pop("output_dir", None)
         opts.pop("use_cache", None)
         opts.pop("config_path", None)
@@ -590,8 +590,8 @@ class FitMixtureWizardDialog(QDialog):
         if self._meta is None:
             return
         parent = self.parent()
-        if parent is not None and hasattr(parent, "fit_mixture_run_requested"):
-            getattr(parent, "fit_mixture_run_requested").emit()
+        if parent is not None and hasattr(parent, "model_mixture_run_requested"):
+            getattr(parent, "model_mixture_run_requested").emit()
 
     def _on_cancel_clicked(self) -> None:
         parent = self.parent()
@@ -603,7 +603,7 @@ class FitMixtureWizardDialog(QDialog):
             return
         try:
             self.write_mixture_config_yaml()
-            req = self.build_fit_mixture_request()
+            req = self.build_model_mixture_request()
         except Exception as e:
             QMessageBox.critical(self, "Cannot build request", str(e))
             return

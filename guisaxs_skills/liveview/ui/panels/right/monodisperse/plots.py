@@ -10,7 +10,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PyQt5.QtCore import Qt
 
-from autosaxs.core.gnom import parse_gnom_out
+from autosaxs.core.gnom import distribution_arrays, parse_gnom_out
 
 
 class _BaseMplPlot(FigureCanvas):
@@ -182,14 +182,16 @@ class PrPlot(_BaseMplPlot):
             return
         try:
             parsed = parse_gnom_out(gnom_out_path)
-            dist = parsed.get("distribution")
+            arrays = distribution_arrays(parsed.get("distribution"))
         except Exception:
             self._show_status("P(r) parse error")
             return
-        if not dist or len(dist) != 2:
+        if arrays is None:
             self._show_status("No P(r) in .out")
             return
-        r, pr = (np.asarray(a, dtype=float) for a in dist)
+        r, pr, err = arrays
+        r = np.asarray(r, dtype=float)
+        pr = np.asarray(pr, dtype=float)
         m = np.isfinite(r) & np.isfinite(pr)
         if not m.any():
             self._show_status("Empty P(r)")
@@ -197,10 +199,68 @@ class PrPlot(_BaseMplPlot):
         self._click_path = gnom_out_path
         self._click_viewer = "gnom_pr"
         self._ax.clear()
-        self._ax.plot(r[m], pr[m], "C0-", lw=1.2)
+        # Faint close-fits / force-zero-off overlays when present next to the best .out.
+        out_dir = os.path.dirname(os.path.abspath(gnom_out_path))
+        ens_dir = os.path.join(out_dir, "ensemble")
+        close_dir = os.path.join(ens_dir, "close_fits")
+        close_labeled = False
+        if os.path.isdir(close_dir):
+            for name in sorted(os.listdir(close_dir)):
+                if not name.endswith(".out"):
+                    continue
+                cf_path = os.path.join(close_dir, name)
+                try:
+                    cf_arr = distribution_arrays(
+                        parse_gnom_out(cf_path).get("distribution")
+                    )
+                except Exception:
+                    continue
+                if cf_arr is None:
+                    continue
+                rr, pp, _ee = cf_arr
+                label = "close fits (Dmax±10%)" if not close_labeled else None
+                self._ax.plot(
+                    rr, pp, color="0.65", lw=0.8, alpha=0.5, zorder=1, label=label
+                )
+                close_labeled = True
+        if os.path.isdir(ens_dir):
+            for name in sorted(os.listdir(ens_dir)):
+                if not name.endswith("_force_zero_off.out"):
+                    continue
+                fz_path = os.path.join(ens_dir, name)
+                try:
+                    fz_arr = distribution_arrays(
+                        parse_gnom_out(fz_path).get("distribution")
+                    )
+                except Exception:
+                    continue
+                if fz_arr is None:
+                    continue
+                rr, pp, _ee = fz_arr
+                self._ax.plot(
+                    rr, pp, color="k", lw=0.8, alpha=1.0, zorder=1, label="force-zero-off"
+                )
+        if err is not None:
+            e = np.asarray(err, dtype=float)
+            me = m & np.isfinite(e)
+            if me.any():
+                self._ax.fill_between(
+                    r[me],
+                    pr[me] - e[me],
+                    pr[me] + e[me],
+                    color="C0",
+                    alpha=0.25,
+                    linewidth=0,
+                    zorder=2,
+                    label=r"$\pm\sigma$",
+                )
+        self._ax.plot(r[m], pr[m], "C0-", lw=1.2, zorder=3, label="best")
         self._ax.set_xlabel("r (nm)")
         self._ax.set_ylabel("P(r)")
         self._ax.grid(True, alpha=0.2)
+        handles, _labels = self._ax.get_legend_handles_labels()
+        if handles:
+            self._ax.legend(fontsize=7, loc="best")
         self._fig.tight_layout()
         self.draw_idle()
         self.setCursor(Qt.PointingHandCursor)
@@ -209,17 +269,21 @@ class PrPlot(_BaseMplPlot):
 class ShapeFitPlot(_BaseMplPlot):
     def plot_from_fir(self, fir_path: str, *, label: str = "fit") -> None:
         if not fir_path or not os.path.isfile(fir_path):
-            self._show_status("No .fir")
+            self._show_status("No fit file")
             return
         try:
             from autosaxs.core.utils import ensure_q_nm
 
             # ATSAS .fir: one header line, then sExp | iExp | Err | iFit(+Const)
-            data = np.loadtxt(fir_path, skiprows=1)
+            # DENSS *_map.fit: '#' header, then q | I | err | Icalc (Å⁻¹)
+            try:
+                data = np.loadtxt(fir_path, comments="#")
+            except Exception:
+                data = np.loadtxt(fir_path, skiprows=1)
             if data.ndim == 1:
                 data = data.reshape(1, -1)
             if data.shape[1] < 2:
-                self._show_status("Invalid .fir")
+                self._show_status("Invalid fit file")
                 return
             q = data[:, 0]
             i_exp = data[:, 1]
@@ -229,14 +293,14 @@ class ShapeFitPlot(_BaseMplPlot):
                 i_fit = data[:, 2]
             else:
                 i_fit = data[:, 1]
-            # DAMMIF .fir s-values are Å^-1; BODIES .fir is typically already nm^-1.
+            # DAMMIF .fir / DENSS .fit s-values are Å^-1; BODIES .fir is typically already nm^-1.
             q, i_exp, _ = ensure_q_nm(q, i_exp, None)
         except Exception:
-            self._show_status("FIR read error")
+            self._show_status("Fit read error")
             return
         m = np.isfinite(q) & np.isfinite(i_exp) & (i_exp > 0) & np.isfinite(i_fit) & (i_fit > 0)
         if not m.any():
-            self._show_status("Empty FIR")
+            self._show_status("Empty fit")
             return
         self._click_path = fir_path
         self._ax.clear()

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from ...core.models import RunRequest
-from ..session.output_paths import dammif_dir, fit_bodies_dir, fit_distances_dir, guinier_mono_dir
+from ..session.output_paths import dammif_dir, denss_dir, model_bodies_dir, fit_distances_dir, guinier_mono_dir
 from ..session.state import (
     DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES,
     LiveviewSessionState,
@@ -163,6 +163,7 @@ def shape_step(
         opts: Dict[str, Any] = {
             "output_dir": str(damdir.resolve()),
             "use_cache": False,
+            "n_runs": max(1, int(getattr(state, "model_dam_n_runs", 1) or 1)),
         }
         if gnom_from_distances_placeholder:
             opts["gnom_path"] = "${fit_distances.best_gnom_out_path}"
@@ -176,13 +177,13 @@ def shape_step(
             if gnom_abs:
                 opts["gnom_path"] = gnom_abs
         return JobStep(
-            name="fit_dammif",
-            request=RunRequest("fit_dammif", [prof], opts),
+            name="model_dam",
+            request=RunRequest("model_dam", [prof], opts),
         )
     if mode == MonodisperseShapeMode.BODIES:
-        bodies_outdir = fit_bodies_dir(output_root)
+        bodies_outdir = model_bodies_dir(output_root)
         bodies_outdir.mkdir(parents=True, exist_ok=True)
-        shapes = state.fit_bodies_shapes
+        shapes = state.model_bodies_shapes
         if not shapes:
             shapes = list(DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES)
         wp = state.monodisperse_wizard_params
@@ -195,12 +196,45 @@ def shape_step(
             for key in ("first", "last"):
                 if wp.get(key) is not None:
                     opts[key] = wp[key]
-        return JobStep(name="fit_bodies", request=RunRequest("fit_bodies", [prof], opts))
+        return JobStep(name="model_bodies", request=RunRequest("model_bodies", [prof], opts))
+    if mode == MonodisperseShapeMode.DENSS:
+        denss_outdir = denss_dir(output_root)
+        denss_outdir.mkdir(parents=True, exist_ok=True)
+        protocol = str(getattr(state, "model_density_mode", "pilot") or "pilot").strip().lower()
+        if protocol not in ("pilot", "average", "refined"):
+            protocol = "pilot"
+        denss_mode = str(getattr(state, "model_density_denss_mode", "fast") or "fast").strip().lower()
+        if denss_mode not in ("slow", "fast", "membrane"):
+            denss_mode = "fast"
+        opts = {
+            "output_dir": str(denss_outdir.resolve()),
+            "use_cache": False,
+            "mode": protocol,
+            "denss_mode": denss_mode,
+            "n_maps": max(2, int(getattr(state, "model_density_n_maps", 20) or 20)),
+            "n_jobs": 1,
+        }
+        # Optional Dmax hint only — DENSS does not require GNOM.
+        if gnom_from_distances_placeholder:
+            opts["gnom_path"] = "${fit_distances.best_gnom_out_path}"
+        else:
+            gnom_abs = discover_gnom_out_path(
+                profile_abs=prof,
+                output_root=output_root,
+                watchdir=state.watchdir,
+                hint=(gnom_out_path or "").strip(),
+            )
+            if gnom_abs:
+                opts["gnom_path"] = gnom_abs
+        return JobStep(
+            name="model_density",
+            request=RunRequest("model_density", [prof], opts),
+        )
     return None
 
 
 def job_includes_shape(steps: List[JobStep]) -> bool:
-    return any(s.name in ("fit_dammif", "fit_bodies") for s in steps)
+    return any(s.name in ("model_dam", "model_bodies", "model_density") for s in steps)
 
 
 def build_monodisperse_steps(
@@ -278,7 +312,8 @@ def build_monodisperse_steps(
                 output_root=root,
                 shape_mode=str(mode.value),
                 gnom_out_path=gnom_out_path,
-                gnom_from_distances_placeholder=chained and mode == MonodisperseShapeMode.DAMMIF,
+                gnom_from_distances_placeholder=chained
+                and mode in (MonodisperseShapeMode.DAMMIF, MonodisperseShapeMode.DENSS),
             )
             if step is not None:
                 steps.append(step)

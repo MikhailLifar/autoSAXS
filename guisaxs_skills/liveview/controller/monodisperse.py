@@ -173,6 +173,9 @@ class LiveviewMonodisperseHandler:
                         "No usable GNOM .out found. Run fit_distances first, then re-run DAMMIF.",
                     )
                 return
+        # DENSS: GNOM is optional (Dmax hint only).
+        if mode == MonodisperseShapeMode.DENSS and right is not None:
+            gnom_out = (right.monodisperse_coordinator.gnom_out_for_dammif() or "").strip()
         steps = build_monodisperse_steps(
             prof,
             output_root=root,

@@ -1,10 +1,10 @@
 ---
-name: fit-dammif
-description: SAXS / small-angle x-ray scattering: run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile (shape reconstruction / bead model). When no GNOM `.out` is supplied, `fit_distances` is run in-process to obtain one.
+name: model-bodies
+description: SAXS / small-angle x-ray scattering: run ATSAS `bodies` shape fitting for multiple candidate shapes on a 1D profile, exporting fit files (FIR, PNG, YAML, CSV) and a comparison figure.
 catalog-hidden: true
 ---
 
-# `autosaxs fit-dammif` (subskill)
+# `autosaxs model-bodies` (subskill)
 
 ## Critical: `autosaxs` is a Python package
 
@@ -13,13 +13,13 @@ catalog-hidden: true
 **Preferred invocation (explicit, unambiguous):**
 
 ```bash
-/path/to/myenv/bin/autosaxs fit-dammif ...
+/path/to/myenv/bin/autosaxs model-bodies ...
 ```
 
 If the correct environment is activated so its `bin/` is on `PATH`, the same command is:
 
 ```bash
-autosaxs fit-dammif ...
+autosaxs model-bodies ...
 ```
 
 **What does not work:** `python -m autosaxs …` — the package has no top-level `__main__.py`. Do not try to substitute other `-m` module paths here; **use `<env>/bin/autosaxs` instead.**
@@ -28,11 +28,11 @@ If you see **`autosaxs: command not found`** (or similar), the agent **must not*
 
 ## What I do
 
-This skill wraps the `autosaxs fit-dammif` CLI command / `autosaxs.skill.fit_dammif` Python entry point.
+This skill wraps the `autosaxs model-bodies` CLI command / `autosaxs.skill.model_bodies` Python entry point.
 
 ## When to use me
 
-- You want to run `autosaxs fit-dammif` on real data.
+- You want to run `autosaxs model-bodies` on real data.
 
 ## Required inputs
 
@@ -48,7 +48,7 @@ See the docstring section **Arguments** below.
 ```
 
 Then use the created `config_base.conf` (or a copy of it) as the config input path and edit it if your setup requires changes.
-3. Run **`/path/to/myenv/bin/autosaxs fit-dammif …`** (or `autosaxs fit-dammif …` when the right env is active), or call the Python function.
+3. Run **`/path/to/myenv/bin/autosaxs model-bodies …`** (or `autosaxs model-bodies …` when the right env is active), or call the Python function.
 4. Use the returned/written output paths.
 
 ## Output requirements
@@ -58,39 +58,44 @@ See the docstring section **Returns** below.
 ## Tooling rules
 
 - **`autosaxs` is always tied to a Python environment** — see **Critical: `autosaxs` is a Python package** above before running anything.
-- When in doubt (CI, fresh terminals, mixed conda/system shells), **always use the full path:** **`<path-to-env>/bin/autosaxs fit-dammif …`**.
-- If you know the correct env is active on `PATH`, **`autosaxs fit-dammif …`** is fine.
+- When in doubt (CI, fresh terminals, mixed conda/system shells), **always use the full path:** **`<path-to-env>/bin/autosaxs model-bodies …`**.
+- If you know the correct env is active on `PATH`, **`autosaxs model-bodies …`** is fine.
 - If the skill requires a config path (e.g. `config_path` / `config`) and no config file exists yet, run **`autosaxs get-default-config -o <dir>`** to materialize the bundled default config (`config_base.conf`) into a real file, then pass that path to the skill.
-- Prefer the Python API (`autosaxs.skill.fit_dammif`) for scripting or tight integration inside Python.
+- Prefer the Python API (`autosaxs.skill.model_bodies`) for scripting or tight integration inside Python.
 
 ## Autosaxs skill docstring
 
-SAXS / small-angle x-ray scattering: run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile (shape reconstruction / bead model). When no GNOM `.out` is supplied, `fit_distances` is run in-process to obtain one.
+SAXS / small-angle x-ray scattering: run ATSAS `bodies` shape fitting for multiple candidate shapes on a 1D profile, exporting fit files (FIR, PNG, YAML, CSV) and a comparison figure.
 
 ### Arguments
 
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
-- `output_dir` (str, default `.`): Directory where `dammif` outputs are written.
-- `gnom_path` (str | None, default `None`): Optional path to a GNOM/DATGNOM `.out` file for DAMMIF. If omitted, `fit_distances` is run in-process on `profile` and its `best_gnom_out_path` is used.
-- `dammif_reps_num` (int, default `1`): Number of independent DAMMIF runs (replicas) to execute.
+- `output_dir` (str, default `.`): Directory where `bodies` outputs are written.
+- `config_path` (str | None, default `None`): Optional YAML config path for CLI parity; this skill does not read a `model_bodies` section (no bundled defaults).
+- `shapes` (list[str] | None, default `None`): Subset of body model names to fit (`BODIES_SHAPES_LIST`). `None` or empty means fit **all** models (single `bodies` invocation). A non-empty list runs `bodies --body=...` per shape.
+- `first` (int | None, default `None`): Passed to `bodies` as `--first` (1-based data point index). If omitted, taken from the low-q end of the Guinier interval from in-process `fit_guinier`.
+- `last` (int | None, default `None`): Passed to `bodies` as `--last` (1-based data point index). Omitted when `None`.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
 
 `dict[str, str]` with:
 
-- `output_subdir`: Directory containing `dammif` fit artifacts (FIR/CIF and summary files). Each replica also gets `{rep}_pr.dat` and `{rep}_pr.png` (GNOM-style p(r) from DAM bead pairs via Monte Carlo).
+- `output_subdir`: Directory containing the exported `bodies` fit artifacts.
+
+The directory typically contains multiple per-shape FIT files plus aggregated `bodies_fits.yml` and `bodies_fits.csv` if any shapes successfully fit. Each fitted shape also gets `{shape}_pr.dat` and `{shape}_pr.png` (GNOM-style p(r) from the voxel DAM used for 3D views, via Monte Carlo bead-pair sampling).
 
 ### Python usage
 
 ```python
-from autosaxs.skill import fit_dammif
+from autosaxs.skill import model_bodies
 
-out = fit_dammif(
+out = model_bodies(
     profile="subtracted/sub_sample_01.dat",
-    output_dir="dammif",
-    gnom_path="guinier/sample_01_gnom.out",
-    dammif_reps_num=1,
+    output_dir="bodies",
+    shapes=["cylinder", "ellipsoid"],
+    first=10,
+    last=120,
     use_cache=False,
 )
 
@@ -100,5 +105,5 @@ print(out["output_subdir"])
 ### CLI usage
 
 ```bash
-autosaxs fit-dammif subtracted/sub_sample_01.dat --output-dir dammif --dammif-reps-num 1
+autosaxs model-bodies subtracted/sub_sample_01.dat --output-dir bodies --shapes cylinder ellipsoid --first 10 --last 120
 ```

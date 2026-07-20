@@ -62,11 +62,22 @@ def resolve_optional_config_path(config_path: Any) -> Optional[str]:
     return path
 
 
+# Legacy YAML section names accepted when the canonical skill section is absent.
+_SKILL_SECTION_ALIASES: Dict[str, tuple[str, ...]] = {
+    "model_mixture": ("fit_mixture",),
+}
+
+
 def skill_section(full_cfg: Optional[Dict[str, Any]], skill_name: str) -> Dict[str, Any]:
     """Return the parameter dict for ``skill_name``; missing or empty section → ``{}``."""
     if not full_cfg:
         return {}
     section = full_cfg.get(skill_name)
+    if section is None:
+        for alias in _SKILL_SECTION_ALIASES.get(skill_name, ()):
+            section = full_cfg.get(alias)
+            if section is not None:
+                break
     if section is None:
         return {}
     if not isinstance(section, dict):

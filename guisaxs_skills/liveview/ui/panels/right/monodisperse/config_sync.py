@@ -36,7 +36,9 @@ class MonodisperseConfigSync:
             self._state.monodisperse_shape_mode = MonodisperseShapeMode.NONE
         shapes = self._wizard.shape_pane.selected_shapes()
         if shapes:
-            self._state.fit_bodies_shapes = list(shapes)
+            self._state.model_bodies_shapes = list(shapes)
+        self.apply_n_runs(self._wizard.shape_pane.n_runs())
+        self.apply_denss_settings()
         self.persist_confs()
 
     def persist_confs(self) -> None:
@@ -82,7 +84,33 @@ class MonodisperseConfigSync:
             self._state.monodisperse_shape_mode = MonodisperseShapeMode.NONE
         shapes = self._wizard.shape_pane.selected_shapes()
         if shapes:
-            self._state.fit_bodies_shapes = list(shapes)
+            self._state.model_bodies_shapes = list(shapes)
+        self.apply_n_runs(self._wizard.shape_pane.n_runs())
+        self.apply_denss_settings()
+
+    def apply_n_runs(self, n: int) -> None:
+        """Persist ``n_runs`` only — does not trigger a shape re-run."""
+        try:
+            self._state.model_dam_n_runs = max(1, int(n))
+        except (TypeError, ValueError):
+            self._state.model_dam_n_runs = 1
+
+    def apply_denss_settings(self) -> None:
+        """Persist DENSS protocol / denss_mode / n_maps — does not trigger a re-run."""
+        pane = self._wizard.shape_pane
+        protocol = str(pane.denss_protocol() or "pilot").strip().lower()
+        if protocol not in ("pilot", "average", "refined"):
+            protocol = "pilot"
+        denss_mode = str(pane.denss_mode() or "fast").strip().lower()
+        if denss_mode not in ("slow", "fast", "membrane"):
+            denss_mode = "fast"
+        try:
+            n_maps = max(2, int(pane.denss_n_maps()))
+        except (TypeError, ValueError):
+            n_maps = 20
+        self._state.model_density_mode = protocol
+        self._state.model_density_denss_mode = denss_mode
+        self._state.model_density_n_maps = n_maps
 
     def store_guinier_interval(self, first: int, last: int) -> None:
         """Persist Guinier spins without touching DATGNOM first/last."""

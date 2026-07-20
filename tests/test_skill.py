@@ -30,10 +30,13 @@ from autosaxs.skill import (
     write_cache,
 )
 from autosaxs.skill.calibrate import calibrate
+from autosaxs.skill.model_bodies import model_bodies
 from autosaxs.skill.fit_bodies import fit_bodies
+from autosaxs.skill.model_dam import model_dam
 from autosaxs.skill.fit_dammif import fit_dammif
 from autosaxs.skill.fit_distances import fit_distances
 from autosaxs.skill.fit_sizes import fit_sizes
+from autosaxs.skill.model_mixture import model_mixture
 from autosaxs.skill.fit_mixture import fit_mixture
 from autosaxs.skill.fit_guinier import fit_guinier
 from autosaxs.skill.analyze_kratky import analyze_kratky
@@ -115,9 +118,9 @@ def test_check_output_integrity_ok():
     ("fit-guinier", fit_guinier),
     ("analyze-kratky", analyze_kratky),
     ("fit-distances", fit_distances),
-    ("fit-mixture", fit_mixture),
-    ("fit-bodies", fit_bodies),
-    ("fit-dammif", fit_dammif),
+    ("model-mixture", model_mixture),
+    ("model-bodies", model_bodies),
+    ("model-dam", model_dam),
 ])
 def test_skill_has_standard_docstring(skill_name, skill_fn):
     doc = skill_fn.__doc__
@@ -666,18 +669,18 @@ def test_integrate_raises_without_images():
 
 
 # ---------------------------------------------------------------------------
-# fit_mixture: contract (requires profile)
+# model_mixture: contract (requires profile)
 # ---------------------------------------------------------------------------
-def test_fit_mixture_raises_without_profile():
+def test_model_mixture_raises_without_profile():
     with pytest.raises(FileNotFoundError):
-        fit_mixture(
+        model_mixture(
             profile="",
             output_dir=tempfile.mkdtemp(),
             use_cache=False,
         )
 
 
-def test_fit_mixture_contract_with_mock_mixture(monkeypatch):
+def test_model_mixture_contract_with_mock_mixture(monkeypatch):
     """
     Contract test without requiring ATSAS MIXTURE executable.
 
@@ -714,7 +717,7 @@ def test_fit_mixture_contract_with_mock_mixture(monkeypatch):
         )
         return _sp.CompletedProcess(args=["mixture"], returncode=0, stdout="Produced function minimum is equal to 1.234", stderr="")
 
-    monkeypatch.setattr("autosaxs.skill.fit_mixture.mixture._run_mixture", _fake_run_mixture)
+    monkeypatch.setattr("autosaxs.skill.model_mixture.mixture._run_mixture", _fake_run_mixture)
 
     with tempfile.TemporaryDirectory() as tmp:
         q = np.linspace(0.1, 2.0, 40)
@@ -727,7 +730,7 @@ def test_fit_mixture_contract_with_mock_mixture(monkeypatch):
         Path(cfg_path).write_text(
             "\n".join(
                 [
-                    "fit_mixture:",
+                    "model_mixture:",
                     "  maxit: 5",
                     "  r_min: 0.1",
                     "  r_max: 8.0",
@@ -740,7 +743,7 @@ def test_fit_mixture_contract_with_mock_mixture(monkeypatch):
         )
 
         out_dir = os.path.join(tmp, "mixture_out")
-        result = fit_mixture(profile_path, output_dir=out_dir, config_path=cfg_path, use_cache=False)
+        result = model_mixture(profile_path, output_dir=out_dir, config_path=cfg_path, use_cache=False)
 
         for key in (
             "output_subdir",
@@ -752,7 +755,7 @@ def test_fit_mixture_contract_with_mock_mixture(monkeypatch):
             "r_max_nm",
             "poly_max_nm",
         ):
-            assert key in result, f"fit_mixture must return {key}"
+            assert key in result, f"model_mixture must return {key}"
 
         def _scalar(v):
             return v[0] if isinstance(v, list) and len(v) == 1 else v
@@ -773,7 +776,7 @@ def test_fit_mixture_contract_with_mock_mixture(monkeypatch):
         assert os.path.getsize(csv_path) > 0
 
 
-def test_fit_mixture_without_config_path_uses_bundled_defaults(monkeypatch):
+def test_model_mixture_without_config_path_uses_bundled_defaults(monkeypatch):
     import subprocess as _sp
 
     def _fake_run_mixture(work_dir: Path, dat_basename: str, cmd_content: str) -> _sp.CompletedProcess:
@@ -794,9 +797,9 @@ def test_fit_mixture_without_config_path_uses_bundled_defaults(monkeypatch):
         )
         return _sp.CompletedProcess(args=["mixture"], returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr("autosaxs.skill.fit_mixture.mixture._run_mixture", _fake_run_mixture)
+    monkeypatch.setattr("autosaxs.skill.model_mixture.mixture._run_mixture", _fake_run_mixture)
     monkeypatch.setattr(
-        "autosaxs.skill.fit_mixture._rmax_nm_from_fit_sizes",
+        "autosaxs.skill.model_mixture._rmax_nm_from_fit_sizes",
         lambda profile, output_dir, event_bus: 12.0,
     )
 
@@ -807,7 +810,7 @@ def test_fit_mixture_without_config_path_uses_bundled_defaults(monkeypatch):
         profile_path = os.path.join(tmp, "subtracted.dat")
         write_saxs(profile_path, q, I, sigma, {"type": "subtracted"})
         out_dir = os.path.join(tmp, "mixture_out")
-        result = fit_mixture(profile_path, output_dir=out_dir, use_cache=False)
+        result = model_mixture(profile_path, output_dir=out_dir, use_cache=False)
         assert os.path.isfile(str(result["results_csv_path"]))
         def _scalar(v):
             return v[0] if isinstance(v, list) and len(v) == 1 else v
@@ -816,8 +819,8 @@ def test_fit_mixture_without_config_path_uses_bundled_defaults(monkeypatch):
         assert float(_scalar(result["poly_max_nm"])) == pytest.approx(6.0)
 
 
-def test_fit_mixture_radius_params_use_nm_externally():
-    from autosaxs.skill.fit_mixture import _resolve_mixture_radius_params
+def test_model_mixture_radius_params_use_nm_externally():
+    from autosaxs.skill.model_mixture import _resolve_mixture_radius_params
 
     params = _resolve_mixture_radius_params(
         profile="dummy.dat",
@@ -1032,13 +1035,13 @@ def test_fit_sizes_rmax_optimization_invoked(monkeypatch):
         assert float(out["best_gnom_out_path"].split("rmax_")[-1].split(".out")[0]) == pytest.approx(7.5)
 
 # ---------------------------------------------------------------------------
-# fit_bodies / fit_dammif: contract (require profile)
+# model_bodies / model_dam: contract (require profile)
 # ---------------------------------------------------------------------------
-def test_fit_bodies_first_from_guinier(monkeypatch):
+def test_model_bodies_first_from_guinier(monkeypatch):
     import subprocess as _sp
     import importlib as _importlib
 
-    _mod = _importlib.import_module("autosaxs.skill.fit_bodies")
+    _mod = _importlib.import_module("autosaxs.skill.model_bodies")
     guinier_calls = []
 
     def _fake_guinier(q_nm, I, sigma, atsas_dat_path=None):
@@ -1052,7 +1055,7 @@ def test_fit_bodies_first_from_guinier(monkeypatch):
             "quality_class": "good",
         }
 
-    monkeypatch.setattr("autosaxs.skill.fit_bodies.run_guinier_analysis", _fake_guinier)
+    monkeypatch.setattr("autosaxs.skill.model_bodies.run_guinier_analysis", _fake_guinier)
 
     def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
         _ = capture_output, text, timeout, kwargs
@@ -1060,7 +1063,7 @@ def test_fit_bodies_first_from_guinier(monkeypatch):
         assert any(str(a).startswith("--first=") for a in cmd)
         return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr("autosaxs.skill.fit_bodies.subprocess.run", _fake_run)
+    monkeypatch.setattr("autosaxs.skill.model_bodies.subprocess.run", _fake_run)
 
     with tempfile.TemporaryDirectory() as tmp:
         q = np.linspace(0.05, 2.0, 60)
@@ -1068,11 +1071,11 @@ def test_fit_bodies_first_from_guinier(monkeypatch):
         profile_path = os.path.join(tmp, "profile.dat")
         write_saxs(profile_path, q, I, 0.02 * I, {})
 
-        fit_bodies(profile_path, output_dir=os.path.join(tmp, "bodies"), use_cache=False)
+        model_bodies(profile_path, output_dir=os.path.join(tmp, "bodies"), use_cache=False)
         assert len(guinier_calls) == 1
 
 
-def test_fit_bodies_skips_guinier_when_first_set(monkeypatch):
+def test_model_bodies_skips_guinier_when_first_set(monkeypatch):
     import subprocess as _sp
     import importlib as _importlib
 
@@ -1082,27 +1085,27 @@ def test_fit_bodies_skips_guinier_when_first_set(monkeypatch):
         guinier_calls.append(True)
         raise AssertionError("fit_guinier should not run when first is set")
 
-    monkeypatch.setattr("autosaxs.skill.fit_bodies.run_guinier_analysis", _guinier_guard)
+    monkeypatch.setattr("autosaxs.skill.model_bodies.run_guinier_analysis", _guinier_guard)
 
     def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
         _ = capture_output, text, timeout, kwargs
         assert any(a == "--first=3" for a in cmd)
         return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr("autosaxs.skill.fit_bodies.subprocess.run", _fake_run)
+    monkeypatch.setattr("autosaxs.skill.model_bodies.subprocess.run", _fake_run)
 
     with tempfile.TemporaryDirectory() as tmp:
         q = np.linspace(0.1, 2.0, 40)
         profile_path = os.path.join(tmp, "profile.dat")
         write_saxs(profile_path, q, np.exp(-q**2), None, {})
 
-        fit_bodies(profile_path, output_dir=os.path.join(tmp, "bodies"), first=3, use_cache=False)
+        model_bodies(profile_path, output_dir=os.path.join(tmp, "bodies"), first=3, use_cache=False)
         assert not guinier_calls
 
 
-def test_fit_bodies_raises_without_profile():
+def test_model_bodies_raises_without_profile():
     with pytest.raises(FileNotFoundError):
-        fit_bodies(
+        model_bodies(
             profile="",
             output_dir=tempfile.mkdtemp(),
             use_cache=False,
@@ -1198,16 +1201,24 @@ def test_analyze_kratky_raises_without_profile():
         )
 
 
-def test_fit_dammif_raises_without_profile():
+def test_model_dam_raises_without_profile():
     with pytest.raises(FileNotFoundError):
-        fit_dammif(
+        model_dam(
             profile="",
             output_dir=tempfile.mkdtemp(),
             use_cache=False,
         )
 
 
-def test_fit_dammif_calls_fit_distances_when_gnom_omitted(monkeypatch):
+def _write_minimal_dammif_cif(path: str) -> None:
+    Path(path).write_text(
+        "data_dummy\nloop_\n_atom_site.id\n_atom_site.Cartn_x\n_atom_site.Cartn_y\n_atom_site.Cartn_z\n"
+        "1 0.0 0.0 0.0\n",
+        encoding="utf-8",
+    )
+
+
+def test_model_dam_calls_fit_distances_when_gnom_omitted(monkeypatch):
     import subprocess as _sp
 
     fit_distances_calls = []
@@ -1223,13 +1234,14 @@ def test_fit_dammif_calls_fit_distances_when_gnom_omitted(monkeypatch):
         return gnom_path
 
     monkeypatch.setattr(
-        "autosaxs.skill.fit_dammif._gnom_path_from_fit_distances",
+        "autosaxs.skill.model_dam.dam._gnom_path_from_fit_distances",
         _fake_gnom_from_distances,
     )
 
     def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
         _ = capture_output, text, timeout, kwargs
         assert (cmd[0] if cmd else "") == "dammif"
+        assert "--mode=FAST" in cmd
         dammif_gnom_args.append(str(cmd[-1]))
         prefix = next(a.split("=", 1)[1] for a in cmd if str(a).startswith("--prefix="))
         fir = os.path.join(cwd or ".", f"{prefix}.fir")
@@ -1238,12 +1250,13 @@ def test_fit_dammif_calls_fit_distances_when_gnom_omitted(monkeypatch):
             for i in range(10):
                 q = 0.1 * (i + 1)
                 f.write(f"{q}\t1.0\t0.1\t0.95\n")
+        _write_minimal_dammif_cif(os.path.join(cwd or ".", f"{prefix}-1.cif"))
         return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr("autosaxs.skill.fit_dammif.subprocess.run", _fake_run)
-    monkeypatch.setattr("autosaxs.skill.fit_dammif.PLTViewer.view_curves", lambda *a, **k: None)
+    monkeypatch.setattr("autosaxs.skill.model_dam.dam.subprocess.run", _fake_run)
+    monkeypatch.setattr("autosaxs.skill.model_dam.dam.PLTViewer.view_curves", lambda *a, **k: None)
     monkeypatch.setattr(
-        "autosaxs.skill.fit_dammif.PLTViewer.plot_3d_views_and_scattering",
+        "autosaxs.skill.model_dam.dam.PLTViewer.plot_3d_views_and_scattering",
         lambda *a, **k: None,
     )
 
@@ -1253,22 +1266,26 @@ def test_fit_dammif_calls_fit_distances_when_gnom_omitted(monkeypatch):
         profile_path = os.path.join(tmp, "profile.dat")
         write_saxs(profile_path, q, I, 0.02 * I, {})
         out_dir = os.path.join(tmp, "dammif")
-        result = fit_dammif(profile_path, output_dir=out_dir, use_cache=False)
+        result = model_dam(profile_path, output_dir=out_dir, use_cache=False)
         assert len(fit_distances_calls) == 1
         assert fit_distances_calls[0][0] == os.path.normpath(os.path.abspath(profile_path))
         assert len(dammif_gnom_args) == 1
         assert os.path.isabs(dammif_gnom_args[0])
         assert dammif_gnom_args[0].endswith("fake_gnom.out")
         assert os.path.isdir(str(result["output_subdir"]))
+        best = Path(str(result["best_cif_path"]))
+        assert best.is_symlink()
+        assert best.name == "best.cif"
+        assert result["frequency_map_path"] == ""
 
 
-def test_fit_dammif_skips_fit_distances_when_gnom_provided(monkeypatch):
+def test_model_dam_skips_fit_distances_when_gnom_provided(monkeypatch):
     import subprocess as _sp
 
     def _guard(*_a, **_k):
         raise AssertionError("fit_distances should not run when gnom_path is set")
 
-    monkeypatch.setattr("autosaxs.skill.fit_dammif._gnom_path_from_fit_distances", _guard)
+    monkeypatch.setattr("autosaxs.skill.model_dam.dam._gnom_path_from_fit_distances", _guard)
 
     def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
         _ = capture_output, text, timeout, kwargs
@@ -1280,10 +1297,15 @@ def test_fit_dammif_skips_fit_distances_when_gnom_provided(monkeypatch):
             for i in range(10):
                 q = 0.1 * (i + 1)
                 f.write(f"{q}\t1.0\t0.1\t0.95\n")
+        _write_minimal_dammif_cif(os.path.join(cwd or ".", f"{prefix}-1.cif"))
         return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr("autosaxs.skill.fit_dammif.subprocess.run", _fake_run)
-    monkeypatch.setattr("autosaxs.skill.fit_dammif.PLTViewer.view_curves", lambda *a, **k: None)
+    monkeypatch.setattr("autosaxs.skill.model_dam.dam.subprocess.run", _fake_run)
+    monkeypatch.setattr("autosaxs.skill.model_dam.dam.PLTViewer.view_curves", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "autosaxs.skill.model_dam.dam.PLTViewer.plot_3d_views_and_scattering",
+        lambda *a, **k: None,
+    )
 
     with tempfile.TemporaryDirectory() as tmp:
         q = np.linspace(0.05, 2.0, 60)
@@ -1292,12 +1314,286 @@ def test_fit_dammif_skips_fit_distances_when_gnom_provided(monkeypatch):
         gnom_path = os.path.join(tmp, "provided_gnom.out")
         Path(gnom_path).write_text("DATGNOM OUTPUT\n")
         out_dir = os.path.join(tmp, "dammif")
-        fit_dammif(profile_path, output_dir=out_dir, gnom_path=gnom_path, use_cache=False)
+        model_dam(profile_path, output_dir=out_dir, gnom_path=gnom_path, use_cache=False)
+
+
+def test_model_dam_n_runs_runs_damaver(monkeypatch):
+    import subprocess as _sp
+
+    def _guard(*_a, **_k):
+        raise AssertionError("fit_distances should not run when gnom_path is set")
+
+    monkeypatch.setattr("autosaxs.skill.model_dam.dam._gnom_path_from_fit_distances", _guard)
+    monkeypatch.setattr("autosaxs.skill.model_dam.dam.shutil.which", lambda name: f"/fake/bin/{name}")
+
+    calls = []
+
+    def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
+        _ = capture_output, text, timeout, kwargs
+        calls.append((list(cmd), cwd))
+        exe = cmd[0] if cmd else ""
+        if exe == "dammif":
+            prefix = next(a.split("=", 1)[1] for a in cmd if str(a).startswith("--prefix="))
+            fir = os.path.join(cwd or ".", f"{prefix}.fir")
+            with open(fir, "w") as f:
+                f.write("s Exp iExp Err iFit\n")
+                for i in range(10):
+                    q = 0.1 * (i + 1)
+                    f.write(f"{q}\t1.0\t0.1\t0.95\n")
+            _write_minimal_dammif_cif(os.path.join(cwd or ".", f"{prefix}-1.cif"))
+        elif exe == "damaver":
+            out = Path(cwd or ".")
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "damaver-global-damaver.cif").write_text("data_freq\n", encoding="utf-8")
+            (out / "damaver-global-summary.txt").write_text(
+                "Most probable model: dammif-2-1.cif\nInclude dammif-1-1.cif\nInclude dammif-2-1.cif\n",
+                encoding="utf-8",
+            )
+        else:
+            raise AssertionError(f"unexpected executable: {exe}")
+        return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("autosaxs.skill.model_dam.dam.subprocess.run", _fake_run)
+    monkeypatch.setattr("autosaxs.skill.model_dam.dam.PLTViewer.view_curves", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "autosaxs.skill.model_dam.dam.PLTViewer.plot_3d_views_and_scattering",
+        lambda *a, **k: None,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.05, 2.0, 60)
+        profile_path = os.path.join(tmp, "profile.dat")
+        write_saxs(profile_path, q, np.exp(-q**2), 0.02, {})
+        gnom_path = os.path.join(tmp, "gnom.out")
+        Path(gnom_path).write_text("DATGNOM OUTPUT (fake)\n")
+        out_dir = os.path.join(tmp, "dammif")
+        result = model_dam(
+            profile_path,
+            output_dir=out_dir,
+            gnom_path=gnom_path,
+            n_runs=2,
+            dammif_mode="slow",
+            use_cache=False,
+        )
+        dammif_calls = [c for c, _ in calls if c[0] == "dammif"]
+        damaver_calls = [c for c, _ in calls if c[0] == "damaver"]
+        assert len(dammif_calls) == 2
+        assert all("--mode=SLOW" in c for c in dammif_calls)
+        assert len(damaver_calls) == 1
+        assert result["frequency_map_path"]
+        assert os.path.isfile(str(result["frequency_map_path"]))
+        best = Path(str(result["best_cif_path"]))
+        assert best.is_symlink()
+        assert best.resolve().name == "dammif-2-1.cif"
+
+
+def test_fit_dammif_deprecated_alias(monkeypatch):
+    """Deprecated fit_dammif still forwards to model_dam."""
+    import subprocess as _sp
+
+    monkeypatch.setattr(
+        "autosaxs.skill.model_dam.dam._gnom_path_from_fit_distances",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should use gnom_path")),
+    )
+
+    def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
+        _ = capture_output, text, timeout, kwargs
+        prefix = next(a.split("=", 1)[1] for a in cmd if str(a).startswith("--prefix="))
+        fir = os.path.join(cwd or ".", f"{prefix}.fir")
+        with open(fir, "w") as f:
+            f.write("s Exp iExp Err iFit\n")
+            for i in range(10):
+                q = 0.1 * (i + 1)
+                f.write(f"{q}\t1.0\t0.1\t0.95\n")
+        _write_minimal_dammif_cif(os.path.join(cwd or ".", f"{prefix}-1.cif"))
+        return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("autosaxs.skill.model_dam.dam.subprocess.run", _fake_run)
+    monkeypatch.setattr("autosaxs.skill.model_dam.dam.PLTViewer.view_curves", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "autosaxs.skill.model_dam.dam.PLTViewer.plot_3d_views_and_scattering",
+        lambda *a, **k: None,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.05, 2.0, 60)
+        profile_path = os.path.join(tmp, "profile.dat")
+        write_saxs(profile_path, q, np.exp(-q**2), 0.02, {})
+        gnom_path = os.path.join(tmp, "gnom.out")
+        Path(gnom_path).write_text("DATGNOM OUTPUT (fake)\n")
+        with pytest.warns(DeprecationWarning, match="fit_dammif is deprecated"):
+            fit_dammif(
+                profile_path,
+                output_dir=os.path.join(tmp, "dammif"),
+                gnom_path=gnom_path,
+                dammif_reps_num=1,
+                use_cache=False,
+            )
+
+
+def test_model_dam_presentation_vis_writes_assets(tmp_path: Path):
+    """Presentation writer creates synced run GIFs + overlap + occupancy assets."""
+    from autosaxs.skill.model_dam.vis import write_presentation_visuals
+
+    def _write_cif(path: Path, pts: np.ndarray, occ=None) -> None:
+        lines = [
+            "data_test",
+            "loop_",
+            "_atom_site.group_PDB",
+            "_atom_site.id",
+            "_atom_site.type_symbol",
+            "_atom_site.label_atom_id",
+            "_atom_site.label_alt_id",
+            "_atom_site.label_comp_id",
+            "_atom_site.label_asym_id",
+            "_atom_site.label_seq_id",
+            "_atom_site.pdbx_PDB_ins_code",
+            "_atom_site.Cartn_x",
+            "_atom_site.Cartn_y",
+            "_atom_site.Cartn_z",
+            "_atom_site.occupancy",
+            "_atom_site.B_iso_or_equiv",
+            "_atom_site.pdbx_formal_charge",
+            "_atom_site.pdbx_PDB_model_num",
+        ]
+        for i, (x, y, z) in enumerate(pts, 1):
+            o = 1.0 if occ is None else float(occ[i - 1])
+            lines.append(f"ATOM {i} C CA . ASP A 1 ? {x:.3f} {y:.3f} {z:.3f} {o:.3f} 20.00 ? 1")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    rng = np.random.default_rng(1)
+    base = rng.normal(size=(80, 3)) * 8.0
+    dam = tmp_path / "damaver"
+    dam.mkdir()
+    for i in range(1, 3):
+        pts = base + rng.normal(size=base.shape) * 0.5
+        _write_cif(dam / f"damaver-global-dammif-{i}-1r.cif", pts)
+        _write_cif(tmp_path / f"dammif-{i}-1.cif", pts)
+    _write_cif(dam / "damaver-global-damaver.cif", base, occ=rng.uniform(0.0, 3.0, size=len(base)))
+    best = tmp_path / "best.cif"
+    best.symlink_to(tmp_path / "dammif-1-1.cif")
+
+    out = write_presentation_visuals(
+        str(tmp_path),
+        best_cif_path=str(best),
+        frequency_map_path=str(dam / "damaver-global-damaver.cif"),
+    )
+    pres = Path(out["presentation_dir"])
+    assert pres.is_dir()
+    assert len(out["presentation_run_gifs"]) == 2
+    assert Path(out["presentation_overlap_gif"]).is_file()
+    assert Path(out["presentation_occupancy_gif"]).is_file()
+    assert Path(out["presentation_overlap_png"]).is_file()
+    assert Path(out["presentation_occupancy_png"]).is_file()
+    assert Path(out["presentation_occupancy_thresholds_png"]).is_file()
+
+
+def test_fit_bodies_deprecated_alias(monkeypatch):
+    """Deprecated fit_bodies still forwards to model_bodies."""
+    import subprocess as _sp
+
+    monkeypatch.setattr(
+        "autosaxs.skill.model_bodies.run_guinier_analysis",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should pass first")),
+    )
+
+    def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
+        _ = capture_output, text, timeout, kwargs
+        assert (cmd[0] if cmd else "") == "bodies"
+        return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("autosaxs.skill.model_bodies.subprocess.run", _fake_run)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.05, 2.0, 60)
+        profile_path = os.path.join(tmp, "profile.dat")
+        write_saxs(profile_path, q, np.exp(-q**2), 0.02, {})
+        with pytest.warns(DeprecationWarning, match="fit_bodies is deprecated"):
+            fit_bodies(
+                profile_path,
+                output_dir=os.path.join(tmp, "bodies"),
+                first=3,
+                use_cache=False,
+            )
+
+
+def test_fit_mixture_deprecated_alias(monkeypatch):
+    """Deprecated fit_mixture still forwards to model_mixture."""
+    import subprocess as _sp
+
+    def _fake_run_mixture(work_dir: Path, dat_basename: str, cmd_content: str) -> _sp.CompletedProcess:
+        _ = cmd_content
+        work_dir.mkdir(parents=True, exist_ok=True)
+        fit_path = work_dir / dat_basename.replace(".dat", ".fit")
+        log_path = work_dir / "mixture.log"
+        q_nm = np.linspace(0.1, 2.0, 30)
+        q_A = q_nm / 10.0
+        I_exp = np.exp(-q_nm**2) + 0.05
+        I_fit = I_exp * 0.98
+        sigma = 0.03 * np.abs(I_exp)
+        with open(fit_path, "w") as f:
+            for i in range(len(q_A)):
+                f.write(f"{q_A[i]}\t{I_exp[i]}\t{I_fit[i]}\t{sigma[i]}\n")
+        log_path.write_text("1SPH 0.50 0 0 50.0 0 5.0\nProduced function minimum is equal to 1.234\n")
+        return _sp.CompletedProcess(args=["mixture"], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("autosaxs.skill.model_mixture.mixture._run_mixture", _fake_run_mixture)
+    monkeypatch.setattr(
+        "autosaxs.skill.model_mixture._rmax_nm_from_fit_sizes",
+        lambda *_a, **_k: 5.0,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.1, 2.0, 40)
+        profile_path = os.path.join(tmp, "subtracted.dat")
+        write_saxs(profile_path, q, np.exp(-q**2) + 0.02, 0.03, {})
+        with pytest.warns(DeprecationWarning, match="fit_mixture is deprecated"):
+            fit_mixture(profile_path, output_dir=os.path.join(tmp, "mixture"), use_cache=False)
+
+
+def _fake_datgnom_out_text(*, rmax: float = 35.0, te: float = 0.85) -> str:
+    """Minimal DATGNOM/GNOM .out: rmax header, Total Estimate, 8+ row p(r) table."""
+    return "\n".join(
+        [
+            "DATGNOM OUTPUT (fake)",
+            f"Real space range: 0.0000 to {float(rmax):.4f}",
+            f"Total Estimate = {float(te):.2f}",
+            "",
+            "R      P(R)    Error",
+            "0.0    0.0     0.0",
+            "5.0    1.0     0.1",
+            "10.0   2.0     0.1",
+            "15.0   1.5     0.1",
+            "20.0   0.8     0.1",
+            "25.0   0.2     0.1",
+            "30.0   0.0     0.1",
+            "35.0   0.0     0.1",
+            "",
+        ]
+    )
+
+
+def _write_fake_atsas_out(cmd, cwd=None) -> None:
+    """Resolve -o path (absolute for datgnom, cwd-relative for gnom) and write a fake .out."""
+    out_idx = cmd.index("-o")
+    out_path = cmd[out_idx + 1]
+    if cwd and not os.path.isabs(out_path):
+        out_path = os.path.join(cwd, out_path)
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    rmax = 35.0
+    for a in cmd:
+        s = str(a)
+        if s.startswith("--rmax="):
+            try:
+                rmax = float(s.split("=", 1)[1])
+            except ValueError:
+                pass
+    Path(out_path).write_text(_fake_datgnom_out_text(rmax=rmax))
 
 
 def test_fit_distances_contract(monkeypatch):
     """
-    Contract test without requiring DATGNOM to be installed: monkeypatch subprocess.run to emulate `datgnom`.
+    Contract test without requiring DATGNOM/GNOM: monkeypatch subprocess.run.
     """
     import subprocess as _sp
 
@@ -1310,35 +1606,13 @@ def test_fit_distances_contract(monkeypatch):
 
         def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
             exe = cmd[0] if cmd else ""
-            assert exe == "datgnom"
-            assert any(str(a).startswith("--rg=") for a in cmd)
-            out_idx = cmd.index("-o")
-            out_path = cmd[out_idx + 1]
-            # Minimal .out: header line for rmax, Total Estimate, and an 8+ row p(r) table (monotonic R).
-            # p(r) parser requires a block of >= 8 monotonic (R, P, Err) rows.
-            Path(out_path).write_text(
-                "\n".join(
-                    [
-                        "DATGNOM OUTPUT (fake)",
-                        "Real space range: 0.0000 to 35.0000",
-                        "Total Estimate = 0.85",
-                        "",
-                        "R      P(R)    Error",
-                        "0.0    0.0     0.0",
-                        "5.0    1.0     0.1",
-                        "10.0   2.0     0.1",
-                        "15.0   1.5     0.1",
-                        "20.0   0.8     0.1",
-                        "25.0   0.2     0.1",
-                        "30.0   0.0     0.1",
-                        "35.0   0.0     0.1",
-                        "",
-                    ]
-                )
-            )
+            assert exe in ("datgnom", "gnom")
+            if exe == "datgnom":
+                assert any(str(a).startswith("--rg=") for a in cmd)
+            _write_fake_atsas_out(cmd, cwd=cwd)
             return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
-        monkeypatch.setattr("autosaxs.skill.fit_distances.subprocess.run", _fake_run)
+        monkeypatch.setattr("autosaxs.skill.fit_distances.runners.subprocess.run", _fake_run)
 
         out_dir = os.path.join(tmp, "distances")
         result = fit_distances(
@@ -1358,7 +1632,6 @@ def test_fit_distances_contract(monkeypatch):
 
 def test_fit_distances_score_te_minus_nf():
     from autosaxs.core.gnom import candidate_score
-    from autosaxs.skill.fit_distances import _select_best
 
     c_high = {"total_estimate": 0.9, "neg_frac": 0.1, "suspicious": False}
     c_low = {"total_estimate": 0.9, "neg_frac": 0.3, "suspicious": False}
@@ -1367,12 +1640,13 @@ def test_fit_distances_score_te_minus_nf():
     assert candidate_score({"total_estimate": None, "neg_frac": 0.0}) == float("-inf")
     assert candidate_score({"total_estimate": 1.0}) == pytest.approx(1.0)
 
-    best = _select_best(
+    best = max(
         [
             {"total_estimate": 0.5, "neg_frac": 0.0, "suspicious": False},
             {"total_estimate": 0.9, "neg_frac": 0.2, "suspicious": False},
             {"total_estimate": 1.0, "neg_frac": 0.5, "suspicious": False},
-        ]
+        ],
+        key=candidate_score,
     )
     assert best["total_estimate"] == 0.9 and best["neg_frac"] == 0.2
 
@@ -1380,8 +1654,6 @@ def test_fit_distances_score_te_minus_nf():
 def test_fit_distances_rg_optimization_invoked(monkeypatch):
     """When rg_nm is omitted, fit_guinier and bounded Rg optimization run."""
     import subprocess as _sp
-
-    from autosaxs.skill import fit_distances as fd_mod
 
     guinier_calls = []
     optimize_calls = []
@@ -1410,34 +1682,17 @@ def test_fit_distances_rg_optimization_invoked(monkeypatch):
 
         def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
             exe = cmd[0] if cmd else ""
-            assert exe == "datgnom"
-            out_idx = cmd.index("-o")
-            out_path = cmd[out_idx + 1]
-            Path(out_path).write_text(
-                "\n".join(
-                    [
-                        "DATGNOM OUTPUT (fake)",
-                        "Real space range: 0.0000 to 35.0000",
-                        "Total Estimate = 0.85",
-                        "",
-                        "R      P(R)    Error",
-                        "0.0    0.0     0.0",
-                        "5.0    1.0     0.1",
-                        "10.0   2.0     0.1",
-                        "15.0   1.5     0.1",
-                        "20.0   0.8     0.1",
-                        "25.0   0.2     0.1",
-                        "30.0   0.0     0.1",
-                        "35.0   0.0     0.1",
-                        "",
-                    ]
-                )
-            )
+            assert exe in ("datgnom", "gnom")
+            _write_fake_atsas_out(cmd, cwd=cwd)
             return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
-        monkeypatch.setattr("autosaxs.skill.fit_distances.run_guinier_analysis", _fake_guinier)
-        monkeypatch.setattr("autosaxs.skill.fit_distances._optimize_rg_nm", _fake_optimize)
-        monkeypatch.setattr("autosaxs.skill.fit_distances.subprocess.run", _fake_run)
+        monkeypatch.setattr(
+            "autosaxs.skill.fit_distances.optimize.run_guinier_analysis", _fake_guinier
+        )
+        monkeypatch.setattr(
+            "autosaxs.skill.fit_distances.distances._optimize_rg_nm", _fake_optimize
+        )
+        monkeypatch.setattr("autosaxs.skill.fit_distances.runners.subprocess.run", _fake_run)
 
         out_dir = os.path.join(tmp, "distances")
         fit_distances(profile_path, output_dir=out_dir, first=None, rg_nm=None, use_cache=False)
@@ -1459,7 +1714,7 @@ def test_fit_distances_all_runs_failed(monkeypatch):
         profile_path = os.path.join(tmp, "profile.dat")
         write_saxs(profile_path, q, I, sigma, {})
 
-        monkeypatch.setattr("autosaxs.skill.fit_distances.subprocess.run", _fake_run)
+        monkeypatch.setattr("autosaxs.skill.fit_distances.runners.subprocess.run", _fake_run)
 
         out_dir = os.path.join(tmp, "distances")
         result = fit_distances(

@@ -43,9 +43,9 @@ from ..foreign.aiAssistantFramework.lib import llm
 # from aiAssistantFramework.lib import telegram
 # import controller as ai_controller
 from ..skill.calibrate import calibrate
-from ..skill.fit_bodies import fit_bodies
-from ..skill.fit_dammif import fit_dammif
-from ..skill.fit_mixture import fit_mixture
+from ..skill.model_bodies import model_bodies
+from ..skill.model_dam import model_dam
+from ..skill.model_mixture import model_mixture
 from ..skill.integrate import integrate
 from ..skill.plot import plot
 from ..skill.subtract import subtract
@@ -1095,7 +1095,7 @@ class Controller:
                         q_max_nm = q_range_nm[1] if q_range_nm and len(q_range_nm) >= 2 else None
                         mixture_root = os.path.join(directory, 'mixture')
                         for i, b in enumerate(selected_order):
-                            out_mixture = fit_mixture(
+                            out_mixture = model_mixture(
                                 selected_profiles[b]['path'],
                                 os.path.join(mixture_root, b),
                                 config_path=context.config_path,
@@ -1119,7 +1119,7 @@ class Controller:
                         bodies_root = os.path.join(directory, 'bodies')
                         bodies_dirs_list = []
                         for b in selected_order:
-                            out_bodies = fit_bodies(
+                            out_bodies = model_bodies(
                                 selected_profiles[b]['path'],
                                 os.path.join(bodies_root, b),
                                 use_cache=fast_forward,
@@ -1136,7 +1136,7 @@ class Controller:
                         for b in selected_order:
                             gnom_p = descriptors_by_basename.get(b, (None, None))[1]
                             prof_p = selected_profiles[b]['path']
-                            out_dammif = fit_dammif(
+                            out_dammif = model_dam(
                                 prof_p,
                                 os.path.join(dammif_root, b),
                                 gnom_path=gnom_p or prof_p,

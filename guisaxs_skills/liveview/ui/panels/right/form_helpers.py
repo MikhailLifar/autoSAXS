@@ -32,5 +32,5 @@ def discover_fit_skill_meta() -> tuple[Any, Any, Any]:
     return (
         skills.get("fit_distances"),
         skills.get("fit_sizes"),
-        skills.get("fit_mixture"),
+        skills.get("model_mixture"),
     )

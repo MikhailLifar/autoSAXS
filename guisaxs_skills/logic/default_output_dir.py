@@ -15,9 +15,10 @@ def default_output_dir_for_skill(*, workdir: Path, skill_name: str) -> Path:
         "subtract": "subtracted",
         "plot": "plots",
         "fit_guinier": "descriptors",
-        "fit_mixture": "mixture",
-        "fit_bodies": "bodies",
-        "fit_dammif": "dammif",
+        "model_mixture": "mixture",
+        "model_bodies": "bodies",
+        "model_dam": "dammif",
+        "model_density": "denss",
         "fit_distances": "fit_distances",
     }
     sub = mapping.get(skill_name, skill_name)

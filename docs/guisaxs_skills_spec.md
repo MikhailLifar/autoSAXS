@@ -37,7 +37,7 @@ This document specifies a new desktop GUI application (“guisaxs-skills”) tha
 - The GUI **MUST NOT** call `autosaxs.processor` / pyFAI integration / subtraction routines directly.
 - The only allowed compute operations are **invocations of public skill entry points** from `autosaxs/skill.py`:
   - `calibrate`, `integrate`, `integrate_proxy`, `subtract`, `plot`, `guinier_analysis`,
-    `fit_mixture`, `fit_bodies`, `fit_dammif` (and any future public skill).
+    `model_mixture`, `model_bodies`, `model_dam` (and any future public skill).
 - Any legacy “convenience” functionality that reproduces part of a skill inside the GUI is forbidden.
 
 ### 2.2 Isolation (hard requirement)
@@ -350,7 +350,7 @@ This section defines what the middle column’s **per-skill data panel** must sh
 - Preview of Guinier plot image(s) (if produced)
 - Link to any written report/CSV outputs
 
-### 9.7 `fit_mixture`
+### 9.7 `model_mixture`
 
 **Inputs:** one or many curves; mixture model options.  
 **Middle shows (after run):**
@@ -358,16 +358,16 @@ This section defines what the middle column’s **per-skill data panel** must sh
 - Preview of fit plot(s)
 - Primary outputs (parameter files, plots, chosen model IDs)
 
-### 9.8 `fit_bodies`
+### 9.8 `model_bodies`
 
 **Middle shows (after run):**
 - Candidate bodies ranking (chi2) if produced
 - Preview plot(s) and selected body info
 
-### 9.9 `fit_dammif`
+### 9.9 `model_dam`
 
 **Middle shows (after run):**
-- Run status + key produced models/artifacts (e.g. output directories)
+- Run status + key produced models/artifacts (e.g. output directories, `best.cif`, frequency map when `n_runs>1`)
 - Any computed descriptors table (if produced)
 - Warning banner: “may be long-running; cancellation will stop external ATSAS processes”
 

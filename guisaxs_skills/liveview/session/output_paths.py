@@ -48,12 +48,21 @@ def fit_sizes_dir(root: Path) -> Path:
     return root / "fit_sizes"
 
 
+def model_bodies_dir(root: Path) -> Path:
+    return root / "model_bodies"
+
+
 def fit_bodies_dir(root: Path) -> Path:
-    return root / "fit_bodies"
+    """Deprecated alias for :func:`model_bodies_dir` (legacy liveview folder name was ``fit_bodies``)."""
+    return model_bodies_dir(root)
 
 
 def dammif_dir(root: Path) -> Path:
     return root / "dammif"
+
+
+def denss_dir(root: Path) -> Path:
+    return root / "denss"
 
 
 def mixture_dir(root: Path) -> Path:

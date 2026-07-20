@@ -696,6 +696,9 @@ SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance
 - `fits_csv_path`: Path to a CSV containing candidate scores/metadata.
 - `fit_vs_exp_png_path` / `fit_vs_exp_png_error`: Fit-vs-experiment plot output or error message.
 - `best_pr_png_path` / `best_pr_png_error`: \(p(r)\) plot output or error message.
+- `ensemble_dir` / `ensemble_summary_path`: Close-fits Dmax ensemble directory and CSV summary.
+- `close_fit_out_paths`: Saved GNOM `.out` paths for Dmax±10% close fits.
+- `force_zero_off_out_path`: Saved GNOM `.out` with `--force-zero-rmax=N` at Dmax.
 - `dmax_nm`: Maximum real-space size D_max (nm) from the selected GNOM/DATGNOM fit.
 - `rg_pr_nm` / `i0_pr`: Integral Rg and I(0) from p(r) (GNOM-reported or computed from the distribution).
 - `rg_guinier_nm`: Guinier Rg (nm) from in-process `fit_guinier` or user `rg_nm`.
@@ -800,7 +803,7 @@ autosaxs fit-sizes subtracted/sub_sample_01.dat --output-dir sizes --shape spher
 
 ---
 
-## `fit_mixture`
+## `model_mixture`
 
 SAXS / small-angle x-ray scattering: run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and write a comparison plot, size distribution plot, and results CSV (mixture / multi-population size distributions).
 
@@ -812,9 +815,9 @@ Prerequisites:
 
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where the MIXTURE outputs are written.
-- `config_path` (str | None, default `None`): Optional path to a YAML config file with a `fit_mixture` section. When omitted, bundled defaults apply.
+- `config_path` (str | None, default `None`): Optional path to a YAML config file with a `model_mixture` section. When omitted, bundled defaults apply.
 - `q_min_nm` / `q_max_nm` (float | None): Optional q bounds (nm^-1); set via CLI or user config (not in bundled template).
-- `maxit`, `max_nph`: MIXTURE parameters; defaults from bundled `fit_mixture` section when omitted.
+- `maxit`, `max_nph`: MIXTURE parameters; defaults from bundled `model_mixture` section when omitted.
 - `plot_I_q` (bool, default `False`): Write I vs q fit comparison plot (labels show BIC).
 - `plot_logI_logq` (bool, default `False`): Write log I vs log q fit comparison plot (labels show BIC_log).
 - `plot_logI_q` (bool, default `True`): Write log I vs q fit comparison plot (labels show chi2).
@@ -844,9 +847,9 @@ Important constraint:
 ### Python usage
 
 ```python
-from autosaxs.skill import fit_mixture
+from autosaxs.skill import model_mixture
 
-out = fit_mixture(
+out = model_mixture(
     profile="subtracted/sub_sample_01.dat",
     output_dir="mixture",
     q_min_nm=0.8,
@@ -860,12 +863,12 @@ print(out["results_csv_path"])
 ### CLI usage
 
 ```bash
-autosaxs fit-mixture subtracted/sub_sample_01.dat --output-dir mixture --q-min-nm 0.8 --q-max-nm 2.5
+autosaxs model-mixture subtracted/sub_sample_01.dat --output-dir mixture --q-min-nm 0.8 --q-max-nm 2.5
 ```
 
 ---
 
-## `fit_bodies`
+## `model_bodies`
 
 SAXS / small-angle x-ray scattering: run ATSAS `bodies` shape fitting for multiple candidate shapes on a 1D profile, exporting fit files (FIR, PNG, YAML, CSV) and a comparison figure.
 
@@ -873,7 +876,7 @@ SAXS / small-angle x-ray scattering: run ATSAS `bodies` shape fitting for multip
 
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where `bodies` outputs are written.
-- `config_path` (str | None, default `None`): Optional YAML config path for CLI parity; this skill does not read a `fit_bodies` section (no bundled defaults).
+- `config_path` (str | None, default `None`): Optional YAML config path for CLI parity; this skill does not read a `model_bodies` section (no bundled defaults).
 - `shapes` (list[str] | None, default `None`): Subset of body model names to fit (`BODIES_SHAPES_LIST`). `None` or empty means fit **all** models (single `bodies` invocation). A non-empty list runs `bodies --body=...` per shape.
 - `first` (int | None, default `None`): Passed to `bodies` as `--first` (1-based data point index). If omitted, taken from the low-q end of the Guinier interval from in-process `fit_guinier`.
 - `last` (int | None, default `None`): Passed to `bodies` as `--last` (1-based data point index). Omitted when `None`.
@@ -890,9 +893,9 @@ The directory typically contains multiple per-shape FIT files plus aggregated `b
 ### Python usage
 
 ```python
-from autosaxs.skill import fit_bodies
+from autosaxs.skill import model_bodies
 
-out = fit_bodies(
+out = model_bodies(
     profile="subtracted/sub_sample_01.dat",
     output_dir="bodies",
     shapes=["cylinder", "ellipsoid"],
@@ -907,49 +910,179 @@ print(out["output_subdir"])
 ### CLI usage
 
 ```bash
-autosaxs fit_bodies subtracted/sub_sample_01.dat --output-dir bodies --shapes cylinder ellipsoid --first 10 --last 120
+autosaxs model-bodies subtracted/sub_sample_01.dat --output-dir bodies --shapes cylinder ellipsoid --first 10 --last 120
 ```
 
 ---
 
-## `fit_dammif`
+## `model_dam`
 
-SAXS / small-angle x-ray scattering: run ATSAS `dammif` (ab initio shape reconstruction) on a 1D profile (shape reconstruction / bead model). When no GNOM `.out` is supplied, `fit_distances` is run in-process to obtain one.
+SAXS / small-angle x-ray scattering: ab initio bead-model shape reconstruction with ATSAS DAMMIF, optionally followed by DAMAVER ensemble averaging (shape reconstruction / bead model / occupancy map). When no GNOM `.out` is supplied, `fit_distances` is run in-process to obtain one.
+
+With `n_runs=1`, runs a single DAMMIF reconstruction. With `n_runs>1`, runs independent DAMMIF replicas then DAMAVER (NSD alignment, outlier rejection, frequency/occupancy map). The data-fitting final shape is the most probable DAMMIF replica (`best.cif` symlink); the DAMAVER frequency map is the stability product. DAMMIN refinement is not performed.
 
 ### Arguments
 
 - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
-- `output_dir` (str, default `.`): Directory where `dammif` outputs are written.
+- `output_dir` (str, default `.`): Directory where DAMMIF / DAMAVER outputs are written.
 - `gnom_path` (str | None, default `None`): Optional path to a GNOM/DATGNOM `.out` file for DAMMIF. If omitted, `fit_distances` is run in-process on `profile` and its `best_gnom_out_path` is used.
-- `dammif_reps_num` (int, default `1`): Number of independent DAMMIF runs (replicas) to execute.
+- `n_runs` (int, default `1`): Number of independent DAMMIF runs. When `>1`, DAMAVER is run on the particle models.
+- `dammif_mode` (str, default `fast`): DAMMIF annealing mode: `fast` or `slow`.
+- `make_presentation_vis` (bool, default `False`): When True, write presentation PNGs/GIFs under `{output}/presentation/` (synced per-run rotation GIFs, overlap, occupancy threshold; nm scale bar; no run/title captions).
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict[str, str | list[str]]` with:
+
+- `output_subdir`: Directory containing DAMMIF fit artifacts (FIR/CIF and summary files). Each replica also gets `{rep}_pr.dat` and `{rep}_pr.png` (GNOM-style p(r) from DAM bead pairs via Monte Carlo).
+- `best_cif_path`: Symlink `best.cif` pointing at the most probable particle CIF (the sole run when `n_runs=1`).
+- `best_view_path`: Path to ``best_view.png`` (isosurface + fit overlay for the best model); empty if unavailable.
+- `frequency_map_path`: Path to the DAMAVER frequency/occupancy map CIF (empty string when `n_runs=1`).
+- `presentation_dir` and related `presentation_*` keys when `make_presentation_vis=True` (empty strings / empty list otherwise).
+
+### Python usage
+
+```python
+from autosaxs.skill import model_dam
+
+out = model_dam(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="dammif",
+    gnom_path="guinier/sample_01_gnom.out",
+    n_runs=1,
+    dammif_mode="fast",
+    make_presentation_vis=False,
+    use_cache=False,
+)
+
+print(out["output_subdir"], out["best_cif_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs model-dam subtracted/sub_sample_01.dat --output-dir dammif --n-runs 1 --dammif-mode fast
+autosaxs model-dam subtracted/sub_sample_01.dat --output-dir dammif --n-runs 5 --make-presentation-vis
+```
+
+---
+
+## `model_density`
+
+SAXS / small-angle x-ray scattering: ab initio continuous electron-density reconstruction with DENSS (Grant protocol; density map / FSC resolution / voxel σ map). Requires the DENSS package (`denss`, `denss-all`, `denss-refine`) installed in the active Python environment.
+
+Protocol `mode`: `pilot` runs a single DENSS reconstruction; `average` runs denss-all (N maps, enantiomer selection, alignment, averaging, FSC) and writes a voxel-wise σ map from the aligned replicas; `refined` runs denss-all then denss-refine of the average against the data (σ still from the denss-all aligned stack). Pipeline q is converted to Å⁻¹ for DENSS staging (never pass autosaxs nm GNOM `.out` files to DENSS unchanged). Alignment is denss-all's built-in procedure (no separate aligner).
+
+### Arguments
+
+- `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where DENSS outputs are written.
+- `gnom_path` (str | None, default `None`): Optional GNOM/DATGNOM `.out` used only for \(D_{\max}\) (nm→Å). Smooth \(I(q)\) comes from the staged Å `.dat` (DENSS may fit internally).
+- `mode` (str, default `pilot`): Protocol stage: `pilot`, `average`, or `refined`.
+- `denss_mode` (str, default `slow`): DENSS algorithm mode: `slow`, `fast`, or `membrane`.
+- `n_maps` (int, default `20`): Number of reconstructions for `average`/`refined` (ignored in `pilot`; must be ≥2 when used).
+- `n_jobs` (int, default `1`): Parallel cores for denss-all.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
 
 `dict[str, str]` with:
 
-- `output_subdir`: Directory containing `dammif` fit artifacts (FIR/CIF and summary files). Each replica also gets `{rep}_pr.dat` and `{rep}_pr.png` (GNOM-style p(r) from DAM bead pairs via Monte Carlo).
+- `output_subdir`: Directory containing DENSS artifacts for this sample.
+- `density_map_path`: Primary density MRC (pilot map, average map, or refined map).
+- `avg_map_path`: Averaged MRC path when averaging ran; empty string for `pilot`.
+- `sigma_map_path`: Voxel-wise density σ MRC from denss-all `*_aligned.mrc` stack when averaging ran; empty string for `pilot`.
+- `fsc_path`: FSC curve path when averaging ran; empty string otherwise.
+- `map_fit_path`: Calculated vs experimental fit file when present; else empty.
+- `denss_log_path`: Main log for the completed mode.
 
 ### Python usage
 
 ```python
-from autosaxs.skill import fit_dammif
+from autosaxs.skill import model_density
 
-out = fit_dammif(
+out = model_density(
     profile="subtracted/sub_sample_01.dat",
-    output_dir="dammif",
-    gnom_path="guinier/sample_01_gnom.out",
-    dammif_reps_num=1,
+    output_dir="denss",
+    mode="pilot",
+    denss_mode="slow",
     use_cache=False,
 )
 
-print(out["output_subdir"])
+print(out["density_map_path"])
 ```
 
 ### CLI usage
 
 ```bash
-autosaxs fit-dammif subtracted/sub_sample_01.dat --output-dir dammif --dammif-reps-num 1
+autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss --mode pilot --denss-mode slow
+```
+
+---
+
+## `process_monodisperse`
+
+SAXS / small-angle x-ray scattering: run the monodisperse single-profile quality pipeline
+(Guinier → dimensionless Kratky → DATGNOM p(r) / Shannon–ΔRg passport → optional DAMMIF
+when quality gates pass → per-sample PDF report).
+
+This is a **meta-skill**: it only calls existing leaf skills (`fit_guinier`, `analyze_kratky`,
+`fit_distances`, `model_dam`, `report_individual`) and wires outputs between them.
+It does **not** change leaf interiors. Steps before Guinier (geometry, averaging, buffer
+subtraction) and polydisperse sizing are omitted — input must already be a subtracted
+(or otherwise ready) 1D profile.
+
+``model_dam`` runs only when `fit_distances` reports ``high_quality`` / ``HIGH QUALITY``
+(quality guide: Total Estimate ≥ 0.55 and ΔRg ≤ 10%). Default ``n_runs=5``.
+
+Primary result: the assembled PDF under ``<output_dir>/reports/`` (includes DAMMIF
+fragments when generated).
+
+### Arguments
+
+- `profile` (str): 1D path expression (file/dir/glob of `*.dat`). Directories expand non-recursively.
+- `output_dir` (str, default `.`): Pipeline root; leaf skills write under subdirectories here.
+- `config_path` (str | None, default `None`): Optional YAML config forwarded to leaf skills.
+- `first` / `last` (int | None): Optional fixed Guinier interval (1-based); both required together.
+  Guinier `first` is forwarded to DATGNOM; Guinier `last` is **not** passed to DATGNOM
+  (window too narrow for p(r)).
+- `smooth` (float | None, default `None`): Optional DATGNOM `--smooth` for `fit_distances`.
+- `n_runs` (int, default `5`): DAMMIF replica count for `model_dam` when the quality gate passes.
+- `use_cache` (bool, default `False`): Forwarded to leaf skills.
+
+### Returns
+
+`dict` with:
+
+- `report_pdf_path`: Primary PDF quality passport (when written).
+- `assembled_report_md_path`: Merged Markdown report.
+- `pipeline_dir`: The `output_dir` used as the pipeline root.
+- `basename`: Sample basename used for report assembly.
+- `model_dam_ran`: Whether `model_dam` was invoked.
+- `model_dam_skip_reason`: Why DAMMIF was skipped (empty when run).
+- `fit_guinier`: Return dict from `fit_guinier`.
+- `analyze_kratky`: Return dict from `analyze_kratky`.
+- `fit_distances`: Return dict from `fit_distances`.
+- `model_dam`: Return dict from `model_dam` (empty dict when skipped).
+- `report_individual`: Return dict from `report_individual`.
+
+### Python usage
+
+```python
+from autosaxs.skill import process_monodisperse
+
+out = process_monodisperse(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="mono_out",
+)
+print(out["report_pdf_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs process-monodisperse subtracted/sub_sample_01.dat --output-dir mono_out
 ```
 
 ---

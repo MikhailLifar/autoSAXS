@@ -76,9 +76,21 @@ class MonodisperseWizardWidget(QWidget):
         if g_first and g_last:
             self.guinier_pane.set_range(int(g_first), int(g_last))
         self.gnom_pane.set_params(wp)
-        shapes = getattr(state, "fit_bodies_shapes", None)
+        shapes = getattr(state, "model_bodies_shapes", None)
         if shapes:
             self.shape_pane.set_selected_shapes(list(shapes))
+        n_runs = getattr(state, "model_dam_n_runs", None)
+        if n_runs is not None:
+            self.shape_pane.set_n_runs(int(n_runs))
+        denss_protocol = getattr(state, "model_density_mode", None)
+        if denss_protocol:
+            self.shape_pane.set_denss_protocol(str(denss_protocol))
+        denss_mode = getattr(state, "model_density_denss_mode", None)
+        if denss_mode:
+            self.shape_pane.set_denss_mode(str(denss_mode))
+        denss_n_maps = getattr(state, "model_density_n_maps", None)
+        if denss_n_maps is not None:
+            self.shape_pane.set_denss_n_maps(int(denss_n_maps))
 
     def set_running(self, running: bool) -> None:
         self.guinier_pane.set_running(running)

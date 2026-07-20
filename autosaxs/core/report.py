@@ -742,11 +742,22 @@ def build_summary_report_pdf(summary_data: Dict[str, Any], output_path: str) -> 
 
 
 _RE_MD_IMG = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_RE_MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_RE_MD_CODE = re.compile(r"`([^`]+)`")
+_RE_MD_ITALIC = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
 
 
-def _paragraph_from_plain(text: str, style: Any) -> Paragraph:
-    t = xml_escape(text.strip())
-    return Paragraph(t.replace("\n", "<br/>"), style)
+def _md_inline_to_reportlab(text: str) -> str:
+    """Escape XML then map common Markdown inline markers to ReportLab Paragraph markup."""
+    t = xml_escape((text or "").strip())
+    t = _RE_MD_BOLD.sub(r"<b>\1</b>", t)
+    t = _RE_MD_CODE.sub(r"<font face='Courier' size='8'>\1</font>", t)
+    t = _RE_MD_ITALIC.sub(r"<i>\1</i>", t)
+    return t.replace("\n", "<br/>")
+
+
+def _paragraph_from_md(text: str, style: Any) -> Paragraph:
+    return Paragraph(_md_inline_to_reportlab(text), style)
 
 
 def _is_md_table_separator_row(cells: List[str]) -> bool:
@@ -769,7 +780,8 @@ def build_pdf_from_assembled_markdown(
     Render assembled Markdown (headings, paragraphs, ``![alt](path)`` images, pipe tables) to a PDF using ReportLab.
 
     Relative image paths are resolved against ``markdown_base_dir`` when provided (typically the directory
-    containing the assembled ``.md`` file).
+    containing the assembled ``.md`` file). Supports ``#``–``####`` headings and inline ``**bold**`` /
+    ``*italic*`` / `` `code` ``.
     """
     styles = getSampleStyleSheet()
     story: list = []
@@ -777,6 +789,13 @@ def build_pdf_from_assembled_markdown(
     h1_style = styles["Heading1"]
     h2_style = styles["Heading2"]
     h3_style = styles["Heading3"]
+    h4_style = ParagraphStyle(
+        name="MdHeading4",
+        parent=h3_style,
+        fontSize=max(10, int(getattr(h3_style, "fontSize", 12) or 12) - 1),
+        spaceBefore=6,
+        spaceAfter=4,
+    )
     small = ParagraphStyle(name="MdSmall", parent=body_style, fontSize=8, leading=10)
     lines = md_text.splitlines()
     i = 0
@@ -790,7 +809,7 @@ def build_pdf_from_assembled_markdown(
         buf = []
         if not text:
             return
-        story.append(_paragraph_from_plain(text, body_style))
+        story.append(_paragraph_from_md(text, body_style))
         story.append(Spacer(1, 0.2 * cm))
 
     while i < len(lines):
@@ -829,7 +848,7 @@ def build_pdf_from_assembled_markdown(
             if rows_data:
                 rp_rows: List[List[Paragraph]] = []
                 for row in rows_data:
-                    rp_rows.append([Paragraph(xml_escape(c or ""), small) for c in row])
+                    rp_rows.append([_paragraph_from_md(c or "", small) for c in row])
                 ncols = max(len(r) for r in rows_data)
                 col_w = (14 * cm) / max(ncols, 1)
                 t = Table(rp_rows, colWidths=[col_w] * ncols)
@@ -845,21 +864,28 @@ def build_pdf_from_assembled_markdown(
                 story.append(t)
                 story.append(Spacer(1, 0.3 * cm))
             continue
+        # Longer heading markers first (#### before ###).
+        if stripped.startswith("#### "):
+            flush_buf()
+            story.append(_paragraph_from_md(stripped[5:].strip(), h4_style))
+            story.append(Spacer(1, 0.15 * cm))
+            i += 1
+            continue
         if stripped.startswith("### "):
             flush_buf()
-            story.append(Paragraph(xml_escape(stripped[4:].strip()), h3_style))
+            story.append(_paragraph_from_md(stripped[4:].strip(), h3_style))
             story.append(Spacer(1, 0.2 * cm))
             i += 1
             continue
         if stripped.startswith("## "):
             flush_buf()
-            story.append(Paragraph(xml_escape(stripped[3:].strip()), h2_style))
+            story.append(_paragraph_from_md(stripped[3:].strip(), h2_style))
             story.append(Spacer(1, 0.25 * cm))
             i += 1
             continue
         if stripped.startswith("# "):
             flush_buf()
-            story.append(Paragraph(xml_escape(stripped[2:].strip()), h1_style))
+            story.append(_paragraph_from_md(stripped[2:].strip(), h1_style))
             story.append(Spacer(1, 0.3 * cm))
             i += 1
             continue
@@ -869,7 +895,7 @@ def build_pdf_from_assembled_markdown(
             for m in _RE_MD_IMG.finditer(stripped):
                 before = stripped[pos : m.start()].strip()
                 if before:
-                    story.append(_paragraph_from_plain(before, body_style))
+                    story.append(_paragraph_from_md(before, body_style))
                 img_path = m.group(2).strip().strip('"').strip("'")
                 if img_path and not os.path.isabs(img_path) and markdown_base_dir:
                     img_path = os.path.normpath(os.path.join(markdown_base_dir, img_path))
@@ -885,7 +911,7 @@ def build_pdf_from_assembled_markdown(
                 pos = m.end()
             tail = stripped[pos:].strip()
             if tail:
-                story.append(_paragraph_from_plain(tail, body_style))
+                story.append(_paragraph_from_md(tail, body_style))
             i += 1
             continue
         buf.append(line)

@@ -41,9 +41,13 @@ SKILL_DEFAULT_ORDER: Dict[str, int] = {
     "analyze_kratky": 42,
     "fit_distances": 43,
     "fit_sizes": 44,
-    "fit_mixture": 50,
-    "fit_bodies": 51,
-    "fit_dammif": 52,
+    "model_mixture": 50,
+    "fit_mixture": 50,  # deprecated alias id (legacy fragments)
+    "model_bodies": 51,
+    "fit_bodies": 51,  # deprecated alias id (legacy fragments)
+    "model_dam": 52,
+    "fit_dammif": 52,  # deprecated alias id (legacy fragments)
+    "model_density": 53,
 }
 
 

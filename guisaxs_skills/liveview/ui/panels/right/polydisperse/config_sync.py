@@ -28,7 +28,7 @@ class PolydisperseConfigSync:
         mix = self._window.mixture_pane.mixture_params()
         wp["mixture"] = mix
         self._state.polydisperse_window_params = wp
-        self._state.fit_mixture_options = dict(mix)
+        self._state.model_mixture_options = dict(mix)
         mode = self._window.mixture_pane.mixture_mode()
         try:
             self._state.polydisperse_mixture_mode = PolydisperseMixtureMode(mode)
@@ -86,9 +86,9 @@ class PolydisperseConfigSync:
         except OSError:
             pass
         try:
-            mpath.write_text(yaml.safe_dump({"fit_mixture": mix}, sort_keys=True), encoding="utf-8")
-            self._state.fit_mixture_config_path = mpath
-            self._state.fit_mixture_options = mix
+            mpath.write_text(yaml.safe_dump({"model_mixture": mix}, sort_keys=True), encoding="utf-8")
+            self._state.model_mixture_config_path = mpath
+            self._state.model_mixture_options = mix
         except OSError:
             pass
 

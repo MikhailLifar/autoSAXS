@@ -30,7 +30,7 @@ class SessionPathHints:
     last_integrated_dat_path: Optional[str] = None
     # Last mask file used (calibrate / integrate_proxy / any skill with optional mask)
     mask_file_path: Optional[str] = None
-    # Last config file used (.conf for calibrate, YAML for fit_mixture, etc.)
+    # Last config file used (.conf for calibrate, YAML for model_mixture, etc.)
     config_file_path: Optional[str] = None
 
 

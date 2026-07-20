@@ -90,6 +90,9 @@ SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance
 - `fits_csv_path`: Path to a CSV containing candidate scores/metadata.
 - `fit_vs_exp_png_path` / `fit_vs_exp_png_error`: Fit-vs-experiment plot output or error message.
 - `best_pr_png_path` / `best_pr_png_error`: \(p(r)\) plot output or error message.
+- `ensemble_dir` / `ensemble_summary_path`: Close-fits Dmax ensemble directory and CSV summary.
+- `close_fit_out_paths`: Saved GNOM `.out` paths for Dmax±10% close fits.
+- `force_zero_off_out_path`: Saved GNOM `.out` with `--force-zero-rmax=N` at Dmax.
 - `dmax_nm`: Maximum real-space size D_max (nm) from the selected GNOM/DATGNOM fit.
 - `rg_pr_nm` / `i0_pr`: Integral Rg and I(0) from p(r) (GNOM-reported or computed from the distribution).
 - `rg_guinier_nm`: Guinier Rg (nm) from in-process `fit_guinier` or user `rg_nm`.

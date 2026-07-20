@@ -49,6 +49,13 @@ def _newest_dammif_dummy_cif(subdir: Path) -> Optional[str]:
 
 
 def best_dammif_cif(subdir: Path) -> Optional[str]:
+    # Prefer model_dam ``best.cif`` symlink when present.
+    best_link = subdir / "best.cif"
+    if best_link.is_file() or best_link.is_symlink():
+        try:
+            return str(best_link.resolve())
+        except OSError:
+            pass
     yml = subdir / "dammif_fits.yml"
     if not yml.is_file():
         return _newest_dammif_dummy_cif(subdir)

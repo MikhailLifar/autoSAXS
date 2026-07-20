@@ -113,7 +113,7 @@ class GnomPane(QWidget):
         if not isinstance(params, dict):
             return
         # Programmatic updates must not emit params_changed (that pauses/cancels the
-        # live pipeline via intervention_requested — kills fit_dammif mid-auto-job).
+        # live pipeline via intervention_requested — kills model_dam mid-auto-job).
         self._debounce.stop()
         widgets = (self._rg, self._first, self._last, self._smooth)
         for w in widgets:

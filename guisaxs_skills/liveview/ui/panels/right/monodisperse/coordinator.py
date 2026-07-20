@@ -36,6 +36,8 @@ class MonodisperseCoordinator(QObject):
         w.guinier_pane.range_changed.connect(self._on_guinier_range_changed)
         w.gnom_pane.params_changed.connect(self._on_gnom_params_changed)
         w.shape_pane.mode_changed.connect(self._on_shape_mode_changed)
+        w.shape_pane.n_runs_changed.connect(self._on_n_runs_changed)
+        w.shape_pane.denss_settings_changed.connect(self._on_denss_settings_changed)
         w.shape_pane.rerun_shape_requested.connect(self._on_rerun_shape)
         w.auto_toggle_clicked.connect(self._on_auto_toggle)
 
@@ -74,6 +76,14 @@ class MonodisperseCoordinator(QObject):
         self._wizard.shape_pane._update_mode_ui()
         self._wizard.shape_pane.set_rerun_enabled(self._presenter.can_rerun_shape())
         self.shape_config_changed.emit()
+
+    def _on_n_runs_changed(self, n: int) -> None:
+        # Config only: next Re-run shape / next TIFF picks this up. Never enqueue model_dam.
+        self._config.apply_n_runs(n)
+
+    def _on_denss_settings_changed(self) -> None:
+        # Config only: next Re-run shape / next TIFF picks this up.
+        self._config.apply_denss_settings()
 
     def _on_rerun_shape(self) -> None:
         self.intervention_requested.emit()

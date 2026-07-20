@@ -29,8 +29,8 @@ if TYPE_CHECKING:
     from ...windows.polydisperse import PolydisperseAnalysisWindow
 
 
-_MONO_SKILLS = frozenset({"fit_guinier", "fit_distances", "fit_dammif", "fit_bodies"})
-_POLY_SKILLS = frozenset({"fit_guinier", "fit_sizes", "fit_mixture"})
+_MONO_SKILLS = frozenset({"fit_guinier", "fit_distances", "model_dam", "model_bodies", "model_density"})
+_POLY_SKILLS = frozenset({"fit_guinier", "fit_sizes", "model_mixture"})
 
 
 class LiveviewRightPanel(QWidget):
@@ -328,9 +328,9 @@ class LiveviewRightPanel(QWidget):
                 return True, False
             # Ambiguous: only the armed chain that matches skill family.
             return self._state.monodisperse_armed, self._state.polydisperse_armed and not self._state.monodisperse_armed
-        if sn in ("fit_distances", "fit_dammif", "fit_bodies") or sn in _MONO_SKILLS - {"fit_guinier"}:
+        if sn in ("fit_distances", "model_dam", "model_bodies", "model_density") or sn in _MONO_SKILLS - {"fit_guinier"}:
             return True, False
-        if sn in ("fit_sizes", "fit_mixture") or sn in _POLY_SKILLS - {"fit_guinier"}:
+        if sn in ("fit_sizes", "model_mixture") or sn in _POLY_SKILLS - {"fit_guinier"}:
             return False, True
         return False, False
 

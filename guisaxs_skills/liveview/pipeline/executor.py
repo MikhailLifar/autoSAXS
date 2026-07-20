@@ -1088,9 +1088,9 @@ class LiveviewJobExecutor(QObject):
             )
         return steps
 
-    def _fit_mixture_run_options(self) -> dict:
+    def _model_mixture_run_options(self) -> dict:
         """Skill options from window Apply; omit empty values and persistence-only keys."""
-        raw = self._state.fit_mixture_options
+        raw = self._state.model_mixture_options
         if not isinstance(raw, dict):
             return {}
         skip = frozenset({"output_dir", "use_cache", "config_path"})

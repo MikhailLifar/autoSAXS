@@ -47,7 +47,7 @@ class PolydisperseAnalysisWindow(QDialog):
         lay.setContentsMargins(10, 10, 10, 10)
         lay.addWidget(
             QLabel(
-                "Guinier (independent) → fit_sizes (D(R)) → optional fit_mixture. "
+                "Guinier (independent) → fit_sizes (D(R)) → optional model_mixture. "
                 "Control changes suspend auto-processing until you resume."
             )
         )

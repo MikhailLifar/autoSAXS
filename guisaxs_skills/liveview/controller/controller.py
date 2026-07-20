@@ -199,8 +199,8 @@ class LiveviewController(QObject):
     def run_fit_sizes(self) -> None:
         self.skill_runs.run_fit_sizes()
 
-    def run_fit_mixture(self) -> None:
-        self.skill_runs.run_fit_mixture()
+    def run_model_mixture(self) -> None:
+        self.skill_runs.run_model_mixture()
 
     def apply_subtraction_rerun(self, *, scaling_factor: float, sample_dat: str, buffer_dat: str) -> None:
         self.skill_runs.apply_subtraction_rerun(

@@ -57,7 +57,7 @@ def fit_sizes_opts(
     return opts
 
 
-def fit_mixture_opts(
+def model_mixture_opts(
     *,
     state: LiveviewSessionState,
     output_root: Path,
@@ -65,7 +65,7 @@ def fit_mixture_opts(
     outdir = mixture_dir(output_root)
     outdir.mkdir(parents=True, exist_ok=True)
     opts: Dict[str, Any] = {"output_dir": str(outdir.resolve()), "use_cache": False}
-    raw = state.fit_mixture_options
+    raw = state.model_mixture_options
     if isinstance(raw, dict):
         skip = frozenset({"output_dir", "use_cache", "config_path"})
         for key, value in raw.items():
@@ -88,7 +88,7 @@ def fit_mixture_opts(
 
 
 def job_includes_mixture(steps: List[JobStep]) -> bool:
-    return any(s.name == "fit_mixture" for s in steps)
+    return any(s.name == "model_mixture" for s in steps)
 
 
 def build_polydisperse_steps(
@@ -150,7 +150,7 @@ def build_polydisperse_steps(
         parts == PolydispersePipelineParts.FULL
         and state.polydisperse_mixture_mode == PolydisperseMixtureMode.MIXTURE
     ):
-        m_opts = fit_mixture_opts(state=state, output_root=root)
-        steps.append(JobStep(name="fit_mixture", request=RunRequest("fit_mixture", [prof], m_opts)))
+        m_opts = model_mixture_opts(state=state, output_root=root)
+        steps.append(JobStep(name="model_mixture", request=RunRequest("model_mixture", [prof], m_opts)))
 
     return steps

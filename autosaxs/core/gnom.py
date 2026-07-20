@@ -22,9 +22,11 @@ def parse_gnom_out(source: Union[str, os.PathLike]) -> Dict[str, Any]:
     - ``real_space_rg``: real-space Rg reported by GNOM, if present.
     - ``real_space_i0``: real-space I(0) reported by GNOM, if present.
     - ``iq_table``: ``(q, I_exp, sigma, I_fit)`` from the scattering table, if parsed.
-    - ``distribution``: ``(r_or_R, values)`` from the last suitable 3-column real-space
-      distribution block, if parsed. Interpret as p(r) for DATGNOM and D(R) for
-      polydisperse GNOM runs.
+    - ``distribution``: ``(r_or_R, values, err)`` from the last suitable 3-column
+      real-space distribution block, if parsed. ``err`` is the GNOM ERROR column
+      (σ of the distribution) when present and finite; otherwise ``None``.
+      Interpret as p(r) for DATGNOM and D(R) for polydisperse GNOM runs.
+    - ``current_alpha``: regularization parameter ``Current ALPHA`` from the .out, if present.
     """
     if isinstance(source, os.PathLike) or (isinstance(source, str) and os.path.isfile(source)):
         with open(source, "r", errors="replace") as f:
@@ -208,15 +210,32 @@ def parse_gnom_out(source: Union[str, os.PathLike]) -> Dict[str, Any]:
             I_fit.astype(float),
         )
 
-    def parse_distribution(text: str) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    def parse_current_alpha(text: str) -> Optional[float]:
+        m = re.search(
+            r"Current\s+ALPHA\s*:\s*([0-9.eE+-]+)",
+            text or "",
+            flags=re.IGNORECASE,
+        )
+        return _parse_scientific_float(m)
+
+    def parse_distribution(
+        text: str,
+    ) -> Optional[Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]]:
         lines = (text or "").splitlines()
         for blk in reversed(numeric_blocks(lines, min_cols=3, reject_numeric_fourth_col=True)):
             if len(blk) < 8:
                 continue
             r = np.asarray([x[0] for x in blk], dtype=float)
             values = np.asarray([x[1] for x in blk], dtype=float)
-            if np.all(np.diff(r) >= 0):
-                return r, values
+            err_raw = np.asarray([x[2] if len(x) > 2 else np.nan for x in blk], dtype=float)
+            if not np.all(np.diff(r) >= 0):
+                continue
+            err: Optional[np.ndarray]
+            if np.any(np.isfinite(err_raw) & (err_raw > 0)):
+                err = err_raw
+            else:
+                err = None
+            return r, values, err
         return None
 
     return {
@@ -226,9 +245,36 @@ def parse_gnom_out(source: Union[str, os.PathLike]) -> Dict[str, Any]:
         "angular_range": parse_angular_range(out_text),
         "real_space_rg": parse_real_space_rg(out_text),
         "real_space_i0": parse_real_space_i0(out_text),
+        "current_alpha": parse_current_alpha(out_text),
         "iq_table": parse_iq_table(out_text),
         "distribution": parse_distribution(out_text),
     }
+
+
+def distribution_arrays(
+    dist: Any,
+) -> Optional[Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]]:
+    """
+    Normalize a ``parse_gnom_out`` distribution value to ``(r, values, err)``.
+
+    Accepts legacy 2-tuples ``(r, values)`` and new 3-tuples ``(r, values, err)``.
+    """
+    if dist is None:
+        return None
+    try:
+        n = len(dist)
+    except TypeError:
+        return None
+    if n < 2:
+        return None
+    r = np.asarray(dist[0], dtype=float)
+    values = np.asarray(dist[1], dtype=float)
+    err: Optional[np.ndarray] = None
+    if n >= 3 and dist[2] is not None:
+        err_arr = np.asarray(dist[2], dtype=float)
+        if err_arr.shape == values.shape and np.any(np.isfinite(err_arr) & (err_arr > 0)):
+            err = err_arr
+    return r, values, err
 
 def candidate_score(cand: Dict[str, Any]) -> float:
     """score = Total Estimate − neg_frac (higher is better)."""

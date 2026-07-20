@@ -559,7 +559,7 @@ def test_polydisperse_steps_full_defaults(tmp_path: Path):
         parts=PolydispersePipelineParts.FULL,
         load_yaml=ex._load_yaml_options,  # noqa: SLF001
     )
-    assert [s.name for s in steps2] == [FIT_GUINIER_POLY_STEP, "fit_sizes", "fit_mixture"]
+    assert [s.name for s in steps2] == [FIT_GUINIER_POLY_STEP, "fit_sizes", "model_mixture"]
     m_opts = steps2[2].request.options
     assert "r_max" not in m_opts
     assert "poly_max" not in m_opts
@@ -569,13 +569,13 @@ def test_polydisperse_steps_full_defaults(tmp_path: Path):
 
 
 def test_polydisperse_mixture_opts_include_explicit_bounds(tmp_path: Path):
-    from guisaxs_skills.liveview.pipeline.polydisperse_pipeline import fit_mixture_opts
+    from guisaxs_skills.liveview.pipeline.polydisperse_pipeline import model_mixture_opts
 
     state = LiveviewSessionState(watchdir=tmp_path)
     state.polydisperse_window_params = {
         "mixture": {"max_nph": 2, "r_max": 9.5, "poly_max": 3.0},
     }
-    opts = fit_mixture_opts(state=state, output_root=tmp_path)
+    opts = model_mixture_opts(state=state, output_root=tmp_path)
     assert opts["max_nph"] == 2
     assert opts["r_max"] == 9.5
     assert opts["poly_max"] == 3.0
@@ -657,7 +657,7 @@ def test_monodisperse_step_shape_dammif_uses_concrete_gnom_path(tmp_path: Path):
         gnom_out_path=str(gnom),
     )
     assert step is not None
-    assert step.name == "fit_dammif"
+    assert step.name == "model_dam"
     assert step.request.options["gnom_path"] == str(gnom.resolve())
     assert "${" not in step.request.options["gnom_path"]
 
@@ -668,7 +668,7 @@ def test_monodisperse_step_shape_dammif_uses_concrete_gnom_path(tmp_path: Path):
         gnom_out_path=None,
     )
     assert fallback is not None
-    assert fallback.name == "fit_dammif"
+    assert fallback.name == "model_dam"
     assert fallback.request.options.get("gnom_path") == str(gnom.resolve())
 
     other_root = tmp_path / "other"

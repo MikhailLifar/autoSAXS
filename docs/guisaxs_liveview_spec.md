@@ -56,7 +56,7 @@ The GUI MUST NOT call `autosaxs.processor`, pyFAI, or subtraction/integration ro
 - `calibrate`
 - `integrate`
 - `subtract`
-- **Analysis skills (right column; subset may run per file depending on selected mode, see §8):** `fit_guinier`, `fit_distances`, `fit_dammif`, `fit_bodies`, `fit_sizes`, `fit_mixture`
+- **Analysis skills (right column; subset may run per file depending on selected mode, see §8):** `fit_guinier`, `fit_distances`, `model_dam`, `model_bodies`, `fit_sizes`, `model_mixture`
 
 Preview-only reading of existing `.dat`/`.png` files for display is allowed.
 
@@ -67,7 +67,7 @@ All autosaxs skills invoked by this app MUST be run with caching **disabled**:
 - Python API form: pass `use_cache=False`
 - CLI form: pass `--no-cache`
 
-This applies to every run of: `integrate_proxy`, `calibrate`, `integrate`, `subtract`, and every analysis skill listed in §2.2 (`fit_distances`, `fit_dammif`, `fit_bodies`, `fit_sizes`, `fit_mixture`).
+This applies to every run of: `integrate_proxy`, `calibrate`, `integrate`, `subtract`, and every analysis skill listed in §2.2 (`fit_distances`, `model_dam`, `model_bodies`, `fit_sizes`, `model_mixture`).
 
 ### 2.4 Isolation + responsiveness (hard requirement)
 
@@ -301,8 +301,8 @@ The right column is driven by an **analysis mode** drop-down (**`Off` first**, d
 **Drop-down options (fixed order, exact user-visible labels):**
 
 1. **`Off`** — no analysis skills; idle / placeholder when uncalibrated; when calibrated, no post-integration analysis.
-2. **`Monodisperse analysis`** — launches a **separate wizard window** (3-pane: Guinier → GNOM → optional shape); auto pipeline runs `fit_guinier` then `fit_distances`; shape (`fit_bodies` / `fit_dammif`) on demand only via **Re-run shape** (default shape mode **None**).
-3. **`Polydisperse analysis`** — launches a **separate analysis window** (3-pane: Guinier → fit_sizes / D(R) → optional fit_mixture); auto pipeline runs `fit_guinier` then `fit_sizes` (spheres, `first` default 1); mixture on demand when enabled (default **None**). Guinier is display-only and **not** handed off to fit_sizes.
+2. **`Monodisperse analysis`** — launches a **separate wizard window** (3-pane: Guinier → GNOM → optional shape); auto pipeline runs `fit_guinier` then `fit_distances`; shape (`model_bodies` / `model_dam`) on demand only via **Re-run shape** (default shape mode **None**).
+3. **`Polydisperse analysis`** — launches a **separate analysis window** (3-pane: Guinier → fit_sizes / D(R) → optional model_mixture); auto pipeline runs `fit_guinier` then `fit_sizes` (spheres, `first` default 1); mixture on demand when enabled (default **None**). Guinier is display-only and **not** handed off to fit_sizes.
 
 **Common requirements:**
 
@@ -324,7 +324,7 @@ Under the watch directory, the app MUST create (if missing):
 - `subtracted/` — outputs from State C
 - `guinier/` — per-sample Guinier fits (`guinier/<stem>/`; watchdir-level `guinier/guinier.conf` for wizard interval)
 - `fit_distances/` — per-sample GNOM / \(p(r)\) outputs (`fit_distances/<stem>/`)
-- `fit_bodies/` — BODIES shape fits (`fit_bodies/<stem>/`; optional when monodisperse shape mode is BODIES)
+- `model_bodies/` — BODIES shape fits (`model_bodies/<stem>/`; optional when monodisperse shape mode is BODIES)
 - `dammif/` — DAMMIF shape fits (`dammif/<stem>/`; optional when monodisperse shape mode is DAMMIF)
 - `runs/` — per-run logs/stdout/stderr/result dicts for traceability, consistent with `guisaxs_skills` conventions
 
@@ -365,12 +365,12 @@ Cross-pane parameter handoff in the monodisperse wizard (Guinier interval → GN
 | Drop-down label | Skill(s) (in order) | Right-column content (minimum) |
 |-----------------|---------------------|--------------------------------|
 | `Off` | *(none)* | Mode selector + idle / placeholder |
-| `Monodisperse analysis` | `fit_guinier` → `fit_distances` (auto); optional `fit_bodies` / `fit_dammif` (manual) | Separate wizard window: Guinier, GNOM, shape (None/BODIES/DAMMIF) |
-| `Polydisperse analysis` | `fit_guinier` → `fit_sizes` (auto); optional `fit_mixture` (when enabled) | Separate analysis window: Guinier (independent), fit_sizes / D(R), optional mixture |
+| `Monodisperse analysis` | `fit_guinier` → `fit_distances` (auto); optional `model_bodies` / `model_dam` (manual) | Separate wizard window: Guinier, GNOM, shape (None/BODIES/DAMMIF) |
+| `Polydisperse analysis` | `fit_guinier` → `fit_sizes` (auto); optional `model_mixture` (when enabled) | Separate analysis window: Guinier (independent), fit_sizes / D(R), optional mixture |
 
-**Monodisperse shape chaining:** When the user selects **BODIES** or **DAMMIF** and presses **Re-run shape**, `fit_dammif` MUST consume the **GNOM result** from the latest `fit_distances` run (`best_gnom_out_path`). `fit_bodies` uses the profile curve plus Guinier/GNOM handoff parameters. Shape skills do **not** run automatically in the TIFF pipeline (default shape mode is **None**).
+**Monodisperse shape chaining:** When the user selects **BODIES** or **DAMMIF** and presses **Re-run shape**, `model_dam` MUST consume the **GNOM result** from the latest `fit_distances` run (`best_gnom_out_path`). `model_bodies` uses the profile curve plus Guinier/GNOM handoff parameters. Shape skills do **not** run automatically in the TIFF pipeline (default shape mode is **None**).
 
-**Polydisperse chaining:** Guinier pane edits re-run **only** `fit_guinier` (no handoff into `fit_sizes`). `fit_sizes` always uses `shape=spheres` and an explicit `first` (default **1**). When mixture mode is **Mixture**, auto TIFF jobs append `fit_mixture`; enabling mixture mid-run may enqueue a mixture-only follow-up after a successful `fit_sizes`. Mixture `r_max` / `poly_max` start unset (skill-derived) and the pane controls update from the resolved values after a run (same pattern as fit_sizes `last`). Window panes use **data-driven matplotlib viewers** (`.dat`, GNOM `.out`, `dr_csv`, MIXTURE `.fit` / CSV) — not PNG thumbnails.
+**Polydisperse chaining:** Guinier pane edits re-run **only** `fit_guinier` (no handoff into `fit_sizes`). `fit_sizes` always uses `shape=spheres` and an explicit `first` (default **1**). When mixture mode is **Mixture**, auto TIFF jobs append `model_mixture`; enabling mixture mid-run may enqueue a mixture-only follow-up after a successful `fit_sizes`. Mixture `r_max` / `poly_max` start unset (skill-derived) and the pane controls update from the resolved values after a run (same pattern as fit_sizes `last`). Window panes use **data-driven matplotlib viewers** (`.dat`, GNOM `.out`, `dr_csv`, MIXTURE `.fit` / CSV) — not PNG thumbnails.
 
 **Monodisperse queue suspension:** Any wizard control change (Guinier interval, GNOM parameters, shape mode, body checklist) MUST **pause** the FIFO queue, **cancel** the running skill (requeue current job), and allow unlimited re-processing of the **current curve** via manual jobs. Incoming TIFFs remain queued but are not processed until the user presses **Resume auto-processing** (enabled only when no skill is running). This mirrors subtraction-wizard intervention semantics but stays embedded (explicit resume required).
 
@@ -387,14 +387,14 @@ Analysis skills may be slower than integration/subtraction. The implementation M
 
 For multi-step monodisperse auto-processing (`fit_guinier` → `fit_distances`), failure of an earlier step implies later steps are not run for that file. Shape fits are manual and do not block the auto queue. Global per-file failure handling remains §5.5 (skip file, log, continue queue).
 
-### 8.6 `fit_bodies` — body-model subset (skill contract)
+### 8.6 `model_bodies` — body-model subset (skill contract)
 
-The `fit_bodies` skill MUST accept an optional argument specifying which ATSAS **body** models to fit:
+The `model_bodies` skill MUST accept an optional argument specifying which ATSAS **body** models to fit:
 
 - **Default:** `None` (or equivalent) means **all** supported models (the full canonical set used by the skill).
 - **Non-default:** a **subset** of model names (any non-empty subset of that canonical set). The monodisperse wizard **BODIES** shape pane MUST expose this as user-configurable parameters and pass them into the skill invocation.
 
-Canonical names are defined in code (`BODIES_SHAPES_LIST` in `repos/autosaxs/skill/fit_bodies.py`); the UI SHOULD list the same names for multi-select.
+Canonical names are defined in code (`BODIES_SHAPES_LIST` in `repos/autosaxs/skill/model_bodies.py`); the UI SHOULD list the same names for multi-select.
 
 ### 8.7 Interactive 3D viewer (implementation requirement)
 

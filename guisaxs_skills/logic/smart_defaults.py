@@ -21,10 +21,11 @@ ANALYSIS_SKILLS_WITH_PROFILE = frozenset(
     {
         "plot",
         "fit_guinier",
-        "fit_mixture",
+        "model_mixture",
         "fit_distances",
-        "fit_bodies",
-        "fit_dammif",
+        "model_bodies",
+        "model_dam",
+        "model_density",
     }
 )
 
@@ -460,7 +461,7 @@ def anchor_for_calibrate_config(saved_pos: List[Any], resolved_calib_text: str, 
     return None
 
 
-def anchor_for_fit_mixture_config(profile_text: str, saved_profile: Any, workdir: Path) -> Optional[Path]:
+def anchor_for_model_mixture_config(profile_text: str, saved_profile: Any, workdir: Path) -> Optional[Path]:
     ad = anchor_dir_for_path_expression(profile_text, workdir)
     if ad is not None:
         return ad

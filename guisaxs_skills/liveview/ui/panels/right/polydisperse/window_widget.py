@@ -39,7 +39,7 @@ class PolydisperseWindowWidget(QWidget):
         guinier_box.setMinimumWidth(268)
         grid.addWidget(guinier_box, 0, 0, 2, 1)
         grid.addWidget(_pane_group("fit_sizes (D(R))", self.sizes_pane), 0, 1, 1, 1)
-        grid.addWidget(_pane_group("fit_mixture", self.mixture_pane), 1, 1, 1, 1)
+        grid.addWidget(_pane_group("model_mixture", self.mixture_pane), 1, 1, 1, 1)
         grid.setColumnStretch(0, 2)
         grid.setColumnStretch(1, 4)
         grid.setRowStretch(0, 1)
@@ -79,8 +79,8 @@ class PolydisperseWindowWidget(QWidget):
         mix = wp.get("mixture") if isinstance(wp.get("mixture"), dict) else None
         if mix:
             self.mixture_pane.set_mixture_params(mix)
-        elif getattr(state, "fit_mixture_options", None):
-            self.mixture_pane.set_mixture_params(dict(state.fit_mixture_options))
+        elif getattr(state, "model_mixture_options", None):
+            self.mixture_pane.set_mixture_params(dict(state.model_mixture_options))
 
     def set_running(self, running: bool) -> None:
         self.guinier_pane.set_running(running)

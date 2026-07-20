@@ -188,7 +188,7 @@ All outputs are written under the selected watch directory, including:
 
 - per-skill run records under `runs/latest/` (`request.yml`, `result.yml`, `stdout.log`, `stderr.log`)
 - `calibration/`, `averaged/` or `averaged_proxy/`, `subtracted/`
-- analysis outputs under per-skill folders like `fit_distances/<stem>/`, `fit_bodies/<stem>/`, `dammif/<stem>/`, `fit_sizes/<stem>/`, `mixture/<stem>/`
+- analysis outputs under per-skill folders like `fit_distances/<stem>/`, `model_bodies/<stem>/`, `dammif/<stem>/`, `fit_sizes/<stem>/`, `mixture/<stem>/`
 
 ---
 

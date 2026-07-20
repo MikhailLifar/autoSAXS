@@ -22,7 +22,7 @@ from .common import (
     coerce_dat_path_expression,
     expand_files_from_unwrapped,
 )
-from autosaxs.core.gnom import candidate_score, parse_gnom_out
+from autosaxs.core.gnom import candidate_score, distribution_arrays, parse_gnom_out
 from autosaxs.core.gnom_quality import analyze_dr_quality, write_quality_passport_yaml
 
 from .gnom_fit_common import default_atsas_failure_message
@@ -257,6 +257,7 @@ def _assess_and_write_dr_quality(
 
 
 def _dr_quality_markdown(quality: Dict[str, Any]) -> str:
+    """Sample metrics only — no general classification-rule text in the report body."""
     lines = [
         "\n#### Quality assessment (D(R))\n",
         f"- **Status:** {quality.get('overall_status', 'FAILED')}",
@@ -270,9 +271,6 @@ def _dr_quality_markdown(quality: Dict[str, Any]) -> str:
         lines.append(
             f"\n- **Shannon s_min:** {float(s_min):.3f} ({quality.get('shannon_class', 'unknown')})"
         )
-    tip = quality.get("shannon_tip")
-    if tip:
-        lines.append(f"\n- **Shannon tip:** {tip}")
     pdi = quality.get("pdi")
     if pdi is not None:
         lines.append(f"\n- **PDI:** {float(pdi):.3f}")
@@ -283,12 +281,7 @@ def _dr_quality_markdown(quality: Dict[str, Any]) -> str:
             lines.append(f"\n- **⟨R⟩:** {float(d_avg):.3g} ± {float(d_std):.3g} nm")
         else:
             lines.append(f"\n- **⟨R⟩:** {float(d_avg):.3g} nm")
-    tips = quality.get("user_tips") or []
-    if tips:
-        lines.append("\n\n**Notes:**\n")
-        for t in tips:
-            lines.append(f"- {t}\n")
-    return "".join(lines)
+    return "".join(lines) + "\n"
 
 
 def _shape_to_system(shape: str) -> int:
@@ -427,10 +420,12 @@ def _candidate_from_gnom_out(
         "parse_dr_ok": dr is not None,
     }
     if dr is not None:
-        _r, d = dr
-        d_arr = np.asarray(d, dtype=float)
-        if d_arr.size > 0 and np.any(np.isfinite(d_arr)):
-            diag["neg_frac"] = float(np.mean(d_arr < 0.0))
+        arrays = distribution_arrays(dr)
+        if arrays is not None:
+            _r, d, _err = arrays
+            d_arr = np.asarray(d, dtype=float)
+            if d_arr.size > 0 and np.any(np.isfinite(d_arr)):
+                diag["neg_frac"] = float(np.mean(d_arr < 0.0))
     cand: Dict[str, Any] = {
         "shape": shape,
         "system": int(system),
@@ -1113,10 +1108,11 @@ def _fit_sizes_paths(
     try:
         out_text_best = Path(best_gnom_out_path).read_text(errors="replace")
         dr = parse_gnom_out(out_text_best).get("distribution")
-        if dr is None:
+        arrays = distribution_arrays(dr)
+        if arrays is None:
             best_dr_png_error = "could not parse D(R) table from best .out"
         else:
-            r, d = dr
+            r, d, _err = arrays
             dr_csv_path = os.path.join(output_dir, f"{base}_fit_sizes_DR.csv")
             with open(dr_csv_path, "w", newline="") as fp:
                 w = csv.writer(fp)

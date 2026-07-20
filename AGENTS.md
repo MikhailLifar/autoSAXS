@@ -87,7 +87,7 @@ autosaxs/
 
 - **Discovery:** `autosaxs.skill.list_skills()` — single source of truth for CLI and GUI.
 - **Order:** `SKILL_ORDER` in `skill/__init__.py`.
-- **Layout:** mostly one module per skill; subpackages for heavy skills (`calibrate/`, `fit_guinier/`, `fit_mixture/`).
+- **Layout:** mostly one module per skill; subpackages for heavy skills (`calibrate/`, `fit_guinier/`, `model_mixture/`).
 - **Infrastructure (not skills):** `skill_wrap.py` (cache + `@apply_batch`), `common.py` (path coercion), `config.py` (merge bundled + user config), `deps.py` (internal import hub).
 
 | Skill | Module | Notes |
@@ -103,9 +103,10 @@ autosaxs/
 | analyze_kratky | `skill/analyze_kratky.py` | Dimensionless Kratky conformation analysis |
 | fit_distances | `skill/fit_distances.py` | DATGNOM monodisperse p(r) |
 | fit_sizes | `skill/fit_sizes.py` | GNOM polydisperse D(R) |
-| fit_mixture | `skill/fit_mixture/` | ATSAS MIXTURE |
-| fit_bodies | `skill/fit_bodies.py` | ATSAS BODIES |
-| fit_dammif | `skill/fit_dammif.py` | DAMMIF ab initio |
+| model_mixture | `skill/model_mixture/` | ATSAS MIXTURE (`fit_mixture` deprecated alias) |
+| model_bodies | `skill/model_bodies.py` | ATSAS BODIES (`fit_bodies` deprecated alias) |
+| model_dam | `skill/model_dam.py` | DAMMIF ab initio (+ DAMAVER when n_runs>1) |
+| model_density | `skill/model_density.py` | DENSS continuous density |
 | report_individual | `skill/report_individual.py` | Per-sample PDF from fragments |
 | report_summary | `skill/report_summary.py` | Pipeline summary PDF |
 

@@ -119,7 +119,7 @@ class PolydisperseArtifactPresenter:
             self._ingest_guinier(result)
         elif sn == "fit_sizes" or self._looks_like_fit_sizes(result):
             self._ingest_sizes(result)
-        elif sn == "fit_mixture" or result.get("results_csv_path") or result.get("best_label"):
+        elif sn == "model_mixture" or result.get("results_csv_path") or result.get("best_label"):
             self._ingest_mixture(result)
 
     def _looks_like_fit_sizes(self, result: dict) -> bool:

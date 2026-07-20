@@ -15,7 +15,7 @@ from ..logic.smart_defaults import (
     anchor_dir_for_path_expression,
     anchor_dir_from_resolved_path_list,
     anchor_for_calibrate_config,
-    anchor_for_fit_mixture_config,
+    anchor_for_model_mixture_config,
     browse_start_dir_for_resolved_paths,
     common_parent_dir_if_all_files,
     find_config_conf_near,
@@ -278,11 +278,11 @@ class SkillForm(QWidget):
                         cfg = find_config_conf_near(ad)
                         if cfg:
                             val = str(cfg.resolve())
-                if val is None and opt.name == "config_path" and meta.name == "fit_mixture":
+                if val is None and opt.name == "config_path" and meta.name == "model_mixture":
                     prof_w = self._pos_widgets[0] if meta.positional_params else None
                     profile_txt = prof_w.text() if isinstance(prof_w, PathField) else ""
                     saved_prof = saved_pos[0] if saved_pos else None
-                    ad = anchor_for_fit_mixture_config(profile_txt, saved_prof, workdir)
+                    ad = anchor_for_model_mixture_config(profile_txt, saved_prof, workdir)
                     if ad:
                         cfg = find_config_conf_near(ad)
                         if cfg:
@@ -382,8 +382,8 @@ class SkillForm(QWidget):
             self._live_refresh_two_d_shared(paths)
         elif name == "subtract":
             self._live_refresh_subtract(paths)
-        elif name == "fit_mixture":
-            self._live_refresh_fit_mixture(paths)
+        elif name == "model_mixture":
+            self._live_refresh_model_mixture(paths)
         elif name in ANALYSIS_SKILLS_WITH_PROFILE:
             self._live_refresh_analysis_profile(paths)
 
@@ -466,7 +466,7 @@ class SkillForm(QWidget):
                 w_buf.set_text(str(buf.resolve()))
         self._apply_all_browse_starts(meta, workdir, self._hints)
 
-    def _live_refresh_fit_mixture(self, paths: List[str]) -> None:
+    def _live_refresh_model_mixture(self, paths: List[str]) -> None:
         meta = self._meta
         if not meta or self._hints is None:
             return

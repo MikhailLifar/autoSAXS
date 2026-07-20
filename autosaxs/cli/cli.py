@@ -666,6 +666,38 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             _add_skill_subparser(subparsers, kebab_name, fn, aliases=[snake_name])
 
+    # Deprecated fit-* aliases → model_* (not listed in list_skills).
+    if "model_dam" in skills:
+        model_dam_fn = skills["model_dam"]
+        skills_by_cmd["fit-dammif"] = model_dam_fn
+        skills_by_cmd["fit_dammif"] = model_dam_fn
+        _add_skill_subparser(
+            subparsers,
+            "fit-dammif",
+            model_dam_fn,
+            aliases=["fit_dammif"],
+        )
+    if "model_bodies" in skills:
+        model_bodies_fn = skills["model_bodies"]
+        skills_by_cmd["fit-bodies"] = model_bodies_fn
+        skills_by_cmd["fit_bodies"] = model_bodies_fn
+        _add_skill_subparser(
+            subparsers,
+            "fit-bodies",
+            model_bodies_fn,
+            aliases=["fit_bodies"],
+        )
+    if "model_mixture" in skills:
+        model_mixture_fn = skills["model_mixture"]
+        skills_by_cmd["fit-mixture"] = model_mixture_fn
+        skills_by_cmd["fit_mixture"] = model_mixture_fn
+        _add_skill_subparser(
+            subparsers,
+            "fit-mixture",
+            model_mixture_fn,
+            aliases=["fit_mixture"],
+        )
+
     # Support: `autosaxs <subcommand> --description` without requiring positional args.
     # Argparse enforces required positionals before we can inspect flags, so handle this early.
     if argv is None:

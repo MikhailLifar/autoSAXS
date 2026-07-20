@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from autosaxs.core.gnom import distribution_arrays
+
 DEFAULT_TOTAL_ESTIMATE_MIN = 0.55
 DEFAULT_DELTA_RG_PCT_MAX = 10.0
 DEFAULT_DELTA_RG_PCT_ACCEPTABLE = 15.0
@@ -267,6 +269,7 @@ def analyze_pr_quality(
     first_pt_1based: Optional[int] = None,
     suspicious: bool = False,
     thresholds: Optional[PrQualityThresholds] = None,
+    dmax_validation: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Compute p(r) quality metrics from a parsed GNOM/DATGNOM .out."""
     t = thresholds or PrQualityThresholds()
@@ -276,8 +279,9 @@ def analyze_pr_quality(
     pr = parsed.get("distribution")
     rg_pr_nm: Optional[float] = parsed.get("real_space_rg")
     i0_pr: Optional[float] = parsed.get("real_space_i0")
-    if pr is not None:
-        r, p = pr
+    arrays = distribution_arrays(pr)
+    if arrays is not None:
+        r, p, _err = arrays
         rg_integral = rg_from_pr(np.asarray(r, dtype=float), np.asarray(p, dtype=float))
         if rg_integral is not None:
             rg_pr_nm = rg_integral
@@ -314,7 +318,7 @@ def analyze_pr_quality(
         thresholds=t,
     )
 
-    return {
+    out: Dict[str, Any] = {
         "dmax_nm": dmax_nm,
         "rg_pr_nm": rg_pr_nm,
         "i0_pr": i0_pr,
@@ -330,6 +334,200 @@ def analyze_pr_quality(
         "overall_status": overall_status_from_class(pr_class),
         "quality_rationale": rationale,
         "user_tips": user_tips,
+    }
+
+    if dmax_validation:
+        out["dmax_validation"] = dmax_validation
+        for tip in dmax_validation.get("user_tips") or []:
+            if tip and tip not in out["user_tips"]:
+                out["user_tips"].append(tip)
+        severity = str(dmax_validation.get("severity") or "ok")
+        if severity == "failed" and out["pr_quality_class"] != "failed":
+            out["quality_rationale"] = list(out["quality_rationale"]) + [
+                "Dmax validation failed (force-zero-off / ensemble pathology).",
+            ]
+            out["pr_quality_class"] = "failed"
+            out["overall_status"] = overall_status_from_class("failed")
+        # Warnings add tips only; they do not downgrade pr_quality_class (DAM gating).
+
+    return out
+
+
+def _tail_mean_signed(r: np.ndarray, p: np.ndarray, *, frac: float = 0.1) -> Optional[float]:
+    r = np.asarray(r, dtype=float)
+    p = np.asarray(p, dtype=float)
+    m = np.isfinite(r) & np.isfinite(p)
+    r, p = r[m], p[m]
+    if r.size < 5:
+        return None
+    n_tail = max(3, int(math.ceil(frac * r.size)))
+    return float(np.nanmean(p[-n_tail:]))
+
+
+def _abrupt_zero_at_dmax(r: np.ndarray, p: np.ndarray) -> Optional[bool]:
+    """True if p(r) drops abruptly into the forced zero at Dmax (cliff)."""
+    r = np.asarray(r, dtype=float)
+    p = np.asarray(p, dtype=float)
+    m = np.isfinite(r) & np.isfinite(p)
+    r, p = r[m], p[m]
+    if r.size < 6:
+        return None
+    p_abs_max = float(np.nanmax(np.abs(p)))
+    if not np.isfinite(p_abs_max) or p_abs_max <= 0:
+        return None
+    if abs(float(p[-1])) > 1e-6 * p_abs_max:
+        return False
+    prev = float(p[-2])
+    return bool(prev / p_abs_max > 0.15)
+
+
+def analyze_dmax_validation(
+    *,
+    best_parsed: Dict[str, Any],
+    ensemble_rows: List[Dict[str, Any]],
+    force_zero_off_parsed: Optional[Dict[str, Any]],
+    dmax_ref_nm: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Automated Dmax validation from a close-fits ensemble and a force-zero-off run.
+
+    ``ensemble_rows`` entries should include at least ``total_estimate``, ``neg_frac``,
+    ``rg_pr_nm`` (optional), and ``ok``.
+
+    When ``force_zero_off_parsed`` comes from an extended-rmax probe, pass ``dmax_ref_nm``
+    so pathology is scored on the region *beyond* the putative Dmax (aggregation /
+    repulsion), not on the whole curve.
+    """
+    tips: List[str] = []
+    severity = "ok"
+
+    best_arrays = distribution_arrays(best_parsed.get("distribution"))
+    abrupt: Optional[bool] = None
+    if best_arrays is not None:
+        abrupt = _abrupt_zero_at_dmax(best_arrays[0], best_arrays[1])
+        if abrupt:
+            tips.append(
+                "p(r) approaches Dmax abruptly (possible underestimated Dmax); "
+                "inspect the close-fits ensemble."
+            )
+            severity = "warning"
+
+    ok_rows = [row for row in ensemble_rows if row.get("ok")]
+    te_vals: List[float] = []
+    rg_vals: List[float] = []
+    neg_vals: List[float] = []
+    for row in ok_rows:
+        try:
+            te = float(row.get("total_estimate"))
+            if np.isfinite(te):
+                te_vals.append(te)
+        except (TypeError, ValueError):
+            pass
+        try:
+            rg = float(row.get("rg_pr_nm"))
+            if np.isfinite(rg):
+                rg_vals.append(rg)
+        except (TypeError, ValueError):
+            pass
+        try:
+            nf = float(row.get("neg_frac"))
+            if np.isfinite(nf):
+                neg_vals.append(nf)
+        except (TypeError, ValueError):
+            pass
+
+    te_span = float(max(te_vals) - min(te_vals)) if len(te_vals) >= 2 else None
+    rg_span_pct: Optional[float] = None
+    if len(rg_vals) >= 2:
+        rg_mid = 0.5 * (max(rg_vals) + min(rg_vals))
+        if rg_mid > 0:
+            rg_span_pct = float((max(rg_vals) - min(rg_vals)) / rg_mid * 100.0)
+
+    if te_span is not None and te_span > 0.15:
+        tips.append(
+            f"Close-fits ensemble Total Estimate spans {te_span:.3f} across Dmax±10% — "
+            "Dmax may be unstable."
+        )
+        severity = "warning" if severity == "ok" else severity
+    if rg_span_pct is not None and rg_span_pct > 10.0:
+        tips.append(
+            f"Close-fits ensemble Rg(p(r)) spans {rg_span_pct:.1f}% across Dmax±10%."
+        )
+        severity = "warning" if severity == "ok" else severity
+    if neg_vals and max(neg_vals) > 0.05:
+        tips.append(
+            "Some close-fits ensemble members show elevated negativity — inspect p(r) tails."
+        )
+        severity = "warning" if severity == "ok" else severity
+
+    force_tail: Optional[float] = None
+    force_pathology: Optional[str] = None
+    if force_zero_off_parsed is not None:
+        fz_arrays = distribution_arrays(force_zero_off_parsed.get("distribution"))
+        if fz_arrays is not None:
+            r_fz = np.asarray(fz_arrays[0], dtype=float)
+            p_fz = np.asarray(fz_arrays[1], dtype=float)
+            p_abs_max = float(np.nanmax(np.abs(p_fz))) if p_fz.size else 0.0
+            # Prefer the region beyond putative Dmax when an extended probe was used.
+            if (
+                dmax_ref_nm is not None
+                and np.isfinite(float(dmax_ref_nm))
+                and float(dmax_ref_nm) > 0
+                and r_fz.size
+            ):
+                beyond = r_fz >= float(dmax_ref_nm)
+                if np.any(beyond):
+                    force_tail = float(np.nanmean(p_fz[beyond]))
+                else:
+                    force_tail = _tail_mean_signed(r_fz, p_fz)
+            else:
+                force_tail = _tail_mean_signed(r_fz, p_fz)
+            if force_tail is not None and np.isfinite(p_abs_max) and p_abs_max > 0:
+                rel = force_tail / p_abs_max
+                if rel > 0.20:
+                    force_pathology = "aggregation"
+                    tips.append(
+                        "Extended force-zero-off probe: p(r) stays strongly positive past Dmax "
+                        "(possible aggregation or underestimated Dmax)."
+                    )
+                    severity = "failed"
+                elif rel > 0.08:
+                    force_pathology = "aggregation_mild"
+                    tips.append(
+                        "Extended force-zero-off probe: p(r) is mildly positive past Dmax — "
+                        "check for weak aggregation or slightly low Dmax."
+                    )
+                    severity = "warning" if severity == "ok" else severity
+                elif rel < -0.08:
+                    force_pathology = "repulsion"
+                    tips.append(
+                        "Extended force-zero-off probe: p(r) goes systematically negative past Dmax "
+                        "(possible interparticle repulsion / structure factor)."
+                    )
+                    severity = "failed"
+                elif rel < -0.03:
+                    force_pathology = "repulsion_mild"
+                    tips.append(
+                        "Extended force-zero-off probe: p(r) is mildly negative past Dmax — "
+                        "check for weak structure-factor / repulsion."
+                    )
+                    severity = "warning" if severity == "ok" else severity
+                else:
+                    tips.append(
+                        "Force-zero-off check: p(r) past Dmax is consistent with a natural decay to zero."
+                    )
+
+    return {
+        "abrupt_zero_at_dmax": abrupt,
+        "ensemble_n_ok": len(ok_rows),
+        "ensemble_te_span": te_span,
+        "ensemble_rg_span_pct": rg_span_pct,
+        "ensemble_neg_frac_max": float(max(neg_vals)) if neg_vals else None,
+        "force_zero_off_tail_mean": force_tail,
+        "force_zero_off_pathology": force_pathology,
+        "dmax_ref_nm": dmax_ref_nm,
+        "severity": severity,
+        "user_tips": tips,
     }
 
 
@@ -493,8 +691,9 @@ def analyze_dr_quality(
     parse_dr_ok = dr is not None
     moments: Dict[str, Optional[float]] = {"d_avg_nm": None, "d_std_nm": None, "pdi": None}
     peaks: List[float] = []
-    if dr is not None:
-        r, d = dr
+    arrays = distribution_arrays(dr)
+    if arrays is not None:
+        r, d, _err = arrays
         r_arr = np.asarray(r, dtype=float)
         d_arr = np.asarray(d, dtype=float)
         moments = dr_distribution_moments(r_arr, d_arr)

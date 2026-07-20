@@ -5,7 +5,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Default BODIES shapes for liveview “primitives” when no fit_bodies.conf exists yet.
+# Default BODIES shapes for liveview “primitives” when no model_bodies.conf exists yet.
 DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES: List[str] = ["ellipsoid"]
 
 
@@ -28,6 +28,7 @@ class MonodisperseShapeMode(str, Enum):
     NONE = "none"
     DAMMIF = "dammif"
     BODIES = "bodies"
+    DENSS = "denss"
 
 
 class PolydisperseMixtureMode(str, Enum):
@@ -64,14 +65,20 @@ class LiveviewSessionState:
     fit_distances_conf_path: Optional[Path] = None
     fit_sizes_conf_path: Optional[Path] = None
     # Optional ``mixture/liveview_mixture.yml`` from wizard Apply (persistence only).
-    fit_mixture_config_path: Optional[Path] = None
-    # CLI options for ``fit_mixture`` (q range, MIXTURE params). None → bundled defaults, full q.
-    fit_mixture_options: Optional[Dict[str, Any]] = None
-    # Written by the primitives wizard to fit_bodies/fit_bodies.conf (shape subset).
-    fit_bodies_conf_path: Optional[Path] = None
+    model_mixture_config_path: Optional[Path] = None
+    # CLI options for ``model_mixture`` (q range, MIXTURE params). None → bundled defaults, full q.
+    model_mixture_options: Optional[Dict[str, Any]] = None
+    # Written by the primitives wizard to model_bodies/model_bodies.conf (shape subset).
+    model_bodies_conf_path: Optional[Path] = None
     # Subset of BODIES model names; None or [] means pipeline uses DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES.
-    fit_bodies_shapes: Optional[List[str]] = None
+    model_bodies_shapes: Optional[List[str]] = None
     monodisperse_shape_mode: MonodisperseShapeMode = MonodisperseShapeMode.NONE
+    # Independent DAMMIF replicas for model_dam (default 1 = single reconstruction).
+    model_dam_n_runs: int = 1
+    # DENSS / model_density protocol: pilot | average | refined (default pilot).
+    model_density_mode: str = "pilot"
+    model_density_denss_mode: str = "fast"
+    model_density_n_maps: int = 20
     monodisperse_wizard_params: Optional[Dict[str, Any]] = None
     polydisperse_mixture_mode: PolydisperseMixtureMode = PolydisperseMixtureMode.NONE
     polydisperse_window_params: Optional[Dict[str, Any]] = None
@@ -100,15 +107,19 @@ class LiveviewSessionState:
         self.last_subtracted_dat_path = None
         self.monodisperse_armed = False
         self.polydisperse_armed = False
-        self.fit_bodies_shapes = None
-        self.fit_bodies_conf_path = None
+        self.model_bodies_shapes = None
+        self.model_bodies_conf_path = None
         self.fit_guinier_mono_conf_path = None
         self.fit_guinier_poly_conf_path = None
         self.monodisperse_shape_mode = MonodisperseShapeMode.NONE
+        self.model_dam_n_runs = 1
+        self.model_density_mode = "pilot"
+        self.model_density_denss_mode = "fast"
+        self.model_density_n_maps = 20
         self.monodisperse_wizard_params = None
         self.polydisperse_mixture_mode = PolydisperseMixtureMode.NONE
         self.polydisperse_window_params = None
-        self.fit_mixture_options = None
+        self.model_mixture_options = None
 
     def reset_buffer_to_state_b(self) -> None:
         """Clear buffer/subtract settings; disarm analysis; remain calibrated (state B if integrator is set)."""
@@ -117,11 +128,15 @@ class LiveviewSessionState:
         self.last_subtracted_dat_path = None
         self.monodisperse_armed = False
         self.polydisperse_armed = False
-        self.fit_bodies_shapes = None
-        self.fit_bodies_conf_path = None
+        self.model_bodies_shapes = None
+        self.model_bodies_conf_path = None
         self.fit_guinier_mono_conf_path = None
         self.fit_guinier_poly_conf_path = None
         self.monodisperse_shape_mode = MonodisperseShapeMode.NONE
+        self.model_dam_n_runs = 1
+        self.model_density_mode = "pilot"
+        self.model_density_denss_mode = "fast"
+        self.model_density_n_maps = 20
         self.monodisperse_wizard_params = None
         self.polydisperse_mixture_mode = PolydisperseMixtureMode.NONE
         self.polydisperse_window_params = None
@@ -142,11 +157,15 @@ class LiveviewSessionState:
         self.fit_guinier_mono_conf_path = None
         self.fit_guinier_poly_conf_path = None
         self.fit_sizes_conf_path = None
-        self.fit_mixture_config_path = None
-        self.fit_mixture_options = None
-        self.fit_bodies_shapes = None
-        self.fit_bodies_conf_path = None
+        self.model_mixture_config_path = None
+        self.model_mixture_options = None
+        self.model_bodies_shapes = None
+        self.model_bodies_conf_path = None
         self.monodisperse_shape_mode = MonodisperseShapeMode.NONE
+        self.model_dam_n_runs = 1
+        self.model_density_mode = "pilot"
+        self.model_density_denss_mode = "fast"
+        self.model_density_n_maps = 20
         self.monodisperse_wizard_params = None
         self.polydisperse_mixture_mode = PolydisperseMixtureMode.NONE
         self.polydisperse_window_params = None

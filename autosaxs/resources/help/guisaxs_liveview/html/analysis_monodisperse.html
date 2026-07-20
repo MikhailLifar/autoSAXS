@@ -9,21 +9,27 @@
 <h1>Monodisperse analysis</h1>
 <p>Open the monodisperse analysis wizard from the right-column icon (or focus it if already open).
 While the window is open, new TIFFs run Guinier → GNOM → optional shape automatically.
-Selecting BODIES or DAMMIF is <b>configuration</b> for automatic TIFF processing — it does not pause the queue.
+Selecting BODIES, DAMMIF, or DENSS is <b>configuration</b> for automatic TIFF processing — it does not pause the queue.
 Guinier artifacts are stored under <code>guinier_mono/</code> (separate from polydisperse).</p>
 <h2>Guinier</h2>
 <p><b>fit_guinier</b>. Interval edits pause auto-processing and re-run Guinier then GNOM for the current profile (shape is not chained from this manual edit).</p>
 <h2>p(r)</h2>
 <p><b>fit_distances</b> (AUTORG + GNOM). Wizard options: <code>fit_distances/fit_distances.conf</code>.
 Per-TIFF results: <code>fit_distances/&lt;stem&gt;/</code> — fit PNG, p(r) plot, GNOM .out.
-Editing GNOM parameters re-runs GNOM only; use <b>Re-run shape</b> if you also need DAMMIF/BODIES again.</p>
+Editing GNOM parameters re-runs GNOM only; use <b>Re-run shape</b> if you also need DAMMIF/BODIES/DENSS again.</p>
 <h2>DAM</h2>
-<p>When DAMMIF is selected, automatic TIFF jobs run Guinier → GNOM → <b>fit_dammif</b> (FAST) on the GNOM output.
+<p>When DAMMIF is selected, automatic TIFF jobs run Guinier → GNOM → <b>model_dam</b> (FAST) on the GNOM output.
 If you select DAMMIF while a TIFF job is already mid-run (Guinier/GNOM), a shape follow-up job runs after that job finishes.
 Additional folder: <code>dammif/&lt;stem&gt;/</code> — bead model, CIF, 3D preview.</p>
+<h2>DENSS</h2>
+<p>When DENSS is selected, automatic TIFF jobs run Guinier → GNOM → <b>model_density</b>.
+Default protocol is <b>pilot</b> (single reconstruction). <b>average</b>/<b>refined</b> run denss-all (and refine).
+The 3D view is a dark point cloud (ρ ≥ 15% of max): point density, cold color, and opacity encode electron density;
+fullscreen dialog can toggle color/opacity to the ensemble σ map when present.
+Per-TIFF: <code>denss/&lt;stem&gt;/</code> — MRC density, optional σ map, I(q) fit.</p>
 <h2>Primitives</h2>
-<p>When BODIES is selected, automatic TIFF jobs include <b>fit_bodies</b> after GNOM.
-Shape list: <code>fit_bodies/fit_bodies.conf</code>.
-Per-TIFF: <code>fit_bodies/&lt;stem&gt;/</code> — CSV, fit PNGs, 3D for best shape.</p>
+<p>When BODIES is selected, automatic TIFF jobs include <b>model_bodies</b> after GNOM.
+Shape list: <code>model_bodies/model_bodies.conf</code>.
+Per-TIFF: <code>model_bodies/&lt;stem&gt;/</code> — CSV, fit PNGs, 3D for best shape.</p>
 </body>
 </html>

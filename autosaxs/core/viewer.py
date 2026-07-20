@@ -323,44 +323,49 @@ class PLTViewer(Viewer):
         sigma: Optional[np.ndarray] = None,
         q_min: Optional[float] = None,
         q_max: Optional[float] = None,
+        q2_max: float = 30.0,
         title: str = "Guinier fit",
         plotFilePath: Optional[str] = None,
         show_duration: Optional[float] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
-        Guinier plot: ln(I) vs q² with optional error bars (σ_I propagated as σ_lnI ≈ σ/I),
-        plus the chosen Guinier approximation as a line on [q_min, q_max].
+        Guinier plot: ln(I) vs q² (no error bars), plus the chosen Guinier line on [q_min, q_max].
+
+        Display is limited to ``q² ≤ q2_max`` (default 30 nm⁻²). When a Guinier interval is
+        given, the x-axis zooms to a few× that window (still capped by ``q2_max``) so the fit
+        remains visible. ``sigma`` is accepted for API compatibility but is not plotted.
         """
+        _ = sigma
         q = np.asarray(q, dtype=float)
         I = np.asarray(I, dtype=float)
-        mask = np.isfinite(q) & np.isfinite(I) & (I > 0)
         q2 = q ** 2
+        mask = np.isfinite(q) & np.isfinite(I) & (I > 0) & np.isfinite(q2)
+
+        # Cap / zoom: prefer a few Guinier-widths past the fit, never beyond q2_max.
+        xlim_right = float(q2_max) if q2_max is not None and np.isfinite(q2_max) and q2_max > 0 else None
+        if q_max is not None and np.isfinite(q_max) and float(q_max) > 0:
+            zoom = (float(q_max) ** 2) * 4.0
+            if xlim_right is None:
+                xlim_right = zoom
+            else:
+                xlim_right = min(xlim_right, zoom)
+        if xlim_right is not None:
+            mask = mask & (q2 <= xlim_right)
+
         y = np.log(I)
-        yerr: Optional[np.ndarray] = None
-        if sigma is not None:
-            sigma = np.asarray(sigma, dtype=float)
-            yerr = np.full_like(y, np.nan)
-            good = mask & np.isfinite(sigma) & (sigma > 0)
-            yerr[good] = sigma[good] / I[good]
 
         fig, ax = plt.subplots(figsize=(8, 5))
-        if yerr is not None:
-            ax.errorbar(
-                q2[mask],
-                y[mask],
-                yerr=yerr[mask],
-                fmt="o",
-                ms=4,
-                capsize=2,
-                label="data",
-                color="#1f77b4",
-                elinewidth=1,
-            )
-        else:
-            ax.scatter(q2[mask], y[mask], s=20, label="data", color="#1f77b4")
+        ax.scatter(q2[mask], y[mask], s=20, label="data", color="#1f77b4")
 
         if q_min is not None and q_max is not None and q_max > q_min:
-            q_line = np.linspace(float(q_min), float(q_max), 200)
+            q_hi = float(q_max)
+            if xlim_right is not None:
+                q_hi = min(q_hi, float(np.sqrt(xlim_right)))
+            q_lo = float(q_min)
+            if q_hi > q_lo:
+                q_line = np.linspace(q_lo, q_hi, 200)
+            else:
+                q_line = np.asarray([], dtype=float)
         else:
             q_line = q[mask]
         if len(q_line) > 0 and rg_nm > 0 and i0 > 0:
@@ -377,6 +382,8 @@ class PLTViewer(Viewer):
         ax.set_xlabel(r"$q^2$ (nm$^{-2}$)")
         ax.set_ylabel(r"$\ln(I)$ (a.u.)")
         ax.set_title(title)
+        if xlim_right is not None:
+            ax.set_xlim(0.0, float(xlim_right))
         ax.legend(loc="best")
         ax.grid(True, alpha=0.3)
         if plotFilePath is not None:

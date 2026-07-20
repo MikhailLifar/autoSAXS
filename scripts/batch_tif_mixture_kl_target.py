@@ -29,7 +29,7 @@ from typing import Any
 import numpy as np
 
 from autosaxs.mixture import N_PARAMS_PER_PHASE, _parse_fit_file
-from autosaxs.skill.fit_mixture import fit_mixture
+from autosaxs.skill.model_mixture import model_mixture
 from autosaxs.skill.integrate import integrate
 from autosaxs.skill.subtract import subtract
 from autosaxs.utils import gaussian_pdf, load_config, schultz_pdf
@@ -337,9 +337,9 @@ def main() -> int:
 
         try:
             print(f"MIXTURE: {stem}…", file=sys.stderr)
-            fit_mixture(profile=str(sub_path), output_dir=str(mix_dir), **fit_kw)
+            model_mixture(profile=str(sub_path), output_dir=str(mix_dir), **fit_kw)
         except Exception as exc:
-            print(f"fit_mixture failed for {stem}: {exc}", file=sys.stderr)
+            print(f"model_mixture failed for {stem}: {exc}", file=sys.stderr)
             rows_out.append((stem, ""))
             continue
 

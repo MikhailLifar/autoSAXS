@@ -109,8 +109,8 @@ class LiveviewSkillRunsHandler:
         """Deprecated: polydisperse window drives fit_sizes reruns."""
         return
 
-    def run_fit_mixture(self) -> None:
-        """Deprecated: polydisperse window drives fit_mixture reruns."""
+    def run_model_mixture(self) -> None:
+        """Deprecated: polydisperse window drives model_mixture reruns."""
         return
 
     def apply_subtraction_rerun(self, *, scaling_factor: float, sample_dat: str, buffer_dat: str) -> None:
@@ -256,10 +256,11 @@ class LiveviewSkillOutcomesHandler:
             "calibrate",
             "fit_guinier",
             "fit_distances",
-            "fit_dammif",
-            "fit_bodies",
+            "model_dam",
+            "model_density",
+            "model_bodies",
             "fit_sizes",
-            "fit_mixture",
+            "model_mixture",
         ):
             return
         detail = ""
@@ -289,10 +290,11 @@ class LiveviewSkillOutcomesHandler:
         if skill in (
             "fit_guinier",
             "fit_distances",
-            "fit_dammif",
-            "fit_bodies",
+            "model_dam",
+            "model_density",
+            "model_bodies",
             "fit_sizes",
-            "fit_mixture",
+            "model_mixture",
         ):
             self._c.monodisperse.sync_wizard_context_before_ingest(outcome)
             self._c.polydisperse.sync_window_context_before_ingest(outcome)
