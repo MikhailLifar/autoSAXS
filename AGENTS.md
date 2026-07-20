@@ -106,7 +106,7 @@ autosaxs/
 | model_mixture | `skill/model_mixture/` | ATSAS MIXTURE (`fit_mixture` deprecated alias) |
 | model_bodies | `skill/model_bodies.py` | ATSAS BODIES (`fit_bodies` deprecated alias) |
 | model_dam | `skill/model_dam.py` | DAMMIF ab initio (+ DAMAVER when n_runs>1) |
-| model_density | `skill/model_density.py` | DENSS continuous density |
+| model_density | `skill/model_density/` | DENSS continuous density |
 | report_individual | `skill/report_individual.py` | Per-sample PDF from fragments |
 | report_summary | `skill/report_summary.py` | Pipeline summary PDF |
 

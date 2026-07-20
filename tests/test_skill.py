@@ -1488,6 +1488,28 @@ def test_model_dam_presentation_vis_writes_assets(tmp_path: Path):
     assert Path(out["presentation_occupancy_thresholds_png"]).is_file()
 
 
+def test_model_density_presentation_vis_writes_assets(tmp_path: Path):
+    """Presentation writer creates synced slice GIF + midplane PNG from a tiny MRC."""
+    denss = pytest.importorskip("denss")
+    from autosaxs.skill.model_density.vis import write_presentation_visuals
+
+    n = 16
+    side = 80.0  # Å
+    zz, yy, xx = np.mgrid[0:n, 0:n, 0:n]
+    cx = cy = cz = (n - 1) / 2.0
+    r2 = (xx - cx) ** 2 + (yy - cy) ** 2 + (zz - cz) ** 2
+    rho = np.exp(-r2 / (2.0 * 2.5**2)).astype(np.float64)
+    mrc = tmp_path / "toy.mrc"
+    denss.write_mrc(rho, side, filename=str(mrc))
+
+    out = write_presentation_visuals(str(tmp_path), density_map_path=str(mrc))
+    assert Path(out["presentation_dir"]).is_dir()
+    assert Path(out["presentation_slices_gif"]).is_file()
+    assert Path(out["presentation_midplanes_png"]).is_file()
+    assert (tmp_path / "presentation" / "density_slices.gif").is_file()
+    assert (tmp_path / "presentation" / "density_midplanes.png").is_file()
+
+
 def test_fit_bodies_deprecated_alias(monkeypatch):
     """Deprecated fit_bodies still forwards to model_bodies."""
     import subprocess as _sp
