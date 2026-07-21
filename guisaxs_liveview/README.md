@@ -5,7 +5,7 @@ Desktop GUI that watches a folder for new SAXS `.tif` images, queues them, and r
 ## Install
 
 ```sh
-pip install "autosaxs[gui] @ git+http://hpc.nano.sfedu.ru:8080/mikhail/saxsprocessing.git@main"
+pip install "autosaxs[gui] @ git+https://github.com/MikhailLifar/autoSAXS.git@main"
 ```
 
 Use a virtual environment (venv or conda) when possible.

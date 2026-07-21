@@ -38,7 +38,7 @@ Some parts of the pipeline rely on ATSAS executables (e.g. `dammif`). On import,
 Install the package (includes the `autosaxs` CLI entry point):
 
 ```bash
-python -m pip install "autosaxs @ git+http://hpc.nano.sfedu.ru:8080/mikhail/saxsprocessing.git@main"
+python -m pip install "autosaxs @ git+https://github.com/MikhailLifar/autoSAXS.git@main"
 ```
 
 Then check the CLI:
@@ -52,7 +52,7 @@ autosaxs --help
 Install with GUI extras (adds `customtkinter` and `tkinterdnd2`):
 
 ```bash
-python -m pip install "autosaxs[gui] @ git+http://hpc.nano.sfedu.ru:8080/mikhail/saxsprocessing.git@main"
+python -m pip install "autosaxs[gui] @ git+https://github.com/MikhailLifar/autoSAXS.git@main"
 ```
 
 This also installs the `guisaxs` console entry point (see below).
@@ -983,6 +983,7 @@ Protocol `mode`: `pilot` runs a single DENSS reconstruction; `average` runs dens
 - `denss_mode` (str, default `slow`): DENSS algorithm mode: `slow`, `fast`, or `membrane`.
 - `n_maps` (int, default `20`): Number of reconstructions for `average`/`refined` (ignored in `pilot`; must be ≥2 when used).
 - `n_jobs` (int, default `1`): Parallel cores for denss-all.
+- `make_presentation_vis` (bool, default `False`): When True, write presentation slice GIF/PNG under `{output}/presentation/` (synced YZ/XZ/XY cuts through the particle AABB; nm scale bar below panels; electron-ish colormap).
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
@@ -996,6 +997,7 @@ Protocol `mode`: `pilot` runs a single DENSS reconstruction; `average` runs dens
 - `fsc_path`: FSC curve path when averaging ran; empty string otherwise.
 - `map_fit_path`: Calculated vs experimental fit file when present; else empty.
 - `denss_log_path`: Main log for the completed mode.
+- `presentation_dir`, `presentation_slices_gif`, `presentation_midplanes_png` when `make_presentation_vis=True` (empty strings otherwise).
 
 ### Python usage
 
@@ -1007,6 +1009,7 @@ out = model_density(
     output_dir="denss",
     mode="pilot",
     denss_mode="slow",
+    make_presentation_vis=False,
     use_cache=False,
 )
 
@@ -1017,6 +1020,7 @@ print(out["density_map_path"])
 
 ```bash
 autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss --mode pilot --denss-mode slow
+autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss --make-presentation-vis
 ```
 
 ---

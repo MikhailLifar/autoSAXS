@@ -11,7 +11,8 @@ from matplotlib.colors import LinearSegmentedColormap
 # DENSS MRC coordinates are ångströms; presentation scale is in nm.
 _A_TO_NM = 0.1
 _LEVEL_FRACTION = 0.15  # same as liveview denss AABB (guisaxs isosurface_mesh_data)
-_SLICE_DURATION_MS = 320  # 4× slower than the initial 80 ms draft
+_FRAME_DURATION_MS = 50
+_GIF_TOTAL_FRAMES = 200  # full ping-pong loop → 200 × 50 ms = 10 s
 _DPI = 120
 _FIGSIZE = (11.5, 4.4)
 _UPSAMPLE = 8  # in-plane nearest→smooth display factor
@@ -27,6 +28,24 @@ _ELECTRON_CMAP = LinearSegmentedColormap.from_list(
         (1.00, "#f7fbff"),
     ],
 )
+
+
+def _ping_pong_fractions(
+    span_voxels: int = 1,
+    *,
+    total_frames: int = _GIF_TOTAL_FRAMES,
+) -> List[float]:
+    """Return 0→1→0 sweep fractions for a fixed-length ping-pong loop."""
+    _ = span_voxels  # AABB depth does not change frame count (timing is fixed)
+    n = max(int(total_frames), 2)
+    n_fwd = (n + 2) // 2  # n_fwd + (n_fwd - 2) == n
+    fracs_fwd = [i / max(n_fwd - 1, 1) for i in range(n_fwd)]
+    if len(fracs_fwd) <= 1:
+        return [0.0]
+    fracs = fracs_fwd + list(reversed(fracs_fwd[1:-1]))
+    if len(fracs) < n:
+        fracs = fracs + [fracs[-1]] * (n - len(fracs))
+    return fracs[:n]
 
 
 def _round_scale_nm(span_nm: float) -> float:
@@ -54,14 +73,56 @@ def _save_gif(frames: Sequence[np.ndarray], path: Path, *, duration_ms: int) -> 
 
     if not frames:
         return
-    imgs = [Image.fromarray(f, mode="RGB") for f in frames]
+    imgs = [Image.fromarray(np.asarray(f, dtype=np.uint8), mode="RGB") for f in frames]
+    dur = int(duration_ms)
     imgs[0].save(
         path,
         save_all=True,
         append_images=imgs[1:],
-        duration=int(duration_ms),
+        duration=[dur] * len(imgs),
         loop=0,
         optimize=False,
+        disposal=2,
+    )
+
+
+def _interp_along_axis(
+    rho: np.ndarray,
+    axis: int,
+    coord: float,
+    sl_a: slice,
+    sl_b: slice,
+) -> np.ndarray:
+    """Linear interpolation along one axis at continuous ``coord``."""
+    c0 = int(np.floor(coord))
+    c1 = min(c0 + 1, rho.shape[axis] - 1)
+    w = float(coord - c0)
+
+    def _take(c: int) -> np.ndarray:
+        if axis == 0:
+            return rho[c, sl_a, sl_b]
+        if axis == 1:
+            return rho[sl_a, c, sl_b]
+        return rho[sl_a, sl_b, c]
+
+    return (1.0 - w) * _take(c0) + w * _take(c1)
+
+
+def _orthogonal_planes(
+    rho: np.ndarray,
+    *,
+    x_f: float,
+    y_f: float,
+    z_f: float,
+    sx: slice,
+    sy: slice,
+    sz: slice,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """YZ @ x, XZ @ y, XY @ z with sub-voxel interpolation on the varying axis."""
+    return (
+        _interp_along_axis(rho, 0, x_f, sy, sz),
+        _interp_along_axis(rho, 1, y_f, sx, sz),
+        _interp_along_axis(rho, 2, z_f, sx, sy),
     )
 
 
@@ -167,9 +228,9 @@ def _draw_scale_strip(ax, *, bar_nm: float, panel_extent_nm: float, color: str =
 def _make_slice_figure(
     rho: np.ndarray,
     *,
-    ix: int,
-    iy: int,
-    iz: int,
+    x_f: float,
+    y_f: float,
+    z_f: float,
     sx: slice,
     sy: slice,
     sz: slice,
@@ -186,12 +247,7 @@ def _make_slice_figure(
     axes = [fig.add_subplot(gs[0, i]) for i in range(3)]
     ax_scale = fig.add_subplot(gs[1, :])
 
-    # YZ @ x, XZ @ y, XY @ z — crop to AABB in the free axes.
-    planes = (
-        rho[ix, sy, sz],
-        rho[sx, iy, sz],
-        rho[sx, sy, iz],
-    )
+    planes = _orthogonal_planes(rho, x_f=x_f, y_f=y_f, z_f=z_f, sx=sx, sy=sy, sz=sz)
     for ax, plane in zip(axes, planes):
         img = _upsample2d(np.clip(plane, vmin, vmax))
         ax.imshow(
@@ -313,21 +369,19 @@ def write_presentation_visuals(
             },
         )
 
-    # Synced fractional depth: same t maps to relative position on each axis.
-    n_steps = max(x_hi - x_lo + 1, y_hi - y_lo + 1, z_hi - z_lo + 1, 12)
-    fracs_fwd = [i / max(n_steps - 1, 1) for i in range(n_steps)]
-    fracs = fracs_fwd + list(reversed(fracs_fwd[1:-1]))
+    span_vox = max(x_hi - x_lo + 1, y_hi - y_lo + 1, z_hi - z_lo + 1)
+    fracs = _ping_pong_fractions(span_vox)
 
     frames: List[np.ndarray] = []
     for frac in fracs:
-        ix = int(round(x_lo + frac * (x_hi - x_lo)))
-        iy = int(round(y_lo + frac * (y_hi - y_lo)))
-        iz = int(round(z_lo + frac * (z_hi - z_lo)))
+        x_f = float(x_lo + frac * (x_hi - x_lo))
+        y_f = float(y_lo + frac * (y_hi - y_lo))
+        z_f = float(z_lo + frac * (z_hi - z_lo))
         fig = _make_slice_figure(
             rho,
-            ix=ix,
-            iy=iy,
-            iz=iz,
+            x_f=x_f,
+            y_f=y_f,
+            z_f=z_f,
             sx=sx,
             sy=sy,
             sz=sz,
@@ -340,17 +394,17 @@ def write_presentation_visuals(
         plt.close(fig)
 
     gif_path = pres / "density_slices.gif"
-    _save_gif(frames, gif_path, duration_ms=_SLICE_DURATION_MS)
+    _save_gif(frames, gif_path, duration_ms=_FRAME_DURATION_MS)
 
     # Midplane PNG (center of AABB).
-    ix_m = (x_lo + x_hi) // 2
-    iy_m = (y_lo + y_hi) // 2
-    iz_m = (z_lo + z_hi) // 2
+    x_m = 0.5 * (x_lo + x_hi)
+    y_m = 0.5 * (y_lo + y_hi)
+    z_m = 0.5 * (z_lo + z_hi)
     fig = _make_slice_figure(
         rho,
-        ix=ix_m,
-        iy=iy_m,
-        iz=iz_m,
+        x_f=x_m,
+        y_f=y_m,
+        z_f=z_m,
         sx=sx,
         sy=sy,
         sz=sz,

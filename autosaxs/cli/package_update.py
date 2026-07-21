@@ -7,7 +7,7 @@ from typing import List, Tuple
 
 # Upgrade target (git main until PyPI publish).
 AUTOSAXS_UPDATE_SPEC = (
-    "autosaxs[gui] @ git+http://hpc.nano.sfedu.ru:8080/mikhail/saxsprocessing.git@main"
+    "autosaxs[gui] @ git+https://github.com/MikhailLifar/autoSAXS.git@main"
 )
 
 

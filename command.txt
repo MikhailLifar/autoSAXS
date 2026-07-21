@@ -1,3 +1,3 @@
 autosaxs install:
-pip install git+http://hpc.nano.sfedu.ru:8080/mikhail/saxsprocessing.git
-pip install --force-reinstall --no-cache-dir git+http://hpc.nano.sfedu.ru:8080/mikhail/saxsprocessing.git
+pip install git+https://github.com/MikhailLifar/autoSAXS.git
+pip install --force-reinstall --no-cache-dir git+https://github.com/MikhailLifar/autoSAXS.git
