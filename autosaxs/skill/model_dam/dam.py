@@ -59,7 +59,7 @@ def model_dam(
     gnom_path: Optional[SingletonPathExpressionArg] = None,
     n_runs: int = 1,
     dammif_mode: str = "fast",
-    make_presentation_vis: bool = False,
+    visualize_all: bool = False,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
@@ -74,7 +74,7 @@ def model_dam(
     - `gnom_path` (str | None, default `None`): Optional path to a GNOM/DATGNOM `.out` file for DAMMIF. If omitted, `fit_distances` is run in-process on `profile` and its `best_gnom_out_path` is used.
     - `n_runs` (int, default `1`): Number of independent DAMMIF runs. When `>1`, DAMAVER is run on the particle models.
     - `dammif_mode` (str, default `fast`): DAMMIF annealing mode: `fast` or `slow`.
-    - `make_presentation_vis` (bool, default `False`): When True, write presentation PNGs/GIFs under `{output}/presentation/` (synced per-run rotation GIFs, overlap, occupancy threshold; nm scale bar; no run/title captions).
+    - `visualize_all` (bool, default `False`): When True, write PNGs/GIFs under `{output}/visuals/` (synced per-run rotation GIFs, overlap, occupancy threshold; nm scale bar; no run/title captions).
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Returns
@@ -85,7 +85,7 @@ def model_dam(
     - `best_cif_path`: Symlink `best.cif` pointing at the most probable particle CIF (the sole run when `n_runs=1`).
     - `best_view_path`: Path to ``best_view.png`` (isosurface + fit overlay for the best model); empty if unavailable.
     - `frequency_map_path`: Path to the DAMAVER frequency/occupancy map CIF (empty string when `n_runs=1`).
-    - `presentation_dir` and related `presentation_*` keys when `make_presentation_vis=True` (empty strings / empty list otherwise).
+    - `visuals_dir`, `overlap_png`, `overlap_gif`, `occupancy_png`, `occupancy_gif`, `occupancy_thresholds_png`, `run_gifs` when `visualize_all=True` (empty strings / empty list otherwise).
 
     ### Python usage
 
@@ -98,7 +98,7 @@ def model_dam(
         gnom_path="guinier/sample_01_gnom.out",
         n_runs=1,
         dammif_mode="fast",
-        make_presentation_vis=False,
+        visualize_all=False,
         use_cache=False,
     )
 
@@ -109,7 +109,7 @@ def model_dam(
 
     ```bash
     autosaxs model-dam subtracted/sub_sample_01.dat --output-dir dammif --n-runs 1 --dammif-mode fast
-    autosaxs model-dam subtracted/sub_sample_01.dat --output-dir dammif --n-runs 5 --make-presentation-vis
+    autosaxs model-dam subtracted/sub_sample_01.dat --output-dir dammif --n-runs 5 --visualize-all
     ```
     """
     _ = config_path
@@ -134,7 +134,7 @@ def model_dam(
         output_dir=output_dir,
         n_runs=int(n_runs),
         dammif_mode=mode_atsas,
-        make_presentation_vis=bool(make_presentation_vis),
+        visualize_all=bool(visualize_all),
         event_bus=bus,
         use_cache=use_cache,
     )
@@ -431,7 +431,7 @@ def _run_damaver(
 @run_with_cache(
     path_keys_for_hash=["profile", "gnom_path"],
     kwargs_for_hash=None,
-    kwargs_for_hash_keys=["n_runs", "dammif_mode", "make_presentation_vis"],
+    kwargs_for_hash_keys=["n_runs", "dammif_mode", "visualize_all"],
     include_config_in_hash=False,
     warn_if_no_cache=True,
 )
@@ -440,7 +440,7 @@ def _model_dam_paths(
     output_dir: str,
     n_runs: int = 1,
     dammif_mode: str = "FAST",
-    make_presentation_vis: bool = False,
+    visualize_all: bool = False,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
     use_cache: bool = False,
@@ -674,32 +674,32 @@ def _model_dam_paths(
         "best_cif_path": best_cif_path,
         "best_view_path": best_view_path,
         "frequency_map_path": frequency_map_path,
-        "presentation_dir": "",
-        "presentation_overlap_png": "",
-        "presentation_occupancy_png": "",
-        "presentation_occupancy_thresholds_png": "",
-        "presentation_overlap_gif": "",
-        "presentation_occupancy_gif": "",
-        "presentation_run_gifs": [],
+        "visuals_dir": "",
+        "overlap_png": "",
+        "occupancy_png": "",
+        "occupancy_thresholds_png": "",
+        "overlap_gif": "",
+        "occupancy_gif": "",
+        "run_gifs": [],
     }
-    if bool(make_presentation_vis):
-        from .vis import write_presentation_visuals
+    if bool(visualize_all):
+        from .vis import write_visuals
 
-        vis_out = write_presentation_visuals(
+        vis_out = write_visuals(
             output_dir,
             best_cif_path=best_cif_path,
             frequency_map_path=frequency_map_path,
             event_bus=event_bus,
         )
         out.update(vis_out)
-        pres = str(vis_out.get("presentation_dir") or "").strip()
-        if pres:
+        vis_dir = str(vis_out.get("visuals_dir") or "").strip()
+        if vis_dir:
             # Amend individual report with a short pointer (best-effort).
             try:
                 md_path = Path(output_dir) / f"{base}_report_individual.md"
                 if md_path.is_file():
                     with md_path.open("a", encoding="utf-8") as fh:
-                        fh.write(f"\n- Presentation visuals: `{os.path.relpath(pres, output_dir)}/`\n")
+                        fh.write(f"\n- Visuals: `{os.path.relpath(vis_dir, output_dir)}/`\n")
             except OSError:
                 pass
     return out

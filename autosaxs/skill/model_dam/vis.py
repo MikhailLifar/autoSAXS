@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-# CIF coordinates from ATSAS are ångströms; presentation scale is in nm.
+# CIF coordinates from ATSAS are ångströms; on-figure scale is in nm.
 _A_TO_NM = 0.1
 
 _OVERLAP_RGBA: Tuple[Tuple[float, float, float, float], ...] = (
@@ -319,7 +319,7 @@ def _ensure_cifsup_aligned(static: Path, movable: Path, out_dir: Path) -> Path:
         pass
     cifsup = shutil.which("cifsup")
     if not cifsup:
-        raise RuntimeError("cifsup not found on PATH (needed to align models for presentation vis)")
+        raise RuntimeError("cifsup not found on PATH (needed to align models for overlap visuals)")
     proc = subprocess.run(
         [cifsup, "--method=nsd", "-o", str(out), str(static), str(movable)],
         capture_output=True,
@@ -360,7 +360,7 @@ def _prepare_run_cifs(output_dir: Path, best_cif: Optional[Path]) -> List[Tuple[
     return sorted(out, key=lambda t: t[0])
 
 
-def write_presentation_visuals(
+def write_visuals(
     output_dir: str,
     *,
     best_cif_path: str = "",
@@ -368,7 +368,7 @@ def write_presentation_visuals(
     event_bus: Any = None,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Write unlabeled presentation PNGs/GIFs under ``{output_dir}/presentation/``.
+    Write unlabeled PNGs/GIFs under ``{output_dir}/visuals/``.
 
     Includes a screen-space scale bar in nm on every frame. Per-run rotation GIFs share
     camera schedule and bbox so they stay synchronous when played together.
@@ -379,17 +379,17 @@ def write_presentation_visuals(
     import matplotlib.pyplot as plt
 
     od = Path(output_dir)
-    pres = od / "presentation"
+    pres = od / "visuals"
     pres.mkdir(parents=True, exist_ok=True)
 
     empty: Dict[str, Union[str, List[str]]] = {
-        "presentation_dir": str(pres.resolve()),
-        "presentation_overlap_png": "",
-        "presentation_occupancy_png": "",
-        "presentation_occupancy_thresholds_png": "",
-        "presentation_overlap_gif": "",
-        "presentation_occupancy_gif": "",
-        "presentation_run_gifs": [],
+        "visuals_dir": str(pres.resolve()),
+        "overlap_png": "",
+        "occupancy_png": "",
+        "occupancy_thresholds_png": "",
+        "overlap_gif": "",
+        "occupancy_gif": "",
+        "run_gifs": [],
     }
 
     best = Path(best_cif_path) if best_cif_path else None
@@ -403,7 +403,7 @@ def write_presentation_visuals(
 
             event_bus.publish(
                 EventType.MESSAGE,
-                {"text": "model_dam: presentation vis skipped (no particle CIFs)"},
+                {"text": "model_dam: visuals skipped (no particle CIFs)"},
             )
         return empty
 
@@ -412,7 +412,7 @@ def write_presentation_visuals(
 
         event_bus.publish(
             EventType.MESSAGE,
-            {"text": f"model_dam: writing presentation visuals ({len(runs)} run(s))…"},
+            {"text": f"model_dam: writing visuals ({len(runs)} run(s))…"},
         )
 
     meshes: List[Dict[str, Any]] = []
@@ -453,7 +453,7 @@ def write_presentation_visuals(
         run_gifs.append(str(path.resolve()))
 
     result = dict(empty)
-    result["presentation_run_gifs"] = run_gifs
+    result["run_gifs"] = run_gifs
 
     if len(meshes) >= 2:
         # Overlap GIF
@@ -474,7 +474,7 @@ def write_presentation_visuals(
             plt.close(fig)
         ogif = pres / "dammif_runs_overlap_rotate.gif"
         _save_gif(frames, ogif, duration_ms=_ROT_DURATION_MS)
-        result["presentation_overlap_gif"] = str(ogif.resolve())
+        result["overlap_gif"] = str(ogif.resolve())
 
         # Overlap PNG (main + view2)
         for azim, name in ((35.0, "dammif_runs_overlap.png"), (125.0, "dammif_runs_overlap_view2.png")):
@@ -493,7 +493,7 @@ def write_presentation_visuals(
             fig.savefig(outp, dpi=160, facecolor="white")
             plt.close(fig)
             if name == "dammif_runs_overlap.png":
-                result["presentation_overlap_png"] = str(outp.resolve())
+                result["overlap_png"] = str(outp.resolve())
 
     freq_path = Path(frequency_map_path) if frequency_map_path else None
     if freq_path is None or not freq_path.is_file():
@@ -542,7 +542,7 @@ def write_presentation_visuals(
                 plt.close(fig)
             ogif = pres / "damaver_occupancy_threshold.gif"
             _save_gif(frames, ogif, duration_ms=_OCC_DURATION_MS)
-            result["presentation_occupancy_gif"] = str(ogif.resolve())
+            result["occupancy_gif"] = str(ogif.resolve())
 
             # Hero PNG
             thr = 0.40
@@ -573,7 +573,7 @@ def write_presentation_visuals(
             opng = pres / "damaver_occupancy.png"
             fig.savefig(opng, dpi=160, facecolor="white")
             plt.close(fig)
-            result["presentation_occupancy_png"] = str(opng.resolve())
+            result["occupancy_png"] = str(opng.resolve())
 
             # Threshold panel PNG
             thresholds = [0.0, 0.25, 0.50, 0.75]
@@ -607,6 +607,6 @@ def write_presentation_visuals(
             tpng = pres / "damaver_occupancy_thresholds.png"
             fig.savefig(tpng, dpi=150, facecolor="white")
             plt.close(fig)
-            result["presentation_occupancy_thresholds_png"] = str(tpng.resolve())
+            result["occupancy_thresholds_png"] = str(tpng.resolve())
 
     return result

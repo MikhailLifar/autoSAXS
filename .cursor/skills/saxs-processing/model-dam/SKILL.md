@@ -76,7 +76,7 @@ With `n_runs=1`, runs a single DAMMIF reconstruction. With `n_runs>1`, runs inde
 - `gnom_path` (str | None, default `None`): Optional path to a GNOM/DATGNOM `.out` file for DAMMIF. If omitted, `fit_distances` is run in-process on `profile` and its `best_gnom_out_path` is used.
 - `n_runs` (int, default `1`): Number of independent DAMMIF runs. When `>1`, DAMAVER is run on the particle models.
 - `dammif_mode` (str, default `fast`): DAMMIF annealing mode: `fast` or `slow`.
-- `make_presentation_vis` (bool, default `False`): When True, write presentation PNGs/GIFs under `{output}/presentation/` (synced per-run rotation GIFs, overlap, occupancy threshold; nm scale bar; no run/title captions).
+- `visualize_all` (bool, default `False`): When True, write PNGs/GIFs under `{output}/visuals/` (synced per-run rotation GIFs, overlap, occupancy threshold; nm scale bar; no run/title captions).
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
@@ -87,7 +87,7 @@ With `n_runs=1`, runs a single DAMMIF reconstruction. With `n_runs>1`, runs inde
 - `best_cif_path`: Symlink `best.cif` pointing at the most probable particle CIF (the sole run when `n_runs=1`).
 - `best_view_path`: Path to ``best_view.png`` (isosurface + fit overlay for the best model); empty if unavailable.
 - `frequency_map_path`: Path to the DAMAVER frequency/occupancy map CIF (empty string when `n_runs=1`).
-- `presentation_dir` and related `presentation_*` keys when `make_presentation_vis=True` (empty strings / empty list otherwise).
+- `visuals_dir`, `overlap_png`, `overlap_gif`, `occupancy_png`, `occupancy_gif`, `occupancy_thresholds_png`, `run_gifs` when `visualize_all=True` (empty strings / empty list otherwise).
 
 ### Python usage
 
@@ -100,7 +100,7 @@ out = model_dam(
     gnom_path="guinier/sample_01_gnom.out",
     n_runs=1,
     dammif_mode="fast",
-    make_presentation_vis=False,
+    visualize_all=False,
     use_cache=False,
 )
 
@@ -111,5 +111,5 @@ print(out["output_subdir"], out["best_cif_path"])
 
 ```bash
 autosaxs model-dam subtracted/sub_sample_01.dat --output-dir dammif --n-runs 1 --dammif-mode fast
-autosaxs model-dam subtracted/sub_sample_01.dat --output-dir dammif --n-runs 5 --make-presentation-vis
+autosaxs model-dam subtracted/sub_sample_01.dat --output-dir dammif --n-runs 5 --visualize-all
 ```

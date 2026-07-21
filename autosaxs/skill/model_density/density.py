@@ -75,7 +75,7 @@ def model_density(
     denss_mode: str = "slow",
     n_maps: int = 20,
     n_jobs: int = 1,
-    make_presentation_vis: bool = False,
+    visualize_all: bool = False,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
@@ -92,7 +92,7 @@ def model_density(
     - `denss_mode` (str, default `slow`): DENSS algorithm mode: `slow`, `fast`, or `membrane`.
     - `n_maps` (int, default `20`): Number of reconstructions for `average`/`refined` (ignored in `pilot`; must be ≥2 when used).
     - `n_jobs` (int, default `1`): Parallel cores for denss-all.
-    - `make_presentation_vis` (bool, default `False`): When True, write presentation slice GIF/PNG under `{output}/presentation/` (synced YZ/XZ/XY cuts through the particle AABB; nm scale bar below panels; electron-ish colormap).
+    - `visualize_all` (bool, default `False`): When True, write slice GIF/PNG under `{output}/visuals/` (synced YZ/XZ/XY cuts through the particle AABB; nm scale bar below panels; electron-ish colormap).
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Returns
@@ -106,7 +106,7 @@ def model_density(
     - `fsc_path`: FSC curve path when averaging ran; empty string otherwise.
     - `map_fit_path`: Calculated vs experimental fit file when present; else empty.
     - `denss_log_path`: Main log for the completed mode.
-    - `presentation_dir`, `presentation_slices_gif`, `presentation_midplanes_png` when `make_presentation_vis=True` (empty strings otherwise).
+    - `visuals_dir`, `slices_gif`, `midplanes_png` when `visualize_all=True` (empty strings otherwise).
 
     ### Python usage
 
@@ -118,7 +118,7 @@ def model_density(
         output_dir="denss",
         mode="pilot",
         denss_mode="slow",
-        make_presentation_vis=False,
+        visualize_all=False,
         use_cache=False,
     )
 
@@ -129,7 +129,7 @@ def model_density(
 
     ```bash
     autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss --mode pilot --denss-mode slow
-    autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss --make-presentation-vis
+    autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss --visualize-all
     ```
     """
     _ = config_path
@@ -159,7 +159,7 @@ def model_density(
         denss_mode=denss_tok,
         n_maps=int(n_maps),
         n_jobs=int(n_jobs),
-        make_presentation_vis=bool(make_presentation_vis),
+        visualize_all=bool(visualize_all),
         event_bus=bus,
         use_cache=use_cache,
     )
@@ -360,7 +360,7 @@ def _write_sigma_map_from_aligned(
 @run_with_cache(
     path_keys_for_hash=["profile", "gnom_path"],
     kwargs_for_hash=None,
-    kwargs_for_hash_keys=["mode", "denss_mode", "n_maps", "n_jobs", "make_presentation_vis"],
+    kwargs_for_hash_keys=["mode", "denss_mode", "n_maps", "n_jobs", "visualize_all"],
     include_config_in_hash=False,
     warn_if_no_cache=True,
 )
@@ -371,7 +371,7 @@ def _model_density_paths(
     denss_mode: str = "SLOW",
     n_maps: int = 20,
     n_jobs: int = 1,
-    make_presentation_vis: bool = False,
+    visualize_all: bool = False,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
     use_cache: bool = False,
@@ -530,23 +530,23 @@ def _model_density_paths(
     if fsc_path:
         md_parts.append(f"- FSC: `{os.path.relpath(fsc_path, output_dir)}`\n")
 
-    presentation_dir = ""
-    presentation_slices_gif = ""
-    presentation_midplanes_png = ""
-    if bool(make_presentation_vis) and density_map_path:
-        from .vis import write_presentation_visuals
+    visuals_dir = ""
+    slices_gif = ""
+    midplanes_png = ""
+    if bool(visualize_all) and density_map_path:
+        from .vis import write_visuals
 
-        vis_out = write_presentation_visuals(
+        vis_out = write_visuals(
             output_dir,
             density_map_path=density_map_path,
             event_bus=event_bus,
         )
-        presentation_dir = str(vis_out.get("presentation_dir") or "")
-        presentation_slices_gif = str(vis_out.get("presentation_slices_gif") or "")
-        presentation_midplanes_png = str(vis_out.get("presentation_midplanes_png") or "")
-        if presentation_dir:
+        visuals_dir = str(vis_out.get("visuals_dir") or "")
+        slices_gif = str(vis_out.get("slices_gif") or "")
+        midplanes_png = str(vis_out.get("midplanes_png") or "")
+        if visuals_dir:
             md_parts.append(
-                f"- Presentation visuals: `{os.path.relpath(presentation_dir, output_dir)}`\n"
+                f"- Visuals: `{os.path.relpath(visuals_dir, output_dir)}`\n"
             )
 
     summary_refs: List[Dict[str, Any]] = []
@@ -598,7 +598,7 @@ def _model_density_paths(
         "fsc_path": fsc_path or "",
         "map_fit_path": map_fit_path or "",
         "denss_log_path": denss_log_path or "",
-        "presentation_dir": presentation_dir,
-        "presentation_slices_gif": presentation_slices_gif,
-        "presentation_midplanes_png": presentation_midplanes_png,
+        "visuals_dir": visuals_dir,
+        "slices_gif": slices_gif,
+        "midplanes_png": midplanes_png,
     }

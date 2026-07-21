@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
 
-# DENSS MRC coordinates are ångströms; presentation scale is in nm.
+# DENSS MRC coordinates are ångströms; on-figure scale is in nm.
 _A_TO_NM = 0.1
 _LEVEL_FRACTION = 0.15  # same as liveview denss AABB (guisaxs isosurface_mesh_data)
 _FRAME_DURATION_MS = 50
@@ -267,14 +267,14 @@ def _make_slice_figure(
     return fig
 
 
-def write_presentation_visuals(
+def write_visuals(
     output_dir: str,
     *,
     density_map_path: str = "",
     event_bus: Any = None,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Write presentation slice GIF + midplane PNG under ``{output_dir}/presentation/``.
+    Write slice GIF + midplane PNG under ``{output_dir}/visuals/``.
 
     Three synced panels (YZ@x(t), XZ@y(t), XY@z(t)) sweep the particle AABB
     (ρ ≥ 0.15·ρ_max or support MRC). Scale bar sits below the panels on white.
@@ -285,13 +285,13 @@ def write_presentation_visuals(
     import matplotlib.pyplot as plt
 
     od = Path(output_dir)
-    pres = od / "presentation"
+    pres = od / "visuals"
     pres.mkdir(parents=True, exist_ok=True)
 
     empty: Dict[str, Union[str, List[str]]] = {
-        "presentation_dir": str(pres.resolve()),
-        "presentation_slices_gif": "",
-        "presentation_midplanes_png": "",
+        "visuals_dir": str(pres.resolve()),
+        "slices_gif": "",
+        "midplanes_png": "",
     }
 
     dens_path = Path(density_map_path) if density_map_path else None
@@ -311,7 +311,7 @@ def write_presentation_visuals(
 
             event_bus.publish(
                 EventType.MESSAGE,
-                {"text": "model_density: presentation vis skipped (no density MRC)"},
+                {"text": "model_density: visuals skipped (no density MRC)"},
             )
         return empty
 
@@ -319,7 +319,7 @@ def write_presentation_visuals(
         import denss
     except ImportError as exc:
         raise RuntimeError(
-            "model_density presentation vis requires denss (pip install denss)."
+            "model_density visuals require denss (pip install denss)."
         ) from exc
 
     rho, side = denss.read_mrc(str(dens_path))
@@ -363,7 +363,7 @@ def write_presentation_visuals(
             EventType.MESSAGE,
             {
                 "text": (
-                    f"model_density: writing presentation slices "
+                    f"model_density: writing visuals "
                     f"(AABB {x_hi - x_lo + 1}×{y_hi - y_lo + 1}×{z_hi - z_lo + 1})…"
                 )
             },
@@ -418,7 +418,7 @@ def write_presentation_visuals(
     plt.close(fig)
 
     return {
-        "presentation_dir": str(pres.resolve()),
-        "presentation_slices_gif": str(gif_path.resolve()),
-        "presentation_midplanes_png": str(png_path.resolve()),
+        "visuals_dir": str(pres.resolve()),
+        "slices_gif": str(gif_path.resolve()),
+        "midplanes_png": str(png_path.resolve()),
     }
