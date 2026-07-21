@@ -3,8 +3,10 @@
 This project contains:
 
 - **`autosaxs`**: a Python package for building reproducible SAXS processing pipelines (calibration → integration → subtraction → analysis → reports) usable from **Python** or from a **CLI**.
-- **`guisaxs-skills`**: a single-window desktop GUI that acts as a strict interface to `autosaxs` skills (discover skills, generate forms from signatures, run via CLI in an isolated process, inspect artifacts and previews).
-- **`guisaxs-liveview`**: a live, queued processing GUI that watches a directory for new `.tif/.tiff`, runs calibration/integration/subtraction, and optionally performs automated analysis with continuously updating plots.
+- **`guisaxs-skills`**: a PyQt5 desktop GUI that acts as a strict interface to `autosaxs` skills (discover skills, generate forms from signatures, run via CLI in an isolated process, inspect artifacts and previews).
+- **`guisaxs-liveview`**: a PyQt5 live, queued processing GUI that watches a directory for new `.tif/.tiff`, runs calibration/integration/subtraction, and optionally arms monodisperse or polydisperse analysis chains for each new image.
+
+The legacy CustomTkinter **`guisaxs`** app has been removed. Use **`guisaxs-skills`** for one-off skill runs or **`guisaxs-liveview`** for watch-folder workflows.
 
 ---
 
@@ -60,9 +62,15 @@ Example:
 autosaxs get-default-config -o .
 ```
 
+Upgrade an existing install from git `main`:
+
+```bash
+autosaxs -U
+```
+
 #### GUI-enabled apps (`guisaxs-skills`, `guisaxs-liveview`)
 
-Install with GUI extras (adds `customtkinter` and `tkinterdnd2`):
+Install with GUI extras (adds **PyQt5**, `watchdog`, and legacy CustomTkinter deps still used by `autosaxs.pipeline.gui`):
 
 ```bash
 python -m pip install "autosaxs[gui] @ git+https://github.com/MikhailLifar/autoSAXS.git"
@@ -76,7 +84,7 @@ This also installs the `guisaxs-skills` and `guisaxs-liveview` console entry poi
 
 ### Purpose
 
-`guisaxs-skills` is a single-window desktop GUI that acts as a **strict interface to `autosaxs` skills**:
+`guisaxs-skills` is a single-window **PyQt5** desktop GUI that acts as a **strict interface to `autosaxs` skills**:
 
 - discovers skills from the public `autosaxs.skill` API,
 - builds a parameter form from each skill’s signature,
@@ -91,41 +99,38 @@ After installing with the GUI extra, start the application:
 guisaxs-skills
 ```
 
-On startup you will be prompted to choose a **working directory**. The directory may be non-empty; the app will warn about potential overwrites and about cache behavior.
+On startup you will be prompted to choose a **working directory** (or the app reuses the last valid one). The directory may be non-empty; the app will warn about potential overwrites and about cache behavior.
 
-If GUI dependencies are missing, `guisaxs` exits with:
-
-```text
-GUI dependencies are not installed. Install with: pip install "autosaxs[gui]"
-```
+Requires the `[gui]` extra (PyQt5 and related dependencies).
 
 ### Layout
 
 The main window is split into three columns:
 
 - **Left: Skill catalog**
-  - Lists available skills discovered from `autosaxs.skill`.
-  - Selecting a skill opens its form.
+  - Lists available skills discovered from `autosaxs.skill` (report skills excluded).
+  - Selecting a skill opens its form in the middle column.
 
-- **Middle: Skill form + logs**
+- **Middle: Skill form + run controls + logs**
+  - Skill header with a **?** help button (full docstring).
   - `Inputs` and `Options` groups generated from the skill signature.
-  - Run / Cancel controls and live stdout/stderr streaming.
+  - **Run**, **Cancel**, **Copy CLI**, and run-state label.
+  - Live stdout/stderr log view.
 
-- **Right: Artifacts + preview**
-  - Parsed `key=value` artifact list from the CLI output.
-  - Preview panel for images and rendered previews for `.dat`, `.tif/.tiff`, `.csv`, etc.
+- **Right: Preview + artifacts**
+  - Preview panel (top): images and rendered previews for `.dat`, `.tif/.tiff`, `.csv`, etc.
+  - Artifact list (bottom): `key=value` paths parsed from CLI output.
 
-### How to use (tested scenarios)
+**File → Open working directory…** switches the session to another folder.
 
-The GUI has automated “headless” tests that drive the real UI (no pixel assertions). Typical workflows:
-
-#### Scenario: select a skill → fill inputs/options → run → inspect artifacts
+### How to use (typical workflow)
 
 - Select a skill in the catalog (e.g. `calibrate`, `integrate`, `subtract`, `fit_distances`, …)
 - Provide required positional inputs in `Inputs` (supports drag & drop / browse / manual path expressions)
-- Adjust `Options` (notably `output_dir` and `use_cache`; caching is opt-in)
-- Click **Run** and follow logs
-- Inspect produced paths in the right-side `Artifacts` list and click for previews
+- Adjust `Options` (notably `output_dir` and `use_cache`; caching is opt-in — the GUI defaults to `--no-cache`)
+- Optionally enable **Copy inputs into working directory** for files outside the workdir
+- Click **Run** (or press Enter) and follow logs
+- Inspect produced paths in the artifact list and click for previews
 
 ### Outputs (working directory)
 
@@ -140,12 +145,14 @@ The GUI has automated “headless” tests that drive the real UI (no pixel asse
 
 ### Purpose
 
-`guisaxs-liveview` is a single-window desktop GUI for **live, queued processing** of incoming SAXS detector images:
+`guisaxs-liveview` is a **PyQt5** desktop GUI for **live, queued processing** of incoming SAXS detector images:
 
-- watches **one** directory for new `.tif/.tiff` files (and also supports drag & drop),
+- watches a directory for new `.tif/.tiff` files (and also supports drag & drop onto the middle **2D** panel),
 - maintains a processing **queue** and handles files sequentially,
-- after calibration (and optional buffer subtraction) continuously updates plots,
-- can run optional automatic modeling / analysis from a right-side **Analysis mode** selector.
+- after calibration (and optional buffer subtraction) continuously updates 1D plots in the middle column,
+- optionally **arms** monodisperse or polydisperse analysis chains (separate windows) for each new TIFF while those windows stay open.
+
+Implementation lives in `guisaxs_skills.liveview`; `guisaxs-liveview` is a thin launcher entry point.
 
 ### Launch
 
@@ -155,40 +162,56 @@ After installing with the GUI extra, start the application:
 guisaxs-liveview
 ```
 
-On startup you will be prompted to choose a **watch directory** (the app remembers the last valid one).
+The app opens on the last valid **watch directory**, or on the current working directory if it is writable. Use **File → Open watch directory…** to switch folders.
+
+Full in-app documentation: **Help → guisaxs-liveview Help…**
 
 ### Layout
 
-The main window is split into three columns:
+Below the menu bar, a **Watchdir** line shows the active folder (tooltip = full path). The main area is three columns (~1 : 3 : 1 width):
 
-- **Left: setup wizards**
-  - calibration wizard (“Set calibration”)
-  - buffer wizard (“Set buffer”) for subtraction configuration
+- **Left: Calibration + buffer**
+  - **Set calibration** / **Reset** — wizard for `calibrate`, preview, and refined-parameter table.
+  - **Set buffer** / **Reset** — wizard for buffer `.dat` and subtraction q-range.
 
-- **Middle: live view**
-  - queue status and latest 2D image
-  - navigation controls for processed files
+- **Middle: Live view**
+  - Queue status and progress.
+  - **2D** panel — latest TIFF; drop new `.tif/.tiff` here.
+  - **1D** plots — integrated curve, or sample/buffer + subtracted pair when subtraction is enabled.
+  - Session history: **<** **>** **Process** to browse or re-enqueue prior files.
 
-- **Right: Analysis**
-  - analysis mode drop-down (Off / p(r) / DAM / primitives / d(r) / mixture)
-  - mode-specific controls and previews (fit curves + optional 3D previews)
+- **Right: Analysis + log**
+  - **Analysis** toolbar with two icon buttons:
+    - **Monodisperse** — opens a separate wizard window (Guinier → GNOM p(r) → optional BODIES/DAMMIF/DENSS).
+    - **Polydisperse** — opens a separate window (Guinier → D(R) → optional mixture).
+  - While a window is open, that chain is **armed** for new TIFFs; closing the window **disarms** it. Both may be open at once (independent pipelines and output trees).
+  - Live log with **Full** (skill + app) and **App** tabs.
+
+**Menu bar:**
+
+- **File** — open watch directory; switch **flat** (top-level TIFFs only, outputs under watchdir) vs **tree** (recursive TIFF discovery, outputs beside each TIFF).
+- **Update** — upgrade `autosaxs[gui]` from git `main` (or run `autosaxs -U`).
+- **Help** — bundled HTML guide and About dialog.
 
 ### How to use (step list)
 
-- Start `guisaxs-liveview` and select the watch directory
-- Feed TIFFs by either:
-  - drag & drop onto the middle panel, or
-  - copying/saving new files into the watch directory
-- If needed, set calibration via the left wizard, then (optionally) set buffer subtraction
-- Choose an Analysis mode (or keep Off) to enable automatic downstream steps for each new image
+- Start `guisaxs-liveview` (from the folder you want to watch, or pick one via **File**).
+- Feed TIFFs by drag & drop onto the middle **2D** panel, or by copying/saving files into the watch directory.
+- If needed: **Set calibration** → run the wizard → **Run**.
+- If needed: **Set buffer** → choose buffer `.dat` and q-range → **Apply**.
+- Optional: click a right-column **Analysis** icon to open and arm monodisperse and/or polydisperse processing for new TIFFs.
+
+With neither analysis window open, only integration (+ subtraction if enabled) runs.
 
 ### Outputs (watch directory)
 
-All outputs are written under the selected watch directory, including:
+All outputs are written under the selected watch directory (layout depends on flat vs tree mode), including:
 
 - per-skill run records under `runs/latest/` (`request.yml`, `result.yml`, `stdout.log`, `stderr.log`)
 - `calibration/`, `averaged/` or `averaged_proxy/`, `subtracted/`
-- analysis outputs under per-skill folders like `fit_distances/<stem>/`, `model_bodies/<stem>/`, `dammif/<stem>/`, `fit_sizes/<stem>/`, `mixture/<stem>/`
+- monodisperse: `guinier_mono/<stem>/`, `fit_distances/<stem>/`, `dammif/<stem>/`, `model_bodies/<stem>/`, `denss/<stem>/`, …
+- polydisperse: `guinier_poly/<stem>/`, `fit_sizes/<stem>/`, `mixture/<stem>/`, …
+- shared wizard configs (e.g. `fit_distances.conf`, `model_bodies.conf`) next to per-stem folders
 
 ---
 

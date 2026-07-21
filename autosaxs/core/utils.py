@@ -242,6 +242,18 @@ def schultz_pdf(R: np.ndarray, R0: float, sigma: float) -> np.ndarray:
     return np.exp(lnp - np.max(lnp))
 
 
+def lognormal_pdf(R: np.ndarray, mu: float, sigma: float) -> np.ndarray:
+    """Unnormalized lognormal in R. mu = log-scale center, sigma = log-width."""
+    R = np.asarray(R, dtype=float)
+    s = max(float(sigma), 1e-6)
+    m = max(float(mu), 1e-6)
+    mask = R > 0
+    out = np.zeros_like(R, dtype=float)
+    x = np.log(R[mask] / m)
+    out[mask] = np.exp(-0.5 * (x / s) ** 2)
+    return out
+
+
 def read_saxs(filename):
     """
     Read SAXS data and metadata from a file with YAML metadata and CSV data.

@@ -54,32 +54,46 @@ def _q_range_from_merged(merged: Dict, q_min_nm: Optional[float], q_max_nm: Opti
     return (q_min_v, q_max_v)
 
 
+def _read_fit_sizes_handoff(path: str) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as fp:
+        return yaml.safe_load(fp) or {}
+
+
 def _rmax_nm_from_fit_sizes(
     profile: str,
     output_dir: str,
     event_bus: Optional[EventBus],
-) -> float:
-    """Run fit_sizes in-process and return the selected GNOM ``--rmax`` (nm)."""
+) -> tuple[float, str]:
+    """Run fit_sizes in-process; return (rmax_nm, handoff_yaml_path)."""
     from ..fit_sizes import _fit_sizes_paths
+    from ..fit_sizes.quality_io import normalize_fit_sizes_single_sample
 
     sizes_dir = os.path.join(output_dir, "_fit_sizes_defaults")
     if event_bus:
         event_bus.publish(EventType.MESSAGE, {"text": "model_mixture: running fit_sizes (in-process)…"})
-    result = _fit_sizes_paths(
-        input_paths={"profile": profile},
-        output_dir=sizes_dir,
-        shape="spheres",
-        event_bus=event_bus,
-        use_cache=False,
+    result = normalize_fit_sizes_single_sample(
+        _fit_sizes_paths(
+            input_paths={"profile": profile},
+            output_dir=sizes_dir,
+            shape="spheres",
+            event_bus=event_bus,
+            use_cache=False,
+            stability_probe=True,
+        )
     )
-    fit_params_path = result.get("fit_params_path")
-    if not fit_params_path or not os.path.isfile(str(fit_params_path)):
-        raise RuntimeError("model_mixture: fit_sizes did not write fit_params_path; cannot derive r_max.")
-    with open(str(fit_params_path), "r", encoding="utf-8") as fp:
-        doc = yaml.safe_load(fp) or {}
-    rmax_nm = doc.get("rmax_nm")
+    handoff_path = str(result.get("fit_sizes_path") or result.get("fit_params_path") or "")
+    if not handoff_path or not os.path.isfile(handoff_path):
+        raise RuntimeError("model_mixture: fit_sizes did not write fit_sizes handoff YAML; cannot derive r_max.")
+    doc = _read_fit_sizes_handoff(handoff_path)
+    fit = doc.get("fit") or {}
+    rmax_nm = fit.get("rmax_nm")
     if rmax_nm is None:
-        raise RuntimeError("model_mixture: fit_sizes fit_params missing rmax_nm; cannot derive r_max.")
+        rmax_nm = doc.get("rmax_nm")
+    if rmax_nm is None:
+        mm = doc.get("model_mixture") or {}
+        rmax_nm = mm.get("r_max_nm")
+    if rmax_nm is None:
+        raise RuntimeError("model_mixture: fit_sizes handoff missing fit.rmax_nm; cannot derive r_max.")
     rmax_nm_f = float(rmax_nm)
     if rmax_nm_f <= 0:
         raise ValueError(f"model_mixture: invalid rmax_nm from fit_sizes: {rmax_nm_f}")
@@ -88,7 +102,17 @@ def _rmax_nm_from_fit_sizes(
             EventType.MESSAGE,
             {"text": f"model_mixture: fit_sizes completed (rmax={rmax_nm_f:.4g} nm)."},
         )
-    return rmax_nm_f
+    return rmax_nm_f, handoff_path
+
+
+def _load_fit_sizes_hints(handoff_path: str) -> Optional[Dict[str, Any]]:
+    if not handoff_path or not os.path.isfile(handoff_path):
+        return None
+    doc = _read_fit_sizes_handoff(handoff_path)
+    mm = doc.get("model_mixture")
+    if isinstance(mm, dict):
+        return mm
+    return doc
 
 
 def _resolve_mixture_radius_params(
@@ -102,14 +126,34 @@ def _resolve_mixture_radius_params(
     user_poly_max: Optional[float] = None,
 ) -> Dict[str, float]:
     """Resolve MIXTURE radius bounds: inputs/defaults in nm, returned values in Å for ATSAS."""
+    sizes_handoff_path = ""
     if user_r_max is not None:
         r_max_nm = float(user_r_max)
     else:
-        r_max_nm = _rmax_nm_from_fit_sizes(profile, output_dir, event_bus)
+        r_max_nm, sizes_handoff_path = _rmax_nm_from_fit_sizes(profile, output_dir, event_bus)
 
-    r_min_nm = float(user_r_min) if user_r_min is not None else 0.1
-    poly_max_nm = float(user_poly_max) if user_poly_max is not None else 0.5 * r_max_nm
-    poly_min_nm = float(user_poly_min) if user_poly_min is not None else 0.05
+    hints = _load_fit_sizes_hints(sizes_handoff_path) if sizes_handoff_path else None
+
+    if user_r_min is not None:
+        r_min_nm = float(user_r_min)
+    elif hints and hints.get("r_min_nm") is not None:
+        r_min_nm = float(hints["r_min_nm"])
+    else:
+        r_min_nm = 0.1
+
+    if user_poly_max is not None:
+        poly_max_nm = float(user_poly_max)
+    elif hints and hints.get("poly_max_nm") is not None:
+        poly_max_nm = float(hints["poly_max_nm"])
+    else:
+        poly_max_nm = 0.5 * r_max_nm
+
+    if user_poly_min is not None:
+        poly_min_nm = float(user_poly_min)
+    elif hints and hints.get("poly_min_nm") is not None:
+        poly_min_nm = float(hints["poly_min_nm"])
+    else:
+        poly_min_nm = 0.05
     return {
         "r_min": _nm_to_angstrom(r_min_nm),
         "r_max": _nm_to_angstrom(r_max_nm),

@@ -800,7 +800,7 @@ def test_model_mixture_without_config_path_uses_bundled_defaults(monkeypatch):
     monkeypatch.setattr("autosaxs.skill.model_mixture.mixture._run_mixture", _fake_run_mixture)
     monkeypatch.setattr(
         "autosaxs.skill.model_mixture._rmax_nm_from_fit_sizes",
-        lambda profile, output_dir, event_bus: 12.0,
+        lambda profile, output_dir, event_bus: (12.0, os.path.join(output_dir, "fake_fit_sizes.yml")),
     )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -908,16 +908,14 @@ def _fake_gnom_out_text(total_estimate: float = 0.9, neg_d_fraction: float = 0.0
 def test_fit_sizes_contract(monkeypatch):
     """With rmax and first set, only GNOM is invoked (no fit_guinier)."""
     import subprocess as _sp
-    import importlib as _importlib
 
-    _fit_sizes_mod = _importlib.import_module("autosaxs.skill.fit_sizes")
     guinier_calls = []
 
     def _guinier_guard(*_a, **_k):
         guinier_calls.append(True)
         raise AssertionError("fit_guinier should not run when rmax and first are set")
 
-    monkeypatch.setattr("autosaxs.skill.fit_sizes.run_guinier_analysis", _guinier_guard)
+    monkeypatch.setattr("autosaxs.skill.fit_sizes.sizes._guinier_from_profile", _guinier_guard)
 
     def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
         _ = capture_output, text, timeout, kwargs
@@ -927,7 +925,7 @@ def test_fit_sizes_contract(monkeypatch):
         out_path.write_text(_fake_gnom_out_text(), encoding="utf-8")
         return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr("autosaxs.skill.fit_sizes.subprocess.run", _fake_run)
+    monkeypatch.setattr("autosaxs.skill.fit_sizes.runners.subprocess.run", _fake_run)
 
     with tempfile.TemporaryDirectory() as tmp:
         q = np.linspace(0.1, 2.0, 40)
@@ -941,13 +939,14 @@ def test_fit_sizes_contract(monkeypatch):
             use_cache=False,
             rmax_nm=10.0,
             first=1,
+            stability_probe=False,
         )
         assert not guinier_calls
         assert os.path.isfile(str(out["best_gnom_out_path"]))
 
 
 def test_fit_sizes_score_te_minus_nf():
-    from autosaxs.skill.fit_sizes import _candidate_from_gnom_out
+    from autosaxs.skill.fit_sizes.optimize import _candidate_from_gnom_out
 
     out_hi = _fake_gnom_out_text(total_estimate=0.9, neg_d_fraction=0.0)
     out_lo = _fake_gnom_out_text(total_estimate=0.9, neg_d_fraction=1.0)
@@ -988,19 +987,18 @@ def test_fit_sizes_score_te_minus_nf():
 
 def test_fit_sizes_rmax_optimization_invoked(monkeypatch):
     import subprocess as _sp
-    import importlib as _importlib
 
-    _fit_sizes_mod = _importlib.import_module("autosaxs.skill.fit_sizes")
     guinier_calls = []
     optimize_calls = []
 
-    def _fake_guinier(q_nm, I, sigma, atsas_dat_path=None):
+    def _fake_guinier_profile(q_nm, I, sigma, atsas_dat_path):
         guinier_calls.append(True)
         return {
-            "chosen": "adaptive",
-            "chosen_Rg": 2.0,
+            "rg": 2.0,
             "rg_min": 1.5,
             "rg_max": 2.5,
+            "q_min": 0.1,
+            "q_max": 0.5,
             "chosen_interval": (0.1, 0.5),
             "quality_class": "good",
         }
@@ -1009,7 +1007,7 @@ def test_fit_sizes_rmax_optimization_invoked(monkeypatch):
         optimize_calls.append(kwargs)
         return 7.5, [{"rmax_nm": 7.5, "score": 0.7, "intermediate": True}], []
 
-    monkeypatch.setattr("autosaxs.skill.fit_sizes.run_guinier_analysis", _fake_guinier)
+    monkeypatch.setattr("autosaxs.skill.fit_sizes.sizes._guinier_from_profile", _fake_guinier_profile)
 
     def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
         _ = capture_output, text, timeout, kwargs
@@ -1019,8 +1017,8 @@ def test_fit_sizes_rmax_optimization_invoked(monkeypatch):
         out_path.write_text(_fake_gnom_out_text(), encoding="utf-8")
         return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr("autosaxs.skill.fit_sizes.subprocess.run", _fake_run)
-    monkeypatch.setattr("autosaxs.skill.fit_sizes._optimize_rmax_nm", _fake_optimize)
+    monkeypatch.setattr("autosaxs.skill.fit_sizes.runners.subprocess.run", _fake_run)
+    monkeypatch.setattr("autosaxs.skill.fit_sizes.sizes._optimize_rmax_nm", _fake_optimize)
 
     with tempfile.TemporaryDirectory() as tmp:
         q = np.linspace(0.05, 2.0, 60)
@@ -1028,7 +1026,12 @@ def test_fit_sizes_rmax_optimization_invoked(monkeypatch):
         profile_path = os.path.join(tmp, "profile.dat")
         write_saxs(profile_path, q, I, 0.02 * I, {})
 
-        out = fit_sizes(profile_path, output_dir=os.path.join(tmp, "sizes"), use_cache=False)
+        out = fit_sizes(
+            profile_path,
+            output_dir=os.path.join(tmp, "sizes"),
+            use_cache=False,
+            stability_probe=False,
+        )
         assert len(guinier_calls) == 1
         assert len(optimize_calls) == 1
         assert optimize_calls[0]["rg_max_nm"] == pytest.approx(2.5)
@@ -1431,9 +1434,9 @@ def test_fit_dammif_deprecated_alias(monkeypatch):
             )
 
 
-def test_model_dam_presentation_vis_writes_assets(tmp_path: Path):
-    """Presentation writer creates synced run GIFs + overlap + occupancy assets."""
-    from autosaxs.skill.model_dam.vis import write_presentation_visuals
+def test_model_dam_visuals_writes_assets(tmp_path: Path):
+    """Visuals writer creates synced run GIFs + overlap + occupancy assets."""
+    from autosaxs.skill.model_dam.vis import write_visuals
 
     def _write_cif(path: Path, pts: np.ndarray, occ=None) -> None:
         lines = [
@@ -1473,25 +1476,25 @@ def test_model_dam_presentation_vis_writes_assets(tmp_path: Path):
     best = tmp_path / "best.cif"
     best.symlink_to(tmp_path / "dammif-1-1.cif")
 
-    out = write_presentation_visuals(
+    out = write_visuals(
         str(tmp_path),
         best_cif_path=str(best),
         frequency_map_path=str(dam / "damaver-global-damaver.cif"),
     )
-    pres = Path(out["presentation_dir"])
-    assert pres.is_dir()
-    assert len(out["presentation_run_gifs"]) == 2
-    assert Path(out["presentation_overlap_gif"]).is_file()
-    assert Path(out["presentation_occupancy_gif"]).is_file()
-    assert Path(out["presentation_overlap_png"]).is_file()
-    assert Path(out["presentation_occupancy_png"]).is_file()
-    assert Path(out["presentation_occupancy_thresholds_png"]).is_file()
+    vis = Path(out["visuals_dir"])
+    assert vis.is_dir()
+    assert len(out["run_gifs"]) == 2
+    assert Path(out["overlap_gif"]).is_file()
+    assert Path(out["occupancy_gif"]).is_file()
+    assert Path(out["overlap_png"]).is_file()
+    assert Path(out["occupancy_png"]).is_file()
+    assert Path(out["occupancy_thresholds_png"]).is_file()
 
 
-def test_model_density_presentation_vis_writes_assets(tmp_path: Path):
-    """Presentation writer creates synced slice GIF + midplane PNG from a tiny MRC."""
+def test_model_density_visuals_writes_assets(tmp_path: Path):
+    """Visuals writer creates synced slice GIF + midplane PNG from a tiny MRC."""
     denss = pytest.importorskip("denss")
-    from autosaxs.skill.model_density.vis import write_presentation_visuals
+    from autosaxs.skill.model_density.vis import write_visuals
 
     n = 16
     side = 80.0  # Å
@@ -1502,12 +1505,12 @@ def test_model_density_presentation_vis_writes_assets(tmp_path: Path):
     mrc = tmp_path / "toy.mrc"
     denss.write_mrc(rho, side, filename=str(mrc))
 
-    out = write_presentation_visuals(str(tmp_path), density_map_path=str(mrc))
-    assert Path(out["presentation_dir"]).is_dir()
-    assert Path(out["presentation_slices_gif"]).is_file()
-    assert Path(out["presentation_midplanes_png"]).is_file()
-    assert (tmp_path / "presentation" / "density_slices.gif").is_file()
-    assert (tmp_path / "presentation" / "density_midplanes.png").is_file()
+    out = write_visuals(str(tmp_path), density_map_path=str(mrc))
+    assert Path(out["visuals_dir"]).is_dir()
+    assert Path(out["slices_gif"]).is_file()
+    assert Path(out["midplanes_png"]).is_file()
+    assert (tmp_path / "visuals" / "density_slices.gif").is_file()
+    assert (tmp_path / "visuals" / "density_midplanes.png").is_file()
 
 
 def test_fit_bodies_deprecated_alias(monkeypatch):
@@ -1562,7 +1565,7 @@ def test_fit_mixture_deprecated_alias(monkeypatch):
     monkeypatch.setattr("autosaxs.skill.model_mixture.mixture._run_mixture", _fake_run_mixture)
     monkeypatch.setattr(
         "autosaxs.skill.model_mixture._rmax_nm_from_fit_sizes",
-        lambda *_a, **_k: 5.0,
+        lambda *_a, **_k: (5.0, "/tmp/fake_fit_sizes.yml"),
     )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -1768,10 +1771,17 @@ def test_fit_sizes_all_runs_failed(monkeypatch):
         profile_path = os.path.join(tmp, "profile.dat")
         write_saxs(profile_path, q, I, sigma, {})
 
-        monkeypatch.setattr("autosaxs.skill.fit_sizes.subprocess.run", _fake_run)
+        monkeypatch.setattr("autosaxs.skill.fit_sizes.runners.subprocess.run", _fake_run)
 
         out_dir = os.path.join(tmp, "sizes")
-        result = fit_sizes(profile_path, output_dir=out_dir, rmax_nm=5.0, first=1, use_cache=False)
+        result = fit_sizes(
+            profile_path,
+            output_dir=out_dir,
+            rmax_nm=5.0,
+            first=1,
+            use_cache=False,
+            stability_probe=False,
+        )
         from autosaxs.skill.gnom_fit_common import _unwrap_scalar
 
         assert _unwrap_scalar(result.get("atsas_fit_ok")) is False

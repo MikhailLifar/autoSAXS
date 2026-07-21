@@ -531,6 +531,92 @@ def analyze_dmax_validation(
     }
 
 
+def analyze_rmax_validation(
+    *,
+    best_parsed: Dict[str, Any],
+    ensemble_rows: List[Dict[str, Any]],
+    force_zero_off_parsed: Optional[Dict[str, Any]],
+    rmax_ref_nm: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Rmax validation for polydisperse D(R) (close fits + force-zero-off probe)."""
+    raw = analyze_dmax_validation(
+        best_parsed=best_parsed,
+        ensemble_rows=ensemble_rows,
+        force_zero_off_parsed=force_zero_off_parsed,
+        dmax_ref_nm=rmax_ref_nm,
+    )
+    tips = []
+    for tip in raw.get("user_tips") or []:
+        tips.append(
+            str(tip)
+            .replace("p(r)", "D(R)")
+            .replace("Dmax", "Rmax")
+            .replace("Rg(p(r))", "peak position")
+        )
+    out = dict(raw)
+    out["user_tips"] = tips
+    out["rmax_ref_nm"] = rmax_ref_nm
+    out.pop("dmax_ref_nm", None)
+    out["abrupt_zero_at_rmax"] = out.pop("abrupt_zero_at_dmax", None)
+    return out
+
+
+def classify_stability(
+    *,
+    ensemble_rows: List[Dict[str, Any]],
+    rmax_validation: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Classify D(R) stability from close-fit ensemble and force-zero-off probe."""
+    ok_rows = [r for r in ensemble_rows if r.get("ok")]
+    if len(ok_rows) < 2:
+        return "unstable"
+
+    peak_vals: List[float] = []
+    pdi_vals: List[float] = []
+    for row in ok_rows:
+        try:
+            pr = float(row.get("peak_r_nm"))
+            if np.isfinite(pr):
+                peak_vals.append(pr)
+        except (TypeError, ValueError):
+            pass
+        try:
+            pdi = float(row.get("pdi"))
+            if np.isfinite(pdi):
+                pdi_vals.append(pdi)
+        except (TypeError, ValueError):
+            pass
+
+    peak_span_pct: Optional[float] = None
+    if len(peak_vals) >= 2:
+        mid = 0.5 * (max(peak_vals) + min(peak_vals))
+        if mid > 0:
+            peak_span_pct = float((max(peak_vals) - min(peak_vals)) / mid * 100.0)
+
+    pdi_span: Optional[float] = None
+    if len(pdi_vals) >= 2:
+        pdi_span = float(max(pdi_vals) - min(pdi_vals))
+
+    severity = str((rmax_validation or {}).get("severity") or "ok")
+    if severity == "failed":
+        return "unstable"
+    if peak_span_pct is not None and peak_span_pct > 15.0:
+        return "unstable"
+    if pdi_span is not None and pdi_span > 0.15:
+        return "marginal"
+    te_span = (rmax_validation or {}).get("ensemble_te_span")
+    try:
+        if te_span is not None and float(te_span) > 0.15:
+            return "marginal"
+    except (TypeError, ValueError):
+        pass
+    if severity == "warning":
+        return "marginal"
+    if peak_span_pct is not None and peak_span_pct > 8.0:
+        return "marginal"
+    return "stable"
+
+
 def _find_local_maxima(r: np.ndarray, d: np.ndarray) -> List[float]:
     r = np.asarray(r, dtype=float)
     d = np.asarray(d, dtype=float)
@@ -631,6 +717,11 @@ def build_sizes_user_tips(
     total_estimate: Optional[float],
     shape: str,
     thresholds: Optional[DrQualityThresholds] = None,
+    mixture_dist_hint: Optional[str] = None,
+    n_components_suggested: Optional[int] = None,
+    parametric_family: Optional[str] = None,
+    stability_class: Optional[str] = None,
+    modality_confidence: Optional[str] = None,
 ) -> List[str]:
     t = thresholds or DrQualityThresholds()
     tips: List[str] = []
@@ -653,6 +744,20 @@ def build_sizes_user_tips(
     elif modality_class == "unimodal_polydisperse":
         tips.append("Broad unimodal D(R) — typical for polydisperse sols or nanoparticle batches.")
 
+    if parametric_family and parametric_family != "unknown":
+        tips.append(f"Parametric hint on D(R): {parametric_family} (preliminary).")
+    if mixture_dist_hint and n_components_suggested is not None:
+        tips.append(
+            f"Suggested model_mixture starting point: {mixture_dist_hint} distribution, "
+            f"{int(n_components_suggested)} phase(s)."
+        )
+    if modality_confidence == "low":
+        tips.append("Modality ambiguous — confirm with model_mixture before trusting component count.")
+    if stability_class == "unstable":
+        tips.append("Rmax ensemble unstable — treat D(R) as a rough hint only.")
+    elif stability_class == "marginal":
+        tips.append("Rmax ensemble marginally stable — verify before model_mixture.")
+
     try:
         te_v = float(total_estimate) if total_estimate is not None else float("nan")
     except (TypeError, ValueError):
@@ -673,6 +778,83 @@ def build_sizes_user_tips(
         tips.append("Overall D(R) quality: HIGH QUALITY by internal checks.")
 
     return tips
+
+
+def apply_sizes_extended_quality(
+    quality: Dict[str, Any],
+    *,
+    parametric: Optional[Dict[str, Any]] = None,
+    ensemble_info: Optional[Dict[str, Any]] = None,
+    shape: str = "spheres",
+    thresholds: Optional[DrQualityThresholds] = None,
+) -> Dict[str, Any]:
+    """Merge parametric hints, ensemble stability, and rmax validation into quality dict."""
+    t = thresholds or DrQualityThresholds()
+    out = dict(quality)
+    parametric = parametric or {}
+    ensemble_info = ensemble_info or {}
+    rmax_validation = ensemble_info.get("rmax_validation")
+    stability_class = ensemble_info.get("stability_class") or "unknown"
+
+    for key in (
+        "parametric_family",
+        "parametric_aic",
+        "parametric_R0_nm",
+        "parametric_width_nm",
+        "n_components_suggested",
+        "mixture_dist_hint",
+        "parametric_peaks_nm",
+        "modality_confidence",
+    ):
+        if key in parametric:
+            out[key] = parametric[key]
+
+    out["stability_class"] = stability_class
+    out["ensemble_dir"] = ensemble_info.get("ensemble_dir") or ""
+    out["ensemble_summary_path"] = ensemble_info.get("ensemble_summary_path") or ""
+    out["close_fit_out_paths"] = list(ensemble_info.get("close_fit_out_paths") or [])
+    out["force_zero_off_out_path"] = ensemble_info.get("force_zero_off_out_path") or ""
+    if rmax_validation:
+        out["rmax_validation"] = rmax_validation
+        pathology = rmax_validation.get("force_zero_off_pathology")
+        out["force_zero_off_pathology"] = bool(
+            pathology in ("aggregation", "aggregation_mild", "repulsion", "repulsion_mild")
+        )
+        for tip in rmax_validation.get("user_tips") or []:
+            if tip and tip not in out.get("user_tips", []):
+                out.setdefault("user_tips", []).append(tip)
+
+    sizes_class = str(out.get("sizes_quality_class") or "failed")
+    rationale = list(out.get("quality_rationale") or [])
+    if stability_class == "unstable" and sizes_class == "high_quality":
+        sizes_class = "acceptable"
+        rationale.append("Rmax ensemble unstable — downgraded to acceptable.")
+    if rmax_validation and str(rmax_validation.get("severity")) == "failed":
+        if sizes_class == "high_quality":
+            sizes_class = "acceptable"
+        rationale.append("Force-zero-off Rmax validation raised concerns.")
+    out["sizes_quality_class"] = sizes_class
+    out["overall_status"] = overall_status_from_class(sizes_class)
+    out["quality_rationale"] = rationale
+
+    out["user_tips"] = build_sizes_user_tips(
+        sizes_quality_class=sizes_class,
+        modality_class=str(out.get("modality_class") or "unknown"),
+        pdi=out.get("pdi"),
+        d_avg_nm=out.get("d_avg_nm"),
+        d_std_nm=out.get("d_std_nm"),
+        total_estimate=out.get("total_estimate"),
+        shape=shape,
+        thresholds=t,
+        mixture_dist_hint=out.get("mixture_dist_hint"),
+        n_components_suggested=out.get("n_components_suggested"),
+        parametric_family=out.get("parametric_family"),
+        stability_class=stability_class,
+        modality_confidence=out.get("modality_confidence"),
+    )
+    if out.get("shannon_tip"):
+        out["user_tips"] = list(out["user_tips"]) + [str(out["shannon_tip"])]
+    return out
 
 
 def analyze_dr_quality(
@@ -758,5 +940,12 @@ def analyze_dr_quality(
 def write_quality_passport_yaml(path: str, doc: Dict[str, Any]) -> None:
     import yaml
 
+    from autosaxs.core.utils import _make_yaml_safe
+
     with open(path, "w", encoding="utf-8") as fp:
-        yaml.dump(doc, fp, default_flow_style=False, allow_unicode=True)
+        yaml.dump(
+            _make_yaml_safe(doc),
+            fp,
+            default_flow_style=False,
+            allow_unicode=True,
+        )

@@ -85,6 +85,7 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a siz
 - `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
 - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+- `stability_probe` (bool, default `True`): When True, run a close-fit rmax ensemble (5 GNOM calls) plus one force-zero-off boundary probe (1 GNOM call) for stability hints and D(R) plot overlays.
 
 ### Returns
 
@@ -93,22 +94,25 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a siz
 - `output_subdir`: The per-sample output directory used for this profile.
 - `gnom_out_paths`: List of GNOM `.out` paths written for this profile (typically a single “best” `.out`).
 - `best_gnom_out_path`: Path to the selected “best” GNOM `.out`.
-- `best_summary_path`: Path to a YAML summary of candidate runs and the selected parameters.
-- `fit_params_path`: Path to a YAML file containing the fit parameters used for the final run.
+- `fit_sizes_path`: Compact handoff YAML (`{base}_fit_sizes.yml`) — best fit, quality, analysis, and `model_mixture` hints.
+- `fit_sizes_log_path` / `best_summary_path`: Extended run log YAML (`{base}_fit_sizes_log.yml`) — candidates, ensemble, failures.
+- `fit_params_path` / `fit_sizes_hints_path` / `quality_passport_path`: Aliases of `fit_sizes_path` (backward compatibility).
 - `best_symlink_out_path`: Best-effort symlink path to the selected `.out` (may be missing on some filesystems).
-- `fits_csv_path`: Path to a CSV containing candidate scores/metadata.
 - `fit_vs_exp_png_path` / `fit_vs_exp_png_error`: Fit-vs-experiment plot output or error message.
 - `best_dr_png_path` / `best_dr_png_error`: \(D(R)\) plot output or error message.
-- `dr_csv_path`: Path to a CSV export of \(D(R)\) (if successfully parsed).
 - `d_avg_nm` / `d_std_nm` / `pdi`: Mean size, standard deviation, and polydispersity index σ/⟨R⟩ from D(R).
 - `dr_peak_positions_nm` / `dr_n_peaks`: Peak positions and count in D(R).
 - `modality_class`: `monodisperse` \| `unimodal_polydisperse` \| `multimodal` \| `unknown`.
+- `modality_confidence`: `high` \| `low` when parametric and peak-based modality hints disagree.
+- `parametric_family` / `parametric_aic` / `n_components_suggested` / `mixture_dist_hint` / `parametric_peaks_nm`: Cheap post-hoc parametric hints on D(R).
+- `stability_class`: `stable` \| `marginal` \| `unstable` from close-fit ensemble and force-zero-off probe.
+- `ensemble_dir` / `ensemble_summary_path` / `close_fit_out_paths` / `force_zero_off_out_path`: Rmax stability probe artifacts (when `stability_probe=True`).
+- `rmax_validation`: Pathology block from force-zero-off D(R) tail analysis.
 - `rg_guinier_nm`: Guinier Rg (nm) when `fit_guinier` ran in-process.
 - `total_estimate`: GNOM Total Estimate of the selected fit.
 - `sizes_quality_class`: `high_quality` \| `acceptable` \| `failed`.
 - `overall_status`: `HIGH QUALITY` \| `ACCEPTABLE` \| `FAILED`.
 - `quality_rationale` / `user_tips`: Lists explaining the quality assessment.
-- `quality_passport_path`: YAML path with the full quality block.
 
 ### Python usage
 

@@ -176,7 +176,7 @@ def _sanitize_individual_fragment_body(body: str) -> str:
         if "guinier table written to" in low:
             continue
         if low.startswith("summary:") and (
-            "fit_sizes" in low or "fit_sizes_best" in low or "fit_sizes_fits" in low
+            "fit_sizes" in low or "fit_sizes_best" in low or "fit_sizes_log" in low or "fit_sizes_fits" in low
         ):
             continue
         out.append(ln)

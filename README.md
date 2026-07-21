@@ -755,6 +755,7 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a siz
 - `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
 - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+- `stability_probe` (bool, default `True`): When True, run a close-fit rmax ensemble (5 GNOM calls) plus one force-zero-off boundary probe (1 GNOM call) for stability hints and D(R) plot overlays.
 
 ### Returns
 
@@ -763,22 +764,25 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a siz
 - `output_subdir`: The per-sample output directory used for this profile.
 - `gnom_out_paths`: List of GNOM `.out` paths written for this profile (typically a single “best” `.out`).
 - `best_gnom_out_path`: Path to the selected “best” GNOM `.out`.
-- `best_summary_path`: Path to a YAML summary of candidate runs and the selected parameters.
-- `fit_params_path`: Path to a YAML file containing the fit parameters used for the final run.
+- `fit_sizes_path`: Compact handoff YAML (`{base}_fit_sizes.yml`) — best fit, quality, analysis, and `model_mixture` hints.
+- `fit_sizes_log_path` / `best_summary_path`: Extended run log YAML (`{base}_fit_sizes_log.yml`) — candidates, ensemble, failures.
+- `fit_params_path` / `fit_sizes_hints_path` / `quality_passport_path`: Aliases of `fit_sizes_path` (backward compatibility).
 - `best_symlink_out_path`: Best-effort symlink path to the selected `.out` (may be missing on some filesystems).
-- `fits_csv_path`: Path to a CSV containing candidate scores/metadata.
 - `fit_vs_exp_png_path` / `fit_vs_exp_png_error`: Fit-vs-experiment plot output or error message.
 - `best_dr_png_path` / `best_dr_png_error`: \(D(R)\) plot output or error message.
-- `dr_csv_path`: Path to a CSV export of \(D(R)\) (if successfully parsed).
 - `d_avg_nm` / `d_std_nm` / `pdi`: Mean size, standard deviation, and polydispersity index σ/⟨R⟩ from D(R).
 - `dr_peak_positions_nm` / `dr_n_peaks`: Peak positions and count in D(R).
 - `modality_class`: `monodisperse` \| `unimodal_polydisperse` \| `multimodal` \| `unknown`.
+- `modality_confidence`: `high` \| `low` when parametric and peak-based modality hints disagree.
+- `parametric_family` / `parametric_aic` / `n_components_suggested` / `mixture_dist_hint` / `parametric_peaks_nm`: Cheap post-hoc parametric hints on D(R).
+- `stability_class`: `stable` \| `marginal` \| `unstable` from close-fit ensemble and force-zero-off probe.
+- `ensemble_dir` / `ensemble_summary_path` / `close_fit_out_paths` / `force_zero_off_out_path`: Rmax stability probe artifacts (when `stability_probe=True`).
+- `rmax_validation`: Pathology block from force-zero-off D(R) tail analysis.
 - `rg_guinier_nm`: Guinier Rg (nm) when `fit_guinier` ran in-process.
 - `total_estimate`: GNOM Total Estimate of the selected fit.
 - `sizes_quality_class`: `high_quality` \| `acceptable` \| `failed`.
 - `overall_status`: `HIGH QUALITY` \| `ACCEPTABLE` \| `FAILED`.
 - `quality_rationale` / `user_tips`: Lists explaining the quality assessment.
-- `quality_passport_path`: YAML path with the full quality block.
 
 ### Python usage
 
@@ -928,7 +932,7 @@ With `n_runs=1`, runs a single DAMMIF reconstruction. With `n_runs>1`, runs inde
 - `gnom_path` (str | None, default `None`): Optional path to a GNOM/DATGNOM `.out` file for DAMMIF. If omitted, `fit_distances` is run in-process on `profile` and its `best_gnom_out_path` is used.
 - `n_runs` (int, default `1`): Number of independent DAMMIF runs. When `>1`, DAMAVER is run on the particle models.
 - `dammif_mode` (str, default `fast`): DAMMIF annealing mode: `fast` or `slow`.
-- `make_presentation_vis` (bool, default `False`): When True, write presentation PNGs/GIFs under `{output}/presentation/` (synced per-run rotation GIFs, overlap, occupancy threshold; nm scale bar; no run/title captions).
+- `visualize_all` (bool, default `False`): When True, write PNGs/GIFs under `{output}/visuals/` (synced per-run rotation GIFs, overlap, occupancy threshold; nm scale bar; no run/title captions).
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
@@ -939,7 +943,7 @@ With `n_runs=1`, runs a single DAMMIF reconstruction. With `n_runs>1`, runs inde
 - `best_cif_path`: Symlink `best.cif` pointing at the most probable particle CIF (the sole run when `n_runs=1`).
 - `best_view_path`: Path to ``best_view.png`` (isosurface + fit overlay for the best model); empty if unavailable.
 - `frequency_map_path`: Path to the DAMAVER frequency/occupancy map CIF (empty string when `n_runs=1`).
-- `presentation_dir` and related `presentation_*` keys when `make_presentation_vis=True` (empty strings / empty list otherwise).
+- `visuals_dir`, `overlap_png`, `overlap_gif`, `occupancy_png`, `occupancy_gif`, `occupancy_thresholds_png`, `run_gifs` when `visualize_all=True` (empty strings / empty list otherwise).
 
 ### Python usage
 
@@ -952,7 +956,7 @@ out = model_dam(
     gnom_path="guinier/sample_01_gnom.out",
     n_runs=1,
     dammif_mode="fast",
-    make_presentation_vis=False,
+    visualize_all=False,
     use_cache=False,
 )
 
@@ -963,7 +967,7 @@ print(out["output_subdir"], out["best_cif_path"])
 
 ```bash
 autosaxs model-dam subtracted/sub_sample_01.dat --output-dir dammif --n-runs 1 --dammif-mode fast
-autosaxs model-dam subtracted/sub_sample_01.dat --output-dir dammif --n-runs 5 --make-presentation-vis
+autosaxs model-dam subtracted/sub_sample_01.dat --output-dir dammif --n-runs 5 --visualize-all
 ```
 
 ---
@@ -983,7 +987,7 @@ Protocol `mode`: `pilot` runs a single DENSS reconstruction; `average` runs dens
 - `denss_mode` (str, default `slow`): DENSS algorithm mode: `slow`, `fast`, or `membrane`.
 - `n_maps` (int, default `20`): Number of reconstructions for `average`/`refined` (ignored in `pilot`; must be ≥2 when used).
 - `n_jobs` (int, default `1`): Parallel cores for denss-all.
-- `make_presentation_vis` (bool, default `False`): When True, write presentation slice GIF/PNG under `{output}/presentation/` (synced YZ/XZ/XY cuts through the particle AABB; nm scale bar below panels; electron-ish colormap).
+- `visualize_all` (bool, default `False`): When True, write slice GIF/PNG under `{output}/visuals/` (synced YZ/XZ/XY cuts through the particle AABB; nm scale bar below panels; electron-ish colormap).
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
@@ -997,7 +1001,7 @@ Protocol `mode`: `pilot` runs a single DENSS reconstruction; `average` runs dens
 - `fsc_path`: FSC curve path when averaging ran; empty string otherwise.
 - `map_fit_path`: Calculated vs experimental fit file when present; else empty.
 - `denss_log_path`: Main log for the completed mode.
-- `presentation_dir`, `presentation_slices_gif`, `presentation_midplanes_png` when `make_presentation_vis=True` (empty strings otherwise).
+- `visuals_dir`, `slices_gif`, `midplanes_png` when `visualize_all=True` (empty strings otherwise).
 
 ### Python usage
 
@@ -1009,7 +1013,7 @@ out = model_density(
     output_dir="denss",
     mode="pilot",
     denss_mode="slow",
-    make_presentation_vis=False,
+    visualize_all=False,
     use_cache=False,
 )
 
@@ -1020,7 +1024,7 @@ print(out["density_map_path"])
 
 ```bash
 autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss --mode pilot --denss-mode slow
-autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss --make-presentation-vis
+autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss --visualize-all
 ```
 
 ---
