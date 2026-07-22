@@ -15,10 +15,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-# Add repos to path when run as script
+# Add src/ to path when run as script (src layout)
 _REPOS = Path(__file__).resolve().parent.parent
-if str(_REPOS) not in __import__("sys").path:
-    __import__("sys").path.insert(0, str(_REPOS))
+_SRC = _REPOS / "src"
+import sys
+for _p in (_SRC, _REPOS):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 from autosaxs.skill import (
     CACHE_FILENAME,
@@ -425,7 +428,7 @@ def test_merge_skill_params_precedence():
 def test_calibrate_raises_without_calib_image():
     with pytest.raises((FileNotFoundError, ValueError)):
         calibrate(
-            calib_image="",
+            calibrant_image="",
             output_dir=tempfile.mkdtemp(),
             mask="dummy_mask.msk",
             use_cache=False,
@@ -435,7 +438,7 @@ def test_calibrate_raises_without_calib_image():
 def test_calibrate_rejects_unknown_calibrant():
     with pytest.raises(ValueError, match="Unknown calibrant"):
         calibrate(
-            calib_image="",
+            calibrant_image="",
             output_dir=tempfile.mkdtemp(),
             mask="dummy_mask.msk",
             calibrant="not_a_real_calibrant",
@@ -450,7 +453,7 @@ def test_calibrate_requires_mask_for_default_from_file_mode():
 
         with pytest.raises(TypeError):
             calibrate(
-                calib_image=calib_path,
+                calibrant_image=calib_path,
                 output_dir=os.path.join(tmp, "out"),
                 use_cache=False,
             )
@@ -500,7 +503,7 @@ def test_calibrate_default_mask_mode_is_from_file(monkeypatch):
         monkeypatch.setattr("autosaxs.skill.calibrate.PLTViewer.view_mask", lambda *args, **kwargs: None)
 
         out = calibrate(
-            calib_image=calib_path,
+            calibrant_image=calib_path,
             output_dir=os.path.join(tmp, "out"),
             mask=mask_path,
             use_cache=False,
@@ -564,7 +567,7 @@ def test_calibrate_always_overrides_config_calibrant(monkeypatch):
         monkeypatch.setattr("autosaxs.skill.calibrate.PLTViewer.view_mask", lambda *args, **kwargs: None)
 
         out = calibrate(
-            calib_image=calib_path,
+            calibrant_image=calib_path,
             output_dir=os.path.join(tmp, "out"),
             mask=mask_path,
             calibrant=requested_calibrant,
@@ -590,7 +593,7 @@ def test_calibrate_requires_wavelength(monkeypatch):
             Path(calib_path).write_bytes(b"dummy")
             np.save(mask_path, np.zeros((4, 4), dtype=bool))
             calibrate(
-                calib_image=calib_path,
+                calibrant_image=calib_path,
                 output_dir=tempfile.mkdtemp(),
                 mask=mask_path,
                 use_cache=False,
@@ -645,7 +648,7 @@ def test_calibrate_dist_guess_passed_to_autocalib(monkeypatch):
         monkeypatch.setattr("autosaxs.skill.calibrate.PLTViewer.view_mask", lambda *args, **kwargs: None)
 
         calibrate(
-            calib_image=calib_path,
+            calibrant_image=calib_path,
             output_dir=os.path.join(tmp, "out"),
             mask=mask_path,
             use_cache=False,
@@ -921,7 +924,9 @@ def test_fit_sizes_contract(monkeypatch):
         _ = capture_output, text, timeout, kwargs
         assert (cmd[0] if cmd else "") == "gnom"
         out_idx = cmd.index("-o")
-        out_path = Path(cwd) / cmd[out_idx + 1]
+        out_arg = Path(cmd[out_idx + 1])
+        out_path = out_arg if out_arg.is_absolute() else Path(cwd) / out_arg
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(_fake_gnom_out_text(), encoding="utf-8")
         return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
@@ -939,7 +944,6 @@ def test_fit_sizes_contract(monkeypatch):
             use_cache=False,
             rmax_nm=10.0,
             first=1,
-            stability_probe=False,
         )
         assert not guinier_calls
         assert os.path.isfile(str(out["best_gnom_out_path"]))
@@ -1013,7 +1017,9 @@ def test_fit_sizes_rmax_optimization_invoked(monkeypatch):
         _ = capture_output, text, timeout, kwargs
         assert (cmd[0] if cmd else "") == "gnom"
         out_idx = cmd.index("-o")
-        out_path = Path(cwd) / cmd[out_idx + 1]
+        out_arg = Path(cmd[out_idx + 1])
+        out_path = out_arg if out_arg.is_absolute() else Path(cwd) / out_arg
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(_fake_gnom_out_text(), encoding="utf-8")
         return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
@@ -1030,7 +1036,6 @@ def test_fit_sizes_rmax_optimization_invoked(monkeypatch):
             profile_path,
             output_dir=os.path.join(tmp, "sizes"),
             use_cache=False,
-            stability_probe=False,
         )
         assert len(guinier_calls) == 1
         assert len(optimize_calls) == 1
@@ -1795,7 +1800,6 @@ def test_fit_sizes_all_runs_failed(monkeypatch):
             rmax_nm=5.0,
             first=1,
             use_cache=False,
-            stability_probe=False,
         )
         from autosaxs.skill.gnom_fit_common import _unwrap_scalar
 

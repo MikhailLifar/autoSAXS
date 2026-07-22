@@ -33,10 +33,12 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# Add repos to path when running as script
+# Add src/ to path when running as script (src layout)
 _REPOS = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _REPOS not in sys.path:
-    sys.path.insert(0, _REPOS)
+_SRC = os.path.join(_REPOS, "src")
+for _p in (_SRC, _REPOS):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from autosaxs.core.utils import (
     chi2_average_sigma,

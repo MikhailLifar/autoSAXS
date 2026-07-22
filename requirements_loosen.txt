@@ -33,7 +33,6 @@ six
 squarify
 threadpoolctl
 tifffile
-tkinterdnd2
 tzdata
 uv
 wheel

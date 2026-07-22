@@ -10,7 +10,8 @@
 
 | Path | What it is |
 |------|------------|
-| `/home/mikl/KurchatovCoop/repos/` | **Git repo root** — Python package, tests, docs, `.cursor/` |
+| `/home/mikl/KurchatovCoop/repos/` | **Git repo root** — `pyproject.toml`, tests, docs, `.cursor/` |
+| `/home/mikl/KurchatovCoop/repos/src/` | **Installable packages** (`autosaxs`, `guisaxs_skills`, `guisaxs_liveview`) |
 | `/home/mikl/KurchatovCoop/` | **Parent workspace** — validation data, sample TIFFs, one-off scripts, experiment outputs |
 | `/home/mikl/KurchatovCoop/.cursor` | Symlink → `repos/.cursor` |
 
@@ -20,16 +21,15 @@ Real-data tests expect validation fixtures under **`/home/mikl/KurchatovCoop/val
 
 ## Packages at a glance
 
-Single distribution (`pyproject.toml`, version in `[project].version`). Four console entry points:
+Single distribution (`pyproject.toml`, version in `[project].version`). Three console entry points:
 
 | Entry point | Package | Status | Role |
 |-------------|---------|--------|------|
-| `autosaxs` | `autosaxs/` | **active** | Core SAXS processing + CLI |
-| `guisaxs-skills` | `guisaxs_skills/` | **active** | PyQt5 skill console |
-| `guisaxs-liveview` | `guisaxs_liveview/` | **active** | Thin launcher → `guisaxs_skills.liveview` |
-| `guisaxs` | `guisaxs/` | **missing** | Legacy CustomTkinter app; entry point registered but package absent from tree |
+| `autosaxs` | `src/autosaxs/` | **active** | Core SAXS processing + CLI |
+| `guisaxs-skills` | `src/guisaxs_skills/` | **active** | PyQt5 skill console |
+| `guisaxs-liveview` | `src/guisaxs_liveview/` | **active** | Thin launcher → `guisaxs_skills.liveview` |
 
-GUI extras: `pip install -e repos[gui]` (adds `customtkinter`, `tkinterdnd2`, `PyQt5`, `watchdog`).
+GUI extras: `pip install -e repos[gui]` (adds `customtkinter`, `PyQt5`, `watchdog`).
 
 ---
 
@@ -212,7 +212,7 @@ Help assets live in `autosaxs/resources/help/guisaxs_liveview/`.
 | Path expansion rules | `autosaxs/core/path_expression.py`, `skill/common.py` |
 | Caching (`.cache` YAML) | `autosaxs/skill/skill_wrap.py`, `docs/skills_paradigm.md` §2.1 |
 | Config merge precedence | `autosaxs/skill/config.py`, `resources/config_base.conf` |
-| Subtraction algorithm | `autosaxs/skill/subtract.py`, `autosaxs/tests/test_subtract.py` |
+| Subtraction algorithm | `autosaxs/skill/subtract.py`, `tests/test_skill.py` |
 | Guinier / GNOM / ATSAS fits | `skill/fit_guinier/`, `fit_distances.py`, `fit_sizes.py`, `gnom_fit_common.py` |
 | Report assembly | `autosaxs/core/report_fragments.py`, `skill/report_*.py` |
 | GUI skill metadata | `guisaxs_skills/logic/skill_catalog.py` |
@@ -267,12 +267,9 @@ No parallel APIs or duplicated literals.
 | `repos/tests/test_skill.py` | **Primary** — every skill's contract, cache, return keys |
 | `repos/tests/test_skills_real_data.py` | E2E vs `validation/` reference data |
 | `repos/tests/test_guisaxs_liveview.py` | Liveview GUI (needs xvfb + `[gui]`) |
-| `repos/autosaxs/tests/` | Focused unit tests (subtract, average, guinier, pddf, report_fragments) |
-| `repos/guisaxs_skills/tests/` | smart_defaults, session_persistence, calibration_display |
+| `repos/tests/guisaxs-liveview/` | Liveview unit tests (session, smart_defaults, …) |
 
 Run all (CI order): `repos/helpers/run_tests.sh`.
-
-**Stale:** `README.md` references `repos/tests/test_guisaxs.py` — file not present.
 
 ### Docs & specs
 
@@ -283,7 +280,6 @@ Run all (CI order): `repos/helpers/run_tests.sh`.
 | `docs/guisaxs_skills_spec.md` | Skills GUI spec |
 | `docs/guisaxs_liveview_spec.md` | Liveview spec |
 | `docs/pipeline_interactive_spec.md` | Legacy pipeline / EventBus |
-| `docs/guisaxs_spec.md` | Legacy guisaxs (package missing) |
 
 ### Cursor project files
 
@@ -309,9 +305,8 @@ Headless GUI tests: `xvfb-run -a python -m pytest tests/test_guisaxs_liveview.py
 
 ## Known gaps / stale references
 
-- `guisaxs` package and `tests/test_guisaxs.py` referenced in README but absent.
-- README says `python -m autosaxs.cli`; code uses `python -m autosaxs.cli.cli`.
+- README / CLI help may still say `python -m autosaxs.cli` in places; entry module is `python -m autosaxs.cli.cli`.
 
 ---
 
-*Last structured pass: 2026-07-06. Update this file when you touch architecture or discover a better "start here" path.*
+*Last structured pass: 2026-07-22. Update this file when you touch architecture or discover a better "start here" path.*

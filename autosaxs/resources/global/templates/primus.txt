@@ -1,9 +1,0 @@
-DISK {data_file}
-FIT
-MODEL {model}
-RANGE {q_min} {q_max}
-{initial_parameters}
-{pdist_commands}
-{fit_parameters}
-RUN
-EXIT

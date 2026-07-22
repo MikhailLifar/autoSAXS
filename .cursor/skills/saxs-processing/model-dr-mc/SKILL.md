@@ -107,7 +107,7 @@ Important constraint:
 - `dr_csv_path`: CSV of \(R\), \(dR\), \(D\), \(D_\mathrm{std}\).
 - `stats_path`: YAML with gof, modes, peaks, resolved limits.
 - `handoff_path`: Compact YAML hints for `model_mixture`.
-- `fit_png_path` / `dr_png_path` / `result_card_png_path`: Plot paths (result card may be empty on McPlot failure).
+- `fit_png_path` / `dr_png_path`: Fit and D(R) plot paths.
 - `n_rep`, `r_min_nm`, `r_max_nm`, `q_min_nm`, `q_max_nm`, `n_components_suggested`.
 
 ### Python usage

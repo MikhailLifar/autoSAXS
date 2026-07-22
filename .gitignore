@@ -7,8 +7,5 @@ __pycache__/
 build/
 dist/
 *.egg
-autosaxs/temp/
+src/autosaxs/temp/
 guisaxs_temp/
-# local GUI state
-guisaxs_skills/.last_workdir.txt
-guisaxs_skills/.last_watchdir_liveview.txt

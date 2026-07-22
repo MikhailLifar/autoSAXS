@@ -7,7 +7,7 @@ name = "autosaxs"
 version = "2.10.2"
 description = "Interactive SAXS pipeline core: calibration, integration, subtraction, ATSAS descriptors, plots, shape fitting, reports. After install, run `autosaxs --help`: epilog lists get-readme, get-skills, get-default-config (export docs and default config into your workspace)."
 requires-python = ">=3.10"
-license = "MIT"
+license = "Apache-2.0"
 authors = []
 keywords = ["saxs", "small-angle scattering", "pyFAI", "ATSAS", "calibration", "integration"]
 classifiers = [
@@ -43,27 +43,24 @@ dependencies = [
 
 [project.scripts]
 autosaxs = "autosaxs.cli:main"
-guisaxs = "guisaxs.__main__:main"
 guisaxs-skills = "guisaxs_skills.__main__:main"
 guisaxs-liveview = "guisaxs_liveview.__main__:main"
 
 [project.optional-dependencies]
-gui = ["customtkinter", "tkinterdnd2", "PyQt5", "watchdog"]
+gui = ["customtkinter", "PyQt5", "watchdog"]
 dev = ["build", "pip", "import-linter"]
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["autosaxs*", "guisaxs*", "guisaxs_skills*", "guisaxs_liveview*"]
+where = ["src"]
+include = ["autosaxs*", "guisaxs_skills*", "guisaxs_liveview*"]
 
 [tool.setuptools.package-data]
 autosaxs = [
     "resources/agent_quickstart.txt",
     "resources/config_base.conf",
-    "resources/global/*.yml",
-    "resources/global/templates/*",
     "resources/prompts/**/*.txt",
-    "resources/pipelines/*.txt",
     "resources/readme/*.md",
     "resources/ai_skills/*.md",
+    "resources/schemas/*.json",
     "resources/help/guisaxs_liveview/**/*",
 ]

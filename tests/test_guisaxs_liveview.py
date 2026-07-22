@@ -30,8 +30,9 @@ from guisaxs_skills.core.models import RunRequest
 from guisaxs_skills.liveview.session import LiveviewSessionState
 
 _REPOS = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_SRC = os.path.join(_REPOS, "src")
 _TESTS_DIR = os.path.join(_REPOS, "tests")
-for _p in (_REPOS, _TESTS_DIR):
+for _p in (_SRC, _REPOS, _TESTS_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -819,7 +820,7 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
             assert p.is_file(), f"Missing validation fixture: {p}"
 
         # Setting the calib image may auto-fill mask; config_path stays empty (bundled defaults).
-        assert _set_pathfield_text_by_label(form, label="calib_image", text=str(calib))
+        assert _set_pathfield_text_by_label(form, label="calibrant_image", text=str(calib))
         try:
             getattr(form, "_on_primary_path_expression_changed")()  # type: ignore[attr-defined]
         except Exception:
@@ -930,7 +931,7 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
         sample_token = "ihs27_95.9_sample"
         ok_pr = _wait_until(
             app,
-            lambda: any(guinier_dir.rglob("*_guinier_region.yml"))
+            lambda: any(guinier_dir.rglob("*_results.txt"))
             and any(p.is_file() and p.stat().st_size > 0 for p in fd_dir.rglob("*_fits.png"))
             and any(
                 p.is_file()

@@ -1,9 +1,10 @@
-# `autosaxs` package + `guisaxs` app + `guisaxs-skills` app
+# `autosaxs` package + `guisaxs-skills` app + `guisaxs-liveview` app
 
 This project contains:
 
 - **`autosaxs`**: a Python package for building reproducible SAXS processing pipelines (calibration → integration → subtraction → analysis → reports) usable from **Python** or from a **CLI**.
-- **`guisaxs`**: a lightweight desktop GUI app built on top of `autosaxs` for interactive, file-driven processing (drag & drop TIFFs, run calibration, integrate buffer/sample, produce plots and subtracted curves).
+- **`guisaxs-skills`**: a PyQt5 desktop GUI that acts as a strict interface to `autosaxs` skills (discover skills, generate forms from signatures, run via CLI in an isolated process, inspect artifacts and previews).
+- **`guisaxs-liveview`**: a PyQt5 live, queued processing GUI that watches a directory for new `.tif/.tiff`, runs calibration/integration/subtraction, and optionally arms monodisperse or polydisperse analysis chains for each new image.
 
 ---
 
@@ -14,15 +15,15 @@ This project contains:
 `autosaxs` is the **data processing core**: it provides the computation and the public “skills” API used by both:
 
 - **CLI users** (the `autosaxs` command), and
-- **GUI users** (the `guisaxs` app).
+- **GUI users** (the `guisaxs-skills` and `guisaxs-liveview` apps).
 
 Its main goal is to make common SAXS processing steps **scriptable, cacheable, and reproducible**, while staying convenient for interactive use.
 
 ### Main design choices
 
-- **One public API for everything (“skills”)**: user-facing operations are implemented as Python functions with stable signatures in the `autosaxs.skill` package (`repos/autosaxs/skill/`). The CLI dispatches subcommands to those functions by introspecting signatures and docstrings.
+- **One public API for everything (“skills”)**: user-facing operations are implemented as Python functions with stable signatures in the `autosaxs.skill` package (`repos/src/autosaxs/skill/`). The CLI dispatches subcommands to those functions by introspecting signatures and docstrings.
 - **Path expressions instead of “single file only”**: most skills accept a file/dir/glob expression and expand it in a consistent way (directories expand non-recursively; empty expansion is an error).
-- **Cache-by-default**: when `use_cache=True`, skills may reuse outputs via a hidden cache file under the output directory (intended for fast re-runs during interactive work).
+- **Optional caching**: by default, skills run with `use_cache=False`. When `use_cache=True`, skills may reuse outputs via a hidden cache file under the output directory (intended for fast re-runs during interactive work).
 - **External science stack integration**: `pyFAI` is used for calibration/integration; several downstream steps rely on **ATSAS** being installed (see below).
 
 ### Requirements (ATSAS)
@@ -38,7 +39,7 @@ Some parts of the pipeline rely on ATSAS executables (e.g. `dammif`). On import,
 Install the package (includes the `autosaxs` CLI entry point):
 
 ```bash
-python -m pip install "autosaxs @ git+https://github.com/MikhailLifar/autoSAXS.git@main"
+python -m pip install "autosaxs @ git+https://github.com/MikhailLifar/autoSAXS.git"
 ```
 
 Then check the CLI:
@@ -47,123 +48,172 @@ Then check the CLI:
 autosaxs --help
 ```
 
-#### GUI-enabled (`guisaxs`)
+Helper subcommands ship files from the package into a directory of your choice:
 
-Install with GUI extras (adds `customtkinter` and `tkinterdnd2`):
+- `autosaxs get-readme` — write the generated skills README (`README.md`) into `--output-dir`
+- `autosaxs get-skills` — replace the entire `saxs-processing/` directory under `--output-dir`, then write a SAXS orchestrator `SKILL.md` plus nested leaf `<name>/<name>.md` procedure docs (from skill docstrings; not nested `SKILL.md`); subskills are linked from the orchestrator catalog
+- `autosaxs get-default-config` — copy the bundled default `config_base.conf` (skill-keyed YAML) into `--output-dir` for optional overrides; skills use bundled defaults when `--conf` is omitted
+
+Example:
 
 ```bash
-python -m pip install "autosaxs[gui] @ git+https://github.com/MikhailLifar/autoSAXS.git@main"
+autosaxs get-default-config -o .
 ```
 
-This also installs the `guisaxs` console entry point (see below).
+Upgrade an existing install from git `main`:
+
+```bash
+autosaxs -U
+```
+
+#### GUI-enabled apps (`guisaxs-skills`, `guisaxs-liveview`)
+
+Install with GUI extras (adds **PyQt5**, `watchdog`, and legacy CustomTkinter deps still used by `autosaxs.pipeline.gui`):
+
+```bash
+python -m pip install "autosaxs[gui] @ git+https://github.com/MikhailLifar/autoSAXS.git"
+```
+
+This also installs the `guisaxs-skills` and `guisaxs-liveview` console entry points (see below).
 
 ---
 
-## `guisaxs` (app)
+## `guisaxs-skills` (app)
 
 ### Purpose
 
-`guisaxs` is an **interactive desktop app** for processing SAXS data by dropping files into the UI:
+`guisaxs-skills` is a single-window **PyQt5** desktop GUI that acts as a **strict interface to `autosaxs` skills**:
 
-- calibrate from a **calibrant TIFF** (optionally using a mask),
-- integrate a **buffer TIFF** to a 1D curve,
-- integrate one or more **sample TIFFs** to 1D curves,
-- automatically generate **subtracted** curves (sample − last buffer),
-- save standard plots for 2D images and 1D curves into the working directory.
-
-It is designed to be “thin”: the GUI coordinates user input, shows plots, and delegates computation to the same underlying `autosaxs` pipeline components used by the CLI.
+- discovers skills from the public `autosaxs.skill` API,
+- builds a parameter form from each skill’s signature,
+- runs skills via the `autosaxs` CLI in an **isolated process**,
+- shows produced artifact paths and previews (images + common scientific formats).
 
 ### Launch
 
 After installing with the GUI extra, start the application:
 
 ```bash
-guisaxs
+guisaxs-skills
 ```
 
-On startup you will be prompted to choose a **working directory**. The directory must be **empty**; `guisaxs` writes all outputs there (including `config.yml`).
+On startup the working directory is the process **current working directory** (`cwd`). Use **File → Open working directory…** to switch. The directory may be non-empty; the app can warn about potential overwrites and about cache behavior.
 
-If GUI dependencies are missing, `guisaxs` exits with:
-
-```text
-GUI dependencies are not installed. Install with: pip install "autosaxs[gui]"
-```
+Requires the `[gui]` extra (PyQt5 and related dependencies).
 
 ### Layout
 
-The main window is split into a left **Control Panel** and a right **Visualization** area:
+The main window is split into three columns:
 
-- **Left: Control Panel**
-  - **Drag & drop zones**:
-    - `Calibrant Image` (TIFF)
-    - `Mask File (Optional)` (`.npy`, `.txt`, or `.msk`)
-    - `Buffer Image` (TIFF)
-    - `Sample Image(s)` (one or many TIFFs)
-  - **Calibration Parameters** (editable entry + slider for each):
-    - wavelength (Å)
-    - detector distance (mm)
-    - pixel size (mm)
-    - beam center X/Y (px)
-    - detector tilt (rad)
-    - tilt plane rotation (rad)
-  - **Apply Calibration** button
+- **Left: Skill catalog**
+  - Lists available skills discovered from `autosaxs.skill` (report skills excluded).
+  - Selecting a skill opens its form in the middle column.
 
-- **Right: Visualization tabs**
-  - **2D Images**: shows the dropped TIFFs as 2D plots (and saves PNGs).
-  - **1D Curves**: shows integrated/subtracted 1D curves (and saves PNGs).
+- **Middle: Skill form + run controls + logs**
+  - Skill header with a **?** help button (full docstring).
+  - `Inputs` and `Options` groups generated from the skill signature.
+  - **Run**, **Cancel**, **Copy CLI**, and run-state label.
+  - Live stdout/stderr log view.
 
-- **Bottom: Status bar**
-  - Shows progress/success/error messages from background calibration/processing threads.
+- **Right: Preview + artifacts**
+  - Preview panel (top): images and rendered previews for `.dat`, `.tif/.tiff`, `.csv`, etc.
+  - Artifact list (bottom): `key=value` paths parsed from CLI output.
 
-### How to use (tested scenarios)
+**File → Open working directory…** switches the session to another folder.
 
-The GUI has automated “headless” tests that drive the real UI (no pixel assertions) in `repos/tests/test_guisaxs.py`. The following workflows are explicitly tested against validation reference data.
+### How to use (typical workflow)
 
-#### Scenario A (calibrant → mask → apply calibration → buffer → sample)
-
-- Drop a **calibrant TIFF** into `Calibrant Image`
-- Drop a **mask** into `Mask File (Optional)`
-- Click **Apply Calibration** and wait for calibration to finish
-- Drop **buffer TIFF** into `Buffer Image` and wait until the integrated curve appears in the working directory
-- Drop **sample TIFF** into `Sample Image(s)` and wait for:
-  - `int_<sample>.dat` (integrated sample)
-  - `sub_<sample>.dat` (subtracted curve using the most recent buffer)
-
-#### Scenario B (mask → calibrant → apply calibration → buffer → sample)
-
-Same as Scenario A, but the first two drops are swapped:
-
-- Drop **mask** first, then the **calibrant TIFF**
-
-#### Practical note: buffer then sample
-
-The tested workflow intentionally waits for the buffer integration output to exist before dropping the sample. Doing buffer and sample “at once” can start overlapping workers and may cause issues with concurrent access to a shared integrator. In practice: **drop buffer, wait for `int_<buffer>.dat`, then drop sample(s)**.
+- Select a skill in the catalog (e.g. `calibrate`, `integrate`, `subtract`, `fit_distances`, …)
+- Provide required positional inputs in `Inputs` (supports drag & drop / browse / manual path expressions)
+- Adjust `Options` (notably `output_dir` and `use_cache`; caching is opt-in — the GUI defaults to `--no-cache`)
+- Optionally enable **Copy inputs into working directory** for files outside the workdir
+- Click **Run** (or press Enter) and follow logs
+- Inspect produced paths in the artifact list and click for previews
 
 ### Outputs (working directory)
 
-`guisaxs` writes its artifacts into the chosen working directory, including:
+`guisaxs-skills` writes its artifacts into the chosen working directory, including:
 
-- `config.yml` (current parameters)
-- integrated 1D curves like `int_<name>.dat`
-- subtracted curves like `sub_<name>.dat`
-- plots saved by the 2D and 1D tabs (PNG)
-
-### Headless / CI usage (xvfb)
-
-The GUI tests require a display; on CI you can run them under Xvfb:
-
-```bash
-xvfb-run -a python -m pytest repos/tests/test_guisaxs.py
-```
+- `runs/latest/request.yml`, `stdout.log`, `stderr.log`, `result.yml` (traceability for the latest run)
+- skill outputs under the configured `output_dir` (typically recommended subfolders like `calibration/`, `averaged/`, `subtracted/`, …)
 
 ---
 
-## `guisaxs-skills` (app)
+## `guisaxs-liveview` (app)
 
-`guisaxs-skills` is a newer GUI concept: a single-window **skill console** that runs `autosaxs` skills (calibrate/integrate/subtract/analysis/…) via the `autosaxs` CLI in an **isolated process**, streams logs live, and then shows the returned artifact paths with basic previews.
+### Purpose
 
-- **Docs**: see `repos/guisaxs_skills/README.md`
-- **Launch (dev)**: `python -m guisaxs_skills`
+`guisaxs-liveview` is a **PyQt5** desktop GUI for **live, queued processing** of incoming SAXS detector images:
+
+- watches a directory for new `.tif/.tiff` files (and also supports drag & drop onto the middle **2D** panel),
+- maintains a processing **queue** and handles files sequentially,
+- after calibration (and optional buffer subtraction) continuously updates 1D plots in the middle column,
+- optionally **arms** monodisperse or polydisperse analysis chains (separate windows) for each new TIFF while those windows stay open.
+
+Implementation lives in `guisaxs_skills.liveview`; `guisaxs-liveview` is a thin launcher entry point.
+
+### Launch
+
+After installing with the GUI extra, start the application:
+
+```bash
+guisaxs-liveview
+```
+
+The app opens on the process **current working directory** (`cwd`) when it is writable. Use **File → Open watch directory…** to switch folders.
+
+Full in-app documentation: **Help → guisaxs-liveview Help…**
+
+Upgrade from the app via **Update → Update to latest version…**, or run `autosaxs -U` / reinstall `autosaxs[gui]`.
+
+Bundled help HTML (for developers) lives under `autosaxs/resources/help/guisaxs_liveview/` (`manifest.yaml`, `html/`, `style/help.css`); edit and reinstall — no separate build step.
+
+### Layout
+
+Below the menu bar, a **Watchdir** line shows the active folder (tooltip = full path). The main area is three columns (~1 : 3 : 1 width):
+
+- **Left: Calibration + buffer**
+  - **Set calibration** / **Reset** — wizard for `calibrate`, preview, and refined-parameter table.
+  - **Set buffer** / **Reset** — wizard for buffer `.dat` and subtraction q-range.
+
+- **Middle: Live view**
+  - Queue status and progress.
+  - **2D** panel — latest TIFF; drop new `.tif/.tiff` here.
+  - **1D** plots — integrated curve, or sample/buffer + subtracted pair when subtraction is enabled.
+  - Session history: **<** **>** **Process** to browse or re-enqueue prior files.
+
+- **Right: Analysis + log**
+  - **Analysis** toolbar with two icon buttons:
+    - **Monodisperse** — opens a separate wizard window (Guinier → GNOM p(r) → optional BODIES/DAMMIF/DENSS).
+    - **Polydisperse** — opens a separate window (Guinier → D(R) → optional McSAS / mixture).
+  - While a window is open, that chain is **armed** for new TIFFs; closing the window **disarms** it. Both may be open at once (independent pipelines and output trees).
+  - Live log with **Full** (skill + app) and **App** tabs.
+
+**Menu bar:**
+
+- **File** — open watch directory; switch **flat** (top-level TIFFs only, outputs under watchdir) vs **tree** (recursive TIFF discovery, outputs beside each TIFF).
+- **Update** — upgrade `autosaxs[gui]` from git `main` (or run `autosaxs -U`).
+- **Help** — bundled HTML guide and About dialog.
+
+### How to use (step list)
+
+- Start `guisaxs-liveview` (from the folder you want to watch, or pick one via **File**).
+- Feed TIFFs by drag & drop onto the middle **2D** panel, or by copying/saving files into the watch directory.
+- If needed: **Set calibration** → run the wizard → **Run**.
+- If needed: **Set buffer** → choose buffer `.dat` and q-range → **Apply**.
+- Optional: click a right-column **Analysis** icon to open and arm monodisperse and/or polydisperse processing for new TIFFs.
+
+With neither analysis window open, only integration (+ subtraction if enabled) runs.
+
+### Outputs (watch directory)
+
+All outputs are written under the selected watch directory (layout depends on flat vs tree mode), including:
+
+- per-skill run records under `runs/latest/` (`request.yml`, `result.yml`, `stdout.log`, `stderr.log`)
+- `calibration/`, `averaged/` or `averaged_proxy/`, `subtracted/`
+- monodisperse: `guinier_mono/<stem>/`, `fit_distances/<stem>/`, `dammif/<stem>/`, `model_bodies/<stem>/`, `denss/<stem>/`, …
+- polydisperse: `guinier_poly/<stem>/`, `fit_sizes/<stem>/`, `model_dr_mc/<stem>/`, `mixture/<stem>/`, …
+- shared wizard configs (e.g. `fit_distances.conf`, `model_bodies.conf`) next to per-stem folders
 
 ---
 
@@ -171,17 +221,18 @@ xvfb-run -a python -m pytest repos/tests/test_guisaxs.py
 
 This section documents the public *skills* exposed by the `autosaxs` package.
 
-Skills are Python functions in the `autosaxs.skill` package (`repos/autosaxs/skill/`) with a fixed signature designed to be callable both from Python and from the `autosaxs` CLI.
+Skills are Python functions in the `autosaxs.skill` package (`repos/src/autosaxs/skill/`) with a fixed signature designed to be callable both from Python and from the `autosaxs` CLI.
 
 ### CLI vs Python (how commands are wired)
 
 The `autosaxs` command dispatches subcommands to the corresponding skill functions by introspecting their signatures. In practice:
 
 - Run a skill from the CLI as `autosaxs <command> ...`.
-- Every skill supports `--output-dir <path>` (maps to the skill's `output_dir` argument, default: `.`).
-- Every skill supports caching by default; use `--no-cache` to disable it (maps to `use_cache=False` in Python).
+- Every skill supports `-o` / `--output-dir <path>` (maps to the skill's `output_dir` argument, default: `.`).
+- Every skill supports caching; use `--cache` to enable it (maps to `use_cache=True` in Python). Use `--no-cache` to explicitly disable it.
 - Positional arguments in the CLI match the skill signature order.
 - Keyword options use `--kebab-case` names (underscores become `-`).
+- Brief CLI `--help` text for skill-specific options comes from the skill docstring section **`### Short parameter list`** (one bullet per parameter: ``- param_name: help text``).
 
 ### Path expansion (important API behavior)
 
@@ -195,7 +246,7 @@ Most skills take a **path expression** rather than a strict “single file”:
 
 Note: `autosaxs integrate` accepts either a single path expression **or** multiple image paths on the CLI (the CLI passes a list; the skill normalizes it).
 
-### Caching (enabled by default)
+### Caching (opt-in)
 
 - When `use_cache=True`, a skill may write/read a hidden `.cache` YAML file inside its output directory.
 - Re-running with the same inputs and relevant options can reuse previously generated output paths if the files still exist and are recent enough (output-integrity check).
@@ -209,7 +260,7 @@ SAXS / small-angle x-ray scattering: calibrate detector geometry using a calibra
 
 ### Arguments
 
-- `calib_image` (str): Path to the calibration image (e.g. TIFF) used for ring analysis.
+- `calibrant_image` (str): Path to the calibration image (e.g. TIFF) used for ring analysis.
 - `output_dir` (str, default `.`): Directory where results are written.
 - `config_path` (str | None, default `None`): Optional path to a YAML config file with a `calibrate` section. When omitted, bundled defaults from the installed `autosaxs` package are used.
 - `mask` (str): Path to a mask used during ring analysis. Supports .txt (NuPy format), .msk (Fit2d)
@@ -222,6 +273,13 @@ SAXS / small-angle x-ray scattering: calibrate detector geometry using a calibra
 Important constraints:
 
 - `mask` is always required by the skill and the CLI (the GUI should treat it as a required field).
+
+### Short parameter list
+
+- mask_mode: Default: load mask from file as is
+- calibrant: name of the calibrant, default: AgBh
+- wavelength: X-ray wavelength in Ångström
+- dist_guess: Optional: initial sample-detector distance in metres (algorithm works good even if this is not set)
 
 ### Returns
 
@@ -240,7 +298,7 @@ Important constraints:
 from autosaxs.skill import calibrate
 
 out = calibrate(
-    calib_image="AgBh.tif",
+    calibrant_image="AgBh.tif",
     output_dir="calibration",
     mask="mask.msk",
     mask_mode="f",
@@ -276,6 +334,11 @@ SAXS / small-angle x-ray scattering: integrate 2D SAXS images to 1D curves (q, I
 - `npt` (int, default `1000`): Number of points in the output q grid.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 - `validation_png` (bool, default `False`): If `True`, write a PNG next to each integrated curve showing the source image (log-intensity) with integrator-masked pixels highlighted in semi-transparent red.
+
+### Short parameter list
+
+- npt: Number of integrated points, default: 1000
+- validation_png: Show validation image
 
 ### Returns
 
@@ -327,6 +390,12 @@ rejection, and writes an inverse-variance weighted merge.
   reference exceeds this value.
 - `chi2_min` (float, default ``0.9``): Warn when reduced chi-squared is below this value.
 - `use_cache` (bool, default ``False``): Enable/disable caching for this skill run.
+
+### Short parameter list
+
+- cormap_p_min: internal parameter, recommended not to change, default: 0.05
+- chi2_max: internal parameter, recommended not to change, default: 1.25
+- chi2_min: internal parameter, recommended not to change, default: 0.9
 
 ### Returns
 
@@ -431,17 +500,27 @@ or legacy `match_tail`, optionally restricted to a q window (`q_min` / `q_max`).
 
 The q window (`q_min`, `q_max`) is always required at the Python API and CLI. A user config file may supply values that override the arguments passed to `subtract()`.
 
+### Short parameter list
+
+- method: internal parameter, changing the default is not recommended, default: point-match
+- sample_form: default: Porod+linear
+- buffer_form: default: linear
+- point_match_factor: internal parameter, changing the default is not recommended, default: 0.995
+- q_min: Required, start of matching region
+- q_max: Required, end of matching region, matching point
+- scaling_factor: Manual scaling factor. When this set, it replaces auto-scale
+
 ### Returns
 
 `dict[str, str]` with:
 
 - `subtracted_1d`: Path to the subtracted curve `.dat`.
+- `sub_plot_path`: Path to the subtracted curve PNG (log I vs q).
 - `diff_plot_path`: Path to a diff plot PNG.
 - `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
-- `sub_plot_path`: Path to a subtracted curve plot PNG.
-
 Subtraction quality (`correct` or `over-subtracted`) is written into the subtracted `.dat` metadata
 (``subtract.correctness``) and into per-sample report fragments (individual Markdown and summary YAML).
+The individual report embeds the subtracted curve from the `.dat` (not from `sub_plot_path`).
 
 ### Python usage
 
@@ -566,9 +645,8 @@ autosaxs plot-2d raw/sample_01.tif --output-dir plots_2d
 
 SAXS / small-angle x-ray scattering: fit the Guinier region on a 1D profile (adaptive Rg, I(0), Rg span). Writes:
 
-- a text results file
+- a text results file (chosen Guinier parameters and method comparison)
 - an ATSAS-format `.dat` file for downstream tools
-- a YAML file describing the chosen Guinier region parameters
 - a Guinier plot (ln I vs q²) with error bars and the chosen fit line
 
 ### Arguments
@@ -585,7 +663,6 @@ SAXS / small-angle x-ray scattering: fit the Guinier region on a 1D profile (ada
 
 - `results_path`: Path to the results text file.
 - `atsas_dat_path`: Path to the ATSAS-format `.dat` file.
-- `guinier_region_path`: Path to the chosen Guinier region YAML.
 - `guinier_plot_path`: Path to the Guinier fit PNG.
 
 ### Python usage
@@ -599,7 +676,7 @@ out = fit_guinier(
     use_cache=False,
 )
 
-print(out["guinier_region_path"])
+print(out["results_path"])
 ```
 
 ### CLI usage
@@ -755,7 +832,13 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a siz
 - `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
 - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
-- `stability_probe` (bool, default `True`): When True, run a close-fit rmax ensemble (5 GNOM calls) plus one force-zero-off boundary probe (1 GNOM call) for stability hints and D(R) plot overlays.
+
+### Short parameter list
+
+- shape: spheres, currently only spheres supported
+- rad56_nm: depricated, has no effect
+- alpha: regularization parameter, auto-optimized if not set
+- nr: number of fitted points, stick to the default
 
 ### Returns
 
@@ -776,7 +859,7 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a siz
 - `modality_confidence`: `high` \| `low` when parametric and peak-based modality hints disagree.
 - `parametric_family` / `parametric_aic` / `n_components_suggested` / `mixture_dist_hint` / `parametric_peaks_nm`: Cheap post-hoc parametric hints on D(R).
 - `stability_class`: `stable` \| `marginal` \| `unstable` from close-fit ensemble and force-zero-off probe.
-- `ensemble_dir` / `ensemble_summary_path` / `close_fit_out_paths` / `force_zero_off_out_path`: Rmax stability probe artifacts (when `stability_probe=True`).
+- `ensemble_dir` / `ensemble_summary_path` / `close_fit_out_paths` / `force_zero_off_out_path`: Rmax stability probe artifacts (close-fit ensemble + force-zero-off).
 - `rmax_validation`: Pathology block from force-zero-off D(R) tail analysis.
 - `rg_guinier_nm`: Guinier Rg (nm) when `fit_guinier` ran in-process.
 - `total_estimate`: GNOM Total Estimate of the selected fit.
@@ -803,6 +886,89 @@ print(out["best_gnom_out_path"])
 
 ```bash
 autosaxs fit-sizes subtracted/sub_sample_01.dat --output-dir sizes --shape spheres
+```
+
+---
+
+## `model_dr_mc`
+
+SAXS / small-angle x-ray scattering: recover a form-free volume-weighted size distribution
+\(D(R)\) with per-bin uncertainties using McSAS3 Monte Carlo fitting (polydisperse spheres).
+
+Fits an ensemble of independent sphere-contribution models to a subtracted 1D curve, then
+histograms the recovered radii. Bin heights are volume-weighted; error bars are the sample
+standard deviation across independent repetitions. For publication-quality uncertainty on
+\(D(R)\), raise ``n_rep`` to 50–100 (default 5 is for interactive / pipeline use).
+
+Prerequisites:
+
+- Python package ``mcsas3`` (installed with autosaxs).
+- Sphere form factor only in this skill (McSAS3 internal ``mcsas_sphere``).
+
+### Arguments
+
+- `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where McSAS outputs are written (one subdirectory per profile).
+- `config_path` (str | None, default `None`): Optional YAML/config with a `model_dr_mc` section. When omitted, bundled defaults apply.
+- `q_min_nm` / `q_max_nm` (float | None): Optional q bounds (nm^-1) for the fit window.
+- `n_rep` (int, default `5`): Independent MC repetitions. Mean \(D(R)\) and per-bin \(\sigma\) come from this ensemble; use 50–100 for publication.
+- `n_contrib` (int, default `300`): Number of sphere contributions in each MC model.
+- `conv_crit` (float, default `1`): Reduced-\(\chi^2\) convergence target. Raise if experimental \(\sigma_I\) are too optimistic and runs never finish.
+- `n_cores` (int, default `0`): Parallel workers for repetitions (`0` = autodetect).
+- `nbins` (int, default `100`): Rebin count for input \(I(q)\) before fitting.
+- `n_bin` (int, default `50`): Number of bins in the post-fit log-\(R\) volume-weighted histogram.
+- `max_iter` (int, default `20000`): Max MC iterations per repetition.
+- `sld` / `sld_solvent` (float): Scattering-length densities for absolute scaling (`1e-6 Å^-2`). Relative \(I(q)\) still yields a useful relative \(D(R)\).
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+Important constraint:
+
+- If you set `q_max_nm`, you must also set `q_min_nm` (otherwise the skill raises `ValueError`).
+
+### Short parameter list
+
+- q_min_nm: start of fit region
+- q_max_nm: end of fit region
+- n_rep: number of independent MC repetitions; default: 5 (use 50–100 for publication)
+- n_contrib: number of sphere contributions per model; default: 300
+- conv_crit: reduced-chi2 convergence target; default: 1
+- n_cores: parallel workers for repetitions; default: 0 (autodetect)
+- nbins: rebin count for input I(q); default: 100
+- n_bin: number of D(R) histogram bins; default: 50
+- max_iter: max MC iterations per repetition; default: 20000
+- sld: particle scattering-length density (1e-6 Å^-2); default: 33.4
+- sld_solvent: solvent scattering-length density (1e-6 Å^-2); default: 0.0
+
+### Returns
+
+`dict` with:
+
+- `output_subdir`: Per-sample output directory.
+- `state_path`: McSAS3 HDF5/NeXus state (`.nxs`).
+- `dr_csv_path`: CSV of \(R\), \(dR\), \(D\), \(D_\mathrm{std}\).
+- `stats_path`: YAML with gof, modes, peaks, resolved limits.
+- `handoff_path`: Compact YAML hints for `model_mixture`.
+- `fit_png_path` / `dr_png_path`: Fit and D(R) plot paths.
+- `n_rep`, `r_min_nm`, `r_max_nm`, `q_min_nm`, `q_max_nm`, `n_components_suggested`.
+
+### Python usage
+
+```python
+from autosaxs.skill import model_dr_mc
+
+out = model_dr_mc(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="mcsas",
+    n_rep=5,
+    use_cache=False,
+)
+print(out["dr_png_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs model-dr-mc subtracted/sub_sample_01.dat --output-dir mcsas --n-rep 10
 ```
 
 ---
@@ -834,6 +1000,16 @@ Prerequisites:
 Important constraint:
 
 - If you set `q_max_nm`, you must also set `q_min_nm` (otherwise the skill raises `ValueError`).
+
+### Short parameter list
+
+- q_min_nm: start of fit region
+- q_max_nm: end of fit region
+- maxit: number of optimization iterations, default: 100
+- r_min: size lower bound
+- r_max: size upper bound
+- poly_min: spread lower bound
+- poly_max: spread upper bound
 
 ### Returns
 
@@ -935,6 +1111,12 @@ With `n_runs=1`, runs a single DAMMIF reconstruction. With `n_runs>1`, runs inde
 - `visualize_all` (bool, default `False`): When True, write PNGs/GIFs under `{output}/visuals/` (synced per-run rotation GIFs, overlap, occupancy threshold; nm scale bar; no run/title captions).
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
+### Short parameter list
+
+- n_runs: 1 for fast pilot view; 5, 10 or 20 - for reliable averaged shape
+- dammif_mode: FAST or SLOW, default FAST; recommended not to change the default
+- visualize_all: Heavy visualization with nice GIF's. Not fast, rather production level artifacts
+
 ### Returns
 
 `dict[str, str | list[str]]` with:
@@ -987,8 +1169,15 @@ Protocol `mode`: `pilot` runs a single DENSS reconstruction; `average` runs dens
 - `denss_mode` (str, default `slow`): DENSS algorithm mode: `slow`, `fast`, or `membrane`.
 - `n_maps` (int, default `20`): Number of reconstructions for `average`/`refined` (ignored in `pilot`; must be ≥2 when used).
 - `n_jobs` (int, default `1`): Parallel cores for denss-all.
-- `visualize_all` (bool, default `False`): When True, write slice GIF/PNG under `{output}/visuals/` (synced YZ/XZ/XY cuts through the particle AABB; nm scale bar below panels; electron-ish colormap).
+- `visualize_all` (bool, default `True`): When True, write slice GIF/PNG and rotating density/σ GIFs under `{output}/visuals/`.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Short parameter list
+
+- mode: Run mode: pilot - quick map view; average - average map across mutliple runs; refined - refined from averaged; default - pilot
+- denss_mode: Internal parameter, recommended not to change, default: slow
+- n_maps: Number of independent run for average; default 20
+- visualize_all: Run visualizations, default: true
 
 ### Returns
 
@@ -1001,7 +1190,7 @@ Protocol `mode`: `pilot` runs a single DENSS reconstruction; `average` runs dens
 - `fsc_path`: FSC curve path when averaging ran; empty string otherwise.
 - `map_fit_path`: Calculated vs experimental fit file when present; else empty.
 - `denss_log_path`: Main log for the completed mode.
-- `visuals_dir`, `slices_gif`, `midplanes_png` when `visualize_all=True` (empty strings otherwise).
+- `visuals_dir`, `slices_gif`, `midplanes_png`, `density_rotate_gif`, `sigma_rotate_gif` when `visualize_all=True` (empty strings otherwise; `sigma_rotate_gif` empty in `pilot`).
 
 ### Python usage
 
@@ -1013,7 +1202,6 @@ out = model_density(
     output_dir="denss",
     mode="pilot",
     denss_mode="slow",
-    visualize_all=False,
     use_cache=False,
 )
 
@@ -1024,7 +1212,6 @@ print(out["density_map_path"])
 
 ```bash
 autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss --mode pilot --denss-mode slow
-autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss --visualize-all
 ```
 
 ---

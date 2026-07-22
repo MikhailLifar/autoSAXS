@@ -83,11 +83,10 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a siz
 - `first` (int | None): GNOM `--first` (1-based). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
 - `last` (int | None): GNOM `--last`. If omitted, not passed to GNOM.
 - `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
-- `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
-- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
-- `stability_probe` (bool, default `True`): When True, run a close-fit rmax ensemble (5 GNOM calls) plus one force-zero-off boundary probe (1 GNOM call) for stability hints and D(R) plot overlays.
+    - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
+    - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
-### Returns
+    ### Returns
 
 `dict[str, str | list[str]]` with:
 
@@ -106,7 +105,7 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a siz
 - `modality_confidence`: `high` \| `low` when parametric and peak-based modality hints disagree.
 - `parametric_family` / `parametric_aic` / `n_components_suggested` / `mixture_dist_hint` / `parametric_peaks_nm`: Cheap post-hoc parametric hints on D(R).
 - `stability_class`: `stable` \| `marginal` \| `unstable` from close-fit ensemble and force-zero-off probe.
-- `ensemble_dir` / `ensemble_summary_path` / `close_fit_out_paths` / `force_zero_off_out_path`: Rmax stability probe artifacts (when `stability_probe=True`).
+- `ensemble_dir` / `ensemble_summary_path` / `close_fit_out_paths` / `force_zero_off_out_path`: Rmax stability probe artifacts (close-fit ensemble + force-zero-off).
 - `rmax_validation`: Pathology block from force-zero-off D(R) tail analysis.
 - `rg_guinier_nm`: Guinier Rg (nm) when `fit_guinier` ran in-process.
 - `total_estimate`: GNOM Total Estimate of the selected fit.

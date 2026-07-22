@@ -30,7 +30,7 @@ step "Run unit/skill tests"
 step "Run real-data tests"
 "${PY}" -m pytest "${REPO_DIR}/tests/test_skills_real_data.py" -q --tb=short
 
-step "Install autosaxs with GUI extra (needed for guisaxs tests)"
+step "Install autosaxs with GUI extra (needed for guisaxs-liveview tests)"
 "${PIP}" install -e "${REPO_DIR}[gui]"
 
 step "Run GUI tests headless (xvfb-run required)"
