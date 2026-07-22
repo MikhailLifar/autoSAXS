@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Optional, Union, Tuple, Dict
+from typing import Optional, Union, Tuple, Dict, List, Sequence
 
 import numpy as np
 import pandas as pd
@@ -598,6 +598,92 @@ class PLTViewer(Viewer):
 
         if plotFilePath is not None:
             savefig(fig, plotFilePath)
+
+
+def write_iq_fit_comparison_png(
+    out_path: str,
+    q: np.ndarray,
+    I_exp: np.ndarray,
+    fits: Sequence[Tuple[np.ndarray, str]],
+    *,
+    sigma: Optional[np.ndarray] = None,
+    title: str = "",
+    primary_index: int = 0,
+    primary_fit_std: Optional[np.ndarray] = None,
+) -> str:
+    """
+    I(q) fit-vs-experiment PNG in the McSAS-style layout: log I panel + residual panel.
+
+    ``fits`` is a sequence of ``(I_fit, label)`` arrays on the same ``q`` grid as ``I_exp``.
+    Residuals are taken against ``fits[primary_index]`` (clamped into range).
+    Optional ``primary_fit_std`` draws a ±σ band around the primary fit.
+    """
+    q = np.asarray(q, dtype=float)
+    ye = np.asarray(I_exp, dtype=float)
+    if not fits:
+        raise ValueError("write_iq_fit_comparison_png: at least one fit curve is required")
+    fig, axes = plt.subplots(
+        2,
+        1,
+        figsize=(7, 5.5),
+        sharex=True,
+        gridspec_kw={"height_ratios": [2.2, 1.0]},
+    )
+    ax, axr = axes
+    ax.plot(q, ye, "k-", lw=1.2, alpha=0.85, label="experiment")
+    colors = [f"C{i}" for i in range(10)]
+    primary_index = int(np.clip(primary_index, 0, len(fits) - 1))
+    y_primary = None
+    for i, (I_fit, label) in enumerate(fits):
+        yf = np.asarray(I_fit, dtype=float)
+        color = colors[i % len(colors)]
+        lw = 1.8 if i == primary_index else 1.2
+        alpha = 0.9 if i == primary_index else 0.75
+        ax.plot(q, yf, color=color, lw=lw, alpha=alpha, label=str(label))
+        if i == primary_index:
+            y_primary = yf
+            if primary_fit_std is not None:
+                ys = np.asarray(primary_fit_std, dtype=float)
+                m = np.isfinite(q) & np.isfinite(yf) & np.isfinite(ys)
+                ax.fill_between(
+                    q[m],
+                    (yf - ys)[m],
+                    (yf + ys)[m],
+                    color=color,
+                    alpha=0.25,
+                    linewidth=0,
+                    label=r"fit $\pm\sigma$",
+                )
+    assert y_primary is not None
+    ax.set_yscale("log")
+    ax.set_ylabel(r"$I(q)$ (a.u.)")
+    if title:
+        ax.set_title(title)
+    ax.grid(True, which="both", alpha=0.25)
+    ax.legend(fontsize=8, loc="best")
+
+    if sigma is not None:
+        sig = np.asarray(sigma, dtype=float)
+        if sig.shape == ye.shape and np.any(np.isfinite(sig) & (sig > 0)):
+            denom = np.where(np.isfinite(sig), np.abs(sig), 0.0) + 0.1
+            resid_ylabel = r"$(I-I_\mathrm{fit})/(\sigma+0.1)$"
+        else:
+            denom = np.abs(ye) + 0.1
+            resid_ylabel = r"$(I-I_\mathrm{fit})/(|I|+0.1)$"
+    else:
+        denom = np.abs(ye) + 0.1
+        resid_ylabel = r"$(I-I_\mathrm{fit})/(|I|+0.1)$"
+    with np.errstate(divide="ignore", invalid="ignore"):
+        resid = (ye - y_primary) / denom
+    axr.axhline(0.0, color="0.5", lw=0.8)
+    axr.plot(q, resid, "C1-", lw=1.0)
+    axr.set_xlabel(r"$q$ (nm$^{-1}$)")
+    axr.set_ylabel(resid_ylabel)
+    axr.grid(True, alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return str(out_path)
 
 
 def get_bright_fire_cmap():

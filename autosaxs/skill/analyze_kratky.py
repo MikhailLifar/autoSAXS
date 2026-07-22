@@ -430,8 +430,6 @@ def _analyze_kratky_paths(
     md_lines.append(".\n")
     if os.path.isfile(kratky_dimensionless_plot_path):
         md_lines.append(f"![Dimensionless Kratky]({os.path.basename(kratky_dimensionless_plot_path)})\n")
-    if os.path.isfile(kratky_plot_path):
-        md_lines.append(f"![Classical Kratky]({os.path.basename(kratky_plot_path)})\n")
 
     summary_refs = [
         {"role": "kratky_results", "path": os.path.basename(results_path), "format": "text"},

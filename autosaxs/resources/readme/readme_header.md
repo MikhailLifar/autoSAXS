@@ -183,7 +183,7 @@ Below the menu bar, a **Watchdir** line shows the active folder (tooltip = full 
 - **Right: Analysis + log**
   - **Analysis** toolbar with two icon buttons:
     - **Monodisperse** — opens a separate wizard window (Guinier → GNOM p(r) → optional BODIES/DAMMIF/DENSS).
-    - **Polydisperse** — opens a separate window (Guinier → D(R) → optional mixture).
+    - **Polydisperse** — opens a separate window (Guinier → D(R) → optional McSAS / mixture).
   - While a window is open, that chain is **armed** for new TIFFs; closing the window **disarms** it. Both may be open at once (independent pipelines and output trees).
   - Live log with **Full** (skill + app) and **App** tabs.
 
@@ -210,7 +210,7 @@ All outputs are written under the selected watch directory (layout depends on fl
 - per-skill run records under `runs/latest/` (`request.yml`, `result.yml`, `stdout.log`, `stderr.log`)
 - `calibration/`, `averaged/` or `averaged_proxy/`, `subtracted/`
 - monodisperse: `guinier_mono/<stem>/`, `fit_distances/<stem>/`, `dammif/<stem>/`, `model_bodies/<stem>/`, `denss/<stem>/`, …
-- polydisperse: `guinier_poly/<stem>/`, `fit_sizes/<stem>/`, `mixture/<stem>/`, …
+- polydisperse: `guinier_poly/<stem>/`, `fit_sizes/<stem>/`, `model_dr_mc/<stem>/`, `mixture/<stem>/`, …
 - shared wizard configs (e.g. `fit_distances.conf`, `model_bodies.conf`) next to per-stem folders
 
 ---
@@ -226,10 +226,11 @@ Skills are Python functions in the `autosaxs.skill` package (`repos/autosaxs/ski
 The `autosaxs` command dispatches subcommands to the corresponding skill functions by introspecting their signatures. In practice:
 
 - Run a skill from the CLI as `autosaxs <command> ...`.
-- Every skill supports `--output-dir <path>` (maps to the skill's `output_dir` argument, default: `.`).
+- Every skill supports `-o` / `--output-dir <path>` (maps to the skill's `output_dir` argument, default: `.`).
 - Every skill supports caching; use `--cache` to enable it (maps to `use_cache=True` in Python). Use `--no-cache` to explicitly disable it.
 - Positional arguments in the CLI match the skill signature order.
 - Keyword options use `--kebab-case` names (underscores become `-`).
+- Brief CLI `--help` text for skill-specific options comes from the skill docstring section **`### Short parameter list`** (one bullet per parameter: ``- param_name: help text``).
 
 ### Path expansion (important API behavior)
 

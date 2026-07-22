@@ -23,6 +23,32 @@ from .quality_io import (
 from .vis import write_fit_vs_exp_png, write_pr_png
 
 
+def _ensemble_block_for_log(ensemble_info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Serialize ensemble probe results for the run log YAML (no heavy distribution tables)."""
+    info = ensemble_info or {}
+    fz_parsed = info.get("force_zero_off_parsed")
+    fz_summary: Optional[Dict[str, Any]] = None
+    if isinstance(fz_parsed, dict):
+        fz_summary = {
+            "total_estimate": fz_parsed.get("total_estimate"),
+            "real_space_rg": fz_parsed.get("real_space_rg"),
+            "real_space_i0": fz_parsed.get("real_space_i0"),
+            "real_space_rmax": fz_parsed.get("real_space_rmax"),
+            "current_alpha": fz_parsed.get("current_alpha"),
+            "suspicious": bool(fz_parsed.get("suspicious")),
+        }
+    return {
+        "dir": info.get("ensemble_dir") or "",
+        "summary_path": info.get("ensemble_summary_path") or "",
+        "close_fit_out_paths": list(info.get("close_fit_out_paths") or []),
+        "force_zero_off_out_path": info.get("force_zero_off_out_path") or "",
+        "dmax_ref_nm": info.get("dmax_ref_nm"),
+        "rows": list(info.get("ensemble_rows") or []),
+        "force_zero_off": fz_summary,
+        "dmax_validation": info.get("dmax_validation"),
+    }
+
+
 _FITS_CSV_COLUMNS = [
     "rg_nm",
     "first",
@@ -102,7 +128,7 @@ def _finalize_fit_distances_failure(
     fits_csv_path = os.path.join(output_dir, "fit_distances_fits.csv")
     _write_fits_csv(fits_csv_path, candidates)
 
-    best_summary_path = os.path.join(output_dir, f"{base}_fit_distances_best.yml")
+    log_path = os.path.join(output_dir, f"{base}_fit_distances_log.yml")
     summary = {
         "profile": profile,
         "atsas_dat_path": atsas_dat_path,
@@ -113,10 +139,11 @@ def _finalize_fit_distances_failure(
         "fit_guinier": guinier_summary,
         "candidates": candidates,
         "failures": failures,
+        "ensemble": _ensemble_block_for_log(None),
         "fits_csv_path": fits_csv_path,
         "failure_txt_path": failure_txt_path,
     }
-    with open(best_summary_path, "w") as f:
+    with open(log_path, "w") as f:
         yaml.dump(summary, f, default_flow_style=False)
 
     from autosaxs.core.report_fragments import write_skill_report_fragments
@@ -133,7 +160,7 @@ def _finalize_fit_distances_failure(
         md_body,
         summary_references=[
             {"role": "fit_distances_failure", "path": os.path.basename(failure_txt_path), "format": "text"},
-            {"role": "fit_distances_summary", "path": os.path.basename(best_summary_path), "format": "text"},
+            {"role": "fit_distances_summary", "path": os.path.basename(log_path), "format": "text"},
         ],
         summary_extra={"atsas_fit_ok": False, "failure_reason": failure_reason},
     )
@@ -169,7 +196,7 @@ def _finalize_fit_distances_failure(
         "failure_message": message,
         "gnom_out_paths": [],
         "best_gnom_out_path": "",
-        "best_summary_path": best_summary_path,
+        "fit_distances_log_path": log_path,
         "fit_params_path": "",
         "best_symlink_out_path": "",
         "fits_csv_path": fits_csv_path,
@@ -251,7 +278,12 @@ def write_success_artifacts(
     last_param_src = "user" if user_last is not None else "omitted"
     smooth_param_src = "user" if user_smooth is not None else "default"
 
-    best_summary_path = os.path.join(output_dir, f"{base}_fit_distances_best.yml")
+    # Attach validation summary onto ensemble_info for a complete log dump.
+    ensemble_for_log = dict(ensemble_info)
+    if ensemble_for_log.get("dmax_validation") is None and isinstance(pr_quality, dict):
+        ensemble_for_log["dmax_validation"] = pr_quality.get("dmax_validation")
+
+    log_path = os.path.join(output_dir, f"{base}_fit_distances_log.yml")
     summary = {
         "profile": profile,
         "atsas_dat_path": atsas_dat_path,
@@ -286,13 +318,10 @@ def write_success_artifacts(
         "fit_vs_exp_png_error": fit_vs_exp_png_error,
         "best_pr_png_path": best_pr_png_path,
         "best_pr_png_error": best_pr_png_error,
-        "ensemble_dir": ensemble_info.get("ensemble_dir") or "",
-        "ensemble_summary_path": ensemble_info.get("ensemble_summary_path") or "",
-        "close_fit_out_paths": list(ensemble_info.get("close_fit_out_paths") or []),
-        "force_zero_off_out_path": ensemble_info.get("force_zero_off_out_path") or "",
+        "ensemble": _ensemble_block_for_log(ensemble_for_log),
         "quality": pr_quality,
     }
-    with open(best_summary_path, "w") as f:
+    with open(log_path, "w") as f:
         yaml.dump(summary, f, default_flow_style=False)
 
     md_parts = ["### DATGNOM / p(r) (fit_distances)\n"]
@@ -302,7 +331,7 @@ def write_success_artifacts(
         md_parts.append(f"![p(r)]({os.path.basename(best_pr_png_path)})\n")
     md_parts.append(_pr_quality_markdown(pr_quality))
     summary_refs: List[Dict[str, Any]] = [
-        {"role": "fit_distances_summary", "path": os.path.basename(best_summary_path), "format": "text"},
+        {"role": "fit_distances_summary", "path": os.path.basename(log_path), "format": "text"},
         {
             "role": "fit_distances_scores",
             "path": os.path.basename(fits_csv_path),
@@ -337,7 +366,7 @@ def write_success_artifacts(
         "atsas_fit_ok": True,
         "gnom_out_paths": gnom_out_paths,
         "best_gnom_out_path": best_gnom_out_path,
-        "best_summary_path": best_summary_path,
+        "fit_distances_log_path": log_path,
         "fit_params_path": fit_params_path,
         "best_symlink_out_path": best_link_path,
         "fits_csv_path": fits_csv_path,

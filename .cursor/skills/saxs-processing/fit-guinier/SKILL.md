@@ -67,9 +67,8 @@ See the docstring section **Returns** below.
 
 SAXS / small-angle x-ray scattering: fit the Guinier region on a 1D profile (adaptive Rg, I(0), Rg span). Writes:
 
-- a text results file
+- a text results file (chosen Guinier parameters and method comparison)
 - an ATSAS-format `.dat` file for downstream tools
-- a YAML file describing the chosen Guinier region parameters
 - a Guinier plot (ln I vs q²) with error bars and the chosen fit line
 
 ### Arguments
@@ -86,7 +85,6 @@ SAXS / small-angle x-ray scattering: fit the Guinier region on a 1D profile (ada
 
 - `results_path`: Path to the results text file.
 - `atsas_dat_path`: Path to the ATSAS-format `.dat` file.
-- `guinier_region_path`: Path to the chosen Guinier region YAML.
 - `guinier_plot_path`: Path to the Guinier fit PNG.
 
 ### Python usage
@@ -100,7 +98,7 @@ out = fit_guinier(
     use_cache=False,
 )
 
-print(out["guinier_region_path"])
+print(out["results_path"])
 ```
 
 ### CLI usage

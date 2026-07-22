@@ -1509,8 +1509,23 @@ def test_model_density_visuals_writes_assets(tmp_path: Path):
     assert Path(out["visuals_dir"]).is_dir()
     assert Path(out["slices_gif"]).is_file()
     assert Path(out["midplanes_png"]).is_file()
+    assert Path(out["density_rotate_gif"]).is_file()
+    assert out["sigma_rotate_gif"] == ""
     assert (tmp_path / "visuals" / "density_slices.gif").is_file()
     assert (tmp_path / "visuals" / "density_midplanes.png").is_file()
+    assert (tmp_path / "visuals" / "density_rotate.gif").is_file()
+
+    # With a σ map, also write sigma_rotate.gif
+    sigma = (0.05 + 0.2 * (1.0 - rho)).astype(np.float64)
+    sigma_mrc = tmp_path / "toy_sigma.mrc"
+    denss.write_mrc(sigma, side, filename=str(sigma_mrc))
+    out2 = write_visuals(
+        str(tmp_path / "with_sigma"),
+        density_map_path=str(mrc),
+        sigma_map_path=str(sigma_mrc),
+    )
+    assert Path(out2["density_rotate_gif"]).is_file()
+    assert Path(out2["sigma_rotate_gif"]).is_file()
 
 
 def test_fit_bodies_deprecated_alias(monkeypatch):
@@ -1643,7 +1658,7 @@ def test_fit_distances_contract(monkeypatch):
         result = fit_distances(
             profile_path, output_dir=out_dir, rg_nm=2.5, first=1, use_cache=False
         )
-        for key in ("output_subdir", "gnom_out_paths", "best_gnom_out_path", "best_summary_path"):
+        for key in ("output_subdir", "gnom_out_paths", "best_gnom_out_path", "fit_distances_log_path"):
             assert key in result
         assert os.path.isdir(str(result["output_subdir"]))
         gnom_paths = result["gnom_out_paths"]
@@ -1652,7 +1667,7 @@ def test_fit_distances_contract(monkeypatch):
         assert isinstance(gnom_paths, list) and len(gnom_paths) > 0
         assert all(os.path.isfile(p) for p in gnom_paths)
         assert os.path.isfile(str(result["best_gnom_out_path"]))
-        assert os.path.isfile(str(result["best_summary_path"]))
+        assert os.path.isfile(str(result["fit_distances_log_path"]))
 
 
 def test_fit_distances_score_te_minus_nf():
@@ -1754,7 +1769,7 @@ def test_fit_distances_all_runs_failed(monkeypatch):
         if isinstance(msg, list) and len(msg) == 1:
             msg = msg[0]
         assert isinstance(msg, str) and msg
-        assert os.path.isfile(str(_unwrap_scalar(result["best_summary_path"])))
+        assert os.path.isfile(str(_unwrap_scalar(result["fit_distances_log_path"])))
         assert os.path.isfile(str(_unwrap_scalar(result["failure_txt_path"])))
 
 

@@ -14,8 +14,6 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import yaml
-
 from autosaxs.core.event_bus import EventBus, EventType
 from autosaxs.core.utils import _strip_sub_int_prefix
 
@@ -27,7 +25,7 @@ from .common import (
     expand_files_from_unwrapped,
 )
 from .fit_distances import fit_distances
-from .fit_guinier import fit_guinier
+from .fit_guinier import fit_guinier, parse_guinier_results_txt
 from .model_dam import model_dam
 from .report_individual import report_individual
 
@@ -48,34 +46,6 @@ def _as_scalar(value: Any) -> Any:
     if isinstance(value, list):
         return value[0] if value else None
     return value
-
-
-def _load_guinier_handoff(guinier_region_path: Optional[str]) -> Dict[str, Any]:
-    """Read Rg / I(0) / Guinier first-point for downstream skills (liveview handoff contract)."""
-    if not guinier_region_path or not os.path.isfile(guinier_region_path):
-        return {}
-    with open(guinier_region_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    if not isinstance(data, dict):
-        return {}
-    handoff: Dict[str, Any] = {}
-    if data.get("rg") is not None:
-        try:
-            handoff["rg"] = float(data["rg"])
-        except (TypeError, ValueError):
-            pass
-    if data.get("i0") is not None:
-        try:
-            handoff["i0"] = float(data["i0"])
-        except (TypeError, ValueError):
-            pass
-    fp = data.get("first_point_1based")
-    if fp is not None:
-        try:
-            handoff["first_point_1based"] = int(fp)
-        except (TypeError, ValueError):
-            pass
-    return handoff
 
 
 def _pr_allows_model_dam(fit_distances_out: Dict[str, Any]) -> bool:
@@ -243,7 +213,7 @@ def process_monodisperse(
         last=last,
         use_cache=use_cache,
     )
-    handoff = _load_guinier_handoff(_as_single_path(out_guinier.get("guinier_region_path")))
+    handoff = parse_guinier_results_txt(_as_single_path(out_guinier.get("results_path")))
 
     kratky_kwargs: Dict[str, Any] = {
         "config_path": config_path,

@@ -3,7 +3,7 @@ description:
 alwaysApply: true
 ---
 
-When running any Python code or installing packages, use these absolute paths (conda env `LLMAssistant`):
+When running any Python code or installing packages, use these absolute paths (conda env `dev_autosaxs`):
 
-- Python: `/home/mikl/.conda/envs/LLMAssistant/bin/python`
-- pip: `/home/mikl/.conda/envs/LLMAssistant/bin/pip`
+- Python: `/home/mikl/.conda/envs/dev_autosaxs/bin/python`
+- pip: `/home/mikl/.conda/envs/dev_autosaxs/bin/pip`

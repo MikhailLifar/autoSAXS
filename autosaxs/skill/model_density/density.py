@@ -75,7 +75,7 @@ def model_density(
     denss_mode: str = "slow",
     n_maps: int = 20,
     n_jobs: int = 1,
-    visualize_all: bool = False,
+    visualize_all: bool = True,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
@@ -92,8 +92,15 @@ def model_density(
     - `denss_mode` (str, default `slow`): DENSS algorithm mode: `slow`, `fast`, or `membrane`.
     - `n_maps` (int, default `20`): Number of reconstructions for `average`/`refined` (ignored in `pilot`; must be ≥2 when used).
     - `n_jobs` (int, default `1`): Parallel cores for denss-all.
-    - `visualize_all` (bool, default `False`): When True, write slice GIF/PNG under `{output}/visuals/` (synced YZ/XZ/XY cuts through the particle AABB; nm scale bar below panels; electron-ish colormap).
+    - `visualize_all` (bool, default `True`): When True, write slice GIF/PNG and rotating density/σ GIFs under `{output}/visuals/`.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+    ### Short parameter list
+
+    - mode: Run mode: pilot - quick map view; average - average map across mutliple runs; refined - refined from averaged; default - pilot
+    - denss_mode: Internal parameter, recommended not to change, default: slow
+    - n_maps: Number of independent run for average; default 20
+    - visualize_all: Run visualizations, default: true
 
     ### Returns
 
@@ -106,7 +113,7 @@ def model_density(
     - `fsc_path`: FSC curve path when averaging ran; empty string otherwise.
     - `map_fit_path`: Calculated vs experimental fit file when present; else empty.
     - `denss_log_path`: Main log for the completed mode.
-    - `visuals_dir`, `slices_gif`, `midplanes_png` when `visualize_all=True` (empty strings otherwise).
+    - `visuals_dir`, `slices_gif`, `midplanes_png`, `density_rotate_gif`, `sigma_rotate_gif` when `visualize_all=True` (empty strings otherwise; `sigma_rotate_gif` empty in `pilot`).
 
     ### Python usage
 
@@ -118,7 +125,6 @@ def model_density(
         output_dir="denss",
         mode="pilot",
         denss_mode="slow",
-        visualize_all=False,
         use_cache=False,
     )
 
@@ -129,7 +135,6 @@ def model_density(
 
     ```bash
     autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss --mode pilot --denss-mode slow
-    autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss --visualize-all
     ```
     """
     _ = config_path
@@ -371,7 +376,7 @@ def _model_density_paths(
     denss_mode: str = "SLOW",
     n_maps: int = 20,
     n_jobs: int = 1,
-    visualize_all: bool = False,
+    visualize_all: bool = True,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
     use_cache: bool = False,
@@ -533,20 +538,37 @@ def _model_density_paths(
     visuals_dir = ""
     slices_gif = ""
     midplanes_png = ""
+    density_rotate_gif = ""
+    sigma_rotate_gif = ""
     if bool(visualize_all) and density_map_path:
         from .vis import write_visuals
 
         vis_out = write_visuals(
             output_dir,
             density_map_path=density_map_path,
+            sigma_map_path=sigma_map_path or "",
             event_bus=event_bus,
         )
         visuals_dir = str(vis_out.get("visuals_dir") or "")
         slices_gif = str(vis_out.get("slices_gif") or "")
         midplanes_png = str(vis_out.get("midplanes_png") or "")
+        density_rotate_gif = str(vis_out.get("density_rotate_gif") or "")
+        sigma_rotate_gif = str(vis_out.get("sigma_rotate_gif") or "")
         if visuals_dir:
             md_parts.append(
                 f"- Visuals: `{os.path.relpath(visuals_dir, output_dir)}`\n"
+            )
+        if density_rotate_gif:
+            md_parts.append(
+                f"![Density rotate]({os.path.relpath(density_rotate_gif, output_dir)})\n"
+            )
+        if sigma_rotate_gif:
+            md_parts.append(
+                f"![Sigma rotate]({os.path.relpath(sigma_rotate_gif, output_dir)})\n"
+            )
+        if slices_gif:
+            md_parts.append(
+                f"![Density slices]({os.path.relpath(slices_gif, output_dir)})\n"
             )
 
     summary_refs: List[Dict[str, Any]] = []
@@ -601,4 +623,6 @@ def _model_density_paths(
         "visuals_dir": visuals_dir,
         "slices_gif": slices_gif,
         "midplanes_png": midplanes_png,
+        "density_rotate_gif": density_rotate_gif,
+        "sigma_rotate_gif": sigma_rotate_gif,
     }

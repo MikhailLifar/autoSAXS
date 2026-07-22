@@ -21,7 +21,6 @@ class AutosaxsHelpFormatter(argparse.RawDescriptionHelpFormatter):
         pfx = prefix if prefix else "usage: "
         return f"{pfx}autosaxs [-h] [-v] [-U [--force]] COMMAND ...\n\n"
 
-
 def _autosaxs_version() -> str:
     try:
         import autosaxs
@@ -473,6 +472,30 @@ def _read_default_config_base_bytes() -> bytes:
         return (Path(__file__).resolve().parents[1] / "resources" / "config_base.conf").read_bytes()
 
 
+def _parse_short_parameter_list(doc: str) -> Dict[str, str]:
+    """
+    Parse ``### Short parameter list`` bullets from a skill docstring.
+
+    Each line must be ``- param_name: help text`` (optional backticks around ``param_name``).
+    """
+    lines = (doc or "").splitlines()
+    in_section = False
+    result: Dict[str, str] = {}
+    for line in lines:
+        stripped = line.strip()
+        if re.match(r"^###\s+Short parameter list\s*$", stripped, flags=re.IGNORECASE):
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        if stripped.startswith("###"):
+            break
+        m = re.match(r"^-\s*`?([a-zA-Z_][a-zA-Z0-9_]*)`?\s*:\s*(.+?)\s*$", stripped)
+        if m:
+            result[m.group(1)] = m.group(2).strip()
+    return result
+
+
 def _add_skill_subparser(
     subparsers: argparse._SubParsersAction,
     name: str,
@@ -489,7 +512,8 @@ def _add_skill_subparser(
     )
     p.set_defaults(_autosaxs_fn=fn)
     # A separate flag prints the full docstring and exits (handled before argparse enforces required positionals).
-    p.add_argument("--description", action="store_true", help="Print full command description and exit")
+    p.add_argument("--description", action="store_true", help="Print detailed command description")
+    short_params = _parse_short_parameter_list(doc)
 
     # Resolve postponed annotations ("from __future__ import annotations"), so
     # `Optional[float]` etc. are real types and not strings.
@@ -531,7 +555,13 @@ def _add_skill_subparser(
                 p.set_defaults(use_cache=param.default)
                 continue
             if param.name == "output_dir":
-                p.add_argument("--output-dir", dest="output_dir", default=param.default, help="Output directory")
+                p.add_argument(
+                    "-o",
+                    "--output-dir",
+                    dest="output_dir",
+                    default=param.default,
+                    help="Output directory",
+                )
                 continue
             if param.name == "config_path":
                 p.add_argument(
@@ -539,7 +569,7 @@ def _add_skill_subparser(
                     "--conf",
                     dest="config_path",
                     default=param.default,
-                    help="Optional YAML config file (skill-keyed sections); bundled defaults apply when omitted",
+                    help="Deprecated: YAML config file (skill-keyed sections)",
                 )
                 continue
             if param.name == "wavelength":
@@ -548,7 +578,7 @@ def _add_skill_subparser(
                     dest=param.name,
                     type=_parse_optional_float,
                     default=param.default,
-                    help="X-ray wavelength in Ångström",
+                    help=short_params.get("wavelength", "X-ray wavelength in Ångström"),
                 )
                 continue
             if param.name == "dist_guess":
@@ -557,7 +587,10 @@ def _add_skill_subparser(
                     dest=param.name,
                     type=_parse_optional_float,
                     default=param.default,
-                    help="Initial sample-detector distance in metres (before pyFAI refinement)",
+                    help=short_params.get(
+                        "dist_guess",
+                        "Optional: initial sample-detector distance in metres (algorithm works good even if this is not set)",
+                    ),
                 )
                 continue
 
@@ -568,27 +601,42 @@ def _add_skill_subparser(
                 continue
 
             if isinstance(param.default, bool):
+                bool_kw: Dict[str, Any] = {
+                    "dest": param.name,
+                    "default": param.default,
+                }
+                bool_help = short_params.get(param.name)
+                if bool_help:
+                    bool_kw["help"] = bool_help
                 if param.default is False:
-                    p.add_argument(opt_name, dest=param.name, action="store_true")
+                    bool_kw["action"] = "store_true"
                 else:
-                    p.add_argument(opt_name, dest=param.name, action="store_false")
+                    # True default: keep --flag semantics and expose --no-flag.
+                    bool_kw["action"] = argparse.BooleanOptionalAction
+                p.add_argument(opt_name, **bool_kw)
                 continue
 
             if _is_optional_scalar_annotation(ann, int):
-                p.add_argument(
-                    opt_name,
-                    dest=param.name,
-                    type=_parse_optional_int,
-                    default=param.default,
-                )
+                int_kw: Dict[str, Any] = {
+                    "dest": param.name,
+                    "type": _parse_optional_int,
+                    "default": param.default,
+                }
+                int_help = short_params.get(param.name)
+                if int_help:
+                    int_kw["help"] = int_help
+                p.add_argument(opt_name, **int_kw)
                 continue
             if _is_optional_scalar_annotation(ann, float):
-                p.add_argument(
-                    opt_name,
-                    dest=param.name,
-                    type=_parse_optional_float,
-                    default=param.default,
-                )
+                float_kw: Dict[str, Any] = {
+                    "dest": param.name,
+                    "type": _parse_optional_float,
+                    "default": param.default,
+                }
+                float_help = short_params.get(param.name)
+                if float_help:
+                    float_kw["help"] = float_help
+                p.add_argument(opt_name, **float_kw)
                 continue
 
             if _is_optional_list_str_annotation(ann):
@@ -604,13 +652,25 @@ def _add_skill_subparser(
 
             if param.default is inspect._empty:
                 if ann is float:
-                    p.add_argument(opt_name, dest=param.name, type=float, required=True)
+                    req_float_kw: Dict[str, Any] = {"dest": param.name, "type": float, "required": True}
+                    req_float_help = short_params.get(param.name)
+                    if req_float_help:
+                        req_float_kw["help"] = req_float_help
+                    p.add_argument(opt_name, **req_float_kw)
                     continue
                 if ann is int:
-                    p.add_argument(opt_name, dest=param.name, type=int, required=True)
+                    req_int_kw: Dict[str, Any] = {"dest": param.name, "type": int, "required": True}
+                    req_int_help = short_params.get(param.name)
+                    if req_int_help:
+                        req_int_kw["help"] = req_int_help
+                    p.add_argument(opt_name, **req_int_kw)
                     continue
 
-            p.add_argument(opt_name, dest=param.name, default=param.default)
+            opt_kw: Dict[str, Any] = {"dest": param.name, "default": param.default}
+            opt_help = short_params.get(param.name)
+            if opt_help:
+                opt_kw["help"] = opt_help
+            p.add_argument(opt_name, **opt_kw)
 
 
 def main(argv: Optional[List[str]] = None) -> int:

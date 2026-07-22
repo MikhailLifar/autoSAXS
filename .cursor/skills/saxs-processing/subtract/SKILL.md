@@ -84,6 +84,16 @@ or legacy `match_tail`, optionally restricted to a q window (`q_min` / `q_max`).
 
 The q window (`q_min`, `q_max`) is always required at the Python API and CLI. A user config file may supply values that override the arguments passed to `subtract()`.
 
+### Short parameter list
+
+- method: internal parameter, changing the default is not recommended, default: point-match
+- sample_form: default: Porod+linear
+- buffer_form: default: linear
+- point_match_factor: internal parameter, changing the default is not recommended, default: 0.995
+- q_min: Required, start of matching region
+- q_max: Required, end of matching region, matching point
+- scaling_factor: Manual scaling factor. When this set, it replaces auto-scale
+
 ### Returns
 
 `dict[str, str]` with:
@@ -91,8 +101,6 @@ The q window (`q_min`, `q_max`) is always required at the Python API and CLI. A 
 - `subtracted_1d`: Path to the subtracted curve `.dat`.
 - `diff_plot_path`: Path to a diff plot PNG.
 - `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
-- `sub_plot_path`: Path to a subtracted curve plot PNG.
-
 Subtraction quality (`correct` or `over-subtracted`) is written into the subtracted `.dat` metadata
 (``subtract.correctness``) and into per-sample report fragments (individual Markdown and summary YAML).
 

@@ -2,9 +2,9 @@
 set -euo pipefail
 
 REPO_DIR="/home/mikl/KurchatovCoop/repos"
-PY="/home/mikl/.conda/envs/LLMAssistant/bin/python"
-PIP="/home/mikl/.conda/envs/LLMAssistant/bin/pip"
-AUTOSAXS="/home/mikl/.conda/envs/LLMAssistant/bin/autosaxs"
+PY="/home/mikl/.conda/envs/dev_autosaxs/bin/python"
+PIP="/home/mikl/.conda/envs/dev_autosaxs/bin/pip"
+AUTOSAXS="/home/mikl/.conda/envs/dev_autosaxs/bin/autosaxs"
 
 REQUESTED_VERSION="${1:-}"
 

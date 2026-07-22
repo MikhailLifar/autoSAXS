@@ -646,7 +646,7 @@ class LiveviewJobExecutor(QObject):
     def _enrich_fit_distances_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
         out = dict(result or {})
         watchdir = self._state.watchdir
-        bs = out.get("best_summary_path")
+        bs = out.get("fit_distances_log_path")
         fp = out.get("fit_params_path")
         first_i: Optional[int] = None
         last_i: Optional[int] = None

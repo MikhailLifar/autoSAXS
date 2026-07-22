@@ -6,9 +6,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-import yaml
-
 from autosaxs.core.event_bus import EventBus, EventType
+from autosaxs.core.guinier import parse_guinier_results_txt
 from autosaxs.core.utils import ensure_q_nm, load_saxs_1d_any, write_saxs_atsas_format
 from autosaxs.core.viewer import PLTViewer
 
@@ -20,6 +19,11 @@ from ..common import (
 )
 from ..skill_wrap import _strip_sub_int_prefix, apply_batch, run_with_cache
 from .guinier import run_fixed_interval_guinier, run_guinier_analysis, guinier_point_range_1based
+
+__all__ = [
+    "fit_guinier",
+    "parse_guinier_results_txt",
+]
 
 
 def fit_guinier(
@@ -34,9 +38,8 @@ def fit_guinier(
     """
     SAXS / small-angle x-ray scattering: fit the Guinier region on a 1D profile (adaptive Rg, I(0), Rg span). Writes:
 
-    - a text results file
+    - a text results file (chosen Guinier parameters and method comparison)
     - an ATSAS-format `.dat` file for downstream tools
-    - a YAML file describing the chosen Guinier region parameters
     - a Guinier plot (ln I vs q²) with error bars and the chosen fit line
 
     ### Arguments
@@ -53,7 +56,6 @@ def fit_guinier(
 
     - `results_path`: Path to the results text file.
     - `atsas_dat_path`: Path to the ATSAS-format `.dat` file.
-    - `guinier_region_path`: Path to the chosen Guinier region YAML.
     - `guinier_plot_path`: Path to the Guinier fit PNG.
 
     ### Python usage
@@ -67,7 +69,7 @@ def fit_guinier(
         use_cache=False,
     )
 
-    print(out["guinier_region_path"])
+    print(out["results_path"])
     ```
 
     ### CLI usage
@@ -121,7 +123,6 @@ def _fit_guinier_paths(
     base = _strip_sub_int_prefix(os.path.splitext(os.path.basename(profile))[0])
     results_path = os.path.join(output_dir, f"{base}_results.txt")
     atsas_dat_path = os.path.join(output_dir, f"{base}_atsas.dat")
-    guinier_region_path = os.path.join(output_dir, f"{base}_guinier_region.yml")
     guinier_plot_path = os.path.join(output_dir, f"{base}_guinier_fit.png")
 
     if event_bus:
@@ -177,12 +178,15 @@ def _fit_guinier_paths(
         if user_first is not None and user_last is not None:
             guinier_region["first_point_1based"] = int(user_first)
             guinier_region["last_point_1based"] = int(user_last)
+            guinier_region["i_start"] = int(user_first) - 1
         else:
             fp, lp = guinier_point_range_1based(guinier_region)
             if fp is not None:
                 guinier_region["first_point_1based"] = fp
             if lp is not None:
                 guinier_region["last_point_1based"] = lp
+            if guinier_region.get("i_start") is None and guinier_region.get("first_point_1based") is not None:
+                guinier_region["i_start"] = int(guinier_region["first_point_1based"]) - 1
         rg_source = guinier_results["chosen"]
 
         rg_plot = guinier_region.get("rg")
@@ -225,6 +229,18 @@ def _fit_guinier_paths(
                 f.write(f"  q range = [{qmn:.5g}, {qmx:.5g}] nm^-1\n")
             if guinier_region.get("n_points") is not None:
                 f.write(f"  n points = {guinier_region['n_points']}\n")
+            fp = guinier_region.get("first_point_1based")
+            lp = guinier_region.get("last_point_1based")
+            if fp is not None:
+                f.write(f"  first point (1-based) = {int(fp)}\n")
+            if lp is not None:
+                f.write(f"  last point (1-based) = {int(lp)}\n")
+            i_start = guinier_region.get("i_start")
+            if i_start is not None:
+                f.write(f"  i_start (0-based) = {int(i_start)}\n")
+            n_cand = guinier_region.get("n_candidates")
+            if n_cand is not None:
+                f.write(f"  n candidates = {int(n_cand)}\n")
             if guinier_region.get("fit_quality") is not None:
                 f.write(f"  fit quality (selection metric) = {guinier_region['fit_quality']:.4f}\n")
             ir2 = guinier_region.get("interval_r2")
@@ -299,9 +315,6 @@ def _fit_guinier_paths(
                 else:
                     f.write(f"  {method}: (no result)\n")
 
-    with open(guinier_region_path, "w") as f:
-        yaml.dump(guinier_region or {}, f, default_flow_style=False)
-
     from autosaxs.core.report_fragments import write_skill_report_fragments
 
     rg_nm = None
@@ -343,6 +356,5 @@ def _fit_guinier_paths(
     return {
         "results_path": results_path,
         "atsas_dat_path": atsas_dat_path,
-        "guinier_region_path": guinier_region_path,
         "guinier_plot_path": guinier_plot_path,
     }

@@ -69,7 +69,7 @@ SAXS / small-angle x-ray scattering: calibrate detector geometry using a calibra
 
 ### Arguments
 
-- `calib_image` (str): Path to the calibration image (e.g. TIFF) used for ring analysis.
+- `calibrant_image` (str): Path to the calibration image (e.g. TIFF) used for ring analysis.
 - `output_dir` (str, default `.`): Directory where results are written.
 - `config_path` (str | None, default `None`): Optional path to a YAML config file with a `calibrate` section. When omitted, bundled defaults from the installed `autosaxs` package are used.
 - `mask` (str): Path to a mask used during ring analysis. Supports .txt (NuPy format), .msk (Fit2d)
@@ -82,6 +82,13 @@ SAXS / small-angle x-ray scattering: calibrate detector geometry using a calibra
 Important constraints:
 
 - `mask` is always required by the skill and the CLI (the GUI should treat it as a required field).
+
+### Short parameter list
+
+- mask_mode: Default: load mask from file as is
+- calibrant: name of the calibrant, default: AgBh
+- wavelength: X-ray wavelength in Ångström
+- dist_guess: Optional: initial sample-detector distance in metres (algorithm works good even if this is not set)
 
 ### Returns
 
@@ -100,7 +107,7 @@ Important constraints:
 from autosaxs.skill import calibrate
 
 out = calibrate(
-    calib_image="AgBh.tif",
+    calibrant_image="AgBh.tif",
     output_dir="calibration",
     mask="mask.msk",
     mask_mode="f",

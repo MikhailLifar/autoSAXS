@@ -642,7 +642,7 @@ class Controller:
             point_match_factor=float(sub_cfg.get("point_match_factor", 0.995)),
             use_cache=fast_forward,
         )
-        return out["subtracted_1d"], out["sub_plot_path"]
+        return out["subtracted_1d"], out.get("sub_plot_path")
 
     def pipeline_interactive(self, fast_forward=False):
         # Wire response queue for request/response over EventBus (§3)

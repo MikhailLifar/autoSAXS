@@ -398,6 +398,16 @@ def subtract(
 
     The q window (`q_min`, `q_max`) is always required at the Python API and CLI. A user config file may supply values that override the arguments passed to `subtract()`.
 
+    ### Short parameter list
+
+    - method: internal parameter, changing the default is not recommended, default: point-match
+    - sample_form: default: Porod+linear
+    - buffer_form: default: linear
+    - point_match_factor: internal parameter, changing the default is not recommended, default: 0.995
+    - q_min: Required, start of matching region
+    - q_max: Required, end of matching region, matching point
+    - scaling_factor: Manual scaling factor. When this set, it replaces auto-scale
+
     ### Returns
 
     `dict[str, str]` with:
@@ -405,8 +415,6 @@ def subtract(
     - `subtracted_1d`: Path to the subtracted curve `.dat`.
     - `diff_plot_path`: Path to a diff plot PNG.
     - `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
-    - `sub_plot_path`: Path to a subtracted curve plot PNG.
-
     Subtraction quality (`correct` or `over-subtracted`) is written into the subtracted `.dat` metadata
     (``subtract.correctness``) and into per-sample report fragments (individual Markdown and summary YAML).
 
@@ -532,7 +540,6 @@ def _subtract_paths(
     q_sample, I_sample, sigma_sample, _ = read_saxs(sample_1d)
     diff_plot_path = os.path.join(output_dir, f"diff_{base}.png")
     diff_log_plot_path = os.path.join(output_dir, f"diff_log_{base}.png")
-    sub_plot_path = os.path.join(output_dir, f"sub_{base}.png")
     PLTViewer.view_curves(
         q_sample,
         I_sample,
@@ -560,15 +567,6 @@ def _subtract_paths(
         plotFilePath=diff_log_plot_path,
         save=False,
     )
-    PLTViewer.view_curves(
-        q,
-        I_sub,
-        "sample",
-        sigmas=(sigma_sub,),
-        legend=True,
-        plotFilePath=sub_plot_path,
-        save=False,
-    )
     from autosaxs.core.report_fragments import write_skill_report_fragments
 
     _, _, _sigma, meta = read_saxs(dest)
@@ -584,7 +582,7 @@ def _subtract_paths(
         f"Subtraction quality: **{correctness}**.\n",
         f"![Difference sample vs scaled buffer]({os.path.basename(diff_plot_path)})\n",
         f"![Difference log scale]({os.path.basename(diff_log_plot_path)})\n",
-        f"![Subtracted curve]({os.path.basename(sub_plot_path)})\n",
+        f"![Subtracted curve]({os.path.basename(dest)})\n",
     ]
     summary_refs = [
         {"role": "subtracted_curve", "path": os.path.basename(dest), "format": "saxs_dat", "display_name": "subtracted"},
@@ -601,6 +599,5 @@ def _subtract_paths(
         "subtracted_1d": dest,
         "diff_plot_path": diff_plot_path,
         "diff_log_plot_path": diff_log_plot_path,
-        "sub_plot_path": sub_plot_path,
     }
 

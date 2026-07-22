@@ -118,44 +118,18 @@ def _first_existing(paths: List[str]) -> Optional[str]:
 
 
 def _parse_descriptors_from_results(results_path: Optional[str]) -> Optional[Dict[str, str]]:
-    """Parse descriptor values from a pipeline results file. Returns dict or None."""
+    """Parse descriptor values from a pipeline / Guinier results file. Returns dict or None."""
     if not results_path or not os.path.isfile(results_path):
         return None
+    from autosaxs.core.guinier import guinier_results_as_descriptors, parse_guinier_results_txt
+
     out: Dict[str, str] = {}
-    in_chosen = False
-    in_methods = False
+    guinier = parse_guinier_results_txt(results_path)
+    if guinier.get("rg") is not None or guinier.get("methods"):
+        out.update(guinier_results_as_descriptors(guinier))
     with open(results_path, "r") as f:
         for line in f:
-            if "Chosen Guinier result" in line:
-                in_chosen = True
-                in_methods = False
-            elif "All Guinier methods" in line:
-                in_chosen = False
-                in_methods = True
-            elif line.strip().startswith(("Porod region", "Descriptors (used downstream)", "GNOM Results")):
-                in_chosen = False
-                in_methods = False
-            if in_chosen:
-                m = re.match(r"\s*q range\s*=\s*\[([\d.]+),\s*([\d.]+)\]\s*nm\^-1", line)
-                if m:
-                    out["Guinier interval (final)"] = f"[{m.group(1)}, {m.group(2)}] nm^-1"
-            if in_methods and re.match(r"\s*autorg\s*:", line):
-                m = re.search(r"Rg=([\d.]+)\s*nm", line)
-                if m:
-                    out["Rg autorg (nm)"] = m.group(1).strip()
-                else:
-                    out["Rg autorg (nm)"] = "N/A"
-                mi = re.search(r"interval=\[([\d.]+),\s*([\d.]+)\]", line)
-                if mi:
-                    out["Guinier interval (autorg)"] = f"[{mi.group(1)}, {mi.group(2)}] nm^-1"
-                else:
-                    out["Guinier interval (autorg)"] = "N/A"
-            m = re.match(r"\s*Rg\s*=\s*(.+?)\s*nm", line)
-            if m:
-                out["Rg (nm)"] = m.group(1).strip()
-            m = re.match(r"\s*I\(0\)\s*=\s*(.+)", line)
-            if m:
-                out["I(0)"] = m.group(1).strip()
+            # Non-Guinier descriptor blocks (legacy combined pipeline results.txt).
             m = re.match(r"\s*Quality\s*[=:]\s*(.+)", line)
             if m:
                 out["Quality"] = m.group(1).strip()
@@ -171,9 +145,19 @@ def _parse_descriptors_from_results(results_path: Optional[str]) -> Optional[Dic
             m = re.match(r"\s*Porod Volume\s*=\s*(.+?)\s*nm\^?3", line, re.IGNORECASE)
             if m:
                 out["Porod Volume (nm^3)"] = m.group(1).strip()
-            m = re.match(r"\s*classification\s*\([^)]*\)\s*=\s*(.+)", line)
-            if m:
-                out["Classification"] = m.group(1).strip()
+            # Fallback when file has Guinier lines but not the modern section headers.
+            if "Rg (nm)" not in out:
+                m = re.match(r"\s*Rg\s*=\s*(.+?)\s*nm", line)
+                if m:
+                    out["Rg (nm)"] = m.group(1).strip()
+            if "I(0)" not in out:
+                m = re.match(r"\s*I\(0\)\s*=\s*(.+)", line)
+                if m:
+                    out["I(0)"] = m.group(1).strip()
+            if "Classification" not in out:
+                m = re.match(r"\s*classification\s*\([^)]*\)\s*=\s*(.+)", line)
+                if m:
+                    out["Classification"] = m.group(1).strip()
     if "Guinier interval (final)" not in out:
         out["Guinier interval (final)"] = "N/A"
     if "Rg autorg (nm)" not in out:

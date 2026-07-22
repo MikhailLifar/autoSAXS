@@ -30,6 +30,7 @@ from ..deps import (
     read_saxs,
     run_with_cache,
 )
+from autosaxs.core.viewer import write_iq_fit_comparison_png
 from ..common import (
     ConfigPathExpressionArg,
     DatPathExpressionArg,
@@ -76,6 +77,12 @@ def model_dam(
     - `dammif_mode` (str, default `fast`): DAMMIF annealing mode: `fast` or `slow`.
     - `visualize_all` (bool, default `False`): When True, write PNGs/GIFs under `{output}/visuals/` (synced per-run rotation GIFs, overlap, occupancy threshold; nm scale bar; no run/title captions).
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+    ### Short parameter list
+
+    - n_runs: 1 for fast pilot view; 5, 10 or 20 - for reliable averaged shape
+    - dammif_mode: FAST or SLOW, default FAST; recommended not to change the default
+    - visualize_all: Heavy visualization with nice GIF's. Not fast, rather production level artifacts
 
     ### Returns
 
@@ -506,7 +513,6 @@ def _model_dam_paths(
     q, I, sigma, _ = read_saxs(profile_1d)
     # Autosaxs pipeline convention is q in nm^-1; incoming files may be in Å^-1.
     q, I, sigma = ensure_q_nm(q, I, sigma)
-    to_plot = []
     fits_data = []
     # Reference "experimental" curve for the comparison plot/CSV.
     # If DAMMIF is given a GNOM .out, its .fir contains the exact curve DAMMIF fitted (often scaled/regularized),
@@ -545,7 +551,6 @@ def _model_dam_paths(
         # ``dammif-{n}-1.cif`` (liveview and other UIs resolve the best model via ``{key}-1.cif``).
         rep_tag = f"dammif-{i + 1}"
         fits_data.append((rep_tag, {**descr, "chi2": float(chi2)}, q_int, I_fit_interp))
-        to_plot.extend([q_int, I_fit_interp, f"{rep_tag}; $\\chi^2$: {chi2:.2f}"])
         if atoms is not None:
             PLTViewer.plot_3d_views_and_scattering(
                 atoms,
@@ -586,26 +591,26 @@ def _model_dam_paths(
         csv_arrays = [q_exp, I_exp] + [np.interp(q_exp, _q, _i) for _k, _d, _q, _i in fits_data]
         pd.DataFrame(dict(zip(csv_cols, csv_arrays))).to_csv(dammif_fits_csv, index=False)
 
-        to_plot2 = [q_exp, I_exp, {"label": "exp", "lw": 4}] + to_plot
-        if sigma_exp is None:
-            PLTViewer.view_curves(
-                *to_plot2,
-                title=f"Fits comparison for\n{base}",
-                xlabel="q (nm-1)",
-                ylabel="I",
-                legend=True,
-                plotFilePath=dammif_fits_png,
-            )
-        else:
-            PLTViewer.view_curves(
-                *to_plot2,
-                sigmas=(sigma_exp,),
-                title=f"Fits comparison for\n{base}",
-                xlabel="q (nm-1)",
-                ylabel="I",
-                legend=True,
-                plotFilePath=dammif_fits_png,
-            )
+        # Prefer lowest-chi2 replica as the residual reference.
+        primary_index = 0
+        best_chi2 = float("inf")
+        fit_curves = []
+        for idx, (rep_tag, descr, q_int, I_fit_interp) in enumerate(fits_data):
+            chi2 = float(descr.get("chi2", float("nan")))
+            label = f"{rep_tag}; $\\chi^2$: {chi2:.2f}"
+            fit_curves.append((np.interp(q_exp, q_int, I_fit_interp), label))
+            if np.isfinite(chi2) and chi2 < best_chi2:
+                best_chi2 = chi2
+                primary_index = idx
+        write_iq_fit_comparison_png(
+            dammif_fits_png,
+            q_exp,
+            I_exp,
+            fit_curves,
+            sigma=sigma_exp,
+            title=f"Fits comparison for {base}",
+            primary_index=primary_index,
+        )
 
     particle_cifs = _particle_cif_paths(output_dir, int(n_runs))
     frequency_map_path = ""

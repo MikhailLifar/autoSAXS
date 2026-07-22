@@ -690,7 +690,7 @@ SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance
 - `output_subdir`: The per-sample output directory used for this profile.
 - `gnom_out_paths`: List of DATGNOM `.out` paths written for this profile (typically a single “best” `.out`).
 - `best_gnom_out_path`: Path to the selected “best” DATGNOM `.out`.
-- `best_summary_path`: Path to a YAML summary of candidate runs and the selected parameters.
+- `fit_distances_log_path`: Path to the extended run log YAML (`{base}_fit_distances_log.yml`) — candidates, ensemble rows, quality, failures.
 - `fit_params_path`: Path to a YAML file containing the fit parameters used for the final run.
 - `best_symlink_out_path`: Best-effort symlink path to the selected `.out` (may be missing on some filesystems).
 - `fits_csv_path`: Path to a CSV containing candidate scores/metadata.

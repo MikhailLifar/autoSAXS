@@ -11,9 +11,11 @@ from autosaxs.core.report_fragments import (
     assemble_individual_markdown,
     assemble_summary_markdown,
     discover_individual_fragment_paths,
+    embed_individual_report_images,
     resolve_reference_value,
     write_skill_report_fragments,
 )
+from autosaxs.core.utils import write_saxs
 
 
 class ReportFragmentsTest(unittest.TestCase):
@@ -96,6 +98,22 @@ class ReportFragmentsTest(unittest.TestCase):
         self.assertNotIn("Source image", cleaned)
         self.assertNotIn("Summary:", cleaned)
         self.assertIn("![D(R)](dr.png)", cleaned)
+
+    def test_individual_embed_dat_curve(self) -> None:
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            q = np.linspace(0.1, 2.0, 20)
+            I = np.exp(-(q ** 2))
+            dat_path = os.path.join(tmp, "int_sample.dat")
+            write_saxs(dat_path, q, I, None, {"type": "integrated"})
+            md_dir = os.path.join(tmp, "reports")
+            os.makedirs(md_dir)
+            body = f"![Integrated curve]({os.path.basename(dat_path)})\n"
+            dedup: dict = {}
+            result = embed_individual_report_images(body, tmp, md_dir, dedup)
+            self.assertIn("_rptimg_", result)
+            self.assertTrue(any(fn.endswith(".png") for fn in os.listdir(md_dir)))
 
     def test_build_pdf_from_markdown(self) -> None:
         from autosaxs.core.report import build_pdf_from_assembled_markdown

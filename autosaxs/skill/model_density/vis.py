@@ -1,4 +1,4 @@
-"""Presentation PNG/GIF visuals for ``model_density`` (synced orthographic density slices)."""
+"""Presentation PNG/GIF visuals for ``model_density`` (slices + rotating density/σ clouds)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, Normalize
 
 # DENSS MRC coordinates are ångströms; on-figure scale is in nm.
 _A_TO_NM = 0.1
@@ -16,6 +16,16 @@ _GIF_TOTAL_FRAMES = 200  # full ping-pong loop → 200 × 50 ms = 10 s
 _DPI = 120
 _FIGSIZE = (11.5, 4.4)
 _UPSAMPLE = 8  # in-plane nearest→smooth display factor
+
+# Rotating density/σ GIFs (Liveview cloud style; camera schedule like model_dam).
+_N_ROT = 36
+_ELEV = 18.0
+_ROT_DURATION_MS = 70
+_ROT_DPI = 110
+_ROT_FIGSIZE = (5.0, 4.6)
+_ROT_MAX_POINTS = 12_000
+_ROT_BG = "#0b1220"
+_LIMIT_PAD = 1.08
 
 _ELECTRON_CMAP = LinearSegmentedColormap.from_list(
     "electron_density",
@@ -27,6 +37,12 @@ _ELECTRON_CMAP = LinearSegmentedColormap.from_list(
         (0.88, "#c5e4f7"),
         (1.00, "#f7fbff"),
     ],
+)
+
+# Liveview denss cloud colormap (cold electron).
+_CLOUD_CMAP = LinearSegmentedColormap.from_list(
+    "electron_cold",
+    ["#062033", "#0b4f6c", "#0e7490", "#22d3ee", "#e0f7ff"],
 )
 
 
@@ -267,17 +283,317 @@ def _make_slice_figure(
     return fig
 
 
+def _mrc_box_min(rho: np.ndarray, side) -> Tuple[np.ndarray, float]:
+    """Return (box_min_Å, voxel_Å) for a cubic DENSS MRC (Liveview convention)."""
+    n = int(rho.shape[0])
+    side_f = float(np.asarray(side).reshape(-1)[0]) if np.size(side) else float(n)
+    voxel = side_f / float(max(n, 1))
+    half = 0.5 * side_f
+    return np.array([-half, -half, -half], dtype=np.float64), float(voxel)
+
+
+def _build_density_cloud(
+    rho: np.ndarray,
+    side,
+    *,
+    sigma: Optional[np.ndarray] = None,
+    level_fraction: float = _LEVEL_FRACTION,
+    max_points: int = _ROT_MAX_POINTS,
+    rng_seed: int = 0,
+) -> Optional[Dict[str, Any]]:
+    """
+    Point cloud of voxels with ρ ≥ level_fraction·ρ_max (Liveview denss sampling).
+
+    Coordinates and AABB are returned in nm for on-figure scale bars.
+    """
+    rho = np.asarray(rho, dtype=np.float64)
+    if rho.ndim != 3 or rho.size == 0:
+        return None
+    rho_max = float(np.nanmax(rho))
+    if not np.isfinite(rho_max) or rho_max <= 0:
+        return None
+    level = float(level_fraction) * rho_max
+    mask = np.isfinite(rho) & (rho >= level)
+    if not np.any(mask):
+        return None
+
+    box_min, voxel = _mrc_box_min(rho, side)
+    flat_idx = np.flatnonzero(mask)
+    weights = np.maximum(rho.ravel()[flat_idx], 0.0)
+    wsum = float(np.sum(weights))
+    if not np.isfinite(wsum) or wsum <= 0:
+        return None
+
+    ijk_core = np.column_stack(np.unravel_index(flat_idx, rho.shape)).astype(np.float64)
+    xyz_core_a = ijk_core * voxel + box_min
+    core_span = float(np.max(xyz_core_a.max(axis=0) - xyz_core_a.min(axis=0)))
+    pad = max(0.5 * voxel, 0.10 * max(core_span, 1e-6))
+    part_min_a = xyz_core_a.min(axis=0) - pad
+    part_max_a = xyz_core_a.max(axis=0) + pad
+
+    rng = np.random.default_rng(int(rng_seed))
+    n_target = int(max(int(max_points), 1))
+    n_vox = int(flat_idx.size)
+    probs = weights / wsum
+    if n_target <= n_vox:
+        chosen_local = rng.choice(n_vox, size=n_target, replace=False, p=probs)
+        sel = flat_idx[chosen_local]
+        jitter = 0.35
+    else:
+        counts = rng.multinomial(n_target, probs)
+        reps = np.repeat(np.arange(n_vox), counts)
+        sel = flat_idx[reps]
+        jitter = 0.45
+
+    ijk = np.column_stack(np.unravel_index(sel, rho.shape)).astype(np.float64)
+    ijk = ijk + rng.uniform(-jitter, jitter, size=ijk.shape)
+    xyz_nm = (ijk * voxel + box_min) * _A_TO_NM
+    density = rho.ravel()[sel].astype(np.float64)
+
+    sigma_vals: Optional[np.ndarray] = None
+    if sigma is not None:
+        sig = np.asarray(sigma, dtype=np.float64)
+        if sig.shape == rho.shape:
+            sigma_vals = sig.ravel()[sel].astype(np.float64)
+
+    return {
+        "xyz_nm": xyz_nm,
+        "density": density,
+        "sigma": sigma_vals,
+        "lo_nm": np.asarray(part_min_a, dtype=np.float64) * _A_TO_NM,
+        "hi_nm": np.asarray(part_max_a, dtype=np.float64) * _A_TO_NM,
+    }
+
+
+def _cloud_rgba(
+    values: np.ndarray,
+    *,
+    high_is_bright: bool = True,
+    alpha_min: float = 0.10,
+    alpha_max: float = 0.88,
+) -> np.ndarray:
+    vals = np.asarray(values, dtype=np.float64)
+    vmin = float(np.nanmin(vals))
+    vmax = float(np.nanmax(vals))
+    if not np.isfinite(vmin) or not np.isfinite(vmax) or abs(vmax - vmin) < 1e-15:
+        vmax = vmin + 1.0
+    t_raw = np.clip(Normalize(vmin=vmin, vmax=vmax)(vals), 0.0, 1.0)
+    t = t_raw if high_is_bright else (1.0 - t_raw)
+    rgba = _CLOUD_CMAP(t)
+    rgba[:, 3] = alpha_min + (alpha_max - alpha_min) * t
+    return rgba
+
+
+def _equal_limits_3d(ax, lo: np.ndarray, hi: np.ndarray, *, pad: float = _LIMIT_PAD) -> None:
+    center = (lo + hi) * 0.5
+    span = max(float(np.max(hi - lo)) * 0.5 * pad, 1e-3)
+    ax.set_xlim(center[0] - span, center[0] + span)
+    ax.set_ylim(center[1] - span, center[1] + span)
+    ax.set_zlim(center[2] - span, center[2] + span)
+    try:
+        ax.set_box_aspect((1, 1, 1))
+    except Exception:
+        pass
+
+
+def _draw_scale_bar_3d(ax, *, bar_nm: float, span_nm: float, color: str = "#c8d9e8") -> None:
+    """Screen-space nm scale bar overlay (same approach as model_dam)."""
+    axes_data_span = max(float(span_nm) * float(_LIMIT_PAD), 1e-6)
+    width = float(np.clip(bar_nm / axes_data_span, 0.08, 0.40))
+    x0, y0 = 0.06, 0.07
+    tick = 0.022
+    ax2 = ax.figure.add_axes(ax.get_position(), frameon=False, facecolor="none", zorder=20)
+    ax2.set_xlim(0.0, 1.0)
+    ax2.set_ylim(0.0, 1.0)
+    ax2.set_axis_off()
+    ax2.set_navigate(False)
+    ax2.patch.set_alpha(0.0)
+    ax2.plot([x0, x0 + width], [y0, y0], color=color, lw=2.8, solid_capstyle="butt", clip_on=False, zorder=21)
+    ax2.plot([x0, x0], [y0 - tick, y0 + tick], color=color, lw=2.2, solid_capstyle="butt", clip_on=False, zorder=21)
+    ax2.plot(
+        [x0 + width, x0 + width],
+        [y0 - tick, y0 + tick],
+        color=color,
+        lw=2.2,
+        solid_capstyle="butt",
+        clip_on=False,
+        zorder=21,
+    )
+    label = f"{bar_nm:g} nm" if bar_nm >= 1 else f"{bar_nm:.1f} nm"
+    ax2.text(
+        x0 + width * 0.5,
+        y0 + 0.048,
+        label,
+        ha="center",
+        va="bottom",
+        fontsize=10,
+        color=color,
+        clip_on=False,
+        zorder=22,
+    )
+
+
+def _write_rotate_gif(
+    cloud: Dict[str, Any],
+    *,
+    values: np.ndarray,
+    high_is_bright: bool,
+    out_path: Path,
+    plt,
+) -> str:
+    xyz = np.asarray(cloud["xyz_nm"], dtype=np.float64)
+    if xyz.size == 0:
+        return ""
+    rgba = _cloud_rgba(values, high_is_bright=high_is_bright)
+    # σ mode: keep fewer points in high-σ regions (Liveview).
+    if not high_is_bright:
+        n = int(xyz.shape[0])
+        target = max(1500, n // 2)
+        if target < n:
+            w = np.asarray(rgba[:, 3], dtype=np.float64)
+            w = np.maximum(w, 0.0)
+            s = float(np.sum(w))
+            probs = (w / s) if s > 0 else np.full(n, 1.0 / n)
+            rng = np.random.default_rng(2)
+            keep = rng.choice(n, size=int(target), replace=False, p=probs)
+            xyz = xyz[keep]
+            rgba = rgba[keep]
+
+    lo = np.asarray(cloud["lo_nm"], dtype=np.float64)
+    hi = np.asarray(cloud["hi_nm"], dtype=np.float64)
+    span_nm = float(np.max(hi - lo))
+    bar_nm = _round_scale_nm(span_nm)
+    azims = [360.0 * i / _N_ROT for i in range(_N_ROT)]
+
+    frames: List[np.ndarray] = []
+    for azim in azims:
+        fig = plt.figure(figsize=_ROT_FIGSIZE, dpi=_ROT_DPI)
+        fig.patch.set_facecolor(_ROT_BG)
+        ax = fig.add_subplot(111, projection="3d")
+        ax.set_axis_off()
+        ax.set_facecolor(_ROT_BG)
+        ax.scatter(
+            xyz[:, 0],
+            xyz[:, 1],
+            xyz[:, 2],
+            c=rgba,
+            s=8.0,
+            depthshade=False,
+            edgecolors="none",
+            linewidths=0,
+        )
+        _equal_limits_3d(ax, lo, hi)
+        ax.view_init(elev=_ELEV, azim=azim)
+        fig.tight_layout(pad=0.05)
+        _draw_scale_bar_3d(ax, bar_nm=bar_nm, span_nm=span_nm)
+        frames.append(_fig_to_rgb(fig))
+        plt.close(fig)
+
+    _save_gif(frames, out_path, duration_ms=_ROT_DURATION_MS)
+    return str(out_path.resolve())
+
+
+def _write_slice_visuals(
+    *,
+    rho: np.ndarray,
+    side,
+    dens_path: Path,
+    denss,
+    pres: Path,
+    plt,
+) -> Tuple[str, str]:
+    """Write density_slices.gif + density_midplanes.png; return absolute paths."""
+    voxel_a = _mrc_voxel_side(rho, side)
+    support = None
+    support_path = _find_support_mrc(dens_path)
+    if support_path is not None:
+        sup, _ = denss.read_mrc(str(support_path))
+        support = np.asarray(sup, dtype=np.float64)
+
+    sx, sy, sz = _particle_aabb_slices(rho, voxel_a=voxel_a, support=support)
+    x_lo, x_hi = sx.start, sx.stop - 1
+    y_lo, y_hi = sy.start, sy.stop - 1
+    z_lo, z_hi = sz.start, sz.stop - 1
+
+    span_vox = max(x_hi - x_lo + 1, y_hi - y_lo + 1, z_hi - z_lo + 1)
+    panel_extent_nm = float(span_vox) * float(voxel_a) * _A_TO_NM
+    bar_nm = _round_scale_nm(panel_extent_nm)
+
+    crop = rho[sx, sy, sz]
+    pos = crop[np.isfinite(crop) & (crop > 0)]
+    vmin = 0.0
+    if pos.size:
+        vmax = float(np.percentile(pos, 99.0))
+        if not np.isfinite(vmax) or vmax <= vmin:
+            vmax = float(np.nanmax(pos))
+    else:
+        vmax = float(np.nanmax(crop)) if np.any(np.isfinite(crop)) else 1.0
+    if not np.isfinite(vmax) or vmax <= vmin:
+        vmax = vmin + 1.0
+
+    fracs = _ping_pong_fractions(span_vox)
+    frames: List[np.ndarray] = []
+    for frac in fracs:
+        x_f = float(x_lo + frac * (x_hi - x_lo))
+        y_f = float(y_lo + frac * (y_hi - y_lo))
+        z_f = float(z_lo + frac * (z_hi - z_lo))
+        fig = _make_slice_figure(
+            rho,
+            x_f=x_f,
+            y_f=y_f,
+            z_f=z_f,
+            sx=sx,
+            sy=sy,
+            sz=sz,
+            vmin=vmin,
+            vmax=vmax,
+            bar_nm=bar_nm,
+            panel_extent_nm=panel_extent_nm,
+        )
+        frames.append(_fig_to_rgb(fig))
+        plt.close(fig)
+
+    gif_path = pres / "density_slices.gif"
+    _save_gif(frames, gif_path, duration_ms=_FRAME_DURATION_MS)
+
+    x_m = 0.5 * (x_lo + x_hi)
+    y_m = 0.5 * (y_lo + y_hi)
+    z_m = 0.5 * (z_lo + z_hi)
+    fig = _make_slice_figure(
+        rho,
+        x_f=x_m,
+        y_f=y_m,
+        z_f=z_m,
+        sx=sx,
+        sy=sy,
+        sz=sz,
+        vmin=vmin,
+        vmax=vmax,
+        bar_nm=bar_nm,
+        panel_extent_nm=panel_extent_nm,
+    )
+    png_path = pres / "density_midplanes.png"
+    fig.savefig(png_path, dpi=160, facecolor="white")
+    plt.close(fig)
+    return str(gif_path.resolve()), str(png_path.resolve())
+
+
 def write_visuals(
     output_dir: str,
     *,
     density_map_path: str = "",
+    sigma_map_path: str = "",
     event_bus: Any = None,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    Write slice GIF + midplane PNG under ``{output_dir}/visuals/``.
+    Write presentation visuals under ``{output_dir}/visuals/``.
 
-    Three synced panels (YZ@x(t), XZ@y(t), XY@z(t)) sweep the particle AABB
-    (ρ ≥ 0.15·ρ_max or support MRC). Scale bar sits below the panels on white.
+    Always (when a density MRC is available):
+    - ``density_slices.gif`` / ``density_midplanes.png`` — synced orthographic cuts
+    - ``density_rotate.gif`` — rotating Liveview-style ρ point cloud
+
+    When ``sigma_map_path`` is present:
+    - ``sigma_rotate.gif`` — same cloud colored by σ (high σ → dim)
     """
     import matplotlib
 
@@ -292,11 +608,12 @@ def write_visuals(
         "visuals_dir": str(pres.resolve()),
         "slices_gif": "",
         "midplanes_png": "",
+        "density_rotate_gif": "",
+        "sigma_rotate_gif": "",
     }
 
     dens_path = Path(density_map_path) if density_map_path else None
     if dens_path is None or not dens_path.is_file():
-        # Fall back to newest/first *.mrc that is not support/sigma in output_dir.
         cands = sorted(
             p
             for p in od.glob("*.mrc")
@@ -327,98 +644,62 @@ def write_visuals(
     if rho.ndim != 3 or rho.size == 0:
         return empty
 
-    voxel_a = _mrc_voxel_side(rho, side)
-    support = None
-    support_path = _find_support_mrc(dens_path)
-    if support_path is not None:
-        sup, _ = denss.read_mrc(str(support_path))
-        support = np.asarray(sup, dtype=np.float64)
+    sigma_arr: Optional[np.ndarray] = None
+    sigma_path = Path(sigma_map_path) if sigma_map_path else None
+    if sigma_path is not None and sigma_path.is_file():
+        sig, _ = denss.read_mrc(str(sigma_path))
+        sigma_arr = np.asarray(sig, dtype=np.float64)
+        if sigma_arr.shape != rho.shape:
+            if event_bus:
+                from autosaxs.core.event_bus import EventType
 
-    sx, sy, sz = _particle_aabb_slices(rho, voxel_a=voxel_a, support=support)
-    x_lo, x_hi = sx.start, sx.stop - 1
-    y_lo, y_hi = sy.start, sy.stop - 1
-    z_lo, z_hi = sz.start, sz.stop - 1
-
-    # Shared square display extent (nm): max AABB side of the crop.
-    span_vox = max(x_hi - x_lo + 1, y_hi - y_lo + 1, z_hi - z_lo + 1)
-    panel_extent_nm = float(span_vox) * float(voxel_a) * _A_TO_NM
-    bar_nm = _round_scale_nm(panel_extent_nm)
-
-    crop = rho[sx, sy, sz]
-    pos = crop[np.isfinite(crop) & (crop > 0)]
-    vmin = 0.0
-    if pos.size:
-        vmax = float(np.percentile(pos, 99.0))
-        if not np.isfinite(vmax) or vmax <= vmin:
-            vmax = float(np.nanmax(pos))
-    else:
-        vmax = float(np.nanmax(crop)) if np.any(np.isfinite(crop)) else 1.0
-    if not np.isfinite(vmax) or vmax <= vmin:
-        vmax = vmin + 1.0
+                event_bus.publish(
+                    EventType.MESSAGE,
+                    {
+                        "text": (
+                            f"model_density: σ map shape {sigma_arr.shape} ≠ density "
+                            f"{rho.shape}; skipping sigma_rotate.gif"
+                        )
+                    },
+                )
+            sigma_arr = None
 
     if event_bus:
         from autosaxs.core.event_bus import EventType
 
         event_bus.publish(
             EventType.MESSAGE,
-            {
-                "text": (
-                    f"model_density: writing visuals "
-                    f"(AABB {x_hi - x_lo + 1}×{y_hi - y_lo + 1}×{z_hi - z_lo + 1})…"
-                )
-            },
+            {"text": "model_density: writing visuals (slices + rotating density/σ)…"},
         )
 
-    span_vox = max(x_hi - x_lo + 1, y_hi - y_lo + 1, z_hi - z_lo + 1)
-    fracs = _ping_pong_fractions(span_vox)
-
-    frames: List[np.ndarray] = []
-    for frac in fracs:
-        x_f = float(x_lo + frac * (x_hi - x_lo))
-        y_f = float(y_lo + frac * (y_hi - y_lo))
-        z_f = float(z_lo + frac * (z_hi - z_lo))
-        fig = _make_slice_figure(
-            rho,
-            x_f=x_f,
-            y_f=y_f,
-            z_f=z_f,
-            sx=sx,
-            sy=sy,
-            sz=sz,
-            vmin=vmin,
-            vmax=vmax,
-            bar_nm=bar_nm,
-            panel_extent_nm=panel_extent_nm,
-        )
-        frames.append(_fig_to_rgb(fig))
-        plt.close(fig)
-
-    gif_path = pres / "density_slices.gif"
-    _save_gif(frames, gif_path, duration_ms=_FRAME_DURATION_MS)
-
-    # Midplane PNG (center of AABB).
-    x_m = 0.5 * (x_lo + x_hi)
-    y_m = 0.5 * (y_lo + y_hi)
-    z_m = 0.5 * (z_lo + z_hi)
-    fig = _make_slice_figure(
-        rho,
-        x_f=x_m,
-        y_f=y_m,
-        z_f=z_m,
-        sx=sx,
-        sy=sy,
-        sz=sz,
-        vmin=vmin,
-        vmax=vmax,
-        bar_nm=bar_nm,
-        panel_extent_nm=panel_extent_nm,
+    slices_gif, midplanes_png = _write_slice_visuals(
+        rho=rho, side=side, dens_path=dens_path, denss=denss, pres=pres, plt=plt
     )
-    png_path = pres / "density_midplanes.png"
-    fig.savefig(png_path, dpi=160, facecolor="white")
-    plt.close(fig)
+
+    density_rotate_gif = ""
+    sigma_rotate_gif = ""
+    cloud = _build_density_cloud(rho, side, sigma=sigma_arr)
+    if cloud is not None:
+        density_rotate_gif = _write_rotate_gif(
+            cloud,
+            values=cloud["density"],
+            high_is_bright=True,
+            out_path=pres / "density_rotate.gif",
+            plt=plt,
+        )
+        if cloud.get("sigma") is not None:
+            sigma_rotate_gif = _write_rotate_gif(
+                cloud,
+                values=cloud["sigma"],
+                high_is_bright=False,
+                out_path=pres / "sigma_rotate.gif",
+                plt=plt,
+            )
 
     return {
         "visuals_dir": str(pres.resolve()),
-        "slices_gif": str(gif_path.resolve()),
-        "midplanes_png": str(png_path.resolve()),
+        "slices_gif": slices_gif,
+        "midplanes_png": midplanes_png,
+        "density_rotate_gif": density_rotate_gif,
+        "sigma_rotate_gif": sigma_rotate_gif,
     }

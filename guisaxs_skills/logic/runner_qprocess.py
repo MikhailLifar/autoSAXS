@@ -132,7 +132,7 @@ class SkillRunner(QObject):
         result = parse_key_value_stdout(self._stdout_buf)
         # Enrich artifacts for certain skills (GUI-side only; does not affect computation).
         if self._skill_name == "fit_distances":
-            bp = result.get("best_summary_path")
+            bp = result.get("fit_distances_log_path")
             if isinstance(bp, str) and bp.strip() and os.path.isfile(bp):
                 try:
                     data = yaml.safe_load(Path(bp).read_text(encoding="utf-8", errors="replace"))

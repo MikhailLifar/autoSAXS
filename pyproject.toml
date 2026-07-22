@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "autosaxs"
 version = "2.10.2"
 description = "Interactive SAXS pipeline core: calibration, integration, subtraction, ATSAS descriptors, plots, shape fitting, reports. After install, run `autosaxs --help`: epilog lists get-readme, get-skills, get-default-config (export docs and default config into your workspace)."
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 authors = []
 keywords = ["saxs", "small-angle scattering", "pyFAI", "ATSAS", "calibration", "integration"]
@@ -14,16 +14,17 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
     "ase",
     "fabio",
     "matplotlib",
+    "mcsas3>=1.0.6",
     "numpy",
     "pandas",
     "pyFAI",

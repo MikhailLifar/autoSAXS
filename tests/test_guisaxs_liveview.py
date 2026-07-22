@@ -939,7 +939,7 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
                 and not p.name.endswith("_fits.png")
                 for p in fd_dir.rglob("*.png")
             )
-            and any(sample_token in p.name for p in fd_dir.rglob("*_fit_distances_best.yml")),
+            and any(sample_token in p.name for p in fd_dir.rglob("*_fit_distances_log.yml")),
             timeout,
             step_sec=0.1,
         )

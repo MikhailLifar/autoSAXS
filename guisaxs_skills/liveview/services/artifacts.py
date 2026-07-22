@@ -152,7 +152,7 @@ _FIT_DISTANCES_QUALITY_KEYS = (
     "pr_quality_class",
     "overall_status",
     "quality_passport_path",
-    "best_summary_path",
+    "fit_distances_log_path",
     "fit_params_path",
 )
 
@@ -247,7 +247,10 @@ def merge_fit_distances_quality_fields(result: dict, *, watchdir: Path) -> dict[
             candidates.extend(
                 sorted(sd.glob("*_fit_distances_quality.yml"), key=lambda p: p.stat().st_mtime, reverse=True)
             )
-    bs = norm_artifact_path(out.get("best_summary_path"))
+            candidates.extend(
+                sorted(sd.glob("*_fit_distances_log.yml"), key=lambda p: p.stat().st_mtime, reverse=True)
+            )
+    bs = norm_artifact_path(out.get("fit_distances_log_path"))
     if bs:
         candidates.append(_resolve_under_watchdir(bs, watchdir))
     seen: set[str] = set()
@@ -261,14 +264,14 @@ def merge_fit_distances_quality_fields(result: dict, *, watchdir: Path) -> dict[
             quality.update(_read_fit_distances_quality_yaml(cand))
             out.setdefault("quality_passport_path", str(cand.resolve()))
             continue
-        if cand.name.endswith("_fit_distances_best.yml"):
+        if cand.name.endswith("_fit_distances_log.yml"):
             summary = _read_fit_distances_quality_yaml(cand)
             sel = summary.get("selected")
             if isinstance(sel, dict):
                 for k in ("first", "last"):
                     if sel.get(k) is not None and out.get(f"selected_{k}") is None:
                         out[f"selected_{k}"] = sel[k]
-            out.setdefault("best_summary_path", str(cand.resolve()))
+            out.setdefault("fit_distances_log_path", str(cand.resolve()))
     for key in _FIT_DISTANCES_QUALITY_KEYS:
         if key in quality and quality[key] is not None and out.get(key) in (None, "", []):
             val = quality[key]

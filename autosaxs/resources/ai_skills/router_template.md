@@ -37,7 +37,7 @@ The purpose and use-cases for each subskill can be derived from its **descriptio
 
 - Common patterns: calibration / geometry → azimuthal integration → buffer subtraction (if the notion of buffer is applicable)  → plots → analysis / fits.  
   - Typical monodisperse analysis: **fit-distances → model-bodies and model-dam or model-density** (bead models vs continuous density; prefer model-density for multi-contrast)  
-  - Typical polydisperse analysis (assuming spherical shape of the particles): **fit-sizes → model-mixture**  
+  - Typical polydisperse analysis (assuming spherical shape of the particles): **fit-sizes → model-dr-mc → model-mixture**  
 - State the sequence as explicit steps: **order → subskill path → rationale → what is still unknown or assumed**.  
 - After a step completes, **revisit the plan** before pulling in additional leaf skills.  
 

@@ -59,7 +59,7 @@ def _resolve_dist_guess_meters(merged: Dict) -> Optional[float]:
 
 
 def calibrate(
-    calib_image: SingletonTiffPathExpressionArg,
+    calibrant_image: SingletonTiffPathExpressionArg,
     output_dir: str = ".",
     *,
     config_path: Optional[ConfigPathExpressionArg] = None,
@@ -75,7 +75,7 @@ def calibrate(
 
     ### Arguments
 
-    - `calib_image` (str): Path to the calibration image (e.g. TIFF) used for ring analysis.
+    - `calibrant_image` (str): Path to the calibration image (e.g. TIFF) used for ring analysis.
     - `output_dir` (str, default `.`): Directory where results are written.
     - `config_path` (str | None, default `None`): Optional path to a YAML config file with a `calibrate` section. When omitted, bundled defaults from the installed `autosaxs` package are used.
     - `mask` (str): Path to a mask used during ring analysis. Supports .txt (NuPy format), .msk (Fit2d)
@@ -88,6 +88,13 @@ def calibrate(
     Important constraints:
 
     - `mask` is always required by the skill and the CLI (the GUI should treat it as a required field).
+
+    ### Short parameter list
+
+    - mask_mode: Default: load mask from file as is
+    - calibrant: name of the calibrant, default: AgBh
+    - wavelength: X-ray wavelength in Ångström
+    - dist_guess: Optional: initial sample-detector distance in metres (algorithm works good even if this is not set)
 
     ### Returns
 
@@ -106,7 +113,7 @@ def calibrate(
     from autosaxs.skill import calibrate
 
     out = calibrate(
-        calib_image="AgBh.tif",
+        calibrant_image="AgBh.tif",
         output_dir="calibration",
         mask="mask.msk",
         mask_mode="f",
@@ -144,13 +151,13 @@ def calibrate(
     dist_guess_m = _resolve_dist_guess_meters(merged)
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
-    calib_image = coerce_singleton_tiff_path_expression(calib_image)
+    calibrant_image = coerce_singleton_tiff_path_expression(calibrant_image)
     mask_expr = coerce_singleton_mask_expression(mask)
-    imgs = calib_image.unwrap()
+    imgs = calibrant_image.unwrap()
     mask_path = mask_expr.unwrap()[0]
     input_batch: List[Dict[str, Union[str, List[str]]]] = []
     for im in imgs:
-        inp: Dict[str, Union[str, List[str]]] = {"calib_image": im}
+        inp: Dict[str, Union[str, List[str]]] = {"calibrant_image": im}
         inp["mask"] = mask_path
         input_batch.append(inp)
     input_paths: Union[Dict[str, Union[str, List[str]]], List[Dict[str, Union[str, List[str]]]]]
@@ -168,9 +175,9 @@ def calibrate(
     )  # type: ignore[return-value]
 
 
-@apply_batch(stem_from_keys="calib_image", per_sample_subdir="never")
+@apply_batch(stem_from_keys="calibrant_image", per_sample_subdir="never")
 @run_with_cache(
-    path_keys_for_hash=["calib_image", "mask"],
+    path_keys_for_hash=["calibrant_image", "mask"],
     kwargs_for_hash_keys=["calibrant", "mask_mode", "wavelength_a", "dist_guess_m"],
     include_config_in_hash=True,
 )
@@ -187,11 +194,11 @@ def _calibrate_paths(
     dist_guess_m: Optional[float] = None,
 ) -> Dict[str, Union[str, List[str]]]:
     _ = use_cache, sample_index
-    calib_image = input_paths.get("calib_image")
-    if isinstance(calib_image, list):
-        calib_image = calib_image[0] if calib_image else None
-    if not calib_image or not os.path.isfile(calib_image):
-        raise FileNotFoundError("calibrate requires input_paths['calib_image']")
+    calibrant_image = input_paths.get("calibrant_image")
+    if isinstance(calibrant_image, list):
+        calibrant_image = calibrant_image[0] if calibrant_image else None
+    if not calibrant_image or not os.path.isfile(calibrant_image):
+        raise FileNotFoundError("calibrate requires input_paths['calibrant_image']")
     if not config:
         raise ValueError("calibrate requires config (merged calibrate section)")
     mask_mode_map = {
@@ -231,11 +238,11 @@ def _calibrate_paths(
     os.makedirs(output_dir, exist_ok=True)
     calibration_plots_dir = os.path.join(output_dir, "calibration_plots")
     os.makedirs(calibration_plots_dir, exist_ok=True)
-    stem = os.path.splitext(os.path.basename(calib_image))[0]
+    stem = os.path.splitext(os.path.basename(calibrant_image))[0]
     calibration_curve_plot_path = os.path.join(calibration_plots_dir, "calibration_curve.png")
     calibration_curve_dat_path = os.path.join(calibration_plots_dir, "calibration_curve.dat")
     result = autocalib_ring_analysis(
-        calib_image,
+        calibrant_image,
         cfg,
         mask_path=mask_path,
         plots_out_dir=Path(calibration_plots_dir),
@@ -249,7 +256,7 @@ def _calibrate_paths(
         theoretical_peaks = result.get("theoretical_peaks")
         metadata = {
             "type": "calibration_curve",
-            "calib_image": calib_image,
+            "calibrant_image": calibrant_image,
             "calibrant": calibrant,
         }
         if theoretical_peaks is not None:
@@ -264,7 +271,7 @@ def _calibrate_paths(
     PLTViewer.view_mask(
         result["calib_data"],
         result["integrator"].mask,
-        tiff_path=calib_image,
+        tiff_path=calibrant_image,
         show_duration=None,
         plotFilePath=calibration_mask_path,
     )

@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 
 from autosaxs.core.gnom import distribution_arrays, parse_gnom_out
+from autosaxs.core.viewer import write_iq_fit_comparison_png
 
 from ..deps import EventBus, EventType
 
@@ -36,24 +37,21 @@ def write_fit_vs_exp_png(
         if iq_table is None:
             fit_vs_exp_png_error = "could not parse I(q) table from .out"
         else:
-            q, I_exp, _sigma_arr, I_fit = iq_table
+            q, I_exp, sigma_arr, I_fit = iq_table
             fit_vs_exp_png_path = os.path.join(output_dir, f"{base}_fits.png")
-            fig, ax = plt.subplots(figsize=(7, 4))
-            ax.plot(q, I_exp, lw=3, label="exp")
-            ax.plot(q, I_fit, lw=2, label="fit")
-            ax.set_xlabel("q (nm$^{-1}$)")
-            ax.set_ylabel("I(q)")
-            ax.set_yscale("log")
             te = best.get("total_estimate")
             if te is not None:
-                ax.set_title(f"GNOM fit (system={system}): Total Estimate={float(te):.3f}")
+                title = f"GNOM fit (system={system}): Total Estimate={float(te):.3f}"
             else:
-                ax.set_title(f"GNOM fit (system={system})")
-            ax.grid(True, which="both", alpha=0.25)
-            ax.legend()
-            fig.tight_layout()
-            fig.savefig(fit_vs_exp_png_path, dpi=150, bbox_inches="tight")
-            plt.close(fig)
+                title = f"GNOM fit (system={system})"
+            write_iq_fit_comparison_png(
+                fit_vs_exp_png_path,
+                q,
+                I_exp,
+                [(I_fit, "fit")],
+                sigma=sigma_arr,
+                title=title,
+            )
             if event_bus:
                 event_bus.publish(
                     EventType.MESSAGE,

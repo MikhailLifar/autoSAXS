@@ -89,6 +89,11 @@ def integrate(
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
     - `validation_png` (bool, default `False`): If `True`, write a PNG next to each integrated curve showing the source image (log-intensity) with integrator-masked pixels highlighted in semi-transparent red.
 
+    ### Short parameter list
+
+    - npt: Number of integrated points, default: 1000
+    - validation_png: Show validation image
+
     ### Returns
 
     `dict[str, str | list[str]]` with:
@@ -182,6 +187,7 @@ def _integrate_paths(
         md_lines = [
             "### Azimuthal integration\n",
             f"Radial grid: **{npt}** points.\n",
+            f"![Integrated curve]({os.path.basename(dest)})\n",
         ]
         summary_refs = [
             {"role": "integrated_curve", "path": os.path.basename(dest), "format": "saxs_dat"},

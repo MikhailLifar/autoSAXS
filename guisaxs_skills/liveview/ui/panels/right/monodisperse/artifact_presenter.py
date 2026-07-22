@@ -177,9 +177,9 @@ class MonodisperseArtifactPresenter:
 
         lines: list[str] = []
         te = scalar_value(result.get("total_estimate"))
-        if te is None and isinstance(result.get("best_summary_path"), str):
+        if te is None and isinstance(result.get("fit_distances_log_path"), str):
             try:
-                summ = yaml.safe_load(Path(result["best_summary_path"]).read_text(encoding="utf-8"))
+                summ = yaml.safe_load(Path(result["fit_distances_log_path"]).read_text(encoding="utf-8"))
                 if isinstance(summ, dict):
                     sel = summ.get("selected")
                     if isinstance(sel, dict) and sel.get("total_estimate") is not None:

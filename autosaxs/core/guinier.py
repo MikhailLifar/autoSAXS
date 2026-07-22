@@ -1,7 +1,10 @@
-"""Guinier-region math (no I/O). Used by skill/fit_guinier and other skills."""
+"""Guinier-region math and results-file parsing. Used by skill/fit_guinier and other skills."""
 
 from __future__ import annotations
 
+import os
+import re
+import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -19,6 +22,213 @@ ADAPTIVE_I_START_Q_MAX_NM = 1.0
 ADAPTIVE_I_START_INDEX_MAX = 50
 ADAPTIVE_SELECTION_R2_MIN = 0.5
 ADAPTIVE_VALIDATED_STRONG_R2 = 0.85
+
+
+def _parse_optional_float(token: str) -> Optional[float]:
+    s = str(token).strip()
+    if not s or s.upper() == "N/A":
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _parse_optional_int(token: str) -> Optional[int]:
+    s = str(token).strip()
+    if not s or s.upper() == "N/A":
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        return None
+
+
+def parse_guinier_results_txt(results_path: Optional[str]) -> Dict[str, Any]:
+    """
+    Parse ``fit_guinier`` ``*_results.txt`` (chosen block + method comparison).
+
+    Returns a dict with chosen fields when present, e.g. ``rg``, ``i0``, ``q_min``,
+    ``q_max``, ``first_point_1based``, ``last_point_1based``, ``classification``,
+    ``selection_mode``, ``source``, plus ``methods`` mapping method name → details.
+    Empty dict if the path is missing or unreadable.
+    """
+    if not results_path or not os.path.isfile(results_path):
+        return {}
+    out: Dict[str, Any] = {"methods": {}}
+    section: Optional[str] = None
+    try:
+        with open(results_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return {}
+
+    for line in lines:
+        if "Chosen Guinier result" in line:
+            section = "chosen"
+            continue
+        if "All Guinier methods" in line:
+            section = "methods"
+            continue
+        if section == "chosen":
+            if line.strip().startswith(("Porod region", "Descriptors (used downstream)", "GNOM Results")):
+                section = None
+                continue
+            m = re.match(r"\s*Source\s*=\s*(.+)", line)
+            if m:
+                out["source"] = m.group(1).strip()
+                continue
+            m = re.match(r"\s*Rg\s*=\s*([\d.+\-eE]+)\s*nm", line)
+            if m:
+                out["rg"] = float(m.group(1))
+                continue
+            m = re.match(
+                r"\s*Rg span \(all tried intervals\)\s*=\s*\[([\d.+\-eE]+),\s*([\d.+\-eE]+)\]\s*nm",
+                line,
+            )
+            if m:
+                out["rg_min"] = float(m.group(1))
+                out["rg_max"] = float(m.group(2))
+                continue
+            m = re.match(r"\s*Rg StDev\s*=\s*([\d.+\-eE]+)\s*nm", line)
+            if m:
+                out["sigma_rg"] = float(m.group(1))
+                continue
+            m = re.match(r"\s*I\(0\)\s*=\s*([\d.+\-eE]+)", line)
+            if m:
+                out["i0"] = float(m.group(1))
+                continue
+            m = re.match(r"\s*I\(0\) StDev\s*=\s*([\d.+\-eE]+)", line)
+            if m:
+                out["sigma_i0"] = float(m.group(1))
+                continue
+            m = re.match(
+                r"\s*q range\s*=\s*\[([\d.+\-eE]+),\s*([\d.+\-eE]+)\]\s*nm\^-1",
+                line,
+            )
+            if m:
+                out["q_min"] = float(m.group(1))
+                out["q_max"] = float(m.group(2))
+                continue
+            m = re.match(r"\s*n points\s*=\s*(\d+)", line)
+            if m:
+                out["n_points"] = int(m.group(1))
+                continue
+            m = re.match(r"\s*first point \(1-based\)\s*=\s*(\d+)", line)
+            if m:
+                out["first_point_1based"] = int(m.group(1))
+                continue
+            m = re.match(r"\s*last point \(1-based\)\s*=\s*(\d+)", line)
+            if m:
+                out["last_point_1based"] = int(m.group(1))
+                continue
+            m = re.match(r"\s*i_start \(0-based\)\s*=\s*(\d+)", line)
+            if m:
+                out["i_start"] = int(m.group(1))
+                continue
+            m = re.match(r"\s*n candidates\s*=\s*(\d+)", line)
+            if m:
+                out["n_candidates"] = int(m.group(1))
+                continue
+            m = re.match(r"\s*fit quality \(selection metric\)\s*=\s*([\d.+\-eE]+)", line)
+            if m:
+                out["fit_quality"] = float(m.group(1))
+                continue
+            m = re.match(r"\s*interval R\^2\s*=\s*([\d.+\-eE]+)", line)
+            if m:
+                out["interval_r2"] = float(m.group(1))
+                continue
+            m = re.match(r"\s*validation R\^2 \(on \[q_max/2, q_max\]\)\s*=\s*([\d.+\-eE]+)", line)
+            if m:
+                out["validation_r2"] = float(m.group(1))
+                continue
+            m = re.match(r"\s*quality class\s*=\s*(.+)", line)
+            if m:
+                out["quality_class"] = m.group(1).strip()
+                continue
+            m = re.match(r"\s*selection mode\s*=\s*(.+)", line)
+            if m:
+                out["selection_mode"] = m.group(1).strip()
+                continue
+            m = re.match(r"\s*classification\s*\([^)]*\)\s*=\s*(.+)", line)
+            if m:
+                out["classification"] = m.group(1).strip()
+                continue
+            m = re.match(r"\s*Guinier plot\s*=\s*(.+)", line)
+            if m:
+                out["guinier_plot"] = m.group(1).strip()
+                continue
+        elif section == "methods":
+            if line.strip().startswith(("Porod region", "Descriptors (used downstream)", "GNOM Results")):
+                section = None
+                continue
+            m = re.match(
+                r"\s*(\w+):\s*Rg=(\S+)\s*nm,\s*n_points=(\S+),\s*fit_quality=(\S+),\s*"
+                r"interval=(\[[^\]]+\]|N/A),\s*validation_r2=(\S+)(.*)$",
+                line,
+            )
+            if not m:
+                m_none = re.match(r"\s*(\w+):\s*\(no result\)", line)
+                if m_none:
+                    out["methods"][m_none.group(1)] = None
+                continue
+            name = m.group(1)
+            interval_tok = m.group(5)
+            q_lo = q_hi = None
+            mi = re.match(r"\[([\d.+\-eE]+),\s*([\d.+\-eE]+)\]", interval_tok)
+            if mi:
+                q_lo = float(mi.group(1))
+                q_hi = float(mi.group(2))
+            rest = m.group(7) or ""
+            method: Dict[str, Any] = {
+                "Rg": _parse_optional_float(m.group(2)),
+                "n_points": _parse_optional_int(m.group(3)),
+                "fit_quality": _parse_optional_float(m.group(4)),
+                "guinier_interval": (q_lo, q_hi) if q_lo is not None and q_hi is not None else None,
+                "validation_r2": _parse_optional_float(m.group(6)),
+                "chosen": "[CHOSEN]" in rest,
+            }
+            ms = re.search(r"rg_span=\[([\d.+\-eE]+),([\d.+\-eE]+)\]", rest)
+            if ms:
+                method["rg_min"] = float(ms.group(1))
+                method["rg_max"] = float(ms.group(2))
+            mq = re.search(r"quality_class=(\S+)", rest)
+            if mq:
+                method["quality_class"] = mq.group(1).rstrip(",")
+            out["methods"][name] = method
+
+    if out.get("q_min") is not None and out.get("q_max") is not None:
+        out["guinier_interval"] = (out["q_min"], out["q_max"])
+    return out
+
+
+def guinier_results_as_descriptors(parsed: Dict[str, Any]) -> Dict[str, str]:
+    """Map :func:`parse_guinier_results_txt` output to report descriptor display keys."""
+    out: Dict[str, str] = {}
+    if not parsed:
+        return out
+    if parsed.get("rg") is not None:
+        out["Rg (nm)"] = f"{parsed['rg']}"
+    if parsed.get("i0") is not None:
+        out["I(0)"] = f"{parsed['i0']}"
+    if parsed.get("q_min") is not None and parsed.get("q_max") is not None:
+        out["Guinier interval (final)"] = f"[{parsed['q_min']}, {parsed['q_max']}] nm^-1"
+    else:
+        out["Guinier interval (final)"] = "N/A"
+    if parsed.get("classification") is not None:
+        out["Classification"] = str(parsed["classification"])
+    autorg = (parsed.get("methods") or {}).get("autorg")
+    if isinstance(autorg, dict) and autorg.get("Rg") is not None:
+        out["Rg autorg (nm)"] = f"{autorg['Rg']}"
+        interval = autorg.get("guinier_interval")
+        if interval and interval[0] is not None and interval[1] is not None:
+            out["Guinier interval (autorg)"] = f"[{interval[0]}, {interval[1]}] nm^-1"
+        else:
+            out["Guinier interval (autorg)"] = "N/A"
+    else:
+        out["Rg autorg (nm)"] = "N/A"
+        out["Guinier interval (autorg)"] = "N/A"
+    return out
 
 
 def parse_autorg_output(text: str, q: np.ndarray) -> Optional[Dict[str, Any]]:

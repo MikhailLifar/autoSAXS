@@ -228,10 +228,10 @@ Help assets live in `autosaxs/resources/help/guisaxs_liveview/`.
 
 ### Python environment
 
-Use conda env **`LLMAssistant`**:
+Use conda env **`dev_autosaxs`**:
 
-- Python: `/home/mikl/.conda/envs/LLMAssistant/bin/python`
-- pip: `/home/mikl/.conda/envs/LLMAssistant/bin/pip`
+- Python: `/home/mikl/.conda/envs/dev_autosaxs/bin/python`
+- pip: `/home/mikl/.conda/envs/dev_autosaxs/bin/pip`
 
 `helpers/run_tests.sh` uses these paths.
 
@@ -297,10 +297,10 @@ Run all (CI order): `repos/helpers/run_tests.sh`.
 
 ```bash
 cd /home/mikl/KurchatovCoop/repos
-/home/mikl/.conda/envs/LLMAssistant/bin/pip install -e ".[gui]"
-/home/mikl/.conda/envs/LLMAssistant/bin/autosaxs --help
-/home/mikl/.conda/envs/LLMAssistant/bin/python -m guisaxs_skills      # skills console
-/home/mikl/.conda/envs/LLMAssistant/bin/python -m guisaxs_liveview     # liveview
+/home/mikl/.conda/envs/dev_autosaxs/bin/pip install -e ".[gui]"
+/home/mikl/.conda/envs/dev_autosaxs/bin/autosaxs --help
+/home/mikl/.conda/envs/dev_autosaxs/bin/python -m guisaxs_skills      # skills console
+/home/mikl/.conda/envs/dev_autosaxs/bin/python -m guisaxs_liveview     # liveview
 ```
 
 Headless GUI tests: `xvfb-run -a python -m pytest tests/test_guisaxs_liveview.py`

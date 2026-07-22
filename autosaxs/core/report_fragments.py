@@ -41,6 +41,7 @@ SKILL_DEFAULT_ORDER: Dict[str, int] = {
     "analyze_kratky": 42,
     "fit_distances": 43,
     "fit_sizes": 44,
+    "model_dr_mc": 45,
     "model_mixture": 50,
     "fit_mixture": 50,  # deprecated alias id (legacy fragments)
     "model_bodies": 51,
@@ -198,6 +199,39 @@ def rewrite_markdown_image_paths_relative_to(body: str, base_dir: str) -> str:
     return _MD_IMAGE.sub(repl, body)
 
 
+def _render_saxs_dat_curve_png(dat_path: str, out_png: str, *, log_y: bool = True) -> bool:
+    """Render one 1D SAXS ``.dat`` curve to a PNG (for individual report assembly)."""
+    if not dat_path or not os.path.isfile(dat_path):
+        return False
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        q, I, _, _ = read_saxs(dat_path)
+        fig, ax = plt.subplots(figsize=(8.0, 5.0))
+        ax.plot(q, I)
+        ax.set_xlabel("q (nm^-1)")
+        ax.set_ylabel("I (a.u.)")
+        ax.set_title(os.path.basename(dat_path))
+        if log_y:
+            ax.set_yscale("log")
+        fig.tight_layout()
+        os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)
+        fig.savefig(out_png, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return os.path.isfile(out_png) and os.path.getsize(out_png) > 50
+    except Exception:
+        try:
+            import matplotlib.pyplot as plt
+
+            plt.close("all")
+        except Exception:
+            pass
+        return False
+
+
 def embed_individual_report_images(body: str, frag_dir: str, md_dir: str, dedup: Dict[str, str]) -> str:
     """Copy each referenced image next to the assembled ``.md`` and use basename-only ``![](_rptimg_….png)`` links (no ``..`` / directory paths in the Markdown)."""
 
@@ -215,10 +249,17 @@ def embed_individual_report_images(body: str, frag_dir: str, md_dir: str, dedup:
             return m.group(0)
         if abs_path not in dedup:
             ext = os.path.splitext(abs_path)[1].lower()
-            if ext not in (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"):
-                ext = ".png"
-            dedup[abs_path] = f"_rptimg_{uuid.uuid4().hex[:14]}{ext}"
-            shutil.copy2(abs_path, os.path.join(md_dir, dedup[abs_path]))
+            if ext == ".dat":
+                out_name = f"_rptimg_{uuid.uuid4().hex[:14]}.png"
+                out_full = os.path.join(md_dir, out_name)
+                if not _render_saxs_dat_curve_png(abs_path, out_full, log_y=True):
+                    return m.group(0)
+                dedup[abs_path] = out_name
+            else:
+                if ext not in (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"):
+                    ext = ".png"
+                dedup[abs_path] = f"_rptimg_{uuid.uuid4().hex[:14]}{ext}"
+                shutil.copy2(abs_path, os.path.join(md_dir, dedup[abs_path]))
         return f"![{alt}]({dedup[abs_path]})"
 
     return _MD_IMAGE.sub(repl, body)

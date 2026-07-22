@@ -2,8 +2,8 @@
 set -euo pipefail
 
 REPO_DIR="/home/mikl/KurchatovCoop/repos"
-PY="/home/mikl/.conda/envs/LLMAssistant/bin/python"
-PIP="/home/mikl/.conda/envs/LLMAssistant/bin/pip"
+PY="/home/mikl/.conda/envs/dev_autosaxs/bin/python"
+PIP="/home/mikl/.conda/envs/dev_autosaxs/bin/pip"
 
 mkdir -p "${REPO_DIR}"
 cd "${REPO_DIR}"

@@ -42,6 +42,7 @@ The purpose and use-cases for each subskill can be derived from its **descriptio
 - **`saxs-processing/analyze-kratky`** (`autosaxs analyze-kratky`) — SAXS / small-angle x-ray scattering: dimensionless Kratky conformation analysis on a 1D profile.
 - **`saxs-processing/fit-distances`** (`autosaxs fit-distances`) — SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve (real-space distance distribution).
 - **`saxs-processing/fit-sizes`** (`autosaxs fit-sizes`) — SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a size distribution function \(D(R)\) for a polydisperse system from a 1D SAXS curve (polydispersity; spheres/rods).
+- **`saxs-processing/model-dr-mc`** (`autosaxs model-dr-mc`) — SAXS / small-angle x-ray scattering: recover a form-free volume-weighted size distribution
 - **`saxs-processing/model-mixture`** (`autosaxs model-mixture`) — SAXS / small-angle x-ray scattering: run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and write a comparison plot, size distribution plot, and results CSV (mixture / multi-population size distributions).
 - **`saxs-processing/model-bodies`** (`autosaxs model-bodies`) — SAXS / small-angle x-ray scattering: run ATSAS 'bodies' shape fitting for multiple candidate shapes on a 1D profile, exporting fit files (FIR, PNG, YAML, CSV) and a comparison figure.
 - **`saxs-processing/model-dam`** (`autosaxs model-dam`) — SAXS / small-angle x-ray scattering: ab initio bead-model shape reconstruction with ATSAS DAMMIF, optionally followed by DAMAVER ensemble averaging (shape reconstruction / bead model / occupancy map). When no GNOM '.out' is supplied, 'fit_distances' is run in-process to obtain...
@@ -54,7 +55,7 @@ The purpose and use-cases for each subskill can be derived from its **descriptio
 
 - Common patterns: calibration / geometry → azimuthal integration → buffer subtraction (if the notion of buffer is applicable)  → plots → analysis / fits.  
   - Typical monodisperse analysis: **fit-distances → model-bodies and model-dam or model-density** (bead models vs continuous density; prefer model-density for multi-contrast)  
-  - Typical polydisperse analysis (assuming spherical shape of the particles): **fit-sizes → model-mixture**  
+  - Typical polydisperse analysis (assuming spherical shape of the particles): **fit-sizes → model-dr-mc → model-mixture**  
 - State the sequence as explicit steps: **order → subskill path → rationale → what is still unknown or assumed**.  
 - After a step completes, **revisit the plan** before pulling in additional leaf skills.  
 

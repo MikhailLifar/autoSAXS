@@ -71,12 +71,12 @@ def _run_gnom_pr_once(
     out_path: str,
 ) -> tuple[bool, int, str, str]:
     """Run monodisperse GNOM (system=0). Returns (ok, returncode, stderr, out_text)."""
-    atsas_dat_arg = atsas_dat_path
-    atsas_dat_local = os.path.basename(atsas_dat_path)
-    if os.path.isfile(os.path.join(output_dir, atsas_dat_local)):
-        atsas_dat_arg = atsas_dat_local
-    out_arg = os.path.basename(out_path) if os.path.dirname(out_path) else out_path
-    out_effective_path = os.path.join(output_dir, out_arg)
+    # Absolute paths: cwd is often an ensemble subdir, while the ATSAS .dat lives in the
+    # sample output dir — relative paths break under that cwd (same pattern as DATGNOM).
+    atsas_dat_path_abs = str(Path(atsas_dat_path).expanduser().resolve())
+    out_path_abs = str(Path(out_path).expanduser().resolve())
+    output_dir_abs = str(Path(output_dir).expanduser().resolve())
+    os.makedirs(output_dir_abs, exist_ok=True)
 
     cmd: List[str] = [
         "gnom",
@@ -90,14 +90,14 @@ def _run_gnom_pr_once(
         cmd.append(f"--last={int(last)}")
     if alpha is not None and np.isfinite(float(alpha)) and float(alpha) > 0:
         cmd.append(f"--alpha={float(alpha):.6g}")
-    cmd += ["-o", out_arg, atsas_dat_arg]
-    proc = subprocess.run(cmd, cwd=output_dir, capture_output=True, text=True)
+    cmd += ["-o", out_path_abs, atsas_dat_path_abs]
+    proc = subprocess.run(cmd, cwd=output_dir_abs, capture_output=True, text=True)
     if proc.returncode != 0:
         return False, int(proc.returncode), (proc.stderr or proc.stdout or "")[:2000], ""
-    if not os.path.isfile(out_effective_path):
+    if not os.path.isfile(out_path_abs):
         return False, int(proc.returncode), "gnom reported success but output file was not created", ""
     try:
-        out_text = Path(out_effective_path).read_text(errors="replace")
+        out_text = Path(out_path_abs).read_text(errors="replace")
     except OSError as e:
         return False, int(proc.returncode), f"failed to read GNOM output: {e}", ""
     return True, int(proc.returncode), (proc.stderr or "")[:2000], out_text
