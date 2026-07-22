@@ -1,6 +1,6 @@
 # guisaxs-skills — Design notes (implementation choices)
 
-This document records **design choices** for the future implementation of the PyQt5 skills GUI described in `repos/docs/guisaxs_skills_spec.md`. It is intentionally broader and more pragmatic than the spec: it answers “how will we structure and ship it?”
+This document records **design choices** for the future implementation of the PyQt5 skills GUI described in `docs/guisaxs_skills_spec.md`. It is intentionally broader and more pragmatic than the spec: it answers “how will we structure and ship it?”
 
 ---
 
@@ -8,9 +8,9 @@ This document records **design choices** for the future implementation of the Py
 
 ### 1.1 New top-level package
 
-Create a new Python package under `repos/`:
+Create a new Python package under `autosaxs/` (package repo):
 
-- `repos/guisaxs_skills/`
+- `src/guisaxs_skills/`
   - `__init__.py`
   - `__main__.py` (enables `python -m guisaxs_skills`)
   - `app.py` (Qt application bootstrap; creates EventBus, wires layers, starts window)

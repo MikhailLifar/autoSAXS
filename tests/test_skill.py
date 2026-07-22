@@ -876,6 +876,17 @@ def test_subtract_applies_bundled_defaults_with_q_window_from_kwargs(monkeypatch
 
 
 # ---------------------------------------------------------------------------
+# ATSAS probe stub (require_atsas → dammif -v before skill body)
+# ---------------------------------------------------------------------------
+def _stub_atsas_installed(monkeypatch) -> None:
+    """Avoid real ATSAS probe; needed when tests replace subprocess.run globally."""
+    monkeypatch.setattr(
+        "autosaxs.skill.skill_wrap.ensure_atsas_installed",
+        lambda: "3.2.1",
+    )
+
+
+# ---------------------------------------------------------------------------
 # fit_sizes
 # ---------------------------------------------------------------------------
 def _fake_gnom_out_text(total_estimate: float = 0.9, neg_d_fraction: float = 0.0) -> str:
@@ -912,6 +923,7 @@ def test_fit_sizes_contract(monkeypatch):
     """With rmax and first set, only GNOM is invoked (no fit_guinier)."""
     import subprocess as _sp
 
+    _stub_atsas_installed(monkeypatch)
     guinier_calls = []
 
     def _guinier_guard(*_a, **_k):
@@ -992,6 +1004,7 @@ def test_fit_sizes_score_te_minus_nf():
 def test_fit_sizes_rmax_optimization_invoked(monkeypatch):
     import subprocess as _sp
 
+    _stub_atsas_installed(monkeypatch)
     guinier_calls = []
     optimize_calls = []
 
@@ -1049,6 +1062,7 @@ def test_model_bodies_first_from_guinier(monkeypatch):
     import subprocess as _sp
     import importlib as _importlib
 
+    _stub_atsas_installed(monkeypatch)
     _mod = _importlib.import_module("autosaxs.skill.model_bodies")
     guinier_calls = []
 
@@ -1087,6 +1101,7 @@ def test_model_bodies_skips_guinier_when_first_set(monkeypatch):
     import subprocess as _sp
     import importlib as _importlib
 
+    _stub_atsas_installed(monkeypatch)
     guinier_calls = []
 
     def _guinier_guard(*_a, **_k):
@@ -1229,6 +1244,7 @@ def _write_minimal_dammif_cif(path: str) -> None:
 def test_model_dam_calls_fit_distances_when_gnom_omitted(monkeypatch):
     import subprocess as _sp
 
+    _stub_atsas_installed(monkeypatch)
     fit_distances_calls = []
     dammif_gnom_args = []
 
@@ -1290,6 +1306,8 @@ def test_model_dam_calls_fit_distances_when_gnom_omitted(monkeypatch):
 def test_model_dam_skips_fit_distances_when_gnom_provided(monkeypatch):
     import subprocess as _sp
 
+    _stub_atsas_installed(monkeypatch)
+
     def _guard(*_a, **_k):
         raise AssertionError("fit_distances should not run when gnom_path is set")
 
@@ -1327,6 +1345,8 @@ def test_model_dam_skips_fit_distances_when_gnom_provided(monkeypatch):
 
 def test_model_dam_n_runs_runs_damaver(monkeypatch):
     import subprocess as _sp
+
+    _stub_atsas_installed(monkeypatch)
 
     def _guard(*_a, **_k):
         raise AssertionError("fit_distances should not run when gnom_path is set")
@@ -1399,6 +1419,7 @@ def test_fit_dammif_deprecated_alias(monkeypatch):
     """Deprecated fit_dammif still forwards to model_dam."""
     import subprocess as _sp
 
+    _stub_atsas_installed(monkeypatch)
     monkeypatch.setattr(
         "autosaxs.skill.model_dam.dam._gnom_path_from_fit_distances",
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should use gnom_path")),
@@ -1537,6 +1558,7 @@ def test_fit_bodies_deprecated_alias(monkeypatch):
     """Deprecated fit_bodies still forwards to model_bodies."""
     import subprocess as _sp
 
+    _stub_atsas_installed(monkeypatch)
     monkeypatch.setattr(
         "autosaxs.skill.model_bodies.run_guinier_analysis",
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should pass first")),
@@ -1642,6 +1664,7 @@ def test_fit_distances_contract(monkeypatch):
     """
     import subprocess as _sp
 
+    _stub_atsas_installed(monkeypatch)
     with tempfile.TemporaryDirectory() as tmp:
         q = np.linspace(0.05, 2.0, 60)
         I = np.exp(-q**2) + 0.01
@@ -1700,6 +1723,7 @@ def test_fit_distances_rg_optimization_invoked(monkeypatch):
     """When rg_nm is omitted, fit_guinier and bounded Rg optimization run."""
     import subprocess as _sp
 
+    _stub_atsas_installed(monkeypatch)
     guinier_calls = []
     optimize_calls = []
 
@@ -1749,6 +1773,8 @@ def test_fit_distances_rg_optimization_invoked(monkeypatch):
 def test_fit_distances_all_runs_failed(monkeypatch):
     import subprocess as _sp
 
+    _stub_atsas_installed(monkeypatch)
+
     def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
         return _sp.CompletedProcess(args=cmd, returncode=1, stdout="", stderr="DATGNOM failed (fake)")
 
@@ -1780,6 +1806,8 @@ def test_fit_distances_all_runs_failed(monkeypatch):
 
 def test_fit_sizes_all_runs_failed(monkeypatch):
     import subprocess as _sp
+
+    _stub_atsas_installed(monkeypatch)
 
     def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
         return _sp.CompletedProcess(args=cmd, returncode=1, stdout="", stderr="GNOM failed (fake)")

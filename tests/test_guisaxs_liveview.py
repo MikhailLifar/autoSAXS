@@ -11,7 +11,7 @@ Scenario:
 - Compare integrated + subtracted curves to validation baselines using the same regression metric as test_skills_real_data.
 
 Requires a display (use xvfb on CI), e.g.:
-  xvfb-run -a /path/to/python -m pytest repos/tests/test_guisaxs_liveview.py -v
+  xvfb-run -a /path/to/python -m pytest tests/test_guisaxs_liveview.py -v
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ VALIDATION_RAW = os.path.join(VALIDATION_DIR, "raw")
 
 _VALIDATION_MISSING_MSG = (
     f"Validation directory not found: {VALIDATION_DIR}. "
-    "Run: python repos/scripts/setup_validation_data.py"
+    "Run: python scripts/setup_validation_data.py"
 )
 
 

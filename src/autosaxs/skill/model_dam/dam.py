@@ -28,6 +28,7 @@ from ..deps import (
     ensure_q_nm,
     read_bodies_cif,
     read_saxs,
+    require_atsas,
     run_with_cache,
 )
 from autosaxs.core.viewer import write_iq_fit_comparison_png
@@ -435,6 +436,7 @@ def _run_damaver(
 
 
 @apply_batch(stem_from_keys="profile", per_sample_subdir="always")
+@require_atsas
 @run_with_cache(
     path_keys_for_hash=["profile", "gnom_path"],
     kwargs_for_hash=None,

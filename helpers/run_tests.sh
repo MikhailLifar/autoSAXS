@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_DIR="/home/mikl/KurchatovCoop/repos"
+REPO_DIR="/home/mikl/KurchatovCoop/autosaxs"
 PY="/home/mikl/.conda/envs/dev_autosaxs/bin/python"
 PIP="/home/mikl/.conda/envs/dev_autosaxs/bin/pip"
 

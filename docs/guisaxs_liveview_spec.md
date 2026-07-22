@@ -1,6 +1,6 @@
 # guisaxs-liveview — Technical Specification
 
-This document specifies a new desktop GUI application (“guisaxs-liveview”) for **live, queued processing** of incoming SAXS `.tif` images in a watched directory. It is written to be precise enough to implement **while reusing `repos/guisaxs_skills/` widgets and conventions as much as possible**.
+This document specifies a new desktop GUI application (“guisaxs-liveview”) for **live, queued processing** of incoming SAXS `.tif` images in a watched directory. It is written to be precise enough to implement **while reusing `src/guisaxs_skills/` widgets and conventions as much as possible**.
 
 ---
 
@@ -38,7 +38,7 @@ This document specifies a new desktop GUI application (“guisaxs-liveview”) f
 
 ### 2.1 Reuse `guisaxs_skills` by maximum extent possible (hard requirement)
 
-The implementation MUST reuse the existing `repos/guisaxs_skills/` building blocks wherever feasible, including (non-exhaustive):
+The implementation MUST reuse the existing `src/guisaxs_skills/` building blocks wherever feasible, including (non-exhaustive):
 
 - `ui/path_field.py` for directory selection and file path inputs (DnD + browse + manual entry).
 - `ui/curve_plot.py`, `ui/preview_panel.py`, and any existing viewer components for `.png`/curve previews.
@@ -261,7 +261,7 @@ Use a three-column main window (a horizontal splitter) consistent with `guisaxs_
 #### 6.2.2 Calibration panel (top)
 
 - Must reuse the existing “calibrate skill panel” patterns from `guisaxs_skills`.
-- User sets parameters for `calibrate` (matching the existing calibrate panel in `repos/guisaxs_skills/`).
+- User sets parameters for `calibrate` (matching the existing calibrate panel in `src/guisaxs_skills/`).
 - On “Run”:
   - invoke `calibrate` (isolated process)
   - on success: transition to State B
@@ -336,7 +336,7 @@ Under the watch directory, the app MUST create (if missing):
 
 ### 7.2 Naming policy (hard requirement)
 
-File naming MUST follow the standard autosaxs conventions already used elsewhere in this repository (see `repos/guisaxs_skills/` practices). The liveview app must **not** invent a new naming scheme.
+File naming MUST follow the standard autosaxs conventions already used elsewhere in this repository (see `src/guisaxs_skills/` practices). The liveview app must **not** invent a new naming scheme.
 
 The spec intentionally does not restate exact filename templates here; the implementation must centralize naming using the same helper(s)/conventions as `guisaxs_skills` (and/or autosaxs utilities) so outputs are consistent across tools.
 
@@ -394,7 +394,7 @@ The `model_bodies` skill MUST accept an optional argument specifying which ATSAS
 - **Default:** `None` (or equivalent) means **all** supported models (the full canonical set used by the skill).
 - **Non-default:** a **subset** of model names (any non-empty subset of that canonical set). The monodisperse wizard **BODIES** shape pane MUST expose this as user-configurable parameters and pass them into the skill invocation.
 
-Canonical names are defined in code (`BODIES_SHAPES_LIST` in `repos/autosaxs/skill/model_bodies.py`); the UI SHOULD list the same names for multi-select.
+Canonical names are defined in code (`BODIES_SHAPES_LIST` in `src/autosaxs/skill/model_bodies.py`); the UI SHOULD list the same names for multi-select.
 
 ### 8.7 Interactive 3D viewer (implementation requirement)
 

@@ -13,7 +13,7 @@ evaluates:
   - simple left/right imbalance metrics on the gated, high-weight set
 
 Run:
-  /home/mikl/.conda/envs/LLMAssistant/bin/python repos/tests/optional/diag_center_bias_alignment_gate.py \
+  /home/mikl/.conda/envs/LLMAssistant/bin/python tests/optional/diag_center_bias_alignment_gate.py \
     --image data/calib_benchmark/0000_AgBh200_135.6.tif \
     --config-path data/calib_benchmark_200_to_500/config.conf
 """
@@ -28,7 +28,7 @@ from typing import Tuple
 import numpy as np
 
 WORKSPACE_ROOT = Path("/home/mikl/KurchatovCoop")
-sys.path.insert(0, str(WORKSPACE_ROOT / "repos"))
+sys.path.insert(0, str(WORKSPACE_ROOT / "autosaxs" / "src"))
 
 from autosaxs.core.utils import load_config, read_from_tiff  # type: ignore
 from autosaxs.skill.calibrate.autocalib import autocalib_ring_analysis, _log1p_image  # type: ignore

@@ -1,19 +1,98 @@
 # Wrappers and common functionality for skills.
-# See repos/docs/skills_paradigm.md.
+# See docs/skills_paradigm.md.
 
 from __future__ import annotations
 
 import functools
 import hashlib
 import os
+import re
+import subprocess
+import warnings
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Literal, Optional, Union, overload
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, overload
 
 import yaml
 
 from ..core.event_bus import EventBus, EventType
 
 CACHE_FILENAME = ".cache"
+
+RECOMMENDED_ATSAS_VERSION = "3.2.1"
+ATSAS_DOWNLOAD_URL = "https://www.embl-hamburg.de/biosaxs/download.html"
+
+
+def probe_atsas() -> Tuple[Optional[str], Optional[str]]:
+    """
+    Probe ATSAS via ``dammif -v``.
+
+    Returns ``(version, error)``:
+    - ``(version, None)`` when a version string was parsed
+    - ``(None, None)`` when dammif is present but version could not be parsed
+    - ``(None, message)`` when dammif is missing or the probe failed
+    """
+    try:
+        result = subprocess.run(
+            ["dammif", "-v"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        out = (result.stdout or "") + (result.stderr or "")
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        return None, (
+            "Apparently ATSAS package, on which some autosaxs skills rely, is not installed "
+            f"(dammif not runnable: {exc}). Install ATSAS here: {ATSAS_DOWNLOAD_URL}"
+        )
+    match = re.search(r"ATSAS\s+(\d+\.\d+\.\d+)", out)
+    if not match:
+        return None, None
+    return match.group(1), None
+
+
+def warn_atsas_on_import() -> None:
+    """Soft import-time check: warn on missing/mismatched ATSAS; never raise."""
+    version, err = probe_atsas()
+    if err:
+        warnings.warn(err, RuntimeWarning, stacklevel=2)
+        return
+    if version is None:
+        warnings.warn(
+            "ATSAS appears to be installed (dammif found), but its version could not be parsed from "
+            "`dammif -v` output. Some autosaxs functions may not work as expected.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        print("ATSAS installed - autosaxs is ready for use!")
+        return
+    if version != RECOMMENDED_ATSAS_VERSION:
+        warnings.warn(
+            f"ATSAS version mismatch: autosaxs was developed/tested with ATSAS "
+            f"{RECOMMENDED_ATSAS_VERSION}, but detected ATSAS {version}. "
+            "Some autosaxs functions may not work due to the mismatch.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    print(f"ATSAS {version} installed - autosaxs is ready for use!")
+
+
+def ensure_atsas_installed() -> str:
+    """Raise if ATSAS is not available; return parsed version or ``\"unknown\"``."""
+    version, err = probe_atsas()
+    if err:
+        raise RuntimeError(err)
+    return version or "unknown"
+
+
+def require_atsas(skill_impl: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorator: raise immediately if ATSAS is not installed before running the skill body."""
+
+    @functools.wraps(skill_impl)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        ensure_atsas_installed()
+        return skill_impl(*args, **kwargs)
+
+    return wrapper
 
 
 # ---------------------------------------------------------------------------

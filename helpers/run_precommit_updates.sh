@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_DIR="/home/mikl/KurchatovCoop/repos"
+REPO_DIR="/home/mikl/KurchatovCoop/autosaxs"
 PY="/home/mikl/.conda/envs/dev_autosaxs/bin/python"
 PIP="/home/mikl/.conda/envs/dev_autosaxs/bin/pip"
 AUTOSAXS="/home/mikl/.conda/envs/dev_autosaxs/bin/autosaxs"
@@ -32,11 +32,11 @@ step() {
   echo "==> $*"
 }
 
-step "Update skills documentation"
-"${PY}" "${REPO_DIR}/autosaxs_skills_explained.py"
+step "Update package docs (README.md + autosaxs-docs/skills_reference.md)"
+"${PY}" -c "from autosaxs.resources.readme.autosaxs_skills_explained import generate_docs; print(generate_docs(output_dir='.'))"
 
-step "Update autosaxs version"
-PYCODE=$'from __future__ import annotations\n\nimport re\nimport sys\nfrom pathlib import Path\n\nREPO = Path(\"/home/mikl/KurchatovCoop/repos\")\nPYPROJECT = REPO / \"pyproject.toml\"\nINIT = REPO / \"autosaxs\" / \"__init__.py\"\n\nrequested = (sys.argv[1].strip() if len(sys.argv) > 1 else \"\") or None\n\npy_text = PYPROJECT.read_text(encoding=\"utf-8\")\nm = re.search(r\"(?m)^\\s*version\\s*=\\s*\\\"(\\d+)\\.(\\d+)\\.(\\d+)\\\"\\s*$\", py_text)\nif not m:\n    raise SystemExit(\"Could not find [project].version in pyproject.toml\")\ncur = tuple(map(int, m.groups()))\n\ndef parse_ver(s: str) -> tuple[int, int, int]:\n    mm = re.fullmatch(r\"(\\d+)\\.(\\d+)\\.(\\d+)\", s.strip())\n    if not mm:\n        raise SystemExit(f\"Invalid version format: {s!r} (expected MAJOR.MINOR.PATCH)\")\n    return tuple(map(int, mm.groups()))\n\nif requested is None:\n    new = (cur[0], cur[1], cur[2] + 1)\nelse:\n    new = parse_ver(requested)\n    if new <= cur:\n        raise SystemExit(\n            f\"Requested version {requested} is not larger than current {cur[0]}.{cur[1]}.{cur[2]}\"\n        )\n\nnew_ver = f\"{new[0]}.{new[1]}.{new[2]}\"\n\npy_text2 = re.sub(\n    r\"(?m)^(\\s*version\\s*=\\s*\\\")(\\d+\\.\\d+\\.\\d+)(\\\"\\s*)$\",\n    lambda mm: f\"{mm.group(1)}{new_ver}{mm.group(3)}\",\n    py_text,\n    count=1,\n)\nif py_text2 == py_text:\n    raise SystemExit(\"Failed to update version in pyproject.toml\")\nPYPROJECT.write_text(py_text2, encoding=\"utf-8\")\n\ninit_text = INIT.read_text(encoding=\"utf-8\")\ninit_text2 = re.sub(\n    r\"(?m)^(?:__version__\\s*=\\s*\\\")(\\d+\\.\\d+\\.\\d+)(\\\")\\s*$\",\n    lambda mm: f\"__version__ = \\\"{new_ver}\\\"\",\n    init_text,\n    count=1,\n)\nif init_text2 == init_text:\n    raise SystemExit(\"Failed to update __version__ in autosaxs/__init__.py\")\nINIT.write_text(init_text2, encoding=\"utf-8\")\n\nprint(new_ver)\n'
+step "Update autosaxs version in pyproject.toml (single source of truth)"
+PYCODE=$'from __future__ import annotations\n\nimport re\nimport sys\nfrom pathlib import Path\n\nREPO = Path("/home/mikl/KurchatovCoop/autosaxs")\nPYPROJECT = REPO / "pyproject.toml"\n\nrequested = (sys.argv[1].strip() if len(sys.argv) > 1 else "") or None\n\npy_text = PYPROJECT.read_text(encoding="utf-8")\nm = re.search(r"(?m)^\\s*version\\s*=\\s*\\"(\\d+)\\.(\\d+)\\.(\\d+)\\"\\s*$", py_text)\nif not m:\n    raise SystemExit("Could not find [project].version in pyproject.toml")\ncur = tuple(map(int, m.groups()))\n\ndef parse_ver(s: str) -> tuple[int, int, int]:\n    mm = re.fullmatch(r"(\\d+)\\.(\\d+)\\.(\\d+)", s.strip())\n    if not mm:\n        raise SystemExit(f"Invalid version format: {s!r} (expected MAJOR.MINOR.PATCH)")\n    return tuple(map(int, mm.groups()))\n\nif requested is None:\n    new = (cur[0], cur[1], cur[2] + 1)\nelse:\n    new = parse_ver(requested)\n    if new <= cur:\n        raise SystemExit(\n            f"Requested version {requested} is not larger than current {cur[0]}.{cur[1]}.{cur[2]}"\n        )\n\nnew_ver = f"{new[0]}.{new[1]}.{new[2]}"\n\npy_text2 = re.sub(\n    r"(?m)^(\\s*version\\s*=\\s*\\")(\\d+\\.\\d+\\.\\d+)(\\"\\s*)$",\n    lambda mm: f"{mm.group(1)}{new_ver}{mm.group(3)}",\n    py_text,\n    count=1,\n)\nif py_text2 == py_text:\n    raise SystemExit("Failed to update version in pyproject.toml")\nPYPROJECT.write_text(py_text2, encoding="utf-8")\nprint(new_ver)\n'
 NEW_VERSION="$(${PY} -c "${PYCODE}" "${REQUESTED_VERSION}")"
 echo "autosaxs version is now ${NEW_VERSION}"
 
@@ -56,4 +56,3 @@ step "Verify reinstall + version"
 step "Pre-commit updates OK (version ${NEW_VERSION})"
 echo "${NEW_VERSION}"
 echo "run_precommit_updates.sh finished at $(date -Is)"
-

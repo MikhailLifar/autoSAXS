@@ -41,7 +41,7 @@ from autosaxs.skill.calibrate.autocalib import _log1p_image  # reuse canonical l
 
 
 WORKSPACE_ROOT = Path("/home/mikl/KurchatovCoop")
-REPOS_DIR = WORKSPACE_ROOT / "repos"
+PKG_SRC = WORKSPACE_ROOT / "autosaxs" / "src"
 
 
 @dataclass(frozen=True)

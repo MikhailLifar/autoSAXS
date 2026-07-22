@@ -13,11 +13,11 @@ Algorithm (high level):
   from the vote map via top-quantile weighted centroid (more stable than argmax
   when the peak is broad/flat).
 
-The script uses the same data directory as repos/tests/test.ipynb and saves
+The script uses the same data directory as tests/test.ipynb and saves
 similar matplotlib visualizations as PNGs.
 
 Run:
-  /home/mikl/.conda/envs/LLMAssistant/bin/python repos/tests/test_center_grad_ls.py
+  /home/mikl/.conda/envs/LLMAssistant/bin/python tests/test_center_grad_ls.py
 """
 
 from __future__ import annotations
@@ -37,10 +37,10 @@ import scipy.ndimage as ndi
 
 
 WORKSPACE_ROOT = Path("/home/mikl/KurchatovCoop")
-REPOS_DIR = WORKSPACE_ROOT / "repos"
+PKG_SRC = WORKSPACE_ROOT / "autosaxs" / "src"
 
-if str(REPOS_DIR) not in sys.path:
-    sys.path.insert(0, str(REPOS_DIR))
+if str(PKG_SRC) not in sys.path:
+    sys.path.insert(0, str(PKG_SRC))
 
 from autosaxs.core.utils import read_from_tiff  # noqa: E402
 

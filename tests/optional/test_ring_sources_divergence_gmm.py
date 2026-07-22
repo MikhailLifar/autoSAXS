@@ -8,10 +8,11 @@ from pathlib import Path
 
 import numpy as np
 
-WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
-REPOS_DIR = WORKSPACE_ROOT / "repos"
-if str(REPOS_DIR) not in sys.path:
-    sys.path.insert(0, str(REPOS_DIR))
+PKG_ROOT = Path(__file__).resolve().parents[2]  # …/autosaxs
+WORKSPACE_ROOT = PKG_ROOT.parent  # …/KurchatovCoop
+PKG_SRC = PKG_ROOT / "src"
+if str(PKG_SRC) not in sys.path:
+    sys.path.insert(0, str(PKG_SRC))
 
 from autosaxs.skill.calibrate.autocalib import autocalib_ring_analysis, ring_analysis  # noqa: E402,F401
 from autosaxs.core.utils import read_from_tiff  # noqa: E402

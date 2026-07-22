@@ -1,3 +1,0 @@
-autosaxs install:
-pip install git+https://github.com/MikhailLifar/autoSAXS.git
-pip install --force-reinstall --no-cache-dir git+https://github.com/MikhailLifar/autoSAXS.git

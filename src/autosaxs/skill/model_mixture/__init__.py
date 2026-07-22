@@ -10,7 +10,7 @@ import yaml
 from autosaxs.core.event_bus import EventBus, EventType
 
 from ..config import merge_skill_params, resolve_optional_config_path
-from ..skill_wrap import apply_batch, run_with_cache
+from ..skill_wrap import apply_batch, require_atsas, run_with_cache
 from ..common import (
     ConfigPathExpressionArg,
     DatPathExpressionArg,
@@ -303,6 +303,7 @@ def model_mixture(
 
 
 @apply_batch(stem_from_keys="profile", per_sample_subdir="always")
+@require_atsas
 @run_with_cache(
     path_keys_for_hash=["profile"],
     kwargs_for_hash_keys=["q_range_nm", "mixture_param_overrides"],

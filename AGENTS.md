@@ -1,7 +1,7 @@
 # AGENTS.md — navigation cache for this repo
 
 **Purpose:** structural and architectural notes so agents do not re-discover the codebase each session.  
-**Not** a user manual — see `README.md`, `docs/`, and `autosaxs get-readme`.  
+**Not** a user manual — see `README.md`, `autosaxs-docs/skills_reference.md`, `docs/`, and `autosaxs get-docs`.  
 **Maintain this file:** update when you add/move modules, change architecture, or learn a non-obvious convention.
 
 ---
@@ -10,12 +10,13 @@
 
 | Path | What it is |
 |------|------------|
-| `/home/mikl/KurchatovCoop/repos/` | **Git repo root** — `pyproject.toml`, tests, docs, `.cursor/` |
-| `/home/mikl/KurchatovCoop/repos/src/` | **Installable packages** (`autosaxs`, `guisaxs_skills`, `guisaxs_liveview`) |
-| `/home/mikl/KurchatovCoop/` | **Parent workspace** — validation data, sample TIFFs, one-off scripts, experiment outputs |
-| `/home/mikl/KurchatovCoop/.cursor` | Symlink → `repos/.cursor` |
+| `/home/mikl/KurchatovCoop/autosaxs/` | **Package git repo** — `pyproject.toml`, `src/`, tests, docs, `.cursor/` (→ GitHub `autoSAXS`) |
+| `/home/mikl/KurchatovCoop/autosaxs/src/` | **Installable packages** (`autosaxs`, `guisaxs_skills`, `guisaxs_liveview`) |
+| `/home/mikl/KurchatovCoop/saxsprocessing/` | **Lab / experiments** (notebooks, one-off scripts); not a git repo; assumes `autosaxs` is installed |
+| `/home/mikl/KurchatovCoop/` | **Parent workspace** — validation data, sample TIFFs, experiment outputs |
+| `/home/mikl/KurchatovCoop/.cursor` | Symlink → `autosaxs/.cursor` |
 
-Real-data tests expect validation fixtures under **`/home/mikl/KurchatovCoop/validation/`** (setup: `repos/scripts/setup_validation_data.py`).
+Real-data tests expect validation fixtures under **`/home/mikl/KurchatovCoop/validation/`** (setup: `scripts/setup_validation_data.py`).
 
 ---
 
@@ -29,7 +30,7 @@ Single distribution (`pyproject.toml`, version in `[project].version`). Three co
 | `guisaxs-skills` | `src/guisaxs_skills/` | **active** | PyQt5 skill console |
 | `guisaxs-liveview` | `src/guisaxs_liveview/` | **active** | Thin launcher → `guisaxs_skills.liveview` |
 
-GUI extras: `pip install -e repos[gui]` (adds `customtkinter`, `PyQt5`, `watchdog`).
+GUI extras: `pip install -e .[gui]` (adds `customtkinter`, `PyQt5`, `watchdog`).
 
 ---
 
@@ -131,7 +132,7 @@ autosaxs/
 
 - Entry: `autosaxs.cli:main` → `cli/cli.py`.
 - Subcommands: auto-built from `list_skills()` signatures (`--kebab-case` options, `--cache`/`--no-cache`, `--conf`).
-- Agent helpers: `get-readme`, `get-skills`, `get-default-config` (see `resources/agent_quickstart.txt`).
+- Agent helpers: `get-docs`, `get-skills`, `get-default-config` (see `resources/agent_quickstart.txt`).
 - **Invoke as:** `python -m autosaxs.cli.cli` (no `__main__` on `autosaxs.cli`).
 
 ### `autosaxs/pipeline/` — legacy interactive orchestration
@@ -264,18 +265,19 @@ No parallel APIs or duplicated literals.
 
 | Location | What |
 |----------|------|
-| `repos/tests/test_skill.py` | **Primary** — every skill's contract, cache, return keys |
-| `repos/tests/test_skills_real_data.py` | E2E vs `validation/` reference data |
-| `repos/tests/test_guisaxs_liveview.py` | Liveview GUI (needs xvfb + `[gui]`) |
-| `repos/tests/guisaxs-liveview/` | Liveview unit tests (session, smart_defaults, …) |
+| `tests/test_skill.py` | **Primary** — every skill's contract, cache, return keys |
+| `tests/test_skills_real_data.py` | E2E vs `validation/` reference data |
+| `tests/test_guisaxs_liveview.py` | Liveview GUI (needs xvfb + `[gui]`) |
+| `tests/guisaxs-liveview/` | Liveview unit tests (session, smart_defaults, …) |
 
-Run all (CI order): `repos/helpers/run_tests.sh`.
+Run all (CI order): `helpers/run_tests.sh`.
 
 ### Docs & specs
 
 | Doc | Topic |
 |-----|-------|
-| `README.md` | User-facing skills reference (long) |
+| `README.md` | Short PyPI / GitHub landing page (generated) |
+| `autosaxs-docs/skills_reference.md` | Detailed per-skill reference (generated) |
 | `docs/skills_paradigm.md` | Skills architecture spec |
 | `docs/guisaxs_skills_spec.md` | Skills GUI spec |
 | `docs/guisaxs_liveview_spec.md` | Liveview spec |
@@ -283,16 +285,16 @@ Run all (CI order): `repos/helpers/run_tests.sh`.
 
 ### Cursor project files
 
-- Rules: `repos/.cursor/rules/` (`python-interpreter`, `reuse-existing-functionality`, `agent-suggestions`)
-- SAXS workflow skills: `repos/.cursor/skills/saxs-processing/` (also exportable via `autosaxs get-skills`)
-- Agent suggestion inbox: `repos/.cursor/suggestions/`
+- Rules: `.cursor/rules/` (`python-interpreter`, `reuse-existing-functionality`, `agent-suggestions`)
+- SAXS workflow skills: `.cursor/skills/saxs-processing/` (also exportable via `autosaxs get-skills`)
+- Agent suggestion inbox: `.cursor/suggestions/`
 
 ---
 
 ## Install & dev commands
 
 ```bash
-cd /home/mikl/KurchatovCoop/repos
+cd /home/mikl/KurchatovCoop/autosaxs
 /home/mikl/.conda/envs/dev_autosaxs/bin/pip install -e ".[gui]"
 /home/mikl/.conda/envs/dev_autosaxs/bin/autosaxs --help
 /home/mikl/.conda/envs/dev_autosaxs/bin/python -m guisaxs_skills      # skills console

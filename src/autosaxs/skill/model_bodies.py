@@ -25,6 +25,7 @@ from .deps import (
     calc_chi2,
     ensure_q_nm,
     load_saxs_1d_any,
+    require_atsas,
     run_guinier_analysis,
     run_with_cache,
     write_saxs_atsas_format,
@@ -201,6 +202,7 @@ def _slice_exp_dat_columns(
 
 
 @apply_batch(stem_from_keys="profile", per_sample_subdir="always")
+@require_atsas
 @run_with_cache(
     path_keys_for_hash=["profile"],
     kwargs_for_hash_keys=["shapes", "first", "last"],

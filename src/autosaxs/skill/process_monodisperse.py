@@ -28,6 +28,7 @@ from .fit_distances import fit_distances
 from .fit_guinier import fit_guinier, parse_guinier_results_txt
 from .model_dam import model_dam
 from .report_individual import report_individual
+from .skill_wrap import require_atsas
 
 # Quality-guide gate for 3D (step 7): ΔRg ≤ 10% and Total Estimate ≥ 0.55
 # → encoded as fit_distances pr_quality_class ``high_quality``.
@@ -87,6 +88,7 @@ def _gnom_out_for_model_dam(
     return dest_abs
 
 
+@require_atsas
 def process_monodisperse(
     profile: DatPathExpressionArg,
     output_dir: str = ".",

@@ -13,8 +13,8 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 WORKSPACE_ROOT = Path("/home/mikl/KurchatovCoop")
-REPOS_DIR = WORKSPACE_ROOT / "repos"
-sys.path.insert(0, str(REPOS_DIR))
+PKG_SRC = WORKSPACE_ROOT / "autosaxs" / "src"
+sys.path.insert(0, str(PKG_SRC))
 
 from autosaxs.core.utils import load_config  # noqa: E402
 from autosaxs.skill.calibrate.autocalib import autocalib_ring_analysis  # noqa: E402

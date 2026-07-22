@@ -43,7 +43,7 @@ from autosaxs.skill.calibrate.autocalib import (
 
 
 WORKSPACE_ROOT = Path("/home/mikl/KurchatovCoop")
-REPOS_DIR = WORKSPACE_ROOT / "repos"
+PKG_SRC = WORKSPACE_ROOT / "autosaxs" / "src"
 
 
 @dataclass(frozen=True)

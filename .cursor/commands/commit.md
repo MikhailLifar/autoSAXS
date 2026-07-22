@@ -11,7 +11,7 @@ When the command is invoked, you should follow these steps:
 
 Run `git status`:
 ```bash
-cd /home/mikl/KurchatovCoop/repos
+cd /home/mikl/KurchatovCoop/autosaxs
 git status
 ```
 
@@ -24,20 +24,20 @@ Then:
 
 Run tests (required):
 ```bash
-cd /home/mikl/KurchatovCoop/repos
+cd /home/mikl/KurchatovCoop/autosaxs
 bash helpers/run_tests.sh
 ```
 
 Then:
-- If the tests script fails (non-zero exit code), read the output (and `repos/commit.log`) and produce a report describing the failures, likely root causes, and possible fixes. DON'T TRY TO FIX THE CODE.
+- If the tests script fails (non-zero exit code), read the output (and `commit.log`) and produce a report describing the failures, likely root causes, and possible fixes. DON'T TRY TO FIX THE CODE.
 - IF AND ONLY IF ALL TESTS PASS, run the pre-commit updates:
 ```bash
-cd /home/mikl/KurchatovCoop/repos
+cd /home/mikl/KurchatovCoop/autosaxs
 bash helpers/run_precommit_updates.sh [<new_version_if_provided_in_command_arguments>]
 ```
 - IF AND ONLY IF the pre-commit updates succeed (exit code 0), run git commit and git push (do NOT run git add here):
 ```bash
-cd /home/mikl/KurchatovCoop/repos
+cd /home/mikl/KurchatovCoop/autosaxs
 git commit -a -m "message from the command argument (use verbatim; do not transform or substitute)"
 git push
 ```

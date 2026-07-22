@@ -33,8 +33,8 @@ import scipy.ndimage as ndi
 from scipy.optimize import minimize
 
 WORKSPACE_ROOT = Path("/home/mikl/KurchatovCoop")
-REPOS_DIR = WORKSPACE_ROOT / "repos"
-sys.path.insert(0, str(REPOS_DIR))
+PKG_SRC = WORKSPACE_ROOT / "autosaxs" / "src"
+sys.path.insert(0, str(PKG_SRC))
 
 from autosaxs.core.utils import read_from_tiff, load_config  # type: ignore
 from autosaxs.skill.calibrate.autocalib import autocalib_ring_analysis  # type: ignore

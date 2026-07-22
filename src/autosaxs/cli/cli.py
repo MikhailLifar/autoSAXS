@@ -400,18 +400,18 @@ def _skill_to_agent_skill_md(*, name: str, fn: Callable[..., Any]) -> str:
     ).rstrip() + "\n"
 
 
-def _add_get_readme_subparser(subparsers: argparse._SubParsersAction) -> None:
+def _add_get_docs_subparser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
-        "get-readme",
-        help="Generate autosaxs README.md",
+        "get-docs",
+        help="Generate README.md (short) and autosaxs-docs/skills_reference.md (detailed skills)",
     )
-    p.set_defaults(_autosaxs_internal_cmd="get-readme")
+    p.set_defaults(_autosaxs_internal_cmd="get-docs")
     p.add_argument(
         "-o",
         "--output-dir",
         dest="output_dir",
         default=".",
-        help="Directory where README.md will be written (default: current directory)",
+        help="Directory where README.md and autosaxs-docs/ will be written (default: current directory)",
     )
 
 
@@ -708,7 +708,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         description="Run a skill or helper (autosaxs COMMAND --help for details).",
     )
 
-    _add_get_readme_subparser(subparsers)
+    _add_get_docs_subparser(subparsers)
     _add_get_skills_subparser(subparsers)
     _add_get_default_config_subparser(subparsers)
 
@@ -780,11 +780,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("the following arguments are required: command")
 
     internal_cmd = getattr(args, "_autosaxs_internal_cmd", None)
-    if internal_cmd == "get-readme":
-        from ..resources.readme.autosaxs_skills_explained import generate_readme
+    if internal_cmd == "get-docs":
+        from ..resources.readme.autosaxs_skills_explained import generate_docs
 
-        out_path = generate_readme(output_dir=getattr(args, "output_dir", "."))
-        print(str(out_path))
+        paths = generate_docs(output_dir=getattr(args, "output_dir", "."))
+        print(str(paths["readme"]))
+        print(str(paths["skills_reference"]))
         return 0
     if internal_cmd == "get-default-config":
         out_dir = Path(getattr(args, "output_dir", ".")).resolve()

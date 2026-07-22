@@ -6,7 +6,7 @@ to follow pipeline conventions:
   - *_ihs\\d+_*.tif (no 'b') -> raw/*_sample.tif
   - *.chi -> reference/ (same basename, for validation)
   - sub_\\d+.dat -> reference_subtracted/ (reference subtracted 1D curves; metadata gives sample/buffer .chi)
-  - config.conf copied from repos/resources/validation_config.conf (skill-keyed YAML)
+  - config.conf copied from resources/validation_config.conf (skill-keyed YAML)
   - Mask: place a file matching mask* (e.g. mask_fti2d_1225.msk) in validation/ for calibration.
 """
 import re

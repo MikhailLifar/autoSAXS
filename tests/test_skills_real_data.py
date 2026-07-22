@@ -80,7 +80,7 @@ SUB_DAT_PATTERN = re.compile(r"^sub_\d+\.dat$")
 
 _VALIDATION_MISSING_MSG = (
     f"Validation directory not found: {VALIDATION_DIR}. "
-    "Run: python repos/scripts/setup_validation_data.py"
+    "Run: python scripts/setup_validation_data.py"
 )
 
 

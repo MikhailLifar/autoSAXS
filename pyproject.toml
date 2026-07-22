@@ -4,17 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autosaxs"
-version = "2.10.2"
-description = "Interactive SAXS pipeline core: calibration, integration, subtraction, ATSAS descriptors, plots, shape fitting, reports. After install, run `autosaxs --help`: epilog lists get-readme, get-skills, get-default-config (export docs and default config into your workspace)."
+version = "2.11.0"
+description = "Interactive SAXS pipeline core: calibration, integration, subtraction, ATSAS descriptors, plots, shape fitting, reports. After install, run `autosaxs --help`: epilog lists get-docs, get-skills, get-default-config (export docs and default config into your workspace)."
+readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 authors = [
     { name = "Mikhail S. Lifar", email = "mikhailkulkov11@gmail.com" },
 ]
-urls = {
-    "Homepage" = "https://github.com/MikhailLifar/autoSAXS",
-    "Repository" = "https://github.com/MikhailLifar/autoSAXS",
-}
 keywords = ["saxs", "small-angle scattering", "pyFAI", "ATSAS", "calibration", "integration"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -46,6 +43,10 @@ dependencies = [
     "requests",
     "httpx",
 ]
+
+[project.urls]
+Homepage = "https://github.com/MikhailLifar/autoSAXS"
+Repository = "https://github.com/MikhailLifar/autoSAXS"
 
 [project.scripts]
 autosaxs = "autosaxs.cli:main"
