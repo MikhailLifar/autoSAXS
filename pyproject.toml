@@ -8,7 +8,13 @@ version = "2.10.2"
 description = "Interactive SAXS pipeline core: calibration, integration, subtraction, ATSAS descriptors, plots, shape fitting, reports. After install, run `autosaxs --help`: epilog lists get-readme, get-skills, get-default-config (export docs and default config into your workspace)."
 requires-python = ">=3.10"
 license = "Apache-2.0"
-authors = []
+authors = [
+    { name = "Mikhail S. Lifar", email = "mikhailkulkov11@gmail.com" },
+]
+urls = {
+    "Homepage" = "https://github.com/MikhailLifar/autoSAXS",
+    "Repository" = "https://github.com/MikhailLifar/autoSAXS",
+}
 keywords = ["saxs", "small-angle scattering", "pyFAI", "ATSAS", "calibration", "integration"]
 classifiers = [
     "Development Status :: 3 - Alpha",
