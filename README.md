@@ -2,6 +2,10 @@
 
 **autoSAXS** is a Python toolkit for reproducible small-angle X-ray scattering (SAXS) pipelines — from detector images to subtracted curves, size distributions, and shape models — usable from a **CLI**, from **Python**, or from desktop GUIs.
 
+<p align="center">
+  <img src="readme-assets/hero_model_dam_frequency.gif" alt="model_dam frequency / occupancy map" width="420"/>
+</p>
+
 ## Why autoSAXS
 
 - **One skills API for everything** — the same processing steps run as `autosaxs <skill> …` or as Python functions with stable signatures, so scripts, GUIs, and agents share one surface.

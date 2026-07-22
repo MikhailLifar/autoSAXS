@@ -67,6 +67,7 @@ autosaxs = [
     "resources/config_base.conf",
     "resources/prompts/**/*.txt",
     "resources/readme/*.md",
+    "resources/readme/images/**/*",
     "resources/ai_skills/*.md",
     "resources/schemas/*.json",
     "resources/help/guisaxs_liveview/**/*",
