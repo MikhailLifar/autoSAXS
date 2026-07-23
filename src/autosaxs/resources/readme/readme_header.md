@@ -1,6 +1,6 @@
 # autoSAXS
 
-**autoSAXS** is a Python toolkit for reproducible small-angle X-ray scattering (SAXS) pipelines — from detector images to subtracted curves, size distributions, and shape models — usable from a **CLI**, from **Python**, or from desktop GUIs.
+**autoSAXS** is a Python toolkit for reproducible small-angle X-ray scattering (SAXS) pipelines — from detector images to subtracted curves, size distributions, and shape models — usable from a **CLI**, from **Python**, from desktop GUIs or through your favourite AI agent.
 
 <p align="center">
   <img src="readme-assets/hero_model_dam_frequency.gif" alt="model_dam frequency / occupancy map" width="420"/>
@@ -19,7 +19,7 @@
 ## Use cases
 
 - Synchrotron or lab SAXS: calibrate geometry, integrate TIFF stacks, average frames, and subtract buffer.
-- Monodisperse analysis: Guinier → pair-distance distribution p(r) → optional ab initio (DAMMIF) / bodies / DENSS density maps.
+- Monodisperse analysis: Guinier → pair-distance distribution p(r) → optional ab initio shape recovery, 3d primitives modeling or electron density inference.
 - Polydisperse analysis: Guinier → size distribution D(R) → optional McSAS or ATSAS MIXTURE.
 - Live experiments: watch a folder for new detector images and process them as they arrive.
 - Scripting and agents: drive the full pipeline from Python or `autosaxs` without reimplementing I/O conventions.
@@ -42,18 +42,76 @@ python -m pip install "autosaxs[gui] @ git+https://github.com/MikhailLifar/autoS
 Helper commands (export docs and defaults into a directory):
 
 - `autosaxs get-docs` — write the short `README.md` and detailed `autosaxs-docs/skills_reference.md`
-- `autosaxs get-skills` — write Cursor-style `saxs-processing/` skill procedures
+- `autosaxs get-skills` — write Cursor-style `saxs-processing/` skill
 - `autosaxs get-default-config` — copy bundled `config_base.conf`
 
 Upgrade from git `main`: `autosaxs -U`
 
 ## Main features
 
-Pipeline stages exposed as skills: **calibrate → integrate / average → subtract → analyze → report**, including Guinier, Kratky, `fit_distances` (p(r)), `fit_sizes` (D(R)), `model_dam`, `model_bodies`, `model_density` (DENSS), `model_dr_mc` (McSAS), `model_mixture`, and reporting helpers.
+Pipeline stages exposed as skills: **calibrate → integrate / average → subtract → analyze → model → report**, including Guinier, Kratky, `fit-distances` (p(r)), `fit-sizes` (D(R)), `model-dam`, `model-bodies`, `model-density` (DENSS), `model-dr-mc` (McSAS), `model-mixture`, and reporting helpers.
 
-Apps: **guisaxs-skills** (catalog + forms + isolated CLI runs) and **guisaxs-liveview** (queued live integration, buffer subtraction, optional analysis wizards).
+Apps: 
+**guisaxs-skills** (catalog + forms + isolated CLI runs, beta version)
+**guisaxs-liveview** (queued live integration, buffer subtraction, optional analysis wizards).
 
 Full per-skill documentation: [`autosaxs-docs/skills_reference.md`](autosaxs-docs/skills_reference.md).
+
+## Quick start
+
+Monodisperse protein walkthrough using [`examples/monodisperse_protein/`](examples/monodisperse_protein/) (AgBh calibrant, mask, sample + buffer TIFFs). `--q-min` / `--q-max` are the buffer-matching window in nm⁻¹ — pick them from the sample+buffer overlay; `4.8`–`5.8` fits this example.
+
+### Python
+
+```python
+from pathlib import Path
+from autosaxs.skill import calibrate, integrate, subtract, process_monodisperse
+
+ex = Path("examples/monodisperse_protein")
+
+calibrate(
+    ex / "AgBh700_96.9_calib.tif",
+    output_dir=str(ex / "calibration"),
+    mask=ex / "mask-20260706_133745.txt",
+    wavelength=1.445,
+)
+integrate(
+    f"{ex / 'ihs27_buffer.tif'}, {ex / 'ihs27_sample.tif'}",
+    ex / "calibration" / "integrator",
+    output_dir=str(ex / "integrated"),
+)
+subtract(
+    ex / "integrated" / "int_ihs27_sample.dat",
+    ex / "integrated" / "int_ihs27_buffer.dat",
+    output_dir=str(ex / "subtracted"),
+    q_min=4.8,
+    q_max=5.8,
+)
+process_monodisperse(ex / "subtracted" / "sub_ihs27_sample.dat")
+```
+
+### CLI
+
+```bash
+cd examples/monodisperse_protein
+
+autosaxs calibrate AgBh700_96.9_calib.tif \
+  --mask mask-20260706_133745.txt --wavelength 1.445 -o calibration/
+
+autosaxs integrate "ihs27_buffer.tif, ihs27_sample.tif" \
+  calibration/integrator/ -o integrated/
+
+autosaxs subtract integrated/int_ihs27_sample.dat integrated/int_ihs27_buffer.dat \
+  --q-min 4.8 --q-max 5.8 -o subtracted/
+
+autosaxs process-monodisperse subtracted/sub_ihs27_sample.dat
+```
+
+### Online GUI
+
+```bash
+guisaxs-liveview
+```
 
 ## Acknowledgements
 
@@ -61,7 +119,7 @@ autoSAXS builds on the SAXS ecosystem rather than replacing it:
 
 - **[pyFAI](https://pyfai.readthedocs.io/)** — detector geometry, calibration, and 1D integration.
 - **[ATSAS](https://www.embl-hamburg.de/biosaxs/download.html)** — tools such as `autorg`, `datgnom`, `gnom`, `dammif`, `mixture`, and `bodies` (external install; recommended **ATSAS 3.2.1**). Importing autoSAXS **warns** if ATSAS is missing; skills that shell out to ATSAS **raise** immediately when it is unavailable.
-- **[DENSS](https://www.tdgrant.com/denss)** — electron-density reconstruction (`model_density`).
+- **[DENSS](https://www.tdgrant.com/denss)** — electron-density reconstruction (`model_density`); pulled in via the `denss` PyPI dependency.
 - **[McSAS](https://github.com/BAMresearch/McSAS) / McSAS3** — Monte Carlo polydisperse sizing (`model_dr_mc`).
 
 ## Contacts

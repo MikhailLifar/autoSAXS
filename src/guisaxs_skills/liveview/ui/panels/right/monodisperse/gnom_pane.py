@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ......ui.style import apply_quality_hint_style
 from .plots import GnomFitPlot, PrPlot
 
 
@@ -133,8 +134,9 @@ class GnomPane(QWidget):
             for w in widgets:
                 w.blockSignals(False)
 
-    def set_diagnostics(self, *, text: str = "") -> None:
+    def set_diagnostics(self, *, text: str = "", poor: bool = False) -> None:
         self._lbl_diagnostics.setText(text or "—")
+        apply_quality_hint_style(self._lbl_diagnostics, poor=bool(poor) and bool(text))
 
     def show_gnom(self, profile_path: str, gnom_out_path: str) -> None:
         self._fit_plot.plot_from_dat_and_gnom_out(profile_path, gnom_out_path)

@@ -44,13 +44,19 @@ class LiveviewMainWindow(QMainWindow):
         self._splitter.setStretchFactor(0, 1)
         self._splitter.setStretchFactor(1, 3)
         self._splitter.setStretchFactor(2, 1)
+        self._left.set_coach_peers(
+            middle=self._middle,
+            right=self._right,
+            has_processed_images=lambda: bool(self._controller.executor.session_processed_tiffs),
+        )
+        self._left.refresh_attention_coach()
 
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(6, 6, 6, 6)
         wd_short, wd_full = contracted_path_label(watchdir)
         self._watchdir_label = QLabel(wd_short)
-        self._watchdir_label.setToolTip(f"Watchdir\n{wd_full}")
+        self._watchdir_label.setToolTip(f"Working dir\n{wd_full}")
         self._watchdir_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self._watchdir_label)
         layout.addWidget(self._splitter, 1)
@@ -101,21 +107,21 @@ class LiveviewMainWindow(QMainWindow):
         mb = self.menuBar()
 
         file_menu = mb.addMenu("File")
-        act_open = QAction("Open watch directory…", self)
+        act_open = QAction("Open working directory…", self)
         act_open.setShortcut(QKeySequence.Open)
         act_open.triggered.connect(self._on_change_watchdir)
         file_menu.addAction(act_open)
 
-        file_menu.addSeparator()
+        advanced_menu = file_menu.addMenu("Advanced…")
         self._act_switch_flat = QAction("Switch to flat directory", self)
-        self._act_switch_flat.setToolTip("Watch top-level TIFFs only; outputs under watchdir.")
+        self._act_switch_flat.setToolTip("Watch top-level TIFFs only; outputs under working dir.")
         self._act_switch_flat.triggered.connect(lambda: self._set_watch_mode(LiveviewWatchMode.FLAT))
-        file_menu.addAction(self._act_switch_flat)
+        advanced_menu.addAction(self._act_switch_flat)
 
         self._act_switch_tree = QAction("Switch to tree directory", self)
         self._act_switch_tree.setToolTip("Recursive TIFF discovery; outputs beside each TIFF.")
         self._act_switch_tree.triggered.connect(lambda: self._set_watch_mode(LiveviewWatchMode.TREE))
-        file_menu.addAction(self._act_switch_tree)
+        advanced_menu.addAction(self._act_switch_tree)
         self._sync_watch_mode_menu()
 
         file_menu.addSeparator()
@@ -164,6 +170,16 @@ class LiveviewMainWindow(QMainWindow):
         request_app_update(parent=self)
 
     def _set_watch_mode(self, new_mode: LiveviewWatchMode) -> None:
+        if new_mode == LiveviewWatchMode.TREE:
+            reply = QMessageBox.question(
+                self,
+                "Switch to tree directory",
+                "Switch to file detection in the dir based on periodically tracking file tree changes. Continue?",
+                QMessageBox.Ok | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            if reply != QMessageBox.Ok:
+                return
         self._controller.set_watch_mode(new_mode)
         self._sync_watch_mode_menu()
 
@@ -179,7 +195,7 @@ class LiveviewMainWindow(QMainWindow):
             return
         wd_short, wd_full = contracted_path_label(new_p)
         self._watchdir_label.setText(wd_short)
-        self._watchdir_label.setToolTip(f"Watchdir\n{wd_full}")
+        self._watchdir_label.setToolTip(f"Working dir\n{wd_full}")
         self._sync_watch_mode_menu()
 
     def _wire_ui(self) -> None:
@@ -208,7 +224,14 @@ class LiveviewMainWindow(QMainWindow):
         self._middle.history_step.connect(self._controller.history_step)
         self._middle.process_history_file_requested.connect(self._controller.process_history_file)
         self._middle.subtraction_wizard_requested.connect(self._open_subtraction_wizard)
+        self._middle.image_presence_changed.connect(
+            lambda *_args: self._left.refresh_attention_coach()
+        )
         self._right.analysis_arming_changed.connect(self._controller.on_analysis_arming_changed)
+        self._right.analysis_arming_changed.connect(self._left.refresh_attention_coach)
+        self._controller.processing_mode.mode_changed.connect(
+            lambda *_args: self._left.refresh_attention_coach()
+        )
 
     def _open_subtraction_wizard(self) -> None:
         from .session.state import LiveviewState

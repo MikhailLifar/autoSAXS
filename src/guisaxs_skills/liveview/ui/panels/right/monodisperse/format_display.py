@@ -3,12 +3,43 @@ from __future__ import annotations
 import math
 from typing import Any, Union
 
+_GUINIER_QUALITY_POOR = frozenset({"weak", "degenerate", "interval_only"})
+_GUINIER_CLASS_POOR = frozenset({"upturn", "downturn", "chaotic"})
+_PASSPORT_CLASS_POOR = frozenset({"failed", "acceptable"})
+_PASSPORT_STATUS_POOR = frozenset({"FAILED", "ACCEPTABLE"})
+_STABILITY_POOR = frozenset({"unstable", "marginal"})
+
 
 def scalar_value(value: Any) -> Any:
     """Unwrap single-element lists from skill stdout parsing."""
     if isinstance(value, list) and len(value) == 1:
         return value[0]
     return value
+
+
+def is_guinier_quality_poor(quality_class: str) -> bool:
+    return str(quality_class or "").strip().lower() in _GUINIER_QUALITY_POOR
+
+
+def is_guinier_classification_poor(classification: str) -> bool:
+    return str(classification or "").strip().lower() in _GUINIER_CLASS_POOR
+
+
+def is_passport_quality_poor(
+    *,
+    overall_status: str = "",
+    quality_class: str = "",
+    stability_class: str = "",
+) -> bool:
+    """True when GNOM / D(R) quality passport (or stability) signals caution or failure."""
+    status = str(overall_status or "").strip().upper()
+    if status in _PASSPORT_STATUS_POOR:
+        return True
+    q = str(quality_class or "").strip().lower()
+    if q in _PASSPORT_CLASS_POOR:
+        return True
+    stab = str(stability_class or "").strip().lower()
+    return stab in _STABILITY_POOR
 
 
 def format_display_number(value: Union[float, int, str, None]) -> str:

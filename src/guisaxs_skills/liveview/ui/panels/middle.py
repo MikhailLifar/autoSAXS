@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QFrame,
     QGroupBox,
@@ -33,6 +33,7 @@ class LiveviewMiddlePanel(QWidget):
     history_step = pyqtSignal(int)  # -1 = older, +1 = newer
     process_history_file_requested = pyqtSignal()
     subtraction_wizard_requested = pyqtSignal()
+    image_presence_changed = pyqtSignal(bool)  # True when a 2D TIFF is shown
 
     def __init__(self) -> None:
         super().__init__()
@@ -72,8 +73,13 @@ class LiveviewMiddlePanel(QWidget):
         self._group_img = QGroupBox("2D")
         self._img = DropTiffImageCanvas()
         self._img.tiff_files_dropped.connect(self.tiff_files_dropped.emit)
+        self._img_host = QWidget()
+        self._img_host.setAttribute(Qt.WA_StyledBackground, True)
+        img_host_lay = QVBoxLayout(self._img_host)
+        img_host_lay.setContentsMargins(6, 6, 6, 6)
+        img_host_lay.addWidget(self._img, 1)
         il = QVBoxLayout(self._group_img)
-        il.addWidget(self._img)
+        il.addWidget(self._img_host)
 
         # States A / B / BD: single 1D curve (proxy or integrated q-space).
         self._group_main = QGroupBox("1D")
@@ -134,6 +140,15 @@ class LiveviewMiddlePanel(QWidget):
         self._raster_preview_dialog: ImageViewerDialog | None = None
         self._curve_preview_dialog: DatCurveViewerDialog | None = None
         self._curve_x_label = "q (nm$^{-1}$)"
+
+    def drop_canvas_host(self) -> QWidget:
+        return self._img_host
+
+    def drop_hint_canvas(self) -> DropTiffImageCanvas:
+        return self._img
+
+    def has_image(self) -> bool:
+        return bool((self._current_image_path or "").strip())
 
     def set_history_nav_visible(self, visible: bool) -> None:
         self._nav_frame.setVisible(bool(visible))
@@ -288,11 +303,15 @@ class LiveviewMiddlePanel(QWidget):
         self._subtracted_plot.plot_subtracted_preview_manual(sp, bp, scaling_factor=self._manual_preview_scale)
 
     def show_image(self, path: str) -> None:
+        had = self.has_image()
         self._current_image_path = path or ""
         if not path:
             self._img.clear()
-            return
-        self._img.show_tiff(path)
+        else:
+            self._img.show_tiff(path)
+        now = self.has_image()
+        if had != now:
+            self.image_presence_changed.emit(now)
 
     def _open_2d_viewer(self) -> None:
         if not self._current_image_path:

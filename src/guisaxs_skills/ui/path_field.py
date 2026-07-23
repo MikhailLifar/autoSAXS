@@ -67,8 +67,13 @@ class PathField(QWidget):
         self._edit.textChanged.connect(lambda _t: self._maybe_warn_ext_mismatch())
 
     @property
+    def browse_button(self) -> QPushButton:
+        return self._browse
+
+    @property
     def load_button(self) -> Optional[QPushButton]:
         return self._load
+
     def eventFilter(self, obj, event):  # type: ignore[override]
         # Ensure drops on the line edit behave like drops on the whole widget (replace content).
         if obj is self._edit:

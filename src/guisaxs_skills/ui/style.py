@@ -5,6 +5,17 @@ from PyQt5.QtWidgets import QApplication, QStyleFactory
 
 COLOR_MUTED_TEXT = "#728195"
 COLOR_REQUIRED_STAR = "#ff4d4f"
+# Same red as required-field star — poor fit / data-quality hints in analysis panes.
+COLOR_QUALITY_POOR = COLOR_REQUIRED_STAR
+
+
+def apply_quality_hint_style(widget, *, poor: bool) -> None:
+    """Color a label (or similar) when quality/fit hints indicate a problem."""
+    if poor:
+        # Type selector so this beats the app-wide ``QLabel { color: … }`` rule.
+        widget.setStyleSheet(f"QLabel {{ color: {COLOR_QUALITY_POOR}; }}")
+    else:
+        widget.setStyleSheet("")
 
 
 def apply_style(app: QApplication) -> None:

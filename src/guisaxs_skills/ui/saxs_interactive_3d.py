@@ -383,21 +383,18 @@ class SaxsInteractive3DWidget(QWidget):
         tick_fs = 6 if compact else 9
         dark = self._density_dark
         pane_alpha = 0.08 if dark else (0.12 if compact else 0.22)
-        label_color = "#9fb3c8" if dark else None
-        tick_color = "#8aa0b5" if dark else None
-        grid_alpha = 0.25 if dark else 0.55
+        # Matplotlib rejects color=None; only pass colors for the dark (DENSS) theme.
+        label_kw: dict = {"fontsize": label_fs, "labelpad": 2 if compact else 6}
+        grid_kw: dict = {"linestyle": ":", "linewidth": 0.5, "alpha": 0.25 if dark else 0.55}
+        if dark:
+            label_kw["color"] = "#9fb3c8"
+            grid_kw["color"] = "#6b8cae"
 
         self._ax.set_axis_on()
-        self._ax.set_xlabel(
-            "x (Å)", fontsize=label_fs, labelpad=2 if compact else 6, color=label_color
-        )
-        self._ax.set_ylabel(
-            "y (Å)", fontsize=label_fs, labelpad=2 if compact else 6, color=label_color
-        )
-        self._ax.set_zlabel(
-            "z (Å)", fontsize=label_fs, labelpad=2 if compact else 6, color=label_color
-        )
-        self._ax.grid(True, linestyle=":", linewidth=0.5, alpha=grid_alpha, color="#6b8cae" if dark else None)
+        self._ax.set_xlabel("x (Å)", **label_kw)
+        self._ax.set_ylabel("y (Å)", **label_kw)
+        self._ax.set_zlabel("z (Å)", **label_kw)
+        self._ax.grid(True, **grid_kw)
         nbins = 4 if compact else 5
         for axis in (self._ax.xaxis, self._ax.yaxis, self._ax.zaxis):
             axis.pane.set_visible(True)
@@ -412,16 +409,18 @@ class SaxsInteractive3DWidget(QWidget):
             axis.line.set_visible(True)
             axis.set_major_locator(MaxNLocator(nbins=nbins, prune=None))
         tick_kw = {"labelsize": tick_fs, "pad": 1 if compact else 3}
-        if tick_color:
-            tick_kw["colors"] = tick_color
+        if dark:
+            tick_kw["colors"] = "#8aa0b5"
         self._ax.tick_params(**tick_kw)
         if self._embedded:
             self._ax.set_title("")
             self._fig.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0)
         else:
-            title_color = "#c8d9e8" if dark else None
             if self._title:
-                self._ax.set_title(self._title, fontsize=11, color=title_color)
+                title_kw: dict = {"fontsize": 11}
+                if dark:
+                    title_kw["color"] = "#c8d9e8"
+                self._ax.set_title(self._title, **title_kw)
             else:
                 self._ax.set_title("")
             self._fig.subplots_adjust(left=0.02, right=0.98, bottom=0.02, top=0.96)

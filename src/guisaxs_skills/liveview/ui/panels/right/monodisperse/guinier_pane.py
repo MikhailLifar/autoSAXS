@@ -5,6 +5,8 @@ from typing import Optional
 from PyQt5.QtCore import QTimer, pyqtSignal
 from PyQt5.QtWidgets import QFormLayout, QLabel, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
 
+from ......ui.style import apply_quality_hint_style
+from .format_display import is_guinier_classification_poor, is_guinier_quality_poor
 from .plots import GuinierCurvePlot
 
 
@@ -101,9 +103,19 @@ class GuinierPane(QWidget):
         rg_nm: str = "",
         interval_r2: str = "",
     ) -> None:
-        self._lbl_quality.setText(quality_class or interval_r2 or "—")
-        self._lbl_class.setText(classification or "—")
+        q_text = quality_class or interval_r2 or "—"
+        c_text = classification or "—"
+        self._lbl_quality.setText(q_text)
+        self._lbl_class.setText(c_text)
         self._lbl_rg.setText(rg_nm or "—")
+        apply_quality_hint_style(
+            self._lbl_quality,
+            poor=is_guinier_quality_poor(quality_class),
+        )
+        apply_quality_hint_style(
+            self._lbl_class,
+            poor=is_guinier_classification_poor(classification),
+        )
 
     def show_guinier(self, profile_path: str, results_txt_path: str) -> None:
         self._plot.plot_from_profile_and_results(profile_path, results_txt_path)

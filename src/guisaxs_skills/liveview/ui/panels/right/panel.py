@@ -6,6 +6,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QSplitter,
     QToolButton,
@@ -167,6 +168,26 @@ class LiveviewRightPanel(QWidget):
     def polydisperse_window(self) -> PolydisperseWindowWidget:
         return self._poly_window_widget
 
+    def analysis_windows_open(self) -> bool:
+        mono = self._mono_dialog is not None and self._mono_dialog.isVisible()
+        poly = self._poly_dialog is not None and self._poly_dialog.isVisible()
+        return bool(mono or poly)
+
+    def mono_analysis_button(self) -> QToolButton:
+        return self._btn_mono
+
+    def poly_analysis_button(self) -> QToolButton:
+        return self._btn_poly
+
+    def auto_processing_paused(self) -> bool:
+        return bool(self._mono_wizard_widget.auto_processing_paused())
+
+    def mono_auto_button(self) -> QPushButton:
+        return self._mono_wizard_widget.auto_button()
+
+    def poly_auto_button(self) -> QPushButton:
+        return self._poly_window_widget.auto_button()
+
     def _on_mono_button(self) -> None:
         self.monodisperse_wizard_open_requested.emit()
         self.show_monodisperse_wizard()
@@ -210,6 +231,7 @@ class LiveviewRightPanel(QWidget):
         self._mono_dialog.raise_()
         self._mono_dialog.activateWindow()
         self._sync_button_checked()
+        self.analysis_arming_changed.emit()
 
     def show_polydisperse_window(self) -> None:
         from ...windows.polydisperse import PolydisperseAnalysisWindow
@@ -229,6 +251,7 @@ class LiveviewRightPanel(QWidget):
         self._poly_dialog.raise_()
         self._poly_dialog.activateWindow()
         self._sync_button_checked()
+        self.analysis_arming_changed.emit()
 
     def _on_mono_dialog_closed(self) -> None:
         if not self._state.monodisperse_armed:

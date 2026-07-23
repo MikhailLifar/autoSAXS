@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
 
 from ....widgets.viewer_3d import LiveviewViewer3D
 from .....session.state import DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES
+from ......ui.style import apply_quality_hint_style
 from .plots import ShapeFitPlot
 
 try:
@@ -84,7 +85,15 @@ class ShapePane(QWidget):
         self._rerun.clicked.connect(self.rerun_shape_requested.emit)
         mode_row.addWidget(self._rerun)
 
-        body = QHBoxLayout()
+        self._hint = QLabel(
+            "Select BODIES, DAMMIF or DENSS for automatic shape recovery; Re-run shape for a manual re-run"
+        )
+        self._hint.setWordWrap(True)
+        self._hint.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+
+        self._body = QWidget()
+        body = QHBoxLayout(self._body)
+        body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(10)
         fit_box = QGroupBox("I(q) fit")
         fit_lay = QVBoxLayout(fit_box)
@@ -184,12 +193,15 @@ class ShapePane(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
         lay.addLayout(mode_row)
-        lay.addLayout(body, 1)
+        lay.addWidget(self._hint, 0)
+        lay.addWidget(self._body, 1)
 
         self._rb_none.toggled.connect(lambda on: on and self.mode_changed.emit("none"))
         self._rb_bodies.toggled.connect(lambda on: on and self.mode_changed.emit("bodies"))
         self._rb_dammif.toggled.connect(lambda on: on and self.mode_changed.emit("dammif"))
         self._rb_denss.toggled.connect(lambda on: on and self.mode_changed.emit("denss"))
+        self._running = False
+        self._rerun_allowed = True
         self._update_mode_ui()
 
     def shape_mode(self) -> str:
@@ -229,17 +241,27 @@ class ShapePane(QWidget):
             item.setCheckState(Qt.Checked if item.text() in want else Qt.Unchecked)
 
     def set_running(self, running: bool) -> None:
-        # Global busy: lock Re-run and BODIES checklist; keep mode radios enabled (config).
-        self._rerun.setEnabled(not running and self.shape_mode() != "none")
-        self._shapes.setEnabled(not running and self.shape_mode() == "bodies")
-        self._n_runs.setEnabled(not running and self.shape_mode() == "dammif")
-        denss = self.shape_mode() == "denss" and not running
-        self._denss_protocol.setEnabled(denss)
-        self._denss_mode.setEnabled(denss)
-        self._denss_n_maps.setEnabled(denss and self.denss_protocol() != "pilot")
+        # Global busy: lock Re-run and mode-specific controls; keep mode radios enabled.
+        self._running = bool(running)
+        self._apply_enabled_state()
 
     def set_rerun_enabled(self, enabled: bool) -> None:
-        self._rerun.setEnabled(bool(enabled) and self.shape_mode() != "none")
+        self._rerun_allowed = bool(enabled)
+        self._apply_enabled_state()
+
+    def _apply_enabled_state(self) -> None:
+        """Enable mode-specific controls from current mode + busy flag (never leave stale disables)."""
+        running = self._running
+        mode = self.shape_mode()
+        self._rerun.setEnabled(
+            (not running) and self._rerun_allowed and mode != "none"
+        )
+        self._shapes.setEnabled((not running) and mode == "bodies")
+        self._n_runs.setEnabled((not running) and mode == "dammif")
+        denss_idle = (not running) and mode == "denss"
+        self._denss_protocol.setEnabled(denss_idle)
+        self._denss_mode.setEnabled(denss_idle)
+        self._denss_n_maps.setEnabled(denss_idle and self.denss_protocol() != "pilot")
 
     def n_runs(self) -> int:
         return int(self._n_runs.value())
@@ -305,8 +327,9 @@ class ShapePane(QWidget):
     def _show_denss_info(self) -> None:
         QMessageBox.information(self, "DENSS / protocol", _DENSS_INFO)
 
-    def set_status(self, text: str) -> None:
+    def set_status(self, text: str, *, poor: bool = False) -> None:
         self._lbl_status.setText(text or "—")
+        apply_quality_hint_style(self._lbl_status, poor=bool(poor) and bool(text) and text != "—")
 
     def show_fir(self, fir_path: str, *, label: str = "fit") -> None:
         self._fit_plot.plot_from_fir(fir_path, label=label)
@@ -322,8 +345,8 @@ class ShapePane(QWidget):
     def _update_mode_ui(self) -> None:
         mode = self.shape_mode()
         active = mode != "none"
-        self._fit_box.setVisible(active)
-        self._view_box.setVisible(active)
+        self._hint.setVisible(not active)
+        self._body.setVisible(active)
         bodies = mode == "bodies"
         dammif = mode == "dammif"
         denss = mode == "denss"
@@ -332,7 +355,6 @@ class ShapePane(QWidget):
         self._lbl_n_runs.setVisible(dammif)
         self._btn_dammif_info.setVisible(dammif)
         self._n_runs.setVisible(dammif)
-        self._n_runs.setEnabled(dammif)
         for w in (
             self._lbl_denss_protocol,
             self._btn_denss_info,
@@ -346,11 +368,9 @@ class ShapePane(QWidget):
         show_n_maps = denss and self.denss_protocol() != "pilot"
         self._lbl_denss_n_maps.setVisible(show_n_maps)
         self._denss_n_maps.setVisible(show_n_maps)
-        self._denss_n_maps.setEnabled(show_n_maps)
+        self._apply_enabled_state()
         if mode == "none":
-            self.set_status(
-                "Select BODIES, DAMMIF, or DENSS for automatic processing; Re-run shape for a manual re-run."
-            )
+            self.clear_view()
         elif mode == "dammif":
             self.set_status("DAMMIF after GNOM · Re-run shape to apply n_runs.")
         elif mode == "denss":

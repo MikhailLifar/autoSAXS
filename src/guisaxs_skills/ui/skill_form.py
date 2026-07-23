@@ -54,15 +54,25 @@ class SkillForm(QWidget):
         lab.setTextFormat(0)  # Qt.PlainText
         return lab
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        show_copy_inputs: bool = True,
+        show_use_cache: bool = True,
+        show_config_path: bool = True,
+    ) -> None:
         super().__init__()
         self._meta: Optional[SkillMeta] = None
         self._workdir: Path = Path.cwd()
         self._hints: Optional[SessionPathHints] = None
         self._pos_widgets: List[QWidget] = []
         self._opt_fields: Dict[str, QWidget] = {}
+        self._show_copy_inputs = bool(show_copy_inputs)
+        self._show_use_cache = bool(show_use_cache)
+        self._show_config_path = bool(show_config_path)
 
         self._copy_inputs = QCheckBox("Copy inputs into working directory")
+        self._copy_inputs.setVisible(self._show_copy_inputs)
 
         self._pos_group = QGroupBox("Inputs")
         self._pos_layout = QFormLayout(self._pos_group)
@@ -74,9 +84,12 @@ class SkillForm(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._pos_group)
         lay.addWidget(self._opt_group)
-        lay.addWidget(self._copy_inputs)
+        if self._show_copy_inputs:
+            lay.addWidget(self._copy_inputs)
 
     def copy_inputs_enabled(self) -> bool:
+        if not self._show_copy_inputs:
+            return False
         return self._copy_inputs.isChecked()
 
     def _sync_two_d_tif_dir_from_paths(self, paths: List[str]) -> None:
@@ -137,13 +150,16 @@ class SkillForm(QWidget):
         for le in output.findChildren(QLineEdit):
             le.returnPressed.connect(self.submit_requested.emit)
 
-        use_cache = QCheckBox("")
-        use_cache.setChecked(False)
-        self._opt_fields["use_cache"] = use_cache
-        self._opt_layout.addRow(self._label("Use cache"), use_cache)
+        if self._show_use_cache:
+            use_cache = QCheckBox("")
+            use_cache.setChecked(False)
+            self._opt_fields["use_cache"] = use_cache
+            self._opt_layout.addRow(self._label("Use cache"), use_cache)
 
         for opt in meta.option_params:
             if opt.name in ("output_dir", "use_cache"):
+                continue
+            if opt.name == "config_path" and not self._show_config_path:
                 continue
             is_required = opt.kind == "required_kwonly"
             label = self._required_label(opt.name) if is_required else self._label(opt.name)
@@ -176,7 +192,10 @@ class SkillForm(QWidget):
                 le.returnPressed.connect(self.submit_requested.emit)
 
         saved = saved_state or {}
-        self._copy_inputs.setChecked(bool(saved.get("copy_inputs", False)))
+        if self._show_copy_inputs:
+            self._copy_inputs.setChecked(bool(saved.get("copy_inputs", False)))
+        else:
+            self._copy_inputs.setChecked(False)
         self._hints = hints
         self._apply_smart_coalesce(meta, workdir, hints, saved)
         self._apply_all_browse_starts(meta, workdir, hints)
@@ -575,7 +594,7 @@ class SkillForm(QWidget):
     def state(self) -> dict:
         return {
             "skill_name": self._meta.name if self._meta else None,
-            "copy_inputs": self._copy_inputs.isChecked(),
+            "copy_inputs": self._copy_inputs.isChecked() if self._show_copy_inputs else False,
             "positional": [self._widget_state(w) for w in self._pos_widgets],
             "options": {k: self._widget_state(v) for k, v in self._opt_fields.items()},
         }
@@ -583,7 +602,8 @@ class SkillForm(QWidget):
     def set_state(self, state: dict) -> None:
         if not state:
             return
-        self._copy_inputs.setChecked(bool(state.get("copy_inputs", False)))
+        if self._show_copy_inputs:
+            self._copy_inputs.setChecked(bool(state.get("copy_inputs", False)))
         pos_states = state.get("positional") or []
         for w, s in zip(self._pos_widgets, pos_states):
             self._set_widget_state(w, s)
@@ -618,6 +638,9 @@ class SkillForm(QWidget):
                 if raw == "":
                     continue
                 options[k] = raw
+
+        if not self._show_use_cache:
+            options["use_cache"] = False
 
         for opt in self._meta.option_params:
             if opt.kind != "required_kwonly":

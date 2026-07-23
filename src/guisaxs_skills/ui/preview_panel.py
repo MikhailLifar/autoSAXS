@@ -60,7 +60,13 @@ def _render_tiff_to_png(src_path: str, out_path: str) -> bool:
     return os.path.exists(out_path) and os.path.getsize(out_path) > 0
 
 
-def _render_dat_to_png(src_path: str, out_path: str) -> bool:
+def _render_dat_to_png(
+    src_path: str,
+    out_path: str,
+    *,
+    q_min: Any = None,
+    q_max: Any = None,
+) -> bool:
     from matplotlib.figure import Figure
 
     try:
@@ -91,6 +97,13 @@ def _render_dat_to_png(src_path: str, out_path: str) -> bool:
         # Make the thumbnail stable on log-y by avoiding errors that cross <= 0.
         if sigma is not None and len(I):
             sigma = np.minimum(sigma, 0.99 * I)
+
+    try:
+        from ..liveview.ui.widgets.plots import draw_q_match_band
+
+        draw_q_match_band(ax, q_min, q_max)
+    except Exception:
+        pass
 
     if sigma is not None:
         ax.errorbar(
@@ -356,15 +369,26 @@ class PreviewPanel(QWidget):
         self._temp_preview_png: Optional[str] = None
         self._source_path_for_viewer: Optional[str] = None
         self._dat_curve_viewer: Optional["DatCurveViewerDialog"] = None
+        self._preview_q_min: Any = None
+        self._preview_q_max: Any = None
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._label)
         lay.addWidget(self._image, 1)
 
-    def show_path(self, path: str, *, path_label_visible: bool = True) -> None:
+    def show_path(
+        self,
+        path: str,
+        *,
+        path_label_visible: bool = True,
+        q_min: Any = None,
+        q_max: Any = None,
+    ) -> None:
         self._cleanup_temp_preview()
         self._source_path_for_viewer = None
+        self._preview_q_min = q_min
+        self._preview_q_max = q_max
         self._label.setText("")
         self._label.setToolTip("")
         self._image.clear()
@@ -431,7 +455,12 @@ class PreviewPanel(QWidget):
             if suffix in (".tif", ".tiff"):
                 ok = _render_tiff_to_png(src_path, out_path)
             elif suffix == ".dat":
-                ok = _render_dat_to_png(src_path, out_path)
+                ok = _render_dat_to_png(
+                    src_path,
+                    out_path,
+                    q_min=self._preview_q_min,
+                    q_max=self._preview_q_max,
+                )
             elif suffix == ".csv":
                 ok = _render_csv_to_png(src_path, out_path)
         except Exception:
@@ -459,7 +488,13 @@ class PreviewPanel(QWidget):
         if src and Path(src).suffix.lower() == ".dat":
             from ..liveview.ui.widgets.plots import open_dat_curve_dialog
 
-            self._dat_curve_viewer = open_dat_curve_dialog(self, src, reuse=self._dat_curve_viewer)
+            self._dat_curve_viewer = open_dat_curve_dialog(
+                self,
+                src,
+                reuse=self._dat_curve_viewer,
+                q_min=self._preview_q_min,
+                q_max=self._preview_q_max,
+            )
             return
         if not self._current_image_path:
             return

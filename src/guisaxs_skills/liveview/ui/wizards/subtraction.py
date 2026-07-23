@@ -87,10 +87,7 @@ class SubtractionWizardDialog(QDialog):
         self._apply = QPushButton("Apply")
         self._apply.setEnabled(False)
         self._apply.clicked.connect(self._on_apply_clicked)
-        self._close = QPushButton("Close")
-        self._close.clicked.connect(self.close)
         row.addWidget(self._apply, 0)
-        row.addWidget(self._close, 0)
         lay.addLayout(row, 0)
 
         self._scale_touched = False
@@ -101,7 +98,6 @@ class SubtractionWizardDialog(QDialog):
     def set_running(self, running: bool) -> None:
         r = bool(running)
         self._apply.setEnabled((not r) and self._scale_touched and self._paths_ok())
-        self._close.setEnabled(not r)
         self._scale.setEnabled(not r)
         if r:
             self.setWindowTitle("Subtraction wizard — running…")

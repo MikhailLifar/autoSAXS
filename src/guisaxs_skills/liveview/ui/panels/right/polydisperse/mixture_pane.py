@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from PyQt5.QtCore import QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ..monodisperse.format_display import format_display_number
+from ......ui.style import apply_quality_hint_style
 from .plots import MixtureDistPlot, MixtureFitPlot
 
 # Skill defaults when radius bounds are omitted (nm → Å for distribution plot).
@@ -37,15 +38,21 @@ class MixturePane(QWidget):
         mode_row = QHBoxLayout()
         self._grp = QButtonGroup(self)
         self._rb_none = QRadioButton("None")
-        self._rb_mixture = QRadioButton("Mixture")
+        self._rb_mixture = QRadioButton("MIXTURE")
         self._rb_none.setChecked(True)
         for rb in (self._rb_none, self._rb_mixture):
             self._grp.addButton(rb)
             mode_row.addWidget(rb)
         mode_row.addStretch(1)
-        self._rerun = QPushButton("Re-run mixture")
+        self._rerun = QPushButton("Re-run D(R)")
         self._rerun.clicked.connect(self.rerun_mixture_requested.emit)
         mode_row.addWidget(self._rerun)
+
+        self._hint = QLabel(
+            "Select MIXTURE for automatic D(R) parametric fit; Re-run D(R) for a manual re-run"
+        )
+        self._hint.setWordWrap(True)
+        self._hint.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
         plots_row = QHBoxLayout()
         plots_row.setSpacing(8)
@@ -107,7 +114,9 @@ class MixturePane(QWidget):
         ctrl.addLayout(form)
         ctrl.addWidget(self._lbl_status, 1)
 
-        body = QHBoxLayout()
+        self._body = QWidget()
+        body = QHBoxLayout(self._body)
+        body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(10)
         body.addLayout(plots_row, 3)
         body.addLayout(ctrl, 1)
@@ -116,7 +125,8 @@ class MixturePane(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
         lay.addLayout(mode_row)
-        lay.addLayout(body, 1)
+        lay.addWidget(self._hint, 0)
+        lay.addWidget(self._body, 1)
 
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
@@ -159,6 +169,8 @@ class MixturePane(QWidget):
 
     def _update_mode_ui(self) -> None:
         enabled = self.mixture_mode() == "mixture"
+        self._hint.setVisible(not enabled)
+        self._body.setVisible(enabled)
         self._rerun.setEnabled(enabled)
         for w in self._param_widgets():
             w.setEnabled(enabled)
@@ -242,8 +254,9 @@ class MixturePane(QWidget):
     def set_rerun_enabled(self, enabled: bool) -> None:
         self._rerun.setEnabled(bool(enabled) and self.mixture_mode() == "mixture")
 
-    def set_status(self, text: str) -> None:
+    def set_status(self, text: str, *, poor: bool = False) -> None:
         self._lbl_status.setText(text or "—")
+        apply_quality_hint_style(self._lbl_status, poor=bool(poor) and bool(text) and text != "—")
 
     def set_fit_models(
         self,
@@ -320,7 +333,7 @@ class MixturePane(QWidget):
         self._rows_by_label = {}
         self._fit_paths = {}
         self._best_label = ""
-        self._lbl_status.setText("—")
+        self.set_status("—")
 
     @property
     def fit_plot(self) -> MixtureFitPlot:

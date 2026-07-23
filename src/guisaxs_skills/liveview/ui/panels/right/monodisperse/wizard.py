@@ -105,6 +105,9 @@ class MonodisperseWizardWidget(QWidget):
     def auto_processing_paused(self) -> bool:
         return self._paused
 
+    def auto_button(self) -> QPushButton:
+        return self._auto_btn
+
     def _refresh_auto_button(self, *, processing_idle: bool) -> None:
         if self._paused:
             self._auto_btn.setText("Resume auto-processing")

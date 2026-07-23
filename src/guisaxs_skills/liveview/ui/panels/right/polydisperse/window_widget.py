@@ -38,8 +38,8 @@ class PolydisperseWindowWidget(QWidget):
         guinier_box = _pane_group("Guinier", self.guinier_pane)
         guinier_box.setMinimumWidth(268)
         grid.addWidget(guinier_box, 0, 0, 2, 1)
-        grid.addWidget(_pane_group("fit_sizes (D(R))", self.sizes_pane), 0, 1, 1, 1)
-        grid.addWidget(_pane_group("model_mixture", self.mixture_pane), 1, 1, 1, 1)
+        grid.addWidget(_pane_group("GNOM D(R)", self.sizes_pane), 0, 1, 1, 1)
+        grid.addWidget(_pane_group("D(R)", self.mixture_pane), 1, 1, 1, 1)
         grid.setColumnStretch(0, 2)
         grid.setColumnStretch(1, 4)
         grid.setRowStretch(0, 1)
@@ -94,6 +94,9 @@ class PolydisperseWindowWidget(QWidget):
 
     def auto_processing_paused(self) -> bool:
         return bool(self._paused)
+
+    def auto_button(self) -> QPushButton:
+        return self._auto_btn
 
     def _refresh_auto_button(self, *, processing_idle: bool) -> None:
         if self._paused:

@@ -4,19 +4,21 @@ from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 
 class RunControls(QWidget):
-    def __init__(self) -> None:
+    def __init__(self, *, show_copy_cli: bool = True) -> None:
         super().__init__()
         self._run = QPushButton("Run")
         self._cancel = QPushButton("Cancel")
         self._cancel.setEnabled(False)
         self._copy_cli = QPushButton("Copy CLI")
+        self._copy_cli.setVisible(bool(show_copy_cli))
         self._state = QLabel("Idle")
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._run)
         lay.addWidget(self._cancel)
-        lay.addWidget(self._copy_cli)
+        if show_copy_cli:
+            lay.addWidget(self._copy_cli)
         lay.addWidget(self._state, 1)
 
     @property

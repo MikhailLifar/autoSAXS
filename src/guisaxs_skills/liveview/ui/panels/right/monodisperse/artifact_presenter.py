@@ -27,7 +27,7 @@ from .....services.artifacts import (
 )
 from .....services.dam_models import build_dam_model_catalog
 from .....services.denss_models import build_denss_model_catalog
-from .format_display import format_display_number, scalar_value
+from .format_display import format_display_number, is_passport_quality_poor, scalar_value
 from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
 
 
@@ -274,8 +274,8 @@ class MonodisperseArtifactPresenter:
             self._last_fit_distances_subdir = self._resolve_result_path(sub) or sub
         if not is_atsas_fit_ok(result):
             msg = failure_message_from_result(result, skill_id="fit_distances")
-            self._wizard.gnom_pane.set_diagnostics(text=msg)
             self._wizard.gnom_pane.clear_view()
+            self._wizard.gnom_pane.set_diagnostics(text=msg, poor=True)
             return
         gnom_out = self._resolve_result_path(result.get("best_gnom_out_path"))
         if not gnom_out and self._output_root is not None:
@@ -290,10 +290,11 @@ class MonodisperseArtifactPresenter:
         if gnom_out:
             self._last_gnom_out = gnom_out
         if not gnom_out or not os.path.isfile(gnom_out):
-            self._wizard.gnom_pane.set_diagnostics(
-                text=f"GNOM output not found: {gnom_out or '(missing path)'}"
-            )
             self._wizard.gnom_pane.clear_view()
+            self._wizard.gnom_pane.set_diagnostics(
+                text=f"GNOM output not found: {gnom_out or '(missing path)'}",
+                poor=True,
+            )
             return
         prof = self._effective_profile_path()
         self._wizard.gnom_pane.show_gnom(prof, gnom_out)
@@ -301,7 +302,12 @@ class MonodisperseArtifactPresenter:
             self._wizard.gnom_pane.set_params({"first": result["selected_first"]})
         if result.get("selected_last") is not None:
             self._wizard.gnom_pane.set_params({"last": result["selected_last"]})
-        self._wizard.gnom_pane.set_diagnostics(text=self._format_gnom_diagnostics(result))
+        diag = self._format_gnom_diagnostics(result)
+        poor = is_passport_quality_poor(
+            overall_status=str(scalar_value(result.get("overall_status")) or ""),
+            quality_class=str(scalar_value(result.get("pr_quality_class")) or ""),
+        )
+        self._wizard.gnom_pane.set_diagnostics(text=diag, poor=poor)
         self._wizard.shape_pane.set_rerun_enabled(self.can_rerun_shape())
 
     def _ingest_shape(self, result: dict, *, skill_name: str) -> None:
@@ -352,7 +358,7 @@ class MonodisperseArtifactPresenter:
             )
             self._wizard.shape_pane.set_status(f"Best: {best_shape}")
         else:
-            self._wizard.shape_pane.set_status("No BODIES fit")
+            self._wizard.shape_pane.set_status("No BODIES fit", poor=True)
 
     def _ingest_dammif(self, sd: Path) -> None:
         catalog = build_dam_model_catalog(sd)
@@ -419,7 +425,7 @@ class MonodisperseArtifactPresenter:
                 bits.append("σ map")
             self._wizard.shape_pane.set_status(" · ".join(bits))
         else:
-            self._wizard.shape_pane.set_status(f"No DENSS density in {sd.name}")
+            self._wizard.shape_pane.set_status(f"No DENSS density in {sd.name}", poor=True)
 
     def load_from_disk(
         self,

@@ -36,10 +36,10 @@ class _PolyDrViewerDialog(QDialog):
         lay.addWidget(mpl_navigation_toolbar(self._plot, self))
         lay.addWidget(self._plot, 1)
 
-    def show_dr_csv(self, path: str) -> None:
+    def show_gnom_out(self, path: str) -> None:
         short = Path(path).name
         self.setWindowTitle(f"D(R) — {short}")
-        self._plot.plot_from_dr_csv(path)
+        self._plot.plot_from_gnom_out(path)
 
 
 class _PolyMixtureIqViewerDialog(QDialog):
@@ -139,10 +139,10 @@ class PolydispersePlotClickRouter:
             self._iq_dlg.raise_()
             self._iq_dlg.activateWindow()
             return
-        if viewer == "dr" or suf == ".csv":
+        if viewer == "gnom_dr":
             if self._dr_dlg is None:
                 self._dr_dlg = _PolyDrViewerDialog(self._parent)
-            self._dr_dlg.show_dr_csv(path)
+            self._dr_dlg.show_gnom_out(path)
             self._dr_dlg.show()
             self._dr_dlg.raise_()
             self._dr_dlg.activateWindow()

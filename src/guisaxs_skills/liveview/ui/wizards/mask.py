@@ -15,7 +15,6 @@ from PyQt5.QtGui import QGuiApplication, QKeySequence
 from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
-    QDialogButtonBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -465,6 +464,9 @@ class MaskCanvas(DropTiffImageCanvas):
 
 
 class MaskWizardDialog(QDialog):
+    attention_context_changed = pyqtSignal()
+    mask_committed = pyqtSignal(str)
+
     def __init__(
         self,
         *,
@@ -519,13 +521,9 @@ class MaskWizardDialog(QDialog):
         self._mask_field = PathField(
             mode="any",
             allow_multiple=False,
-            show_load=True,
             expected_exts=(".txt", ".npy", ".msk"),
         )
         self._mask_field.set_workdir(watchdir)
-        load_btn = self._mask_field.load_button
-        if load_btn is not None:
-            load_btn.setToolTip("Load the mask file at the path above (replaces the current mask overlay)")
         cal_dir = str(calibration_subdir(watchdir))
         self._image_field.set_browse_start_dir(cal_dir)
         self._mask_field.set_browse_start_dir(cal_dir)
@@ -555,7 +553,8 @@ class MaskWizardDialog(QDialog):
         self._mask_field.set_smart_drop_handler(self._smart_drop_paths)
         self._image_field.path_changed.connect(self._on_image_field_changed)
         self._mask_field.path_changed.connect(self._on_mask_field_changed)
-        self._mask_field.load_clicked.connect(self._on_load_mask_from_field)
+        self._image_field.path_changed.connect(self.attention_context_changed.emit)
+        self._mask_field.path_changed.connect(self.attention_context_changed.emit)
 
         # Layout
         splitter = QSplitter(Qt.Horizontal)
@@ -571,28 +570,31 @@ class MaskWizardDialog(QDialog):
         right_lay = QVBoxLayout(right)
         right_lay.setContentsMargins(0, 0, 0, 0)
 
-        right_header = QWidget()
-        right_header_lay = QHBoxLayout(right_header)
-        right_header_lay.setContentsMargins(0, 0, 0, 0)
-        right_header_lay.addStretch(1)
-        self._btn_drawing_help = QPushButton("?")
-        self._btn_drawing_help.setObjectName("helpButton")
-        self._btn_drawing_help.setFixedSize(26, 26)
-        self._btn_drawing_help.setToolTip("How to draw masks in the current mode")
-        self._btn_drawing_help.clicked.connect(self._on_drawing_help)
-        right_header_lay.addWidget(self._btn_drawing_help, 0, Qt.AlignTop | Qt.AlignRight)
-        right_lay.addWidget(right_header, 0)
-
         grp_in = QGroupBox("Inputs")
         in_lay = QVBoxLayout(grp_in)
         in_lay.addWidget(QLabel("Calibration image (.tif):"))
         in_lay.addWidget(self._image_field)
-        in_lay.addWidget(QLabel("Mask path (press Load to read an existing file):"))
+        in_lay.addWidget(QLabel("Mask path:"))
         in_lay.addWidget(self._mask_field)
         right_lay.addWidget(grp_in)
 
         grp_tools = QGroupBox("Tools")
         tools_lay = QVBoxLayout(grp_tools)
+        tools_header = QHBoxLayout()
+        tools_header.addStretch(1)
+        self._btn_drawing_help = QPushButton("?")
+        self._btn_drawing_help.setObjectName("helpButton")
+        self._btn_drawing_help.setFixedSize(26, 26)
+        self._btn_drawing_help.setToolTip("How to draw masks in the current mode")
+        self._btn_drawing_help.clicked.connect(self._on_drawing_help)
+        tools_header.addWidget(self._btn_drawing_help, 0, Qt.AlignTop | Qt.AlignRight)
+        tools_lay.addLayout(tools_header)
+        note = QLabel(
+            "Note: you should not mask beam-stop.\n"
+            "It is masked automatically following calibration"
+        )
+        note.setWordWrap(True)
+        tools_lay.addWidget(note)
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("Mode:"))
         mode_row.addWidget(self._mode_combo, 1)
@@ -612,17 +614,36 @@ class MaskWizardDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.addWidget(splitter, 1)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        buttons.rejected.connect(self.reject)
-        buttons.accepted.connect(self.accept)
-        lay.addWidget(buttons, 0)
-
         # Defaults
         self.set_defaults(
             image_path=default_image_path,
             mask_path=default_mask_path,
         )
         self._update_mode_controls()
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self.attention_context_changed.emit()
+
+    def hideEvent(self, event) -> None:  # type: ignore[override]
+        super().hideEvent(event)
+        # Sync mask path back to the calibration form when the window is closed/hidden.
+        path = (self._mask_field.text().strip() or self._saved_mask_path or "").strip()
+        if path:
+            self.mask_committed.emit(path)
+        self.attention_context_changed.emit()
+
+    def has_calibrant_image(self) -> bool:
+        return bool(self._image_field.text().strip())
+
+    def has_mask(self) -> bool:
+        return bool(self._mask_field.text().strip() or self._saved_mask_path)
+
+    def mask_browse_button(self):
+        return self._mask_field.browse_button
+
+    def image_browse_button(self):
+        return self._image_field.browse_button
 
     def _current_mode(self) -> MaskMode:
         value = self._mode_combo.currentData()
@@ -767,33 +788,25 @@ class MaskWizardDialog(QDialog):
 
     def _on_mask_field_changed(self) -> None:
         self._refresh_path_browse_starts()
-        self._ctx_mask_path = self._mask_field.text().strip()
+        self._try_load_mask_from_field()
 
-    def _on_load_mask_from_field(self) -> None:
+    def _try_load_mask_from_field(self) -> None:
+        """Load mask from the path field when the file exists (same auto-load idea as the image field)."""
         mask_path = self._mask_field.text().strip()
-        if not mask_path:
-            QMessageBox.warning(self, "Load mask", "Mask path is empty.")
-            return
+        self._ctx_mask_path = mask_path
         if self._ctx_shape is None:
-            QMessageBox.warning(self, "Load mask", "Load a calibration image first.")
+            return
+        if not mask_path:
+            self._model.base_mask = None
+            self._canvas.refresh_overlays()
             return
         p = Path(mask_path).expanduser()
         if not p.is_file():
-            QMessageBox.warning(self, "Load mask", f"File not found:\n\n{mask_path}")
             return
         base = _read_mask_bool(str(p))
-        if base is None:
-            QMessageBox.warning(self, "Load mask", f"Could not read mask:\n\n{mask_path}")
-            return
-        if tuple(base.shape) != self._ctx_shape:
-            QMessageBox.warning(
-                self,
-                "Load mask",
-                f"Mask shape {base.shape} does not match image shape {self._ctx_shape}.",
-            )
+        if base is None or tuple(base.shape) != self._ctx_shape:
             return
         self._model.sync_context(self._ctx_shape, base_mask=base, reset_edits=True)
-        self._ctx_mask_path = mask_path
         self._canvas.refresh_overlays()
         self._dirty = False
 
@@ -815,10 +828,10 @@ class MaskWizardDialog(QDialog):
 
         self._model.sync_context(shape, base_mask=base, reset_edits=reset_edits)
         self._ctx_shape = shape
-        self._ctx_mask_path = self._mask_field.text().strip()
         self._canvas.refresh_overlays()
         if reset_edits:
             self._dirty = False
+        self._try_load_mask_from_field()
 
     def _on_drawing_help(self) -> None:
         mode = self._current_mode()
@@ -956,6 +969,8 @@ class MaskWizardDialog(QDialog):
         self._canvas.refresh_overlays()
         self._dirty = False
         QMessageBox.information(self, "Mask", f"Saved mask:\n\n{self._saved_mask_path}")
+        self.mask_committed.emit(self._saved_mask_path)
+        self.attention_context_changed.emit()
 
     def reject(self) -> None:  # type: ignore[override]
         if self._confirm_close_if_dirty():

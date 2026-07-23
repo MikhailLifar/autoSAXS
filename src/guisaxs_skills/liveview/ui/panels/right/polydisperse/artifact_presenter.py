@@ -15,7 +15,7 @@ from .....services.artifacts import (
     norm_artifact_path,
     resolve_artifact_path,
 )
-from ..monodisperse.format_display import format_display_number, scalar_value
+from ..monodisperse.format_display import format_display_number, is_passport_quality_poor, scalar_value
 from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
 
 
@@ -27,7 +27,6 @@ class PolydisperseArtifactPresenter:
         self._output_root: Optional[Path] = None
         self._last_guinier_results: str = ""
         self._last_gnom_out: str = ""
-        self._last_dr_csv: str = ""
         self._last_sizes_subdir: str = ""
         self._last_mixture_subdir: str = ""
         self._last_sizes_summary: str = ""
@@ -62,7 +61,6 @@ class PolydisperseArtifactPresenter:
         self._window.mixture_pane.clear_view()
         self._last_guinier_results = ""
         self._last_gnom_out = ""
-        self._last_dr_csv = ""
         self._last_sizes_subdir = ""
         self._last_mixture_subdir = ""
         self._last_sizes_summary = ""
@@ -234,27 +232,29 @@ class PolydisperseArtifactPresenter:
             self._last_sizes_subdir = self._resolve_result_path(sub) or sub
         if not is_atsas_fit_ok(result):
             msg = failure_message_from_result(result, skill_id="fit_sizes")
-            self._window.sizes_pane.set_diagnostics(text=msg)
             self._window.sizes_pane.clear_view()
+            self._window.sizes_pane.set_diagnostics(text=msg, poor=True)
             self._last_sizes_summary = msg
             return
         gnom_out = self._resolve_result_path(result.get("best_gnom_out_path"))
         if gnom_out:
             self._last_gnom_out = gnom_out
-        dr_csv = self._resolve_result_path(result.get("dr_csv_path"))
-        if dr_csv:
-            self._last_dr_csv = dr_csv
         if result.get("selected_first") is not None:
             self._window.sizes_pane.set_params({"first": result["selected_first"]})
         if result.get("selected_last") is not None:
             self._window.sizes_pane.set_params({"last": result["selected_last"]})
         prof = self._effective_profile_path()
         if gnom_out and os.path.isfile(gnom_out):
-            self._window.sizes_pane.show_sizes(prof, gnom_out, dr_csv or "")
+            self._window.sizes_pane.show_sizes(prof, gnom_out)
         else:
             self._window.sizes_pane.clear_view()
         diag = self._format_sizes_diagnostics(result)
-        self._window.sizes_pane.set_diagnostics(text=diag)
+        poor = is_passport_quality_poor(
+            overall_status=str(scalar_value(result.get("overall_status")) or ""),
+            quality_class=str(scalar_value(result.get("sizes_quality_class")) or ""),
+            stability_class=str(scalar_value(result.get("stability_class")) or ""),
+        )
+        self._window.sizes_pane.set_diagnostics(text=diag, poor=poor)
         self._last_sizes_summary = diag.replace("\n", "; ")
         self._window.mixture_pane.set_rerun_enabled(self.can_rerun_mixture())
 
@@ -269,18 +269,18 @@ class PolydisperseArtifactPresenter:
             cands = sorted(Path(sub).glob("mixture_results.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
             csv_path = str(cands[0]) if cands else ""
         if not csv_path or not os.path.isfile(csv_path):
-            self._window.mixture_pane.set_status("No mixture results CSV")
             self._window.mixture_pane.clear_view()
+            self._window.mixture_pane.set_status("No mixture results CSV", poor=True)
             return
         try:
             import pandas as pd
 
             df = pd.read_csv(csv_path)
         except Exception:
-            self._window.mixture_pane.set_status("Failed to read mixture_results.csv")
+            self._window.mixture_pane.set_status("Failed to read mixture_results.csv", poor=True)
             return
         if "label" not in df.columns or df.empty:
-            self._window.mixture_pane.set_status("Empty mixture results")
+            self._window.mixture_pane.set_status("Empty mixture results", poor=True)
             return
         best = str(result.get("best_label") or "").strip()
         if not best and "BIC_log" in df.columns:
@@ -356,14 +356,10 @@ class PolydisperseArtifactPresenter:
             outs = sorted(fs.glob("*.out"), key=lambda p: p.stat().st_mtime, reverse=True)
             if outs:
                 gnom = str(outs[0])
-            drs = sorted(fs.glob("*_DR.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
-            if not drs:
-                drs = sorted(fs.glob("*dr*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
             payload: dict[str, Any] = {
                 "atsas_fit_ok": True,
                 "output_subdir": str(fs),
                 "best_gnom_out_path": gnom,
-                "dr_csv_path": str(drs[0]) if drs else "",
             }
             best_yml = list(fs.glob("*_fit_sizes_best.yml"))
             if best_yml:

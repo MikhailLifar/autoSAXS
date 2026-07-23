@@ -59,6 +59,9 @@ class LiveviewHistoryHandler:
         n = len(hist)
         if n == 0:
             middle.set_history_nav_visible(False)
+            left = self._c.left
+            if left is not None:
+                left.refresh_attention_coach()
             return
         middle.set_history_nav_visible(True)
         if self._index >= n:
@@ -74,6 +77,9 @@ class LiveviewHistoryHandler:
         middle.set_history_prev_enabled(self._index > 0)
         middle.set_history_next_enabled(self._index < n - 1)
         middle.set_process_enabled(True)
+        left = self._c.left
+        if left is not None:
+            left.refresh_attention_coach()
 
     def on_session_file_completed(self) -> None:
         hist = self._c.executor.session_processed_tiffs

@@ -21,6 +21,20 @@ def mpl_navigation_toolbar(canvas: FigureCanvas, parent: QWidget) -> NavigationT
     return NavigationToolbar2QT(canvas, parent)
 
 
+def draw_q_match_band(ax, q_min: Any, q_max: Any) -> None:
+    """Shade the q-match window when both bounds are finite and ordered."""
+    if q_min is None or q_max is None:
+        return
+    try:
+        lo = float(q_min)
+        hi = float(q_max)
+    except (TypeError, ValueError):
+        return
+    if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+        return
+    ax.axvspan(lo, hi, color="C1", alpha=0.28, zorder=0, linewidth=0)
+
+
 class LogCurvePlot(FigureCanvas):
     def __init__(self) -> None:
         self._fig = Figure(figsize=(4, 3), dpi=100)
@@ -44,7 +58,14 @@ class LogCurvePlot(FigureCanvas):
         self.draw_idle()
         self.setCursor(Qt.ArrowCursor)
 
-    def plot_dat(self, path: str, *, label: Optional[str] = None) -> None:
+    def plot_dat(
+        self,
+        path: str,
+        *,
+        label: Optional[str] = None,
+        q_min: Any = None,
+        q_max: Any = None,
+    ) -> None:
         from autosaxs.core.utils import read_saxs
 
         q, I, sigma, _meta = read_saxs(path)
@@ -60,6 +81,7 @@ class LogCurvePlot(FigureCanvas):
             qq = q[m]
             ii = I[m]
             ss = sigma[m] if sigma is not None else None
+            draw_q_match_band(self._ax, q_min, q_max)
             if ss is not None:
                 # Keep error bars valid on log-scale (avoid <= 0 lower bound).
                 ss = np.minimum(ss, 0.99 * ii)
@@ -449,6 +471,8 @@ class DatCurveViewerDialog(QDialog):
         x_label: Optional[str] = None,
         curve_label: Optional[str] = None,
         window_title: Optional[str] = None,
+        q_min: Any = None,
+        q_max: Any = None,
     ) -> None:
         short, full = contracted_path_label(path)
         tip = full
@@ -461,7 +485,7 @@ class DatCurveViewerDialog(QDialog):
         if x_label is not None:
             self._plot.set_x_label(x_label)
         try:
-            self._plot.plot_dat(path, label=curve_label)
+            self._plot.plot_dat(path, label=curve_label, q_min=q_min, q_max=q_max)
         except Exception:
             self._plot.clear()
             if self._plot.figure.axes:
@@ -498,13 +522,22 @@ def open_dat_curve_dialog(
     x_label: Optional[str] = None,
     curve_label: Optional[str] = None,
     window_title: Optional[str] = None,
+    q_min: Any = None,
+    q_max: Any = None,
 ) -> Optional[DatCurveViewerDialog]:
     """Open or refresh an interactive .dat curve viewer (matplotlib zoom/pan toolbar)."""
     p = (path or "").strip()
     if not p or not os.path.isfile(p) or Path(p).suffix.lower() != ".dat":
         return reuse
     dlg = reuse if reuse is not None else DatCurveViewerDialog(parent)
-    dlg.show_single_dat(p, x_label=x_label, curve_label=curve_label, window_title=window_title)
+    dlg.show_single_dat(
+        p,
+        x_label=x_label,
+        curve_label=curve_label,
+        window_title=window_title,
+        q_min=q_min,
+        q_max=q_max,
+    )
     dlg.show()
     dlg.raise_()
     dlg.activateWindow()
@@ -666,23 +699,75 @@ class DropTiffImageCanvas(Image2DPlot):
     def __init__(self) -> None:
         super().__init__()
         self.setAcceptDrops(True)
+        self._attention_on = False
+        self._attention_alpha = 0.5
         self._draw_drop_hint()
 
     def clear(self) -> None:
         super().clear()
         self._draw_drop_hint()
 
+    def set_attention_pulse(self, on: bool, *, alpha: float | None = None) -> None:
+        """Drive Drop .tif coaching from ``AttentionPulse`` (no-op while an image is shown)."""
+        was_on = self._attention_on
+        old_alpha = self._attention_alpha
+        self._attention_on = bool(on)
+        if alpha is not None:
+            self._attention_alpha = float(alpha)
+        if self._last_tiff_path:
+            return
+        # Throttle matplotlib redraws while pulsing.
+        if (
+            was_on
+            and self._attention_on
+            and abs(old_alpha - self._attention_alpha) < 0.08
+        ):
+            return
+        self._draw_drop_hint()
+
     def _draw_drop_hint(self) -> None:
-        self._ax.text(
-            0.5,
-            0.5,
-            "Drop .tif",
-            transform=self._ax.transAxes,
-            ha="center",
-            va="center",
-            alpha=0.5,
-            fontsize=11,
-        )
+        self._ax.clear()
+        if self._attention_on:
+            a = max(0.25, min(1.0, float(self._attention_alpha)))
+            self._ax.text(
+                0.5,
+                0.5,
+                "Drop .tif",
+                transform=self._ax.transAxes,
+                ha="center",
+                va="center",
+                alpha=a,
+                fontsize=14,
+                color="#4c8dff",
+                fontweight="bold",
+            )
+            from matplotlib.patches import FancyBboxPatch
+
+            rect = FancyBboxPatch(
+                (0.06, 0.06),
+                0.88,
+                0.88,
+                boxstyle="round,pad=0.02,rounding_size=0.04",
+                transform=self._ax.transAxes,
+                fill=False,
+                edgecolor="#4c8dff",
+                linewidth=2.5,
+                alpha=a,
+                linestyle="--",
+            )
+            self._ax.add_patch(rect)
+        else:
+            self._ax.text(
+                0.5,
+                0.5,
+                "Drop .tif",
+                transform=self._ax.transAxes,
+                ha="center",
+                va="center",
+                alpha=0.5,
+                fontsize=11,
+            )
+        self._ax.set_axis_off()
         self.draw_idle()
 
     def dragEnterEvent(self, event) -> None:  # type: ignore[override]

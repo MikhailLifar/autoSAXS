@@ -4,18 +4,15 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
-from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QDialog,
-    QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QMessageBox,
     QSpinBox,
     QVBoxLayout,
 )
@@ -24,8 +21,8 @@ from ....core.models import RunRequest
 from ....logic.skill_catalog import discover_skills
 from ....logic.session_state import SessionPathHints
 from ....ui.path_field import PathField
-from ....ui.run_controls import RunControls
 from ....ui.skill_form import SkillForm
+from ..skill_form_utils import force_fixed_output, liveview_run_controls, liveview_skill_form
 
 try:
     from autosaxs.skill.model_bodies import BODIES_SHAPES_LIST
@@ -40,30 +37,6 @@ except Exception:
         "parallelepiped",
         "rotation-ellipsoid",
     ]
-
-
-def _force_no_cache_and_fixed_output(form: SkillForm, *, outdir: str) -> None:
-    try:
-        cb = form._opt_fields.get("use_cache")  # type: ignore[attr-defined]
-        if cb is not None:
-            cb.setChecked(False)
-            cb.setEnabled(False)
-    except Exception:
-        pass
-    try:
-        out = form._opt_fields.get("output_dir")  # type: ignore[attr-defined]
-        if out is not None:
-            out.set_text(outdir)
-            out.setEnabled(False)
-    except Exception:
-        pass
-
-
-def _remove_skill_option_field(form: SkillForm, opt_name: str) -> None:
-    """Drop an option row from ``SkillForm`` (e.g. hide ``config_path`` handled elsewhere)."""
-    w = form._opt_fields.pop(opt_name, None)
-    if w is not None:
-        form._opt_layout.removeRow(w)
 
 
 def _clear_profile_positional_field(form: SkillForm, meta) -> None:
@@ -98,8 +71,8 @@ class FitDistancesWizardDialog(QDialog):
 
         skills = {m.name: m for m in discover_skills()}
         meta = skills.get("fit_distances")
-        self._form = SkillForm()
-        self._controls = RunControls()
+        self._form = liveview_skill_form()
+        self._controls = liveview_run_controls()
         self._controls.run_button.setText("Run/Apply")
         self._meta = meta
 
@@ -114,7 +87,7 @@ class FitDistancesWizardDialog(QDialog):
                 hints=hints,
                 saved_state=saved_form_state,
             )
-            _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+            force_fixed_output(self._form, outdir=str(out))
             _clear_profile_positional_field(self._form, meta)
             lay.addWidget(
                 QLabel(
@@ -128,14 +101,9 @@ class FitDistancesWizardDialog(QDialog):
         else:
             lay.addWidget(QLabel("fit_distances skill is not available."))
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        buttons.rejected.connect(self.close)
-        buttons.accepted.connect(self.close)
-        lay.addWidget(buttons)
 
         self._controls.run_button.clicked.connect(self._on_run_clicked)
         self._controls.cancel_button.clicked.connect(self._on_cancel_clicked)
-        self._controls.copy_cli_button.clicked.connect(self._on_copy_cli)
 
     def rebuild(self, hints: SessionPathHints) -> None:
         if self._meta is None:
@@ -153,7 +121,7 @@ class FitDistancesWizardDialog(QDialog):
             hints=hints,
             saved_state=saved,
         )
-        _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+        force_fixed_output(self._form, outdir=str(out))
         _clear_profile_positional_field(self._form, self._meta)
         self._controls.run_button.setText("Run/Apply")
 
@@ -178,16 +146,6 @@ class FitDistancesWizardDialog(QDialog):
         if parent is not None and hasattr(parent, "fit_distances_cancel_requested"):
             getattr(parent, "fit_distances_cancel_requested").emit()
 
-    def _on_copy_cli(self) -> None:
-        if self._meta is None:
-            return
-        try:
-            req = self._form.build_request()
-        except Exception as e:
-            QMessageBox.critical(self, "Cannot build request", str(e))
-            return
-        text = "autosaxs " + " ".join(req.cli_argv())
-        QGuiApplication.clipboard().setText(text)
 
 
 class FitBodiesWizardDialog(QDialog):
@@ -214,9 +172,8 @@ class FitBodiesWizardDialog(QDialog):
             self._list.addItem(it)
         self._apply_saved_shapes(saved_shapes)
 
-        self._controls = RunControls()
+        self._controls = liveview_run_controls()
         self._controls.run_button.setText("Run/Apply")
-        self._controls.copy_cli_button.setVisible(False)
 
         lay = QVBoxLayout(self)
         lay.addWidget(
@@ -228,10 +185,6 @@ class FitBodiesWizardDialog(QDialog):
         lay.addWidget(self._list, 1)
         lay.addWidget(self._controls)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        buttons.rejected.connect(self.close)
-        buttons.accepted.connect(self.close)
-        lay.addWidget(buttons)
 
         self._controls.run_button.clicked.connect(self._on_run_clicked)
         self._controls.cancel_button.clicked.connect(self._on_cancel_clicked)
@@ -289,8 +242,8 @@ class FitSizesWizardDialog(QDialog):
 
         skills = {m.name: m for m in discover_skills()}
         meta = skills.get("fit_sizes")
-        self._form = SkillForm()
-        self._controls = RunControls()
+        self._form = liveview_skill_form()
+        self._controls = liveview_run_controls()
         self._controls.run_button.setText("Run/Apply")
         self._meta = meta
 
@@ -305,7 +258,7 @@ class FitSizesWizardDialog(QDialog):
                 hints=hints,
                 saved_state=saved_form_state,
             )
-            _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+            force_fixed_output(self._form, outdir=str(out))
             _clear_profile_positional_field(self._form, meta)
             lay.addWidget(
                 QLabel(
@@ -318,14 +271,9 @@ class FitSizesWizardDialog(QDialog):
         else:
             lay.addWidget(QLabel("fit_sizes skill is not available."))
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        buttons.rejected.connect(self.close)
-        buttons.accepted.connect(self.close)
-        lay.addWidget(buttons)
 
         self._controls.run_button.clicked.connect(self._on_run_clicked)
         self._controls.cancel_button.clicked.connect(self._on_cancel_clicked)
-        self._controls.copy_cli_button.clicked.connect(self._on_copy_cli)
 
     def rebuild(self, hints: SessionPathHints) -> None:
         if self._meta is None:
@@ -343,7 +291,7 @@ class FitSizesWizardDialog(QDialog):
             hints=hints,
             saved_state=saved,
         )
-        _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+        force_fixed_output(self._form, outdir=str(out))
         _clear_profile_positional_field(self._form, self._meta)
 
     def build_fit_sizes_request(self) -> RunRequest:
@@ -367,16 +315,6 @@ class FitSizesWizardDialog(QDialog):
         if parent is not None and hasattr(parent, "fit_distances_cancel_requested"):
             getattr(parent, "fit_distances_cancel_requested").emit()
 
-    def _on_copy_cli(self) -> None:
-        if self._meta is None:
-            return
-        try:
-            req = self._form.build_request()
-        except Exception as e:
-            QMessageBox.critical(self, "Cannot build request", str(e))
-            return
-        text = "autosaxs " + " ".join(req.cli_argv())
-        QGuiApplication.clipboard().setText(text)
 
 
 # Written under watchdir/mixture/ for persistence (``model_mixture:`` section; queue uses CLI options).
@@ -428,8 +366,8 @@ class FitMixtureWizardDialog(QDialog):
 
         skills = {m.name: m for m in discover_skills()}
         meta = skills.get("model_mixture")
-        self._form = SkillForm()
-        self._controls = RunControls()
+        self._form = liveview_skill_form()
+        self._controls = liveview_run_controls()
         self._controls.run_button.setText("Run/Apply")
         self._meta = meta
 
@@ -475,9 +413,8 @@ class FitMixtureWizardDialog(QDialog):
                 hints=hints,
                 saved_state=saved_form_state,
             )
-            _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+            force_fixed_output(self._form, outdir=str(out))
             _clear_profile_positional_field(self._form, meta)
-            _remove_skill_option_field(self._form, "config_path")
             lay.addWidget(
                 QLabel(
                     "Set q_min_nm / q_max_nm below to limit the fit range (recommended). Run/Apply saves options "
@@ -493,16 +430,11 @@ class FitMixtureWizardDialog(QDialog):
         else:
             lay.addWidget(QLabel("model_mixture skill is not available."))
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        buttons.rejected.connect(self.close)
-        buttons.accepted.connect(self.close)
-        lay.addWidget(buttons)
 
         if meta is not None:
             self._controls.run_button.clicked.connect(self._on_run_clicked)
             self._controls.cancel_button.clicked.connect(self._on_cancel_clicked)
-            self._controls.copy_cli_button.clicked.connect(self._on_copy_cli)
-
+    
     def mixture_params(self) -> dict[str, Any]:
         return {
             "max_nph": int(self._sp_max_nph.value()),
@@ -561,7 +493,7 @@ class FitMixtureWizardDialog(QDialog):
             hints=hints,
             saved_state=saved,
         )
-        _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+        force_fixed_output(self._form, outdir=str(out))
         _clear_profile_positional_field(self._form, self._meta)
         _remove_skill_option_field(self._form, "config_path")
         self._controls.run_button.setText("Run/Apply")
@@ -598,14 +530,3 @@ class FitMixtureWizardDialog(QDialog):
         if parent is not None and hasattr(parent, "fit_distances_cancel_requested"):
             getattr(parent, "fit_distances_cancel_requested").emit()
 
-    def _on_copy_cli(self) -> None:
-        if self._meta is None:
-            return
-        try:
-            self.write_mixture_config_yaml()
-            req = self.build_model_mixture_request()
-        except Exception as e:
-            QMessageBox.critical(self, "Cannot build request", str(e))
-            return
-        text = "autosaxs " + " ".join(req.cli_argv())
-        QGuiApplication.clipboard().setText(text)

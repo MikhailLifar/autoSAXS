@@ -6,23 +6,30 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import (
     QDialog,
-    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
 from ...services.calibration.storage import calibration_subdir, ensure_tiff_in_calibration
+from ....core.models import RunRequest
 from ....logic.session_state import SessionPathHints
 from ....logic.skill_catalog import discover_skills
 from ....ui.path_field import PathField
-from ....ui.run_controls import RunControls
 from ....ui.skill_form import SkillForm
-from ..widgets.plots import DropTiffImageCanvas
+from ..skill_form_utils import (
+    liveview_run_controls,
+    liveview_skill_form,
+    normalize_calibrate_mask_mode,
+    prepare_liveview_calibrate_form,
+    prepare_liveview_subtract_form,
+)
+from ..widgets.plots import DropTiffImageCanvas, LogCurvePlot, open_dat_curve_dialog
 from PyQt5.QtWidgets import QLineEdit
 from ..widgets.plots import mpl_navigation_toolbar
 
@@ -33,21 +40,37 @@ def _empty_hints():
     return SessionPathHints()
 
 
-def _force_no_cache_and_fixed_output(form: SkillForm, *, outdir: str) -> None:
-    try:
-        cb = form._opt_fields.get("use_cache")  # type: ignore[attr-defined]
-        if cb is not None:
-            cb.setChecked(False)
-            cb.setEnabled(False)
-    except Exception:
-        pass
-    try:
-        out = form._opt_fields.get("output_dir")  # type: ignore[attr-defined]
-        if out is not None:
-            out.set_text(outdir)
-            out.setEnabled(False)
-    except Exception:
-        pass
+class _AspectPlotHost(QWidget):
+    """Center a plot canvas at a fixed width/height aspect so it does not stretch oddly."""
+
+    def __init__(self, child: QWidget, *, aspect: float = 1.55) -> None:
+        super().__init__()
+        self._child = child
+        self._aspect = max(0.5, float(aspect))
+        self._child.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addStretch(1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self._child, 0, Qt.AlignCenter)
+        row.addStretch(1)
+        lay.addLayout(row)
+        lay.addStretch(1)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        avail_w = max(1, int(self.width()) - 8)
+        avail_h = max(1, int(self.height()) - 8)
+        # Fit largest rectangle of the target aspect inside the host.
+        w = avail_w
+        h = int(round(w / self._aspect))
+        if h > avail_h:
+            h = avail_h
+            w = int(round(h * self._aspect))
+        w = max(240, w)
+        h = max(160, h)
+        self._child.setFixedSize(w, h)
 
 
 def _disable_subtract_sample_field(form: SkillForm, meta) -> None:
@@ -71,6 +94,7 @@ def _disable_subtract_sample_field(form: SkillForm, meta) -> None:
 
 class CalibrationWizardDialog(QDialog):
     reset_requested = pyqtSignal()
+    attention_context_changed = pyqtSignal()
 
     def __init__(self, *, watchdir: Path, parent=None) -> None:
         super().__init__(parent)
@@ -101,13 +125,17 @@ class CalibrationWizardDialog(QDialog):
 
         skills = {m.name: m for m in discover_skills()}
         meta = skills.get("calibrate")
-        self._form = SkillForm()
-        self._controls = RunControls()
+        self._form = liveview_skill_form()
+        self._controls = liveview_run_controls()
         self._controls.run_button.setText("Run")
         self._meta = meta
         self._viewer = DropTiffImageCanvas()
         self._viewer_toolbar = None
         self._mask_wizard = None
+        self._run_coach_dismissed = False
+        self._close_coach_armed = False
+        self._btn_close = QPushButton("Close")
+        self._btn_close.clicked.connect(self.close)
 
         lay = QVBoxLayout(self)
         if meta is not None:
@@ -120,13 +148,8 @@ class CalibrationWizardDialog(QDialog):
                 hints=_empty_hints(),
                 saved_state=None,
             )
-            _force_no_cache_and_fixed_output(self._form, outdir=str(out))
-            lay.addWidget(
-                QLabel(
-                    "Calibrate integrator (outputs go to calibration/). "
-                    "config_path is optional — leave empty to use bundled autosaxs defaults."
-                )
-            )
+            prepare_liveview_calibrate_form(self._form, outdir=str(out))
+            lay.addWidget(QLabel("Calibrate integrator (outputs go to calibration/)."))
             splitter = QSplitter(Qt.Horizontal)
             splitter.setChildrenCollapsible(False)
             viewer_wrap = QWidget()
@@ -134,7 +157,14 @@ class CalibrationWizardDialog(QDialog):
             viewer_lay.setContentsMargins(0, 0, 0, 0)
             self._viewer_toolbar = mpl_navigation_toolbar(self._viewer, viewer_wrap)
             viewer_lay.addWidget(self._viewer_toolbar, 0)
-            viewer_lay.addWidget(self._viewer, 1)
+            # Host frame so coaching can draw a CSS border around the canvas
+            # (matplotlib canvases ignore QGraphicsEffect).
+            self._viewer_host = QWidget()
+            self._viewer_host.setAttribute(Qt.WA_StyledBackground, True)
+            host_lay = QVBoxLayout(self._viewer_host)
+            host_lay.setContentsMargins(6, 6, 6, 6)
+            host_lay.addWidget(self._viewer, 1)
+            viewer_lay.addWidget(self._viewer_host, 1)
             splitter.addWidget(viewer_wrap)
 
             right = QWidget()
@@ -162,25 +192,69 @@ class CalibrationWizardDialog(QDialog):
             rr = QHBoxLayout()
             rr.addWidget(self._btn_reset, 0, Qt.AlignLeft)
             rr.addStretch(1)
+            rr.addWidget(self._btn_close, 0, Qt.AlignRight)
             lay.addLayout(rr)
         else:
             lay.addWidget(QLabel("calibrate skill is not available."))
             self._btn_reset = None  # type: ignore[assignment]
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        buttons.rejected.connect(self.close)
-        buttons.accepted.connect(self.close)
-        lay.addWidget(buttons)
+            lay.addWidget(self._btn_close, 0, Qt.AlignRight)
 
         self._controls.run_button.clicked.connect(self._on_run_clicked)
         self._controls.cancel_button.clicked.connect(self._on_cancel_clicked)
-        self._controls.copy_cli_button.clicked.connect(self._on_copy_cli)
         if meta is not None:
             self._wire_viewer_updates()
             self._btn_create_mask.clicked.connect(self._open_mask_wizard)  # type: ignore[attr-defined]
             self._viewer.mpl_connect("button_press_event", self._on_viewer_click_open_mask)
             self._viewer.tiff_files_dropped.connect(self._on_tiff_dropped_to_viewer)
             self._refresh_viewer_from_form()
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self.attention_context_changed.emit()
+
+    def hideEvent(self, event) -> None:  # type: ignore[override]
+        super().hideEvent(event)
+        self.attention_context_changed.emit()
+
+    def has_calibrant_image(self) -> bool:
+        f = self._calib_image_field()
+        return bool(f is not None and f.text().strip())
+
+    def has_mask(self) -> bool:
+        f = self._mask_field()
+        return bool(f is not None and f.text().strip())
+
+    def run_coach_dismissed(self) -> bool:
+        return bool(self._run_coach_dismissed)
+
+    def arm_close_coach(self) -> None:
+        self._close_coach_armed = True
+
+    def close_coach_armed(self) -> bool:
+        return bool(self._close_coach_armed)
+
+    def close_button(self):
+        return self._btn_close
+
+    def mask_browse_button(self):
+        f = self._mask_field()
+        return f.browse_button if f is not None else None
+
+    def create_mask_button(self):
+        return getattr(self, "_btn_create_mask", None)
+
+    def run_button(self):
+        return self._controls.run_button
+
+    def drop_canvas(self):
+        """Widget to coach for the empty-TIFF step (host frame + canvas pulse)."""
+        return getattr(self, "_viewer_host", None) or getattr(self, "_viewer", None)
+
+    def drop_hint_canvas(self):
+        return getattr(self, "_viewer", None)
+
+    def mask_wizard(self):
+        return self._mask_wizard
 
     def _on_tiff_dropped_to_viewer(self, paths_obj: object) -> None:
         if not isinstance(paths_obj, list):
@@ -199,6 +273,7 @@ class CalibrationWizardDialog(QDialog):
         f.set_text(stored)
         f.set_browse_start_dir(str(calibration_subdir(self._watchdir)))
         self._refresh_viewer_from_form()
+        self.attention_context_changed.emit()
 
     def _calib_image_field(self) -> PathField | None:
         try:
@@ -224,11 +299,29 @@ class CalibrationWizardDialog(QDialog):
     def _wire_viewer_updates(self) -> None:
         f = self._calib_image_field()
         if f is not None:
+            try:
+                f.path_changed.disconnect(self._refresh_viewer_from_form)
+            except TypeError:
+                pass
+            try:
+                f.path_changed.disconnect(self._on_coach_path_changed)
+            except TypeError:
+                pass
             f.path_changed.connect(self._refresh_viewer_from_form)
+            f.path_changed.connect(self._on_coach_path_changed)
             f.set_browse_start_dir(str(calibration_subdir(self._watchdir)))
         mask_f = self._mask_field()
         if mask_f is not None:
+            try:
+                mask_f.path_changed.disconnect(self._on_coach_path_changed)
+            except TypeError:
+                pass
+            mask_f.path_changed.connect(self._on_coach_path_changed)
             mask_f.set_browse_start_dir(str(calibration_subdir(self._watchdir)))
+
+    def _on_coach_path_changed(self) -> None:
+        self._run_coach_dismissed = False
+        self.attention_context_changed.emit()
 
     def _refresh_viewer_from_form(self) -> None:
         f = self._calib_image_field()
@@ -273,20 +366,28 @@ class CalibrationWizardDialog(QDialog):
                 default_mask_path=mask_path,
                 parent=self,
             )
+            self._mask_wizard.attention_context_changed.connect(self.attention_context_changed.emit)
+            self._mask_wizard.mask_committed.connect(self._on_mask_committed)
         else:
             self._mask_wizard.set_defaults(
                 image_path=calib_path,
                 mask_path=mask_path,
             )
-        if self._mask_wizard.exec_() == QDialog.Accepted:
-            pass
-        # Update mask field if the wizard saved something, regardless of accept/reject.
-        chosen = self._mask_wizard.saved_mask_path()
+        self._mask_wizard.show()
+        self._mask_wizard.raise_()
+        self._mask_wizard.activateWindow()
+        self.attention_context_changed.emit()
+
+    def _on_mask_committed(self, path: str) -> None:
+        chosen = (path or "").strip()
+        mask_field = self._mask_field()
         if chosen and mask_field is not None:
             mask_field.set_text(chosen)
             mm = self._mask_mode_field()
             if mm is not None and not mm.text().strip():
                 mm.setText("from_file")
+        self._run_coach_dismissed = False
+        self.attention_context_changed.emit()
 
     def _on_reset_clicked(self) -> None:
         self.reset_requested.emit()
@@ -303,13 +404,19 @@ class CalibrationWizardDialog(QDialog):
             hints=_empty_hints(),
             saved_state=None,
         )
-        _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+        prepare_liveview_calibrate_form(self._form, outdir=str(out))
         self._wire_viewer_updates()
         self._refresh_viewer_from_form()
+        self._run_coach_dismissed = False
+        self._close_coach_armed = False
+        self.attention_context_changed.emit()
 
     def _on_run_clicked(self) -> None:
         if self._meta is None:
             return
+        self._run_coach_dismissed = True
+        self._close_coach_armed = False
+        self.attention_context_changed.emit()
         parent = self.parent()
         if parent is not None and hasattr(parent, "calibration_changed"):
             getattr(parent, "calibration_changed").emit()
@@ -319,19 +426,15 @@ class CalibrationWizardDialog(QDialog):
         if parent is not None and hasattr(parent, "calibration_cancel_requested"):
             getattr(parent, "calibration_cancel_requested").emit()
 
-    def _on_copy_cli(self) -> None:
-        if self._meta is None:
-            return
-        try:
-            req = self._form.build_request()
-        except Exception as e:
-            QMessageBox.critical(self, "Cannot build request", str(e))
-            return
-        text = "autosaxs " + " ".join(req.cli_argv())
-        QGuiApplication.clipboard().setText(text)
-
     def build_calibrate_request(self):
-        return self._form.build_request()
+        req = self._form.build_request()
+        opts = dict(req.options or {})
+        mm = normalize_calibrate_mask_mode(opts.get("mask_mode") if isinstance(opts.get("mask_mode"), str) else None)
+        if mm is not None:
+            opts["mask_mode"] = mm
+        elif "mask_mode" in opts:
+            opts.pop("mask_mode", None)
+        return RunRequest(skill_name=req.skill_name, positional=list(req.positional), options=opts)
 
     def set_running(self, running: bool) -> None:
         self._controls.set_running(bool(running))
@@ -339,19 +442,46 @@ class CalibrationWizardDialog(QDialog):
 
 class BufferWizardDialog(QDialog):
     reset_requested = pyqtSignal()
+    attention_context_changed = pyqtSignal()
 
     def __init__(self, *, watchdir: Path, hints: SessionPathHints, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Set buffer")
-        self.setMinimumWidth(560)
-        self.resize(720, 640)
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.CustomizeWindowHint
+            | Qt.WindowTitleHint
+            | Qt.WindowSystemMenuHint
+            | Qt.WindowCloseButtonHint
+            | Qt.WindowMinMaxButtonsHint
+        )
+        self.setSizeGripEnabled(True)
+        try:
+            scr = QGuiApplication.primaryScreen()
+            geo = scr.availableGeometry() if scr is not None else None
+            if geo is not None:
+                w = max(1000, int(0.72 * int(geo.width())))
+                h = max(560, int(0.58 * int(geo.height())))
+                self.resize(w, h)
+                self.setMinimumSize(900, 520)
+        except Exception:
+            self.setMinimumWidth(900)
+            self.resize(1120, 640)
         self._watchdir = watchdir
+        self._dat_viewer = None
+        self._apply_coach_dismissed = False
+        self._close_coach_armed = False
+        self._btn_close = QPushButton("Close")
+        self._btn_close.clicked.connect(self.close)
 
         skills = {m.name: m for m in discover_skills()}
         meta = skills.get("subtract")
-        self._form = SkillForm()
-        self._apply = QPushButton("Apply buffer + subtraction settings")
+        self._form = liveview_skill_form()
+        self._apply = QPushButton("Apply subtraction settings")
         self._meta = meta
+        self._plot = LogCurvePlot()
+        self._plot.mpl_connect("button_press_event", self._on_plot_click)
+        self._splitter: QSplitter | None = None
 
         lay = QVBoxLayout(self)
         if meta is not None:
@@ -364,16 +494,25 @@ class BufferWizardDialog(QDialog):
                 hints=hints,
                 saved_state=None,
             )
-            _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+            prepare_liveview_subtract_form(self._form, outdir=str(out))
             _disable_subtract_sample_field(self._form, meta)
-            lay.addWidget(
-                QLabel(
-                    "Buffer .dat and subtract options (sample curve comes from the live queue). "
-                    "When the pipeline has produced an integrated curve, the buffer field defaults to that "
-                    ".dat and the file browser opens in its directory."
-                )
-            )
-            lay.addWidget(self._form, 1)
+            self._wire_form_plot_updates()
+
+            splitter = QSplitter(Qt.Horizontal)
+            splitter.setChildrenCollapsible(False)
+            self._splitter = splitter
+            left = QWidget()
+            left_lay = QVBoxLayout(left)
+            left_lay.setContentsMargins(0, 0, 0, 0)
+            left_lay.addWidget(QLabel("Buffer curve (click to enlarge)"))
+            left_lay.addWidget(_AspectPlotHost(self._plot, aspect=1.55), 1)
+            splitter.addWidget(left)
+
+            right = QWidget()
+            right.setMinimumWidth(340)
+            right_lay = QVBoxLayout(right)
+            right_lay.setContentsMargins(0, 0, 0, 0)
+            right_lay.addWidget(self._form, 1)
             row = QHBoxLayout()
             row.addWidget(self._apply)
             self._btn_reset = QPushButton("Reset")
@@ -383,18 +522,187 @@ class BufferWizardDialog(QDialog):
             self._btn_reset.clicked.connect(self._on_reset_clicked)
             row.addWidget(self._btn_reset)
             row.addStretch(1)
-            lay.addLayout(row)
-            lay.addWidget(QLabel("These settings are kept for this session and applied to new files."))
+            row.addWidget(self._btn_close)
+            right_lay.addLayout(row)
+            right_lay.addWidget(QLabel("These settings are kept for this session and applied to new files."))
+            splitter.addWidget(right)
+            splitter.setStretchFactor(0, 3)
+            splitter.setStretchFactor(1, 2)
+            lay.addWidget(splitter, 1)
+            self._attach_options_help_button()
+            self._refresh_buffer_plot()
         else:
             lay.addWidget(QLabel("subtract skill is not available."))
             self._btn_reset = None  # type: ignore[assignment]
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        buttons.rejected.connect(self.close)
-        buttons.accepted.connect(self.close)
-        lay.addWidget(buttons)
+            lay.addWidget(self._btn_close, 0, Qt.AlignRight)
 
         self._apply.clicked.connect(self._on_apply)
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        sp = self._splitter
+        if sp is not None:
+            total = int(sp.width()) or int(self.width())
+            if total >= 400:
+                left = int(round(total * 0.58))
+                right = max(340, total - left)
+                left = total - right
+                try:
+                    sp.setSizes([left, right])
+                except Exception:
+                    pass
+        self.attention_context_changed.emit()
+
+    def hideEvent(self, event) -> None:  # type: ignore[override]
+        super().hideEvent(event)
+        self.attention_context_changed.emit()
+
+    def has_buffer_path(self) -> bool:
+        return bool(self._buffer_path_text())
+
+    def has_q_range(self) -> bool:
+        q_min, q_max = self._q_range()
+        return q_min is not None and q_max is not None
+
+    def apply_coach_dismissed(self) -> bool:
+        return bool(self._apply_coach_dismissed)
+
+    def arm_close_coach(self) -> None:
+        self._close_coach_armed = True
+
+    def close_coach_armed(self) -> bool:
+        return bool(self._close_coach_armed)
+
+    def close_button(self):
+        return self._btn_close
+
+    def buffer_browse_button(self):
+        f = self._buffer_field()
+        return f.browse_button if f is not None else None
+
+    def q_min_field(self):
+        w = self._form._opt_fields.get("q_min")  # type: ignore[attr-defined]
+        return w if isinstance(w, QLineEdit) else None
+
+    def q_max_field(self):
+        w = self._form._opt_fields.get("q_max")  # type: ignore[attr-defined]
+        return w if isinstance(w, QLineEdit) else None
+
+    def apply_button(self):
+        return self._apply
+
+    def _wire_form_plot_updates(self) -> None:
+        buf = self._buffer_field()
+        if buf is not None:
+            try:
+                buf.path_changed.disconnect(self._refresh_buffer_plot)
+            except TypeError:
+                pass
+            try:
+                buf.path_changed.disconnect(self._on_coach_inputs_changed)
+            except TypeError:
+                pass
+            buf.path_changed.connect(self._refresh_buffer_plot)
+            buf.path_changed.connect(self._on_coach_inputs_changed)
+        for name in ("q_min", "q_max"):
+            w = self._form._opt_fields.get(name)  # type: ignore[attr-defined]
+            if isinstance(w, QLineEdit):
+                try:
+                    w.textChanged.disconnect(self._on_q_text_changed)
+                except TypeError:
+                    pass
+                try:
+                    w.textChanged.disconnect(self._on_coach_inputs_changed)
+                except TypeError:
+                    pass
+                w.textChanged.connect(self._on_q_text_changed)
+                w.textChanged.connect(self._on_coach_inputs_changed)
+
+    def _on_coach_inputs_changed(self, *_args) -> None:
+        self._apply_coach_dismissed = False
+        self.attention_context_changed.emit()
+
+    def _on_q_text_changed(self, _text: str = "") -> None:
+        self._refresh_buffer_plot()
+
+    def _buffer_field(self) -> PathField | None:
+        if self._meta is None:
+            return None
+        for i, p in enumerate(self._meta.positional_params):
+            if p.name != "buffer_1d":
+                continue
+            widgets = getattr(self._form, "_pos_widgets", [])
+            if i < len(widgets) and isinstance(widgets[i], PathField):
+                return widgets[i]
+        return None
+
+    def _buffer_path_text(self) -> str:
+        f = self._buffer_field()
+        return f.text().strip() if f is not None else ""
+
+    def _q_range(self) -> tuple[object, object]:
+        def _read(name: str):
+            w = self._form._opt_fields.get(name)  # type: ignore[attr-defined]
+            if not isinstance(w, QLineEdit):
+                return None
+            t = w.text().strip()
+            if not t:
+                return None
+            try:
+                return float(t)
+            except ValueError:
+                return None
+
+        return _read("q_min"), _read("q_max")
+
+    def _refresh_buffer_plot(self) -> None:
+        path = self._buffer_path_text()
+        q_min, q_max = self._q_range()
+        if not path:
+            self._plot.clear()
+            return
+        resolved = Path(path).expanduser()
+        if not resolved.is_absolute():
+            resolved = (self._watchdir / resolved).resolve()
+        if not resolved.is_file():
+            self._plot.clear()
+            return
+        try:
+            self._plot.plot_dat(str(resolved), q_min=q_min, q_max=q_max)
+        except Exception:
+            self._plot.clear()
+        if self._dat_viewer is not None and self._dat_viewer.isVisible():
+            open_dat_curve_dialog(
+                self,
+                str(resolved),
+                reuse=self._dat_viewer,
+                q_min=q_min,
+                q_max=q_max,
+                window_title="Buffer curve",
+            )
+
+    def _on_plot_click(self, ev: object) -> None:
+        if getattr(ev, "inaxes", None) is None:
+            return
+        if int(getattr(ev, "button", 0)) != 1:
+            return
+        path = self._buffer_path_text()
+        if not path:
+            return
+        resolved = Path(path).expanduser()
+        if not resolved.is_absolute():
+            resolved = (self._watchdir / resolved).resolve()
+        if not resolved.is_file():
+            return
+        q_min, q_max = self._q_range()
+        self._dat_viewer = open_dat_curve_dialog(
+            self,
+            str(resolved),
+            reuse=self._dat_viewer,
+            q_min=q_min,
+            q_max=q_max,
+            window_title="Buffer curve",
+        )
 
     def _on_reset_clicked(self) -> None:
         self.reset_requested.emit()
@@ -411,8 +719,14 @@ class BufferWizardDialog(QDialog):
             hints=hints,
             saved_state=None,
         )
-        _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+        prepare_liveview_subtract_form(self._form, outdir=str(out))
         _disable_subtract_sample_field(self._form, self._meta)
+        self._wire_form_plot_updates()
+        self._attach_options_help_button()
+        self._refresh_buffer_plot()
+        self._apply_coach_dismissed = False
+        self._close_coach_armed = False
+        self.attention_context_changed.emit()
 
     def rebuild(self, hints: SessionPathHints) -> None:
         if self._meta is None:
@@ -427,11 +741,41 @@ class BufferWizardDialog(QDialog):
             hints=hints,
             saved_state=saved,
         )
-        _force_no_cache_and_fixed_output(self._form, outdir=str(out))
+        prepare_liveview_subtract_form(self._form, outdir=str(out))
         _disable_subtract_sample_field(self._form, self._meta)
+        self._wire_form_plot_updates()
+        self._attach_options_help_button()
+        self._refresh_buffer_plot()
+        self.attention_context_changed.emit()
+
+    def _attach_options_help_button(self) -> None:
+        """Standard ``?`` help control at the top-right of the Options group."""
+        btn = QPushButton("?")
+        btn.setObjectName("helpButton")
+        btn.setFixedSize(22, 22)
+        btn.setToolTip("Auto-scale / q-range help")
+        btn.clicked.connect(self._on_options_help)
+        host = QWidget()
+        hl = QHBoxLayout(host)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.addStretch(1)
+        hl.addWidget(btn, 0, Qt.AlignRight)
+        self._form._opt_layout.insertRow(0, host)  # type: ignore[attr-defined]
+
+    def _on_options_help(self) -> None:
+        QMessageBox.information(
+            self,
+            "Options",
+            "Auto-scale relies on Porod and linear approximations of SAXS data in higher q region. "
+            "q min and q max are the boundaries of the region where approximations hold.\n"
+            "q max is also a point where the algorithm matches buffer and sample. "
+            'Choose it close to the "knee" of a SAXS curve',
+        )
 
     def _on_apply(self) -> None:
+        self._apply_coach_dismissed = True
+        self._close_coach_armed = False
+        self.attention_context_changed.emit()
         parent = self.parent()
         if parent is not None and hasattr(parent, "_apply_buffer_from_wizard"):
             getattr(parent, "_apply_buffer_from_wizard")()
-

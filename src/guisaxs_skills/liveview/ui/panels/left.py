@@ -23,6 +23,7 @@ from ....logic.session_state import SessionPathHints
 from ....ui.preview_panel import PreviewPanel
 from ...services.calibration.display import refined_yml_display_rows
 from ...session.state import LiveviewSessionState
+from ..attention import AttentionPulse
 from ..wizards.left import BufferWizardDialog, CalibrationWizardDialog
 
 
@@ -61,6 +62,9 @@ class LiveviewLeftPanel(QWidget):
         self._state = state
         self._cal_wizard: CalibrationWizardDialog | None = None
         self._buf_wizard: BufferWizardDialog | None = None
+        self._middle = None
+        self._right = None
+        self._has_processed_images = None
 
         self._cal_group = QGroupBox("Calibration")
         self._cal_open = QPushButton("Set calibration")
@@ -119,7 +123,96 @@ class LiveviewLeftPanel(QWidget):
         self._cal_open.clicked.connect(self._open_calibration_wizard)
         self._buf_open.clicked.connect(self._open_buffer_wizard)
 
+        self._attention = AttentionPulse(self)
         self._refresh_buffer_preview_from_state()
+        self.refresh_attention_coach()
+
+    def set_coach_peers(self, *, middle, right, has_processed_images=None) -> None:
+        """Middle/right panels used for post-setup coaching (canvas + analysis icons)."""
+        self._middle = middle
+        self._right = right
+        self._has_processed_images = has_processed_images
+
+    def refresh_attention_coach(self) -> None:
+        """Pulse the next calibration / buffer / analysis setup control(s)."""
+        calibrated = self._state.integrator_dir is not None
+        buffer_ready = (
+            self._state.buffer_dat_path is not None and self._state.subtract_options is not None
+        )
+        targets: list = []
+        cal = self._cal_wizard
+        buf = self._buf_wizard
+        right = self._right
+        middle = self._middle
+
+        if not calibrated:
+            if cal is not None and cal.isVisible():
+                mask_wiz = cal.mask_wizard()
+                if mask_wiz is not None and mask_wiz.isVisible():
+                    if not mask_wiz.has_calibrant_image():
+                        targets.append(mask_wiz.image_browse_button())
+                    if not mask_wiz.has_mask():
+                        targets.append(mask_wiz.mask_browse_button())
+                elif not cal.has_calibrant_image():
+                    targets.append(cal.drop_canvas())
+                    targets.append(cal.drop_hint_canvas())
+                elif not cal.has_mask():
+                    targets.append(cal.mask_browse_button())
+                    targets.append(cal.create_mask_button())
+                elif not cal.run_coach_dismissed():
+                    targets.append(cal.run_button())
+            else:
+                targets.append(self._cal_open)
+        elif cal is not None and cal.isVisible() and cal.close_coach_armed():
+            targets.append(cal.close_button())
+        elif not buffer_ready:
+            if buf is not None and buf.isVisible():
+                if not buf.has_buffer_path():
+                    targets.append(buf.buffer_browse_button())
+                elif not buf.has_q_range():
+                    targets.append(buf.q_min_field())
+                    targets.append(buf.q_max_field())
+                elif not buf.apply_coach_dismissed():
+                    targets.append(buf.apply_button())
+            else:
+                targets.append(self._buf_open)
+        elif buf is not None and buf.isVisible() and buf.close_coach_armed():
+            targets.append(buf.close_button())
+        else:
+            analysis_open = False
+            if right is not None and hasattr(right, "analysis_windows_open"):
+                analysis_open = bool(right.analysis_windows_open())
+            processed = False
+            if callable(self._has_processed_images):
+                try:
+                    processed = bool(self._has_processed_images())
+                except Exception:
+                    processed = False
+            if not analysis_open and not processed:
+                if right is not None:
+                    if hasattr(right, "mono_analysis_button"):
+                        targets.append(right.mono_analysis_button())
+                    if hasattr(right, "poly_analysis_button"):
+                        targets.append(right.poly_analysis_button())
+
+        # Central canvas: pulse when calibrated and empty (drop a TIFF); never while an image is shown.
+        if calibrated and middle is not None and not middle.has_image():
+            if hasattr(middle, "drop_canvas_host"):
+                targets.append(middle.drop_canvas_host())
+            if hasattr(middle, "drop_hint_canvas"):
+                targets.append(middle.drop_hint_canvas())
+
+        # Manual mode: pulse Resume on both mono and poly analysis windows.
+        if right is not None and hasattr(right, "auto_processing_paused") and right.auto_processing_paused():
+            if hasattr(right, "mono_auto_button"):
+                targets.append(right.mono_auto_button())
+            if hasattr(right, "poly_auto_button"):
+                targets.append(right.poly_auto_button())
+
+        self._attention.set_targets(targets)
+
+    def refresh_calibration_coach(self) -> None:
+        self.refresh_attention_coach()
 
     def _build_buffer_path_hints(self) -> SessionPathHints:
         h = SessionPathHints()
@@ -139,9 +232,11 @@ class LiveviewLeftPanel(QWidget):
         if self._cal_wizard is None:
             self._cal_wizard = CalibrationWizardDialog(watchdir=self._state.watchdir, parent=self)
             self._cal_wizard.reset_requested.connect(self.calibration_reset_requested.emit)
+            self._cal_wizard.attention_context_changed.connect(self.refresh_calibration_coach)
         self._cal_wizard.show()
         self._cal_wizard.raise_()
         self._cal_wizard.activateWindow()
+        self.refresh_calibration_coach()
 
     def _open_buffer_wizard(self) -> None:
         hints = self._build_buffer_path_hints()
@@ -152,11 +247,13 @@ class LiveviewLeftPanel(QWidget):
                 parent=self,
             )
             self._buf_wizard.reset_requested.connect(self.buffer_reset_requested.emit)
+            self._buf_wizard.attention_context_changed.connect(self.refresh_calibration_coach)
         else:
             self._buf_wizard.rebuild(hints)
         self._buf_wizard.show()
         self._buf_wizard.raise_()
         self._buf_wizard.activateWindow()
+        self.refresh_calibration_coach()
 
     def build_calibrate_request(self):
         if self._cal_wizard is None:
@@ -173,9 +270,13 @@ class LiveviewLeftPanel(QWidget):
             self._cal_preview.show_path("")
             self._cal_hint.setVisible(True)
             self.set_calibration_params_from_path(None)
+            self.refresh_calibration_coach()
             return
         self._cal_hint.setVisible(False)
         self._cal_preview.show_path(p)
+        if self._cal_wizard is not None and self._cal_wizard.isVisible():
+            self._cal_wizard.arm_close_coach()
+        self.refresh_calibration_coach()
 
     def set_calibration_params_from_path(self, path: Optional[str]) -> None:
         """Fill geometry + wavelength table from autosaxs ``refined.yml`` (or clear)."""
@@ -195,12 +296,19 @@ class LiveviewLeftPanel(QWidget):
             self._cal_params_table.setItem(i, 0, li)
             self._cal_params_table.setItem(i, 1, vi)
         self._cal_params_table.setVisible(bool(rows))
+        if rows and self._state.integrator_dir is not None:
+            if self._cal_wizard is not None and self._cal_wizard.isVisible():
+                self._cal_wizard.arm_close_coach()
+        self.refresh_calibration_coach()
 
     def _refresh_buffer_preview_from_state(self) -> None:
         buf = self._state.buffer_dat_path
+        opts = self._state.subtract_options if isinstance(self._state.subtract_options, dict) else {}
+        q_min = opts.get("q_min")
+        q_max = opts.get("q_max")
         if buf is not None and buf.is_file():
             self._buf_hint.setVisible(False)
-            self._buf_preview.show_path(str(buf))
+            self._buf_preview.show_path(str(buf), q_min=q_min, q_max=q_max)
         else:
             self._buf_preview.show_path("")
             self._buf_hint.setVisible(True)
@@ -208,14 +316,17 @@ class LiveviewLeftPanel(QWidget):
     def sync_buffer_preview_from_state(self) -> None:
         """Refresh buffer thumbnail from ``LiveviewSessionState`` (e.g. after watch-folder change)."""
         self._refresh_buffer_preview_from_state()
+        self.refresh_calibration_coach()
 
     def reset_calibration_wizard_form(self) -> None:
         if self._cal_wizard is not None:
             self._cal_wizard.reset_form_to_defaults()
+        self.refresh_calibration_coach()
 
     def reset_buffer_wizard_form(self) -> None:
         if self._buf_wizard is not None:
             self._buf_wizard.reset_form_to_empty(self._build_buffer_path_hints())
+        self.refresh_calibration_coach()
 
     def _apply_buffer_from_wizard(self) -> None:
         if self._buf_wizard is None:
@@ -243,8 +354,15 @@ class LiveviewLeftPanel(QWidget):
             self._state.subtract_options = dict(opts)
             self._refresh_buffer_preview_from_state()
             self.subtract_config_changed.emit()
+            if self._buf_wizard is not None:
+                self._buf_wizard.arm_close_coach()
+            self.refresh_calibration_coach()
         except Exception as e:
             QMessageBox.critical(self._buf_wizard or self, "Cannot apply buffer", str(e))
+            if self._buf_wizard is not None:
+                self._buf_wizard._apply_coach_dismissed = False  # noqa: SLF001
+                self._buf_wizard._close_coach_armed = False  # noqa: SLF001
+                self.refresh_calibration_coach()
 
 
 def _sanitize_subtract_options(opts: Dict[str, Any]) -> Dict[str, Any]:

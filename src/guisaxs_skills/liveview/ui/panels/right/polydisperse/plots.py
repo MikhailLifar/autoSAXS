@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
@@ -9,7 +8,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PyQt5.QtCore import Qt
 
-from autosaxs.core.gnom import parse_gnom_out
+from autosaxs.core.gnom import distribution_arrays, parse_gnom_out
 
 
 class _BaseMplPlot(FigureCanvas):
@@ -84,30 +83,43 @@ class GnomFitPlot(_BaseMplPlot):
 
 
 class DrPlot(_BaseMplPlot):
-    def plot_from_dr_csv(self, dr_csv_path: str) -> None:
-        if not dr_csv_path or not os.path.isfile(dr_csv_path):
-            self._show_status("No D(R) CSV")
+    def plot_from_gnom_out(self, gnom_out_path: str) -> None:
+        if not gnom_out_path or not os.path.isfile(gnom_out_path):
+            self._show_status("No GNOM .out")
             return
         try:
-            import pandas as pd
-
-            df = pd.read_csv(dr_csv_path)
-            cols = {c.lower(): c for c in df.columns}
-            r_col = cols.get("r") or cols.get("r_nm") or list(df.columns)[0]
-            d_col = cols.get("d") or cols.get("dr") or cols.get("d_r") or list(df.columns)[1]
-            r = np.asarray(df[r_col], dtype=float)
-            d = np.asarray(df[d_col], dtype=float)
+            parsed = parse_gnom_out(gnom_out_path)
+            arrays = distribution_arrays(parsed.get("distribution"))
         except Exception:
-            self._show_status("D(R) CSV error")
+            self._show_status("D(R) parse error")
             return
+        if arrays is None:
+            self._show_status("No D(R) in .out")
+            return
+        r, d, err = arrays
+        r = np.asarray(r, dtype=float)
+        d = np.asarray(d, dtype=float)
         m = np.isfinite(r) & np.isfinite(d)
         if not m.any():
             self._show_status("Empty D(R)")
             return
-        self._click_path = dr_csv_path
-        self._click_viewer = "dr"
+        self._click_path = gnom_out_path
+        self._click_viewer = "gnom_dr"
         self._ax.clear()
-        self._ax.plot(r[m], d[m], "C0-", lw=1.2)
+        if err is not None:
+            e = np.asarray(err, dtype=float)
+            me = m & np.isfinite(e)
+            if me.any():
+                self._ax.fill_between(
+                    r[me],
+                    d[me] - e[me],
+                    d[me] + e[me],
+                    color="C0",
+                    alpha=0.25,
+                    linewidth=0,
+                    zorder=1,
+                )
+        self._ax.plot(r[m], d[m], "C0-", lw=1.2, zorder=2)
         self._ax.set_xlabel("R (nm)")
         self._ax.set_ylabel("D(R)")
         self._ax.grid(True, alpha=0.2)

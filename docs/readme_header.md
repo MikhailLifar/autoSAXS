@@ -55,13 +55,71 @@ Apps: **guisaxs-skills** (catalog + forms + isolated CLI runs) and **guisaxs-liv
 
 Full per-skill documentation: [`autosaxs-docs/skills_reference.md`](autosaxs-docs/skills_reference.md).
 
+## Quick start
+
+Monodisperse protein walkthrough using [`examples/monodisperse_protein/`](examples/monodisperse_protein/) (AgBh calibrant, mask, sample + buffer TIFFs). `--q-min` / `--q-max` are the buffer-matching window in nm⁻¹ — pick them from the sample+buffer overlay; `4.8`–`5.8` fits this example.
+
+### Python
+
+```python
+from pathlib import Path
+from autosaxs.skill import calibrate, integrate, subtract, process_monodisperse
+
+ex = Path("examples/monodisperse_protein")
+
+calibrate(
+    ex / "AgBh700_96.9_calib.tif",
+    output_dir=str(ex / "calibration"),
+    mask=ex / "mask-20260706_133745.txt",
+    wavelength=1.445,
+)
+integrate(
+    f"{ex / 'ihs27_buffer.tif'}, {ex / 'ihs27_sample.tif'}",
+    ex / "calibration" / "integrator",
+    output_dir=str(ex / "integrated"),
+)
+subtract(
+    ex / "integrated" / "int_ihs27_sample.dat",
+    ex / "integrated" / "int_ihs27_buffer.dat",
+    output_dir=str(ex / "subtracted"),
+    q_min=4.8,
+    q_max=5.8,
+)
+process_monodisperse(ex / "subtracted" / "sub_ihs27_sample.dat")
+```
+
+### CLI
+
+```bash
+cd examples/monodisperse_protein
+
+autosaxs calibrate AgBh700_96.9_calib.tif \
+  --mask mask-20260706_133745.txt --wavelength 1.445 -o calibration/
+
+autosaxs integrate "ihs27_buffer.tif, ihs27_sample.tif" \
+  calibration/integrator/ -o integrated/
+
+autosaxs subtract integrated/int_ihs27_sample.dat integrated/int_ihs27_buffer.dat \
+  --q-min 4.8 --q-max 5.8 -o subtracted/
+
+autosaxs process-monodisperse subtracted/sub_ihs27_sample.dat
+```
+
+### Online GUI
+
+```bash
+guisaxs-skills
+# or
+guisaxs-liveview
+```
+
 ## Acknowledgements
 
 autoSAXS builds on the SAXS ecosystem rather than replacing it:
 
 - **[pyFAI](https://pyfai.readthedocs.io/)** — detector geometry, calibration, and 1D integration.
 - **[ATSAS](https://www.embl-hamburg.de/biosaxs/download.html)** — tools such as `autorg`, `datgnom`, `gnom`, `dammif`, `mixture`, and `bodies` (external install; recommended **ATSAS 3.2.1**). Importing autoSAXS **warns** if ATSAS is missing; skills that shell out to ATSAS **raise** immediately when it is unavailable.
-- **[DENSS](https://www.tdgrant.com/denss)** — electron-density reconstruction (`model_density`).
+- **[DENSS](https://www.tdgrant.com/denss)** — electron-density reconstruction (`model_density`); pulled in via the `denss` PyPI dependency.
 - **[McSAS](https://github.com/BAMresearch/McSAS) / McSAS3** — Monte Carlo polydisperse sizing (`model_dr_mc`).
 
 ## Contacts
