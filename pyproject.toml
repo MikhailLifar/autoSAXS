@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autosaxs"
-version = "2.12.0"
+version = "2.12.1"
 description = "Interactive SAXS pipeline core: calibration, integration, subtraction, ATSAS descriptors, plots, shape fitting, reports. After install, run `autosaxs --help`: epilog lists get-docs, get-skills, get-default-config (export docs and default config into your workspace)."
 readme = "README.md"
 requires-python = ">=3.10"

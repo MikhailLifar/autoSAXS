@@ -1,7 +1,5 @@
 # `autosaxs process-monodisperse` (subskill)
 
-Ordinary procedure doc for the orchestrator — **not** a Cursor Agent Skill (`SKILL.md`). Open this file when the plan reaches this step.
-
 ## Critical: `autosaxs` is a Python package
 
 **Do not assume `autosaxs` is an ordinary system command.** It is installed **into a Python environment** (for example via `pip install autosaxs`). Pip installs a launcher script in that environment’s `bin/` directory (next to `python`, `pip`, etc.). **Always run the CLI via that launcher** — especially use an explicit path when the active shell might be the wrong interpreter.
@@ -28,7 +26,7 @@ This procedure wraps the `autosaxs process-monodisperse` CLI command / `autosaxs
 
 ## When to use me
 
-- You want to run `autosaxs process-monodisperse` on real data.
+- You want to run `autosaxs process-monodisperse` on SAXS data.
 
 ## Required inputs
 
@@ -37,15 +35,8 @@ See the docstring section **Arguments** below.
 ## Procedure
 
 1. Prepare input paths and choose an `output_dir` (if applicable).
-2. If this skill requires a config file (look for a required argument like `config_path` / `config` in **Arguments** below) and you do not have one yet, generate the default config into your working directory:
-
-```bash
-/path/to/myenv/bin/autosaxs get-default-config -o /path/to/directory
-```
-
-Then use the created `config_base.conf` (or a copy of it) as the config input path and edit it if your setup requires changes.
-3. Run **`/path/to/myenv/bin/autosaxs process-monodisperse …`** (or `autosaxs process-monodisperse …` when the right env is active), or call the Python function.
-4. Use the returned/written output paths.
+2. Run **`/path/to/myenv/bin/autosaxs process-monodisperse …`** (or `autosaxs process-monodisperse …` when the right env is active), or call the Python function.
+3. Use the returned/written output paths.
 
 ## Output requirements
 
@@ -56,7 +47,6 @@ See the docstring section **Returns** below.
 - **`autosaxs` is always tied to a Python environment** — see **Critical: `autosaxs` is a Python package** above before running anything.
 - When in doubt (CI, fresh terminals, mixed conda/system shells), **always use the full path:** **`<path-to-env>/bin/autosaxs process-monodisperse …`**.
 - If you know the correct env is active on `PATH`, **`autosaxs process-monodisperse …`** is fine.
-- If the skill requires a config path (e.g. `config_path` / `config`) and no config file exists yet, run **`autosaxs get-default-config -o <dir>`** to materialize the bundled default config (`config_base.conf`) into a real file, then pass that path to the skill.
 - Prefer the Python API (`autosaxs.skill.process_monodisperse`) for scripting or tight integration inside Python.
 
 ## Autosaxs skill docstring
@@ -65,23 +55,11 @@ SAXS / small-angle x-ray scattering: run the monodisperse single-profile quality
 (Guinier → dimensionless Kratky → DATGNOM p(r) / Shannon–ΔRg passport → optional DAMMIF
 when quality gates pass → per-sample PDF report).
 
-This is a **meta-skill**: it only calls existing leaf skills (`fit_guinier`, `analyze_kratky`,
-`fit_distances`, `model_dam`, `report_individual`) and wires outputs between them.
-It does **not** change leaf interiors. Steps before Guinier (geometry, averaging, buffer
-subtraction) and polydisperse sizing are omitted — input must already be a subtracted
-(or otherwise ready) 1D profile.
-
-``model_dam`` runs only when `fit_distances` reports ``high_quality`` / ``HIGH QUALITY``
-(quality guide: Total Estimate ≥ 0.55 and ΔRg ≤ 10%). Default ``n_runs=5``.
-
-Primary result: the assembled PDF under ``<output_dir>/reports/`` (includes DAMMIF
-fragments when generated).
-
 ### Arguments
 
-- `profile` (str): 1D path expression (file/dir/glob of `*.dat`). Directories expand non-recursively.
+- `profile` (str): 1D path expression (file/directory/glob of `*.dat`). Directories expand non-recursively.
 - `output_dir` (str, default `.`): Pipeline root; leaf skills write under subdirectories here.
-- `config_path` (str | None, default `None`): Optional YAML config forwarded to leaf skills.
+- `config_path` (str | None, default `None`): Deprecated. Optional YAML config forwarded to leaf skills.
 - `first` / `last` (int | None): Optional fixed Guinier interval (1-based); both required together.
   Guinier `first` is forwarded to DATGNOM; Guinier `last` is **not** passed to DATGNOM
   (window too narrow for p(r)).

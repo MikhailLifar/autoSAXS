@@ -986,23 +986,11 @@ SAXS / small-angle x-ray scattering: run the monodisperse single-profile quality
 (Guinier → dimensionless Kratky → DATGNOM p(r) / Shannon–ΔRg passport → optional DAMMIF
 when quality gates pass → per-sample PDF report).
 
-This is a **meta-skill**: it only calls existing leaf skills (`fit_guinier`, `analyze_kratky`,
-`fit_distances`, `model_dam`, `report_individual`) and wires outputs between them.
-It does **not** change leaf interiors. Steps before Guinier (geometry, averaging, buffer
-subtraction) and polydisperse sizing are omitted — input must already be a subtracted
-(or otherwise ready) 1D profile.
-
-``model_dam`` runs only when `fit_distances` reports ``high_quality`` / ``HIGH QUALITY``
-(quality guide: Total Estimate ≥ 0.55 and ΔRg ≤ 10%). Default ``n_runs=5``.
-
-Primary result: the assembled PDF under ``<output_dir>/reports/`` (includes DAMMIF
-fragments when generated).
-
 ### Arguments
 
-- `profile` (str): 1D path expression (file/dir/glob of `*.dat`). Directories expand non-recursively.
+- `profile` (str): 1D path expression (file/directory/glob of `*.dat`). Directories expand non-recursively.
 - `output_dir` (str, default `.`): Pipeline root; leaf skills write under subdirectories here.
-- `config_path` (str | None, default `None`): Optional YAML config forwarded to leaf skills.
+- `config_path` (str | None, default `None`): Deprecated. Optional YAML config forwarded to leaf skills.
 - `first` / `last` (int | None): Optional fixed Guinier interval (1-based); both required together.
   Guinier `first` is forwarded to DATGNOM; Guinier `last` is **not** passed to DATGNOM
   (window too narrow for p(r)).
