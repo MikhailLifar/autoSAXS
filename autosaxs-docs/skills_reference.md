@@ -267,14 +267,17 @@ or legacy `match_tail`, optionally restricted to a q window (`q_min` / `q_max`).
 - `output_dir` (str, default `.`): Directory where subtraction outputs are written.
 - `config_path` (str | None, default `None`): Optional path to a YAML config file with a `subtract` section. When omitted, bundled defaults apply for method/forms; q-window keys come from CLI or user file only.
 - `method` (str | None, default `None`): `point_match` or `match_tail`. Defaults from bundled config when omitted.
-- `q_min` (float): Lower bound of q-range (nm⁻¹). Required; may be overridden by a user config file `subtract` section.
-- `q_max` (float): Upper bound of q-range (nm⁻¹); for `point_match` the match uses this as q intersect (upper edge of the window). Required; may be overridden by a user config file `subtract` section.
+- `q_min` (float): Lower bound of matching q-range (nm⁻¹). Required. Recommended to choose in "hihg q region", where sample and buffer curve follwo Porod/linear/Porod+linear law.
+- `q_max` (float): Upper bound of matching q-range (nm⁻¹). Required. Recommended to choose in "hihg q region", just before the "knee" of SAXS profile.
 - `sample_form` / `buffer_form` (str | None): For `point_match` only — each is `linear`, `Porod`, or `Porod-plus-linear`.
 - `point_match_factor` (float | None, default `None`): For `point_match`, scale satisfies `point_match_factor * I_sample_fit(q_max) = scale * I_buffer_fit(q_max)`.
 - `scaling_factor` (float | None, default `None`): If provided, overrides automatic scaling and uses this factor directly (must be finite and > 0).
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 The q window (`q_min`, `q_max`) is always required at the Python API and CLI. A user config file may supply values that override the arguments passed to `subtract()`.
+
+### Notes
+Correctness criteria: buffer and sample visually matched at "tail region". Negative values in the subtracted curve are possible due to high variance at the "tail" region. But overall the curves look just match, especially after the "knee".
 
 ### Short parameter list
 
