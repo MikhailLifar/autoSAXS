@@ -33,22 +33,22 @@ Subskills live as ordinary markdown under `saxs-processing/<name>/<name>.md` (no
 
 Each entry links to a procedure doc. Purpose and use-cases come from that file (and the embedded autosaxs docstring). Compact index (path → CLI hook → short teaser):
 
-- [`calibrate/calibrate.md`](calibrate/calibrate.md) (`autosaxs calibrate`) — SAXS / small-angle x-ray scattering: calibrate detector geometry using a calibration image and a config (ring-analysis + geometry refinement). This is a prerequisite for 'integrate' (azimuthal integration).
+- [`calibrate/calibrate.md`](calibrate/calibrate.md) (`autosaxs calibrate`) — SAXS / small-angle x-ray scattering: calibrate detector geometry using calibrant image. This is a prerequisite for 'integrate' (azimuthal integration).
 - [`integrate/integrate.md`](integrate/integrate.md) (`autosaxs integrate`) — SAXS / small-angle x-ray scattering: integrate 2D SAXS images to 1D curves (q, I, sigma) using a calibrated integrator produced by 'calibrate' (azimuthal integration; q-space).
-- [`average/average.md`](average/average.md) (`autosaxs average`) — SAXS / small-angle x-ray scattering: radiation-damage-aware averaging of per-frame 1D curves.
+- [`average/average.md`](average/average.md) (`autosaxs average`) — SAXS / small-angle x-ray scattering: radiation-damage-aware averaging of per-frame 1D SAXS curves.
 - [`integrate-proxy/integrate-proxy.md`](integrate-proxy/integrate-proxy.md) (`autosaxs integrate-proxy`) — SAXS / small-angle x-ray scattering: integrate 2D TIFF image(s) to a 1D curve without detector calibration, using radial averaging in pixel-radius space (quick-look / debugging; not q-calibrated).
 - [`subtract/subtract.md`](subtract/subtract.md) (`autosaxs subtract`) — SAXS / small-angle x-ray scattering: subtract a buffer curve from a sample 1D profile (background subtraction). Scaling uses either 'point_match' (default)
 - [`plot/plot.md`](plot/plot.md) (`autosaxs plot`) — SAXS / small-angle x-ray scattering: generate standard diagnostic plots for a 1D curve (Guinier, Kratky, log-log):
 - [`plot-2d/plot-2d.md`](plot-2d/plot-2d.md) (`autosaxs plot-2d`) — SAXS / small-angle x-ray scattering: render 2D SAXS TIFF image(s) to PNG using log-intensity scaling (2D detector view).
-- [`fit-guinier/fit-guinier.md`](fit-guinier/fit-guinier.md) (`autosaxs fit-guinier`) — SAXS / small-angle x-ray scattering: fit the Guinier region on a 1D profile (adaptive Rg, I(0), Rg span). Writes:
+- [`fit-guinier/fit-guinier.md`](fit-guinier/fit-guinier.md) (`autosaxs fit-guinier`) — SAXS / small-angle x-ray scattering: Do Guinier analysis on a 1D profile (Rg, I(0), Rg span, Guinier interval, quality).
 - [`analyze-kratky/analyze-kratky.md`](analyze-kratky/analyze-kratky.md) (`autosaxs analyze-kratky`) — SAXS / small-angle x-ray scattering: dimensionless Kratky conformation analysis on a 1D profile.
 - [`fit-distances/fit-distances.md`](fit-distances/fit-distances.md) (`autosaxs fit-distances`) — SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve (real-space distance distribution).
-- [`fit-sizes/fit-sizes.md`](fit-sizes/fit-sizes.md) (`autosaxs fit-sizes`) — SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1/5) to obtain a size distribution function \(D(R)\) for a polydisperse system from a 1D SAXS curve (polydispersity; spheres/rods).
+- [`fit-sizes/fit-sizes.md`](fit-sizes/fit-sizes.md) (`autosaxs fit-sizes`) — SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtain a size distribution function \(D(R)\) for a polydisperse system from a 1D SAXS curve.
 - [`model-dr-mc/model-dr-mc.md`](model-dr-mc/model-dr-mc.md) (`autosaxs model-dr-mc`) — SAXS / small-angle x-ray scattering: recover a form-free volume-weighted size distribution
-- [`model-mixture/model-mixture.md`](model-mixture/model-mixture.md) (`autosaxs model-mixture`) — SAXS / small-angle x-ray scattering: run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and write a comparison plot, size distribution plot, and results CSV (mixture / multi-population size distributions).
-- [`model-bodies/model-bodies.md`](model-bodies/model-bodies.md) (`autosaxs model-bodies`) — SAXS / small-angle x-ray scattering: run ATSAS 'bodies' shape fitting for multiple candidate shapes on a 1D profile, exporting fit files (FIR, PNG, YAML, CSV) and a comparison figure.
-- [`model-dam/model-dam.md`](model-dam/model-dam.md) (`autosaxs model-dam`) — SAXS / small-angle x-ray scattering: ab initio bead-model shape reconstruction with ATSAS DAMMIF, optionally followed by DAMAVER ensemble averaging (shape reconstruction / bead model / occupancy map). When no GNOM '.out' is supplied, 'fit_distances' is run in-process to obtain...
-- [`model-density/model-density.md`](model-density/model-density.md) (`autosaxs model-density`) — SAXS / small-angle x-ray scattering: ab initio continuous electron-density reconstruction with DENSS (Grant protocol; density map / FSC resolution / voxel σ map). Requires the DENSS package ('denss', 'denss-all', 'denss-refine') installed in the active Python environment.
+- [`model-mixture/model-mixture.md`](model-mixture/model-mixture.md) (`autosaxs model-mixture`) — SAXS / small-angle x-ray scattering: run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and write a comparison plot, size distribution plot, and results CSV.
+- [`model-bodies/model-bodies.md`](model-bodies/model-bodies.md) (`autosaxs model-bodies`) — SAXS / small-angle x-ray scattering: run ATSAS 'bodies' shape fitting for multiple candidate shapes on a 1D profile.
+- [`model-dam/model-dam.md`](model-dam/model-dam.md) (`autosaxs model-dam`) — SAXS / small-angle x-ray scattering: ab initio bead-model shape reconstruction with ATSAS DAMMIF, optionally followed by DAMAVER ensemble averaging. When no GNOM '.out' is supplied, 'fit_distances' is run in-process to obtain one.
+- [`model-density/model-density.md`](model-density/model-density.md) (`autosaxs model-density`) — SAXS / small-angle x-ray scattering: ab initio continuous electron-density reconstruction with DENSS (Grant protocol; density map / FSC resolution / voxel σ map).
 - [`process-monodisperse/process-monodisperse.md`](process-monodisperse/process-monodisperse.md) (`autosaxs process-monodisperse`) — SAXS / small-angle x-ray scattering: run the monodisperse single-profile quality pipeline
 - [`report-individual/report-individual.md`](report-individual/report-individual.md) (`autosaxs report-individual`) — SAXS / small-angle x-ray scattering: build a per-sample report from an existing pipeline directory.
 - [`report-summary/report-summary.md`](report-summary/report-summary.md) (`autosaxs report-summary`) — SAXS / small-angle x-ray scattering: build a summary report for all samples in a pipeline directory.
@@ -88,4 +88,4 @@ Nested folders under `saxs-processing/` correspond to the **autosaxs** Python pa
 
 ## Provenance
 
-- Generated by `autosaxs get-skills` (autosaxs 2.11.0).
+- Generated by `autosaxs get-skills` (autosaxs 2.11.1).

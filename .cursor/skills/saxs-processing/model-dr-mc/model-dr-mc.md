@@ -62,37 +62,23 @@ See the docstring section **Returns** below.
 ## Autosaxs skill docstring
 
 SAXS / small-angle x-ray scattering: recover a form-free volume-weighted size distribution
-\(D(R)\) with per-bin uncertainties using McSAS3 Monte Carlo fitting (polydisperse spheres).
-
-Fits an ensemble of independent sphere-contribution models to a subtracted 1D curve, then
-histograms the recovered radii. Bin heights are volume-weighted; error bars are the sample
-standard deviation across independent repetitions. For publication-quality uncertainty on
-\(D(R)\), raise ``n_rep`` to 50–100 (default 5 is for interactive / pipeline use).
-
-Prerequisites:
-
-- Python package ``mcsas3`` (installed with autosaxs).
-- Sphere form factor only in this skill (McSAS3 internal ``mcsas_sphere``).
+\(D(R)\) with per-bin uncertainties using McSAS3 Monte Carlo fitting.
 
 ### Arguments
 
-- `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
-- `output_dir` (str, default `.`): Directory where McSAS outputs are written (one subdirectory per profile).
-- `config_path` (str | None, default `None`): Optional YAML/config with a `model_dr_mc` section. When omitted, bundled defaults apply.
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where the outputs are written (one subdirectory per profile).
+- `config_path` (str | None, default `None`): Deprecated. YAML/config with a `model_dr_mc` section. When omitted, bundled defaults apply.
 - `q_min_nm` / `q_max_nm` (float | None): Optional q bounds (nm^-1) for the fit window.
-- `n_rep` (int, default `5`): Independent MC repetitions. Mean \(D(R)\) and per-bin \(\sigma\) come from this ensemble; use 50–100 for publication.
-- `n_contrib` (int, default `300`): Number of sphere contributions in each MC model.
-- `conv_crit` (float, default `1`): Reduced-\(\chi^2\) convergence target. Raise if experimental \(\sigma_I\) are too optimistic and runs never finish.
-- `n_cores` (int, default `0`): Parallel workers for repetitions (`0` = autodetect).
-- `nbins` (int, default `100`): Rebin count for input \(I(q)\) before fitting.
-- `n_bin` (int, default `50`): Number of bins in the post-fit log-\(R\) volume-weighted histogram.
-- `max_iter` (int, default `20000`): Max MC iterations per repetition.
-- `sld` / `sld_solvent` (float): Scattering-length densities for absolute scaling (`1e-6 Å^-2`). Relative \(I(q)\) still yields a useful relative \(D(R)\).
+- `n_rep` (int, default `5`): Independent MC repetitions. Mean \(D(R)\) and per-bin \(\sigma\) come from this ensemble; use 50–100 for publication. Defaults to 5.
+- `n_contrib` (int, default `300`): Number of sphere contributions in each MC model. Defaults to 300.
+- `conv_crit` (float, default `1`): Reduced-\(\chi^2\) convergence target. Raise if experimental \(\sigma_I\) are too optimistic and runs never finish. Defaults to 1.
+- `n_cores` (int, default `0`): Parallel workers for repetitions (`0` = autodetect). Defaults to 0.
+- `nbins` (int, default `100`): Rebin count for input \(I(q)\) before fitting. Defaults to 100.
+- `n_bin` (int, default `50`): Number of bins in the post-fit log-\(R\) volume-weighted histogram. Defaults to 50.
+- `max_iter` (int, default `20000`): Max MC iterations per repetition. Defaults to 20000.
+- `sld` / `sld_solvent` (float): Scattering-length densities for absolute scaling (`1e-6 Å^-2`). Relative \(I(q)\) still yields a useful relative \(D(R)\). Defaults to 33.4 and 0.0 respectively.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
-
-Important constraint:
-
-- If you set `q_max_nm`, you must also set `q_min_nm` (otherwise the skill raises `ValueError`).
 
 ### Short parameter list
 
@@ -137,5 +123,6 @@ print(out["dr_png_path"])
 ### CLI usage
 
 ```bash
-autosaxs model-dr-mc subtracted/sub_sample_01.dat --output-dir mcsas --n-rep 10
+autosaxs model-dr-mc subtracted/sub_sample_01.dat --output-dir mcsas/ 
+autosaxs model-dr-mc subtracted/sub_sample_01.dat --q-min-nm 0.1 --q-max-nm 5.0 --n-rep 10 -o mcsas/
 ```

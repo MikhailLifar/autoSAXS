@@ -61,31 +61,24 @@ See the docstring section **Returns** below.
 
 ## Autosaxs skill docstring
 
-SAXS / small-angle x-ray scattering: run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and write a comparison plot, size distribution plot, and results CSV (mixture / multi-population size distributions).
-
-Prerequisites:
-
-- Requires the ATSAS `mixture` executable to be available on `PATH` (this skill shells out to `mixture`).
+SAXS / small-angle x-ray scattering: run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and write a comparison plot, size distribution plot, and results CSV.
 
 ### Arguments
 
-- `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
-- `output_dir` (str, default `.`): Directory where the MIXTURE outputs are written.
-- `config_path` (str | None, default `None`): Optional path to a YAML config file with a `model_mixture` section. When omitted, bundled defaults apply.
-- `q_min_nm` / `q_max_nm` (float | None): Optional q bounds (nm^-1); set via CLI or user config (not in bundled template).
-- `maxit`, `max_nph`: MIXTURE parameters; defaults from bundled `model_mixture` section when omitted.
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where the outputs are written.
+- `config_path` (str | None, default `None`): Deprecated. YAML/config with a `model_mixture` section. When omitted, bundled defaults apply.
+- `q_min_nm` / `q_max_nm` (float | None): Optional q bounds (nm^-1). Defaults to None.
+- `maxit` (int, default `100`): Number of optimization iterations. Defaults to 100.
+- `max_nph` (int, default `3`): Number of phases.
 - `plot_I_q` (bool, default `False`): Write I vs q fit comparison plot (labels show BIC).
 - `plot_logI_logq` (bool, default `False`): Write log I vs log q fit comparison plot (labels show BIC_log).
 - `plot_logI_q` (bool, default `True`): Write log I vs q fit comparison plot (labels show chi2).
-- `r_min` (float | None): MIXTURE minimum radius (nm). If omitted, defaults to `0.1`. Converted to Å internally for ATSAS MIXTURE.
-- `r_max` (float | None): MIXTURE maximum radius (nm). If omitted, defaults to `rmax_nm` from in-process `fit_sizes`.
-- `poly_min` (float | None): MIXTURE minimum polydispersity (nm). If omitted, defaults to `0.05`.
-- `poly_max` (float | None): MIXTURE maximum polydispersity (nm). If omitted, defaults to `0.5 × r_max`.
+- `r_min` (float | None): Minimum radius (nm). Defaults to `0.1`. Converted to Å internally for ATSAS MIXTURE.
+- `r_max` (float | None): Maximum radius (nm). Defaults to `rmax_nm` from in-process `fit_sizes`.
+- `poly_min` (float | None): Minimum polydispersity (nm). Defaults to `0.05`.
+- `poly_max` (float | None): Maximum polydispersity (nm). Defaults to `0.5 × r_max`.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
-
-Important constraint:
-
-- If you set `q_max_nm`, you must also set `q_min_nm` (otherwise the skill raises `ValueError`).
 
 ### Short parameter list
 
@@ -129,5 +122,6 @@ print(out["results_csv_path"])
 ### CLI usage
 
 ```bash
-autosaxs model-mixture subtracted/sub_sample_01.dat --output-dir mixture --q-min-nm 0.8 --q-max-nm 2.5
+autosaxs model-mixture subtracted/sub_sample_01.dat --output-dir mixture/ 
+autosaxs model-mixture subtracted/sub_sample_01.dat--q-min-nm 0.8 --q-max-nm 2.5 --r-max 10.0 -o mixture/
 ```

@@ -78,21 +78,19 @@ def model_density(
     visualize_all: bool = True,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
-    """
-    SAXS / small-angle x-ray scattering: ab initio continuous electron-density reconstruction with DENSS (Grant protocol; density map / FSC resolution / voxel σ map). Requires the DENSS package (`denss`, `denss-all`, `denss-refine`) installed in the active Python environment.
-
-    Protocol `mode`: `pilot` runs a single DENSS reconstruction; `average` runs denss-all (N maps, enantiomer selection, alignment, averaging, FSC) and writes a voxel-wise σ map from the aligned replicas; `refined` runs denss-all then denss-refine of the average against the data (σ still from the denss-all aligned stack). Pipeline q is converted to Å⁻¹ for DENSS staging (never pass autosaxs nm GNOM `.out` files to DENSS unchanged). Alignment is denss-all's built-in procedure (no separate aligner).
+    r"""
+    SAXS / small-angle x-ray scattering: ab initio continuous electron-density reconstruction with DENSS (Grant protocol; density map / FSC resolution / voxel σ map).
 
     ### Arguments
 
-    - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
-    - `output_dir` (str, default `.`): Directory where DENSS outputs are written.
-    - `gnom_path` (str | None, default `None`): Optional GNOM/DATGNOM `.out` used only for \(D_{\\max}\) (nm→Å). Smooth \(I(q)\) comes from the staged Å `.dat` (DENSS may fit internally).
-    - `mode` (str, default `pilot`): Protocol stage: `pilot`, `average`, or `refined`.
-    - `denss_mode` (str, default `slow`): DENSS algorithm mode: `slow`, `fast`, or `membrane`.
-    - `n_maps` (int, default `20`): Number of reconstructions for `average`/`refined` (ignored in `pilot`; must be ≥2 when used).
-    - `n_jobs` (int, default `1`): Parallel cores for denss-all.
-    - `visualize_all` (bool, default `True`): When True, write slice GIF/PNG and rotating density/σ GIFs under `{output}/visuals/`.
+    - `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+    - `output_dir` (str, default `.`): Directory where the outputs are written.
+    - `gnom_path` (str | None, default `None`): Optional GNOM/DATGNOM `.out` used only for \(D_{\max}\) (nm→Å). Smooth \(I(q)\) comes from the staged Å `.dat` (DENSS may fit internally).
+    - `mode` (str, default `pilot`): Protocol stage: `pilot`, `average`, or `refined`. Defaults to `pilot`.
+    - `denss_mode` (str, default `slow`): DENSS algorithm mode: `slow`, `fast`, or `membrane`. Defaults to `slow`.
+    - `n_maps` (int, default `20`): Number of reconstructions for `average`/`refined` (ignored in `pilot`; must be ≥2 when used). Defaults to 20.
+    - `n_jobs` (int, default `1`): Parallel cores for denss-all. Defaults to 1.
+    - `visualize_all` (bool, default `True`): When True, write slice GIF/PNG and rotating density/σ GIFs under `{output}/visuals/`. Defaults to `True`.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Short parameter list
@@ -134,7 +132,8 @@ def model_density(
     ### CLI usage
 
     ```bash
-    autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss --mode pilot --denss-mode slow
+    autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss/ 
+    autosaxs model-density subtracted/sub_sample_01.dat --mode average --denss-mode slow --n-maps 10 --n-jobs 4 -o denss/
     ```
     """
     _ = config_path

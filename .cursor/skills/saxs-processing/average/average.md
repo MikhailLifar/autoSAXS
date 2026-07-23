@@ -61,23 +61,16 @@ See the docstring section **Returns** below.
 
 ## Autosaxs skill docstring
 
-SAXS / small-angle x-ray scattering: radiation-damage-aware averaging of per-frame 1D curves.
-
-Expands a path expression to sorted per-frame ``.dat`` files, compares each frame to the
-lexicographically first reference (CorMap + reduced chi-squared), truncates at the first
-rejection, and writes an inverse-variance weighted merge.
+SAXS / small-angle x-ray scattering: radiation-damage-aware averaging of per-frame 1D SAXS curves.
 
 ### Arguments
 
-- `profiles` (str): 1D path expression (file / directory / glob / comma-list). Directories expand
-  to ``*.dat`` (non-recursive). Files are sorted lexicographically.
-- `output_dir` (str, default ``./averaged``): Directory for the averaged curve, frame-selection
-  CSV, and report fragments.
-- `cormap_p_min` (float, default ``0.05``): CorMap p-value threshold for borderline warnings.
-- `chi2_max` (float, default ``1.25``): Reject frame (and stop) when reduced chi-squared vs
-  reference exceeds this value.
-- `chi2_min` (float, default ``0.9``): Warn when reduced chi-squared is below this value.
-- `use_cache` (bool, default ``False``): Enable/disable caching for this skill run.
+- `profiles` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive). Files are sorted lexicographically.
+- `output_dir` (str, default `./averaged`): Directory where the outputs are written.
+- `cormap_p_min` (float, default `0.05`): CorMap p-value threshold for borderline warnings.
+- `chi2_max` (float, default `1.25`): Reject frame (and stop) when reduced chi-squared vs reference exceeds this value.
+- `chi2_min` (float, default `0.9`): Warn when reduced chi-squared is below this value.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Short parameter list
 
@@ -87,9 +80,9 @@ rejection, and writes an inverse-variance weighted merge.
 
 ### Returns
 
-``dict[str, str]`` with:
+dict[str, str] with:
 
-- `averaged_1d`: Path to the merged ``int_<prefix>.dat`` curve.
+- `averaged_1d`: Path to the merged `int_<prefix>.dat` curve.
 - `frame_selection_csv`: Path to per-frame selection diagnostics CSV.
 
 ### Python usage

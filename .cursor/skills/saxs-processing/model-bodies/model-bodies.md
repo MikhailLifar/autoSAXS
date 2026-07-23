@@ -61,14 +61,14 @@ See the docstring section **Returns** below.
 
 ## Autosaxs skill docstring
 
-SAXS / small-angle x-ray scattering: run ATSAS `bodies` shape fitting for multiple candidate shapes on a 1D profile, exporting fit files (FIR, PNG, YAML, CSV) and a comparison figure.
+SAXS / small-angle x-ray scattering: run ATSAS `bodies` shape fitting for multiple candidate shapes on a 1D profile.
 
 ### Arguments
 
-- `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
-- `output_dir` (str, default `.`): Directory where `bodies` outputs are written.
-- `config_path` (str | None, default `None`): Optional YAML config path for CLI parity; this skill does not read a `model_bodies` section (no bundled defaults).
-- `shapes` (list[str] | None, default `None`): Subset of body model names to fit (`BODIES_SHAPES_LIST`). `None` or empty means fit **all** models (single `bodies` invocation). A non-empty list runs `bodies --body=...` per shape.
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where the outputs are written.
+- `config_path` (str | None, default `None`): Deprecated. YAML/config with a `model_bodies` section. When omitted, bundled defaults apply.
+- `shapes` (list[str] | None, default `None`): Subset of body model names to fit. `None` or empty means fit **all** models (single `bodies` invocation). A non-empty list runs `bodies --body=...` per shape.
 - `first` (int | None, default `None`): Passed to `bodies` as `--first` (1-based data point index). If omitted, taken from the low-q end of the Guinier interval from in-process `fit_guinier`.
 - `last` (int | None, default `None`): Passed to `bodies` as `--last` (1-based data point index). Omitted when `None`.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.

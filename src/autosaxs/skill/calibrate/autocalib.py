@@ -946,7 +946,7 @@ def autocalib_ring_analysis(
         dist_init_m = float(dist_guess_m)
         k_m_per_px = dist_init_m / r_out0_px if r_out0_px > 0 else float("nan")
         print(
-            "DEBUG: Using provided dist_guess for initial dist: "
+            "INFO: Using provided dist_guess for initial dist: "
             f"k_m_per_px={k_m_per_px:.6g}, dist_m={dist_init_m:.6g}, r_out_ring0_px={r_out0_px:.6g}",
             flush=True,
         )
@@ -958,7 +958,7 @@ def autocalib_ring_analysis(
             calibrant_name=str(config["calibrant_name"]),
         )
         print(
-            "DEBUG: Initial dist from innermost ring: "
+            "INFO: Initial dist from innermost ring: "
             f"k_m_per_px={k_m_per_px:.6g} (expect ~order 1e-2 for typical SAXS), "
             f"dist_m={dist_init_m:.6g}, r_out_ring0_px={r_out0_px:.6g}",
             flush=True,

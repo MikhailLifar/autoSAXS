@@ -63,24 +63,18 @@ See the docstring section **Returns** below.
 
 SAXS / small-angle x-ray scattering: dimensionless Kratky conformation analysis on a 1D profile.
 
-Builds classical (I·q² vs q) and dimensionless ((q·Rg)²·I/I(0) vs q·Rg) Kratky plots,
-locates the global peak, and assigns a model-free conformation class (globular / elongated /
-coil / intermediate).
-
-Unless both ``rg_nm`` and ``i0`` are supplied, runs in-process Guinier analysis to obtain them.
-
 ### Arguments
 
-- `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
-- `output_dir` (str, default `.`): Directory where analysis outputs are written.
-- `config_path` (str | None, default `None`): Optional YAML config path for CLI parity; unused by this skill.
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where the outputs are written.
+- `config_path` (str | None, default `None`): Deprecated. YAML/config with a `analyze_kratky` section. When omitted, bundled defaults apply.
 - `rg_nm` (float | None, default `None`): Radius of gyration in nm. If omitted, taken from in-process Guinier.
 - `i0` (float | None, default `None`): Forward scattering I(0). If omitted, taken from in-process Guinier.
-- `q_min`, `q_max` (float | None): Optional q-range (nm⁻¹) applied before analysis.
-- `globular_x_min`, `globular_x_max`, `globular_y_min`, `globular_y_max`: Globular peak bands (defaults from quality guide).
-- `elongated_x_min`, `elongated_x_max`, `elongated_y_min`: Elongated peak bands.
-- `coil_plateau_y`, `coil_plateau_tol`, `coil_high_x_min`: Coil / Debye-plateau detection.
-- `x_search_min`, `x_search_max`: Peak search window in q·Rg.
+- `q_min`, `q_max` (float | None): Optional q-range (nm⁻¹) applied before analysis. Defaults to None.
+- `globular_x_min`, `globular_x_max`, `globular_y_min`, `globular_y_max`: Globular peak bands. Defaults to 1.65, 1.85, 1.0, 1.2 respectively.
+- `elongated_x_min`, `elongated_x_max`, `elongated_y_min`: Elongated peak bands. Defaults to 1.85, 2.5, 1.15 respectively.
+- `coil_plateau_y`, `coil_plateau_tol`, `coil_high_x_min`: Coil / Debye-plateau detection. Defaults to 2.0, 0.25, 3.0 respectively.
+- `x_search_min`, `x_search_max`: Peak search window in q·Rg. Defaults to 0.5, 4.0 respectively.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns

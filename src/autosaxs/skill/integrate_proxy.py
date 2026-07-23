@@ -43,18 +43,13 @@ def integrate_proxy(
     """
     SAXS / small-angle x-ray scattering: integrate 2D TIFF image(s) to a 1D curve **without detector calibration**, using radial averaging in pixel-radius space (quick-look / debugging; not q-calibrated).
 
-    This is intended for quick-look / debugging when you don’t have a calibrated integrator yet. The output `.dat` stores metadata indicating the x-axis is `r_px` (pixels), not physical q.
-
     ### Arguments
 
-    - `image` (str): 2D image path expression. Can be:
-      - a single `.tif` file path
-      - a directory (expands to `*.tif`, non-recursive)
-      - a glob expression (including `**`)
-    - `output_dir` (str, default `.`): Directory where integrated curves are written.
-    - `mask` (str | None, default `None`): Optional mask path; same shape as the image. (`pyFAI` convention: masked pixels are excluded.)
-    - `cy` (float | None, default `None`): Optional beam center y in pixels. Must be set together with `cx`.
-    - `cx` (float | None, default `None`): Optional beam center x in pixels. Must be set together with `cy`.
+    - `image` (str): 2D image path expression (file/directory/glob). Directories expand to `*.tif` (non-recursive).
+    - `output_dir` (str, default `.`): Directory where the outputs are written.
+    - `mask` (str | None, default `None`): Optional mask path; same shape as the image. (pyFAI convention: masked pixels are excluded.)
+    - `cy` (float | None, default `None`): Optional beam center y in pixels. Must be set together with `cx`. Defaults to None.
+    - `cx` (float | None, default `None`): Optional beam center x in pixels. Must be set together with `cy`. Defaults to None.
     - `npt` (int, default `1000`): Number of points in the output x grid.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
@@ -65,7 +60,7 @@ def integrate_proxy(
 
     ### Returns
 
-    `dict[str, str | list[str]]` with:
+    dict[str, str | list[str]] with:
 
     - `integrated_1d`: Path (or list of paths, if `image` is a directory) to integrated 1D `.dat` curves.
 

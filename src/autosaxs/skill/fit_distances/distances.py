@@ -51,14 +51,14 @@ def fit_distances(
     smooth: Optional[float] = None,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
-    """
+    r"""
     SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve (real-space distance distribution).
 
     ### Arguments
 
-    - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
-    - `output_dir` (str, default `.`): Directory where the GNOM outputs are written (one subdirectory per input profile).
-    - `rg_nm` (float | None, default `None`): Expected Rg in nm. If omitted, run in-process Guinier analysis (`fit_guinier`) for an Rg span, then 1D optimize Rg in `[0, 1.5 × rg_max]` (30 s max) scoring each DATGNOM trial as Total Estimate − neg_frac.
+    - `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+    - `output_dir` (str, default `.`): Directory where the outputs are written (one subdirectory per input profile).
+    - `rg_nm` (float | None, default `None`): Expected Rg in nm, usually passed from Guinier analysis. If omitted, in-process Guinier analysis (`fit_guinier`) is run for an Rg span, then 1D Rg optimization in `[0, 1.5 × rg_max]` (30 s max) takes place.
     - `first` (int | None, default `None`): DATGNOM `--first` (1-based point index). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
     - `last` (int | None, default `None`): DATGNOM `--last`. If omitted, `--last` is not passed to DATGNOM.
     - `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`.
@@ -75,21 +75,29 @@ def fit_distances(
     - `fit_params_path`: Path to a YAML file containing the fit parameters used for the final run.
     - `best_symlink_out_path`: Best-effort symlink path to the selected `.out` (may be missing on some filesystems).
     - `fits_csv_path`: Path to a CSV containing candidate scores/metadata.
-    - `fit_vs_exp_png_path` / `fit_vs_exp_png_error`: Fit-vs-experiment plot output or error message.
-    - `best_pr_png_path` / `best_pr_png_error`: \(p(r)\) plot output or error message.
-    - `ensemble_dir` / `ensemble_summary_path`: Close-fits Dmax ensemble directory and CSV summary.
+    - `fit_vs_exp_png_path`: Fit-vs-experiment plot output.
+    - `fit_vs_exp_png_error`: Error message if fit-vs-experiment plot failed.
+    - `best_pr_png_path`: \(p(r)\) plot output or error message.
+    - `best_pr_png_error`: Error message if \(p(r)\) plot failed.
+    - `ensemble_dir`: Close-fits Dmax ensemble directory.
+    - `ensemble_summary_path`: Close-fits Dmax ensemble CSV summary.
     - `close_fit_out_paths`: Saved GNOM `.out` paths for Dmax±10% close fits.
     - `force_zero_off_out_path`: Saved GNOM `.out` with `--force-zero-rmax=N` at Dmax.
     - `dmax_nm`: Maximum real-space size D_max (nm) from the selected GNOM/DATGNOM fit.
-    - `rg_pr_nm` / `i0_pr`: Integral Rg and I(0) from p(r) (GNOM-reported or computed from the distribution).
+    - `rg_pr_nm`: Integral Rg from p(r) (GNOM-reported or computed from the distribution).
+    - `i0_pr`: Integral I(0) from p(r).
     - `rg_guinier_nm`: Guinier Rg (nm) from in-process `fit_guinier` or user `rg_nm`.
     - `q_min_fit_nm`: Low-q bound (nm⁻¹) used in the GNOM fit (from the `.out` angular range when available).
     - `total_estimate`: GNOM Total Estimate of the selected fit.
     - `delta_rg_pct`: \|Rg_Guinier − Rg_P(r)\| / Rg_Guinier × 100.
-    - `shannon_s_min`, `shannon_class`, `shannon_ok`, `shannon_tip`: Shannon sampling metrics and interpretation guide.
+    - `shannon_s_min`: Minimum Shannon sampling value.
+    - `shannon_class`: Shannon classification.
+    - `shannon_ok`: Boolean indicating acceptable Shannon sampling.
+    - `shannon_tip`: Shannon interpretation guide.
     - `pr_quality_class`: `high_quality` \| `acceptable` \| `failed`.
     - `overall_status`: `HIGH QUALITY` \| `ACCEPTABLE` \| `FAILED` (quality passport label).
-    - `quality_rationale` / `user_tips`: Lists explaining the quality assessment.
+    - `quality_rationale`: List explaining the quality assessment.
+    - `user_tips`: List of user tips about fit or data.
     - `quality_passport_path`: YAML path with the full quality block.
 
     ### Python usage
@@ -109,7 +117,8 @@ def fit_distances(
     ### CLI usage
 
     ```bash
-    autosaxs fit_distances subtracted/sub_sample_01.dat --output-dir distances
+    autosaxs fit_distances subtracted/sub_sample_01.dat --output-dir distances/
+    autosaxs fit_distances subtracted/sub_sample_01.dat --rg-nm 10.0 --first 10 --last 100 --smooth 2.0 -o distances/
     ```
     """
     bus = EventBus()

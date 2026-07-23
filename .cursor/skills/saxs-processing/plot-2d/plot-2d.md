@@ -65,7 +65,7 @@ SAXS / small-angle x-ray scattering: render 2D SAXS TIFF image(s) to PNG using l
 
 ### Arguments
 
-- `image` (str): 2D path expression (file/dir/glob). Directories expand to `*.tif` (non-recursive).
+- `image` (str): 2D path expression (file/directory/glob). Directories expand to `*.tif` (non-recursive).
 - `output_dir` (str, default `.`): Directory where PNG(s) are written.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 

@@ -61,16 +61,12 @@ See the docstring section **Returns** below.
 
 ## Autosaxs skill docstring
 
-SAXS / small-angle x-ray scattering: fit the Guinier region on a 1D profile (adaptive Rg, I(0), Rg span). Writes:
-
-- a text results file (chosen Guinier parameters and method comparison)
-- an ATSAS-format `.dat` file for downstream tools
-- a Guinier plot (ln I vs q²) with error bars and the chosen fit line
+SAXS / small-angle x-ray scattering: Do Guinier analysis on a 1D profile (Rg, I(0), Rg span, Guinier interval, quality). 
 
 ### Arguments
 
-- `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
-- `output_dir` (str, default `.`): Directory where analysis outputs are written.
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where the outputs are written.
 - `first` (int | None, default `None`): 1-based start point for a fixed-interval Guinier fit (requires `last`).
 - `last` (int | None, default `None`): 1-based end point (inclusive) for a fixed-interval Guinier fit (requires `first`).
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
@@ -100,5 +96,6 @@ print(out["results_path"])
 ### CLI usage
 
 ```bash
-autosaxs fit-guinier subtracted/sub_sample_01.dat --output-dir guinier
+autosaxs fit-guinier subtracted/sub_sample_01.dat --output-dir guinier/
+autosaxs fit-guinier subtracted/sub_sample_01.dat --first 10 --last 100 -o guinier/
 ```

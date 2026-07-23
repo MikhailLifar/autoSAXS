@@ -166,30 +166,30 @@ def refine(
     poni1 = pixel_size[0] * center_y_px
     poni2 = pixel_size[1] * center_x_px
 
-    print("DEBUG: Starting mask calculation (before refinement)...")
+    print("INFO: Starting mask calculation (before refinement)...")
     mask = None
     if mask_config is not None:
         mode = mask_config["mode"]
-        print(f"DEBUG: Mask config mode: {mode}")
+        print(f"INFO: Mask config mode: {mode}")
 
         automask = None
         if mode in ["auto", "combined"]:
-            print("DEBUG: Calculating automatic mask...")
+            print("INFO: Calculating automatic mask...")
             automask_ops = {k: v for k, v in mask_config.items() if k != "mode"}
             automask = calc_beam_abnormal_mask(
                 calib_data, center_y_px, center_x_px, r_beam_px, **automask_ops
             )
-            print("DEBUG: Automatic mask calculated")
+            print("INFO: Automatic mask calculated")
 
         file_mask = None
         if mode in ["from_file", "combined"]:
             assert mask_path is not None
-            print(f"DEBUG: Reading mask from file: {mask_path}")
+            print(f"INFO: Reading mask from file: {mask_path}")
             file_mask = IntegratorExtended.read_mask(mask_path)
 
         center_only_mask = None
         if mode == "from_file":
-            print("DEBUG: Adding center (beam-stop) mask for from_file mode (no IQR filtering)")
+            print("INFO: Adding center (beam-stop) mask for from_file mode (no IQR filtering)")
             center_only_mask = calc_beam_abnormal_mask(
                 calib_data,
                 center_y_px,
@@ -211,9 +211,9 @@ def refine(
         if mask is None:
             raise RuntimeError(f"Cannot parse mask_config:\n{mask_config}")
 
-    print("DEBUG: Mask calculation complete")
+    print("INFO: Mask calculation complete")
 
-    print("DEBUG: Creating GeometryRefinement object...")
+    print("INFO: Creating GeometryRefinement object...")
     gr = GeometryRefinement(
         rings,
         calibrant=calibrant,
@@ -226,8 +226,8 @@ def refine(
         detector=detector,
         wavelength=wavelength,
     )
-    print("DEBUG: GeometryRefinement object created. Starting refine3()...")
-    print(f"DEBUG: refine3() fix parameters: {fix}")
+    print("INFO: GeometryRefinement object created. Starting refine3()...")
+    print(f"INFO: refine3() fix parameters: {fix}")
 
     try:
         import threadpoolctl
@@ -236,10 +236,10 @@ def refine(
             with threadpoolctl.threadpool_limits(limits=1, user_api="openmp"):
                 with threadpoolctl.threadpool_limits(limits=1):
                     gr.refine3(fix=fix)
-        print("DEBUG: refine3() completed successfully")
+        print("INFO: refine3() completed successfully")
     except ImportError:
         gr.refine3(fix=fix)
-        print("DEBUG: refine3() completed successfully")
+        print("INFO: refine3() completed successfully")
     refined = {
         "dist": gr._dist,
         "poni1": gr._poni1,
@@ -251,17 +251,17 @@ def refine(
     for k, v in refined.items():
         refined[k] = float(v)
 
-    print("DEBUG: Creating IntegratorExtended object...")
+    print("INFO: Creating IntegratorExtended object...")
     integrator = IntegratorExtended(
         ai_params={"wavelength": wavelength, **refined},
         detector_params={"detector_name": detector_name, "pixel_size": pixel_size},
         mask=mask,
     )
-    print("DEBUG: IntegratorExtended object created")
+    print("INFO: IntegratorExtended object created")
 
-    print(f"DEBUG: Starting 1D integration (npt={npt})...")
+    print(f"INFO: Starting 1D integration (npt={npt})...")
     q_cal, I_cal, sigma = integrator.integrate1d(calib_data, npt=npt)
-    print(f"DEBUG: 1D integration complete. q array length: {len(q_cal)}")
+    print(f"INFO: 1D integration complete. q array length: {len(q_cal)}")
 
     tth_theor = np.array(calibrant.get_2th())
     q_theor = 4 * np.pi * np.sin(tth_theor / 2) / wavelength * 1e-9

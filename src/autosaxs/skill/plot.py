@@ -42,11 +42,9 @@ def plot(
     - Kratky plot (I*q^2 vs q)
     - log-log plot (log(I) vs log(q))
 
-    Also writes a Guinier `.dat` file (ln(I) vs q²) used downstream.
-
     ### Arguments
 
-    - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
+    - `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
     - `output_dir` (str, default `.`): Directory where plot files are written.
     - `guinier_q_min` (float | None, default `None`): Lower q bound for selecting Guinier range (enables `guinier_dat_path`).
     - `guinier_q_max` (float | None, default `None`): Upper q bound for selecting Guinier range.
@@ -58,7 +56,7 @@ def plot(
 
     ### Returns
 
-    `dict[str, str]` with:
+    dict[str, str] with:
 
     - `guinier_plot_path`: Path to the Guinier PNG.
     - `kratky_plot_path`: Path to the Kratky PNG.

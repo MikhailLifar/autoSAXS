@@ -61,7 +61,7 @@ autoSAXS builds on the SAXS ecosystem rather than replacing it:
 
 - **[pyFAI](https://pyfai.readthedocs.io/)** — detector geometry, calibration, and 1D integration.
 - **[ATSAS](https://www.embl-hamburg.de/biosaxs/download.html)** — tools such as `autorg`, `datgnom`, `gnom`, `dammif`, `mixture`, and `bodies` (external install; recommended **ATSAS 3.2.1**). Importing autoSAXS **warns** if ATSAS is missing; skills that shell out to ATSAS **raise** immediately when it is unavailable.
-- **[DENSS](https://denss.org/)** — electron-density reconstruction (`model_density`).
+- **[DENSS](https://www.tdgrant.com/denss)** — electron-density reconstruction (`model_density`).
 - **[McSAS](https://github.com/BAMresearch/McSAS) / McSAS3** — Monte Carlo polydisperse sizing (`model_dr_mc`).
 
 ## Contacts

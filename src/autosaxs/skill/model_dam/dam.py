@@ -65,25 +65,17 @@ def model_dam(
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    SAXS / small-angle x-ray scattering: ab initio bead-model shape reconstruction with ATSAS DAMMIF, optionally followed by DAMAVER ensemble averaging (shape reconstruction / bead model / occupancy map). When no GNOM `.out` is supplied, `fit_distances` is run in-process to obtain one.
-
-    With `n_runs=1`, runs a single DAMMIF reconstruction. With `n_runs>1`, runs independent DAMMIF replicas then DAMAVER (NSD alignment, outlier rejection, frequency/occupancy map). The data-fitting final shape is the most probable DAMMIF replica (`best.cif` symlink); the DAMAVER frequency map is the stability product. DAMMIN refinement is not performed.
+    SAXS / small-angle x-ray scattering: ab initio bead-model shape reconstruction with ATSAS DAMMIF, optionally followed by DAMAVER ensemble averaging. When no GNOM `.out` is supplied, `fit_distances` is run in-process to obtain one.
 
     ### Arguments
 
-    - `profile` (str): 1D path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
-    - `output_dir` (str, default `.`): Directory where DAMMIF / DAMAVER outputs are written.
+    - `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+    - `output_dir` (str, default `.`): Directory where the outputs are written.
     - `gnom_path` (str | None, default `None`): Optional path to a GNOM/DATGNOM `.out` file for DAMMIF. If omitted, `fit_distances` is run in-process on `profile` and its `best_gnom_out_path` is used.
-    - `n_runs` (int, default `1`): Number of independent DAMMIF runs. When `>1`, DAMAVER is run on the particle models.
-    - `dammif_mode` (str, default `fast`): DAMMIF annealing mode: `fast` or `slow`.
-    - `visualize_all` (bool, default `False`): When True, write PNGs/GIFs under `{output}/visuals/` (synced per-run rotation GIFs, overlap, occupancy threshold; nm scale bar; no run/title captions).
+    - `n_runs` (int, default `1`): Number of independent DAMMIF runs. When `>1`, DAMAVER is run on the particle models. Defaults to 1.
+    - `dammif_mode` (str, default `fast`): DAMMIF annealing mode: `fast` or `slow`. Defaults to `fast`.
+    - `visualize_all` (bool, default `False`): When True, write PNGs/GIFs under `{output}/visuals/` (synced per-run rotation GIFs, overlap, occupancy threshold; nm scale bar; no run/title captions). Defaults to `False`.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
-
-    ### Short parameter list
-
-    - n_runs: 1 for fast pilot view; 5, 10 or 20 - for reliable averaged shape
-    - dammif_mode: FAST or SLOW, default FAST; recommended not to change the default
-    - visualize_all: Heavy visualization with nice GIF's. Not fast, rather production level artifacts
 
     ### Returns
 

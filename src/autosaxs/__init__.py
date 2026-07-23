@@ -1,6 +1,7 @@
 # autosaxs: interactive SAXS pipeline core (controller, processor, skill, utils, guinier, event_bus, cli, viewer, context, gui, gui_interface, api, polydispfit, report)
 from __future__ import annotations
 
+import logging
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 try:
@@ -8,6 +9,10 @@ try:
 except PackageNotFoundError:
     # Editable/source tree without an installed distribution metadata entry.
     __version__ = "0.0.0+local"
+
+# pyFAI logs API deprecations (set_wavelength, AzimuthalIntegrator, …) via this
+# logger with full stack traces; keep calling the same APIs but don't spam users.
+logging.getLogger("pyFAI.DEPRECATION").setLevel(logging.ERROR)
 
 from .skill.skill_wrap import warn_atsas_on_import
 
