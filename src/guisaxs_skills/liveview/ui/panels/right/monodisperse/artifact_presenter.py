@@ -17,6 +17,7 @@ from .....session.output_paths import (
     tiff_output_root,
 )
 from .....session.state import LiveviewSessionState, LiveviewWatchMode, MonodisperseShapeMode
+from .....pipeline.monodisperse_pipeline import profile_sample_stem
 from .....services.artifacts import (
     best_dammif_cif,
     bodies_best_fit,
@@ -317,9 +318,14 @@ class MonodisperseArtifactPresenter:
         sd = Path(sub.strip()).expanduser()
         if not sd.is_absolute():
             sd = (self._state.watchdir / sd).resolve()
+        mode = self._wizard.shape_pane.shape_mode()
         if (sd / "bodies_fits.yml").is_file() or skill_name == "model_bodies":
+            if mode != "bodies":
+                return
             self._ingest_bodies(sd)
         elif any(sd.glob("dammif-*.cif")) or (sd / "dammif_fits.yml").is_file() or skill_name == "model_dam":
+            if mode != "dammif":
+                return
             self._ingest_dammif(sd)
         elif (
             skill_name == "model_density"
@@ -328,7 +334,61 @@ class MonodisperseArtifactPresenter:
             or any(sd.glob("*_refined.mrc"))
             or any(sd.glob("*_denss_input.dat"))
         ):
+            if mode != "denss":
+                return
             self._ingest_denss(sd, result=result)
+
+    def _load_shape_artifacts_for_mode(self, *, root: Path, stem: str, mode: str) -> bool:
+        """Load on-disk shape artifacts for ``mode`` into the shared viewer. Returns True if loaded."""
+        m = (mode or "").strip().lower()
+        if m == MonodisperseShapeMode.DAMMIF.value or m == "dammif":
+            dam = dammif_dir(root) / stem
+            if dam.is_dir() and (
+                any(dam.glob("dammif-*.cif")) or (dam / "dammif_fits.yml").is_file()
+            ):
+                self._ingest_dammif(dam)
+                return True
+        elif m == MonodisperseShapeMode.BODIES.value or m == "bodies":
+            fb = model_bodies_dir(root) / stem
+            if fb.is_dir() and (
+                (fb / "bodies_fits.yml").is_file() or any(fb.glob("*.fir"))
+            ):
+                self._ingest_bodies(fb)
+                return True
+        elif m == MonodisperseShapeMode.DENSS.value or m == "denss":
+            dens = denss_dir(root) / stem
+            if dens.is_dir() and (
+                any(dens.glob("*.mrc"))
+                or any(dens.glob("*_denss_input.dat"))
+                or any(
+                    p.is_dir() and any(p.glob("*_avg.mrc"))
+                    for p in dens.iterdir()
+                    if p.is_dir()
+                )
+            ):
+                self._ingest_denss(dens)
+                return True
+        return False
+
+    def refresh_shape_view_for_current_mode(self) -> None:
+        """Clear shared shape previews, then reload disk artifacts for the active mode (if any)."""
+        pane = self._wizard.shape_pane
+        mode = pane.shape_mode()
+        pane.clear_view()
+        if mode == "none":
+            return
+        root = self._output_root
+        if root is None:
+            root = self._state.watchdir.expanduser().resolve()
+        prof = self._effective_profile_path()
+        loaded = False
+        if prof:
+            stem = profile_sample_stem(prof)
+            if stem:
+                loaded = self._load_shape_artifacts_for_mode(root=root, stem=stem, mode=mode)
+        if not loaded:
+            # clear_view wiped status; restore mode placeholder.
+            pane._update_mode_ui()
 
     def _ingest_bodies(self, sd: Path) -> None:
         best_shape, best_params, csv_p = bodies_best_fit(sd)
@@ -480,17 +540,11 @@ class MonodisperseArtifactPresenter:
                 self._state.monodisperse_shape_mode = mode
                 self._wizard.shape_pane.set_shape_mode("bodies")
         if mode == MonodisperseShapeMode.DAMMIF:
-            dam = dammif_dir(root) / stem
-            if dam.is_dir():
-                self._ingest_dammif(dam)
+            self._load_shape_artifacts_for_mode(root=root, stem=stem, mode="dammif")
         elif mode == MonodisperseShapeMode.BODIES:
-            fb = model_bodies_dir(root) / stem
-            if fb.is_dir():
-                self._ingest_bodies(fb)
+            self._load_shape_artifacts_for_mode(root=root, stem=stem, mode="bodies")
         elif mode == MonodisperseShapeMode.DENSS:
-            dens = denss_dir(root) / stem
-            if dens.is_dir():
-                self._ingest_denss(dens)
+            self._load_shape_artifacts_for_mode(root=root, stem=stem, mode="denss")
 
     @property
     def last_guinier_handoff(self) -> Dict[str, Any]:

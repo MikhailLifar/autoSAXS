@@ -16,15 +16,16 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ....ui.preview_panel import ImageViewerDialog, open_image_viewer
 from ...pipeline import LiveviewQueueStatus
 from ....logic.path_display import contracted_path_label
 from ..widgets.plots import (
     DatCurveViewerDialog,
     DropTiffImageCanvas,
+    Image2DViewerDialog,
     LogCurvePlot,
     open_compare_curves_dialog,
     open_dat_curve_dialog,
+    open_image_2d_dialog,
 )
 
 
@@ -136,8 +137,8 @@ class LiveviewMiddlePanel(QWidget):
         self._compare_plot.mpl_connect("button_press_event", self._on_mpl_click_open_compare)
         self._subtracted_plot.mpl_connect("button_press_event", self._on_mpl_click_open_subtracted)
 
-        # Raster (2D) vs interactive .dat curves (matplotlib toolbar).
-        self._raster_preview_dialog: ImageViewerDialog | None = None
+        # Interactive 2D TIFF / 1D .dat (matplotlib NavigationToolbar).
+        self._image_2d_preview_dialog: Image2DViewerDialog | None = None
         self._curve_preview_dialog: DatCurveViewerDialog | None = None
         self._curve_x_label = "q (nm$^{-1}$)"
 
@@ -191,19 +192,19 @@ class LiveviewMiddlePanel(QWidget):
             return False
         return int(getattr(ev, "button", 0)) == 1
 
-    def _raster_viewer_dialog(self) -> ImageViewerDialog:
-        if self._raster_preview_dialog is None:
-            self._raster_preview_dialog = ImageViewerDialog(self)
-        return self._raster_preview_dialog
+    def _image_2d_viewer_dialog(self) -> Image2DViewerDialog:
+        if self._image_2d_preview_dialog is None:
+            self._image_2d_preview_dialog = Image2DViewerDialog(self)
+        return self._image_2d_preview_dialog
 
     def _curve_viewer_dialog(self) -> DatCurveViewerDialog:
         if self._curve_preview_dialog is None:
             self._curve_preview_dialog = DatCurveViewerDialog(self)
         return self._curve_preview_dialog
 
-    def _store_raster_viewer(self, dlg: ImageViewerDialog | None) -> None:
+    def _store_image_2d_viewer(self, dlg: Image2DViewerDialog | None) -> None:
         if dlg is not None:
-            self._raster_preview_dialog = dlg
+            self._image_2d_preview_dialog = dlg
 
     def _on_mpl_click_open_2d(self, ev: object) -> None:
         if not self._is_left_click_in_axes(ev):
@@ -316,12 +317,11 @@ class LiveviewMiddlePanel(QWidget):
     def _open_2d_viewer(self) -> None:
         if not self._current_image_path:
             return
-        self._store_raster_viewer(
-            open_image_viewer(
+        self._store_image_2d_viewer(
+            open_image_2d_dialog(
                 self,
                 self._current_image_path,
-                reuse=self._raster_viewer_dialog(),
-                full_path_tooltip=self._current_image_path,
+                reuse=self._image_2d_viewer_dialog(),
             )
         )
 

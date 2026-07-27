@@ -355,6 +355,9 @@ def prepare_overlap_items(
                 "rgba": rgba,
             }
         )
+    # Reference (most probable) first so the interactive viewer frames like Run.
+    if ref is not None and len(items) > 1:
+        items.sort(key=lambda it: 0 if it.get("key") == ref.key else 1)
     return items
 
 

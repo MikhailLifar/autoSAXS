@@ -71,9 +71,14 @@ class MonodisperseCoordinator(QObject):
 
     def _on_shape_mode_changed(self, mode: str) -> None:
         self._config.apply_shape_mode(mode)
-        if str(mode).lower() == "none":
+        m = str(mode).lower()
+        if m == "none":
             self._wizard.shape_pane.clear_view()
-        self._wizard.shape_pane._update_mode_ui()
+            self._wizard.shape_pane._update_mode_ui()
+        else:
+            # Update mode chrome first, then clear/reload so previews match the selected mode.
+            self._wizard.shape_pane._update_mode_ui()
+            self._presenter.refresh_shape_view_for_current_mode()
         self._wizard.shape_pane.set_rerun_enabled(self._presenter.can_rerun_shape())
         self.shape_config_changed.emit()
 

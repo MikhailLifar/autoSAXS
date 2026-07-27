@@ -796,3 +796,57 @@ class DropTiffImageCanvas(Image2DPlot):
             self.tiff_files_dropped.emit(paths)
         event.setDropAction(Qt.CopyAction)
         event.accept()
+
+
+class Image2DViewerDialog(QDialog):
+    """
+    Full-window interactive 2D TIFF view: matplotlib NavigationToolbar + Image2DPlot.
+    Used when the liveview center canvas is clicked; thumbnails stay toolbar-free.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Image")
+        self.resize(1100, 800)
+        self._plot = Image2DPlot()
+        lay = QVBoxLayout(self)
+        lay.addWidget(mpl_navigation_toolbar(self._plot, self))
+        lay.addWidget(self._plot, 1)
+
+    def plot_panel(self) -> Image2DPlot:
+        return self._plot
+
+    def show_tiff(self, path: str, *, window_title: Optional[str] = None) -> None:
+        short, full = contracted_path_label(path)
+        if window_title:
+            self.setWindowTitle(window_title)
+        else:
+            self.setWindowTitle(f"Image — {short}")
+        self.setToolTip(full)
+        self._plot.setToolTip(full)
+        try:
+            self._plot.show_tiff(path)
+        except Exception:
+            self._plot.clear()
+            if self._plot.figure.axes:
+                self._plot.figure.axes[0].set_title("Could not load image")
+            self._plot.draw_idle()
+
+
+def open_image_2d_dialog(
+    parent: Optional[QWidget],
+    path: str,
+    *,
+    reuse: Optional[Image2DViewerDialog] = None,
+    window_title: Optional[str] = None,
+) -> Optional[Image2DViewerDialog]:
+    """Open or refresh an interactive TIFF viewer (matplotlib zoom/pan toolbar)."""
+    p = (path or "").strip()
+    if not p or not os.path.isfile(p) or not _is_tif_path(p):
+        return reuse
+    dlg = reuse if reuse is not None else Image2DViewerDialog(parent)
+    dlg.show_tiff(p, window_title=window_title)
+    dlg.show()
+    dlg.raise_()
+    dlg.activateWindow()
+    return dlg

@@ -619,22 +619,17 @@ class SaxsInteractive3DWidget(QWidget):
         alpha = 0.82 if self._embedded else 0.85
         edge_lw = 0.12 if self._embedded else 0.18
         mesh_data = payload.get("mesh")
-        self._disconnect_click()
         if self._embedded:
             self._timer.stop()
         self._mrc_cloud = None
-        self._clear_occ_colorbar()
-        self._clear_sigma_colorbar()
-        self._clear_mrc_colorbar()
+        self._fresh_3d_axes()
         self._set_density_dark(False)
-        self._ax.clear()
         self._has_model = True
 
         if isinstance(mesh_data, IsosurfaceMeshData):
             mesh = mesh_data_to_poly3d(mesh_data, alpha=alpha, edge_linewidth=edge_lw)
             self._ax.add_collection3d(mesh)
-            center = np.asarray(mesh_data.min_coords + mesh_data.max_coords, dtype=np.float64) * 0.5
-            self._set_equal_limits(center, mesh_data.min_coords, mesh_data.max_coords)
+            self._frame_isosurface_like_run(mesh_data)
             if (
                 not self._embedded
                 and mesh_data.colorbar_label
@@ -652,9 +647,8 @@ class SaxsInteractive3DWidget(QWidget):
                 self._sigma_colorbar.set_label(str(mesh_data.colorbar_label), fontsize=9)
         elif kind == "overlap":
             meshes = payload.get("meshes") or []
-            mins = []
-            maxs = []
             legend_bits = []
+            ref_mesh: Optional[IsosurfaceMeshData] = None
             for item in meshes:
                 if not isinstance(item, dict):
                     continue
@@ -669,8 +663,10 @@ class SaxsInteractive3DWidget(QWidget):
                         rgba=tuple(rgba) if rgba else None,
                     )
                     self._ax.add_collection3d(poly)
-                    mins.append(md.min_coords)
-                    maxs.append(md.max_coords)
+                    # Frame like Run for the first (reference) mesh — do not re-center
+                    # on the union of all AABBs (that is what shifted Overlap vs Run).
+                    if ref_mesh is None:
+                        ref_mesh = md
                     if rgba and label:
                         legend_bits.append((label, rgba))
                 else:
@@ -687,15 +683,10 @@ class SaxsInteractive3DWidget(QWidget):
                             depthshade=True,
                             edgecolors="none",
                         )
-                        mins.append(np.min(pts, axis=0))
-                        maxs.append(np.max(pts, axis=0))
                         if rgba and label:
                             legend_bits.append((label, rgba))
-            if mins and maxs:
-                lo = np.min(np.stack(mins, axis=0), axis=0)
-                hi = np.max(np.stack(maxs, axis=0), axis=0)
-                center = (lo + hi) * 0.5
-                self._set_equal_limits(center, lo, hi)
+            if ref_mesh is not None:
+                self._frame_isosurface_like_run(ref_mesh)
             else:
                 self._ax.text2D(
                     0.5,
@@ -815,14 +806,13 @@ class SaxsInteractive3DWidget(QWidget):
             cbar_label = "ρ (density)"
             high_is_bright = True
 
-        self._disconnect_click()
         if self._embedded:
             self._timer.stop()
-        self._clear_occ_colorbar()
-        self._clear_sigma_colorbar()
-        self._clear_mrc_colorbar()
+        # Axes3D ignores set_position after colorbar(fraction=...), so clear+re-colorbar
+        # walks left. Fresh axes (same as DAM Run) resets layout; dark theme MUST be
+        # re-applied after fig.clear() or the electron look is lost.
+        self._fresh_3d_axes()
         self._set_density_dark(True)
-        self._ax.clear()
         self._has_model = True
 
         rgba, vmin, vmax, t_vis = _cloud_rgba(values, high_is_bright=high_is_bright)
@@ -1047,6 +1037,25 @@ class SaxsInteractive3DWidget(QWidget):
 
     def mrc_model(self) -> tuple[Optional[str], Optional[str]]:
         return self._last_mrc_path, self._last_sigma_path
+
+    def _fresh_3d_axes(self) -> None:
+        """Replace Axes3D so each load matches a first-open Run view (no sticky aspect)."""
+        self._disconnect_click()
+        self._clear_occ_colorbar()
+        self._clear_sigma_colorbar()
+        self._clear_mrc_colorbar()
+        self._fig.clear()
+        self._ax = self._fig.add_subplot(111, projection="3d")
+        if self._toolbar is not None:
+            try:
+                self._toolbar.update()
+            except Exception:
+                pass
+
+    def _frame_isosurface_like_run(self, mesh_data: IsosurfaceMeshData) -> None:
+        """Identical framing to the dedicated Run (single-mesh) path."""
+        center = np.asarray(mesh_data.min_coords + mesh_data.max_coords, dtype=np.float64) * 0.5
+        self._set_equal_limits(center, mesh_data.min_coords, mesh_data.max_coords)
 
     def _set_equal_limits(
         self,
@@ -1312,13 +1321,38 @@ class Interactive3DViewerDialog(QDialog):
         self._overlap_list.itemChanged.connect(self._on_overlap_checks_changed)
 
         self._plot = SaxsInteractive3DWidget(self, embedded=False)
+        # Overlay on the plot so showing/hiding never reflows the 3D canvas
+        # (layout reflow was shifting Axes3D and sticking after return to Run).
+        self._overlap_list.setParent(self._plot)
+        self._plot.installEventFilter(self)
+
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
         lay.addLayout(top)
         lay.addWidget(self._occ_widget)
         lay.addWidget(self._denss_color_widget)
-        lay.addWidget(self._overlap_list)
         lay.addWidget(self._plot, 1)
+
+    def eventFilter(self, obj, event):  # type: ignore[override]
+        from PyQt5.QtCore import QEvent
+
+        if obj is self._plot and event.type() == QEvent.Resize:
+            self._position_overlap_overlay()
+        return super().eventFilter(obj, event)
+
+    def _position_overlap_overlay(self) -> None:
+        if not self._overlap_list.isVisible():
+            return
+        margin = 4
+        w = max(80, self._plot.width() - 2 * margin)
+        self._overlap_list.setGeometry(margin, margin, w, 110)
+        self._overlap_list.raise_()
+
+    def _set_overlap_overlay_visible(self, visible: bool) -> None:
+        self._overlap_list.setVisible(bool(visible))
+        if visible:
+            self._position_overlap_overlay()
+            self._overlap_list.raise_()
 
     def set_dam_catalog(self, catalog: Any, *, select_key: str = "best") -> bool:
         """Populate dropdown from a ``DamModelCatalog`` and load ``select_key``."""
@@ -1338,7 +1372,7 @@ class Interactive3DViewerDialog(QDialog):
         if not self._entries_by_index:
             self._occ_widget.setVisible(False)
             self._denss_color_widget.setVisible(False)
-            self._overlap_list.setVisible(False)
+            self._set_overlap_overlay_visible(False)
             return False
         self.setWindowTitle("3D — DAM models")
         return self._load_entry(self._entries_by_index[select_idx])
@@ -1352,7 +1386,7 @@ class Interactive3DViewerDialog(QDialog):
         self._combo.blockSignals(False)
         self._occ_widget.setVisible(False)
         self._denss_color_widget.setVisible(False)
-        self._overlap_list.setVisible(False)
+        self._set_overlap_overlay_visible(False)
         ok = self._plot.load_cif(path)
         if window_title:
             self.setWindowTitle(window_title)
@@ -1375,7 +1409,7 @@ class Interactive3DViewerDialog(QDialog):
         self._combo.blockSignals(False)
         self._occ_widget.setVisible(False)
         self._denss_color_widget.setVisible(False)
-        self._overlap_list.setVisible(False)
+        self._set_overlap_overlay_visible(False)
         ok = self._plot.load_bodies_analytical(shape_name, shape_params)
         if window_title:
             self.setWindowTitle(window_title)
@@ -1398,7 +1432,7 @@ class Interactive3DViewerDialog(QDialog):
         self._combo.setCurrentIndex(select_idx if self._entries_by_index else -1)
         self._combo.blockSignals(False)
         self._occ_widget.setVisible(False)
-        self._overlap_list.setVisible(False)
+        self._set_overlap_overlay_visible(False)
         if not self._entries_by_index:
             self._denss_color_widget.setVisible(False)
             return False
@@ -1514,7 +1548,7 @@ class Interactive3DViewerDialog(QDialog):
         self.setWindowTitle(f"3D — {label}")
         if kind == "density":
             self._occ_widget.setVisible(False)
-            self._overlap_list.setVisible(False)
+            self._set_overlap_overlay_visible(False)
             sigma = getattr(entry, "sigma_path", None) or None
             has_sigma = bool(sigma and Path(str(sigma)).is_file())
             self._sync_denss_color_controls(has_sigma=has_sigma)
@@ -1525,14 +1559,14 @@ class Interactive3DViewerDialog(QDialog):
         if kind == "occupancy":
             self._occ_widget.setVisible(True)
             self._denss_color_widget.setVisible(False)
-            self._overlap_list.setVisible(False)
+            self._set_overlap_overlay_visible(False)
             thr = float(self._occ_slider.value()) / 100.0
             self._occ_label.setText(f"Occupancy ≥ {thr:.2f}")
             return self._plot.load_occupancy_cif(path, threshold=thr, title=label)
         if kind == "overlap":
             self._occ_widget.setVisible(False)
             self._denss_color_widget.setVisible(False)
-            self._overlap_list.setVisible(True)
+            self._set_overlap_overlay_visible(True)
             try:
                 return self._load_overlap_view()
             except Exception as exc:
@@ -1540,5 +1574,5 @@ class Interactive3DViewerDialog(QDialog):
                 return False
         self._occ_widget.setVisible(False)
         self._denss_color_widget.setVisible(False)
-        self._overlap_list.setVisible(False)
+        self._set_overlap_overlay_visible(False)
         return self._plot.load_cif(path, title=label)
