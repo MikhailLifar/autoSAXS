@@ -29,20 +29,20 @@
 Core + CLI:
 
 ```bash
-python -m pip install "autosaxs @ git+https://github.com/MikhailLifar/autoSAXS.git"
+python -m pip install autosaxs
 autosaxs --help
 ```
 
 With desktop GUIs (`guisaxs-skills`, `guisaxs-liveview`):
 
 ```bash
-python -m pip install "autosaxs[gui] @ git+https://github.com/MikhailLifar/autoSAXS.git"
+python -m pip install "autosaxs[gui]"
 ```
 
 Optional LLM helper stack (`openai` / `httpx` / `requests`):
 
 ```bash
-python -m pip install "autosaxs[llm] @ git+https://github.com/MikhailLifar/autoSAXS.git"
+python -m pip install "autosaxs[llm]"
 ```
 
 Helper commands (export docs and defaults into a directory):
@@ -51,7 +51,7 @@ Helper commands (export docs and defaults into a directory):
 - `autosaxs get-skills` — write Cursor-style `saxs-processing/` skill
 - `autosaxs get-default-config` — copy bundled `config_base.conf`
 
-Upgrade from git `main`: `autosaxs -U`
+From git `main` (development): `python -m pip install "autosaxs @ git+https://github.com/MikhailLifar/autoSAXS.git"` or `autosaxs -U`
 
 ## Main features
 
