@@ -10,18 +10,19 @@
 <h1>Quick start</h1>
 <ol>
 <li>Activate a Python environment with <code>autosaxs[gui]</code> installed.</li>
-<li>Run <code>guisaxs-liveview</code> from the folder you want to use as working directory (or pick one via <b>File → Open working directory…</b>).</li>
-<li>Feed detector images:
-<ul>
-<li>Drag-and-drop <code>.tif</code> / <code>.tiff</code> onto the middle <b>2D</b> panel (multiple files at once), or</li>
-<li>Copy/save TIFFs into the working directory.</li>
-</ul>
-</li>
-<li>Watch the <b>middle</b> column for queue status and the latest 2D image.</li>
-<li>If needed: <b>left column → Set calibration</b> → run the wizard → <b>Run</b>.</li>
-<li>If needed: <b>Set buffer</b> → choose buffer <code>.dat</code> and q-range → <b>Apply</b>.</li>
-<li>Optional: <b>right column → Analysis</b> drop-down → configure wizards → new TIFFs are analyzed automatically.</li>
+<li>Run <code>guisaxs-liveview</code> from the folder you want as working directory
+(or later: <b>File → Open working directory…</b>).</li>
+<li>Follow the Main window workflow:
+<b>calibrate → [integrate buffer] → [set buffer] → integrate samples → [subtract] → [analysis]</b>.
+Exact control sequences and screenshots:
+<a href="main_window.html">Main window</a>.</li>
+<li>Calibration details: <a href="calibration.html">Calibration</a> ·
+<a href="mask.html">Mask</a>.</li>
+<li>Optional analysis: <a href="analysis_monodisperse.html">Monodisperse</a> ·
+<a href="analysis_polydisperse.html">Polydisperse</a>.</li>
+<li>Mental model: <a href="concepts.html">Concepts</a>. Algorithms:
+<a href="algorithms/index.html">Algorithms</a>.</li>
 </ol>
-<p><a href="window_tour.html">Window tour →</a></p>
+<p><a href="main_window.html">Main window →</a> · <a href="concepts.html">Concepts →</a></p>
 </body>
 </html>

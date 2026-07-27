@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Azimuthal integration</title>
+<link rel="stylesheet" href="../../style/help.css"/>
+</head>
+<body>
+<p class="nav-top"><a href="index.html">← Algorithms</a> · Azimuthal integration</p>
+<h1>Azimuthal integration</h1>
+
+<p><b>Purpose.</b> Collapse a calibrated 2D detector frame to a 1D intensity vs <i>q</i> curve I(<i>q</i>)
+suitable for subtraction and analysis. This is the standard SAXS reduction step once geometry exists.</p>
+
+<p><b>What autosaxs does.</b> Loads the saved pyFAI integrator from calibration, applies the mask used
+at calibration time, runs azimuthal integration (<code>integrate1d</code>) with a chosen number of bins,
+and writes a standard <code>.dat</code> curve (typically under <code>averaged/</code>). Optional overlays
+can show the mask on the 2D image for visual checks.</p>
+
+<p><b>Custom content.</b> Thin relative to other skills: science is almost entirely pyFAI’s integrator;
+autosaxs owns I/O, batching, and wiring into the liveview queue.</p>
+
+<p><b>Engines.</b> pyFAI (calibrated geometry from <a href="calibrate.html">Detector calibration</a>).</p>
+<p class="nav-top"><a href="integrate_proxy.html">← Uncalibrated quick-look</a> ·
+<a href="subtract.html">Buffer subtraction →</a></p>
+</body>
+</html>

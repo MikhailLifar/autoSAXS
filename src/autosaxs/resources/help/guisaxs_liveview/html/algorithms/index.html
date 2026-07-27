@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Algorithms</title>
+<link rel="stylesheet" href="../../style/help.css"/>
+</head>
+<body>
+<p class="nav-top"><a href="../concepts.html">← Concepts</a> · Algorithms</p>
+<h1>Algorithms</h1>
+
+<p>These pages describe what <b>autosaxs</b> does scientifically when liveview runs a processing step —
+aimed at users with a SAXS / physics background. Each page covers purpose (why the step exists) and the
+<b>custom autosaxs procedure</b> (what is not a plain ATSAS or pyFAI default).</p>
+
+<div class="note">For where to click in the GUI, use the window pages
+(<a href="../main_window.html">Main</a>, <a href="../calibration.html">Calibration</a>, analysis).
+For how the app organizes work, see <a href="../concepts.html">Concepts</a>.</div>
+
+<h2>From image to I(q)</h2>
+<ul>
+<li><a href="calibrate.html">Detector calibration</a> — ring-based geometry (custom) + pyFAI refine</li>
+<li><a href="integrate_proxy.html">Uncalibrated quick-look</a> — pixel-space radial average</li>
+<li><a href="integrate.html">Azimuthal integration</a> — calibrated I(q) via pyFAI</li>
+<li><a href="subtract.html">Buffer subtraction</a> — point-match scaling (custom)</li>
+</ul>
+
+<h2>Low-q and real space</h2>
+<ul>
+<li><a href="guinier.html">Guinier analysis</a> — adaptive interval selection (custom)</li>
+<li><a href="fit_distances.html">Pair-distance distribution p(r)</a> — DATGNOM + autosaxs search / QC</li>
+<li><a href="fit_sizes.html">Size distribution D(R)</a> — GNOM spheres + autosaxs search / QC</li>
+<li><a href="model_mixture.html">Parametric sphere mixture</a> — MIXTURE grid + BIC selection</li>
+</ul>
+
+<h2>Shape and density</h2>
+<ul>
+<li><a href="model_bodies.html">Geometric bodies</a> — ATSAS BODIES + autosaxs orchestration</li>
+<li><a href="model_dam.html">Ab initio bead model (DAM)</a> — DAMMIF / DAMAVER orchestration</li>
+<li><a href="model_density.html">Continuous density (DENSS)</a> — Grant-style protocol + σ map</li>
+</ul>
+</body>
+</html>

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Continuous density (DENSS)</title>
+<link rel="stylesheet" href="../../style/help.css"/>
+</head>
+<body>
+<p class="nav-top"><a href="index.html">← Algorithms</a> · Continuous density (DENSS)</p>
+<h1>Continuous density (DENSS)</h1>
+
+<p><b>Purpose.</b> Instead of discrete beads, reconstruct a continuous electron-density map on a voxel
+grid. This can capture hollow or low-density regions more naturally than a uniform bead DAM, at the
+cost of a heavier computation and a different set of ambiguities.</p>
+
+<p><b>Engine.</b> <b>DENSS</b> (Grant protocol). GNOM supplies <b>D<sub>max</sub> only</b>; DENSS fits
+I(<i>q</i>) from the staged profile rather than reusing the full GNOM transform as the density prior.</p>
+
+<p><b>What autosaxs adds (protocol glue).</b></p>
+<ol>
+<li><b>pilot</b> — one reconstruction for a quick look (default in liveview).</li>
+<li><b>average</b> — many independent maps (<code>n_maps</code>), alignment, FSC resolution estimate,
+and an averaged density.</li>
+<li><b>refined</b> — refine starting from the averaged map.</li>
+<li>Builds a <b>voxel-wise σ map</b> across the aligned ensemble so the 3D view can color / opacity-code
+variability, not only mean density.</li>
+</ol>
+
+<p>Choose denss mode (slow / fast / membrane) for the underlying DENSS algorithm; choose protocol stage
+(<b>pilot</b> / <b>average</b> / <b>refined</b>) for how much ensemble work to invest.</p>
+
+<p class="nav-top"><a href="model_dam.html">← Ab initio DAM</a> ·
+<a href="index.html">Algorithms index</a></p>
+</body>
+</html>

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Size distribution D(R)</title>
+<link rel="stylesheet" href="../../style/help.css"/>
+</head>
+<body>
+<p class="nav-top"><a href="index.html">← Algorithms</a> · Size distribution D(R)</p>
+<h1>Size distribution D(R)</h1>
+
+<p><b>Purpose.</b> For polydisperse populations (especially near-spherical scatterers), a volume size
+distribution <i>D</i>(<i>R</i>) is more informative than a single <i>p</i>(<i>r</i>). Peaks and widths
+hint at how many size classes are present and how broad they are — input for parametric mixture fits.</p>
+
+<p><b>Engine.</b> ATSAS <b>GNOM</b> with system = spheres (volume distribution). Autosaxs again supplies
+parameter search and quality assessment rather than a new inverse transform.</p>
+
+<p><b>What autosaxs adds (custom orchestration).</b></p>
+<ol>
+<li>If R<sub>max</sub> is not fixed, searches a plausible R<sub>max</sub> range (time-capped), analogous
+to the Rg search for monodisperse GNOM.</li>
+<li>Runs stability / ensemble checks (including force-zero-style probes) to see whether the chosen
+maximum size is pathological.</li>
+<li>Reports modality and simple parametric PDF hints that help initialize
+<a href="model_mixture.html">mixture</a> models.</li>
+<li>Applies a polydisperse-oriented quality passport (Total Estimate, polydispersity indices, Shannon
+diagnostics).</li>
+</ol>
+
+<p>In liveview, polydisperse Guinier is shown independently and is <b>not</b> fed into fit_sizes as a
+hard constraint — polydisperse Guinier quality is often poor by nature.</p>
+
+<p class="nav-top"><a href="fit_distances.html">← p(r)</a> ·
+<a href="model_mixture.html">Mixture →</a> ·
+<a href="../analysis_polydisperse.html">Polydisperse UI →</a></p>
+</body>
+</html>

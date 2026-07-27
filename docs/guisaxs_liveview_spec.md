@@ -24,7 +24,7 @@ This document specifies a new desktop GUI application (“guisaxs-liveview”) f
 
 **One-sentence summary:** **guisaxs-liveview** is a single-window desktop GUI that watches a directory for **new stable `.tif` files**, processes them **sequentially** via `autosaxs` skills, and continuously updates live plots (2D + 1D) and optional **right-column analysis** outputs according to a user-selected analysis mode (monodisperse analysis, polydisperse analysis, or off).
 
-**Main user goal:** Start a session by choosing a **watch directory**, then iteratively configure processing during the session (calibration → buffer) while the app keeps up with incoming data using a **FIFO queue** and never freezes.
+**Main user goal:** Start a session in a **watch directory** (the process working directory), then iteratively configure processing during the session (calibration → buffer) while the app keeps up with incoming data using a **FIFO queue** and never freezes.
 
 ### 1.2 Non-goals (explicit)
 
@@ -86,29 +86,27 @@ This applies to every run of: `integrate_proxy`, `calibrate`, `integrate`, `subt
 
 ### 3.1 Start session
 
-1. On launch, the app prompts the user to **select the watch directory** using the **same directory selection dialog/logic as `guisaxs_skills` working-directory selection** (i.e., a Qt directory picker with non-native dialog, detail view sizing, and validation that the directory exists and is writable).
-2. After a valid directory is selected, the app starts watching it for new `.tif` files.
+1. On launch, the watch directory is the process **current working directory**, provided it exists and is writable. There is **no** directory picker at startup. If the cwd is missing or not writable, the app MUST exit without opening a window.
+2. The app starts watching that directory for new `.tif` files.
 3. Only **new** files are processed (files already present at watcher start are ignored).
+4. If `<watchdir>/.guisaxs_liveview/session.yaml` exists, the app MUST restore persisted session fields from disk (calibration artifacts, buffer/subtract options, watch mode) — the same cold-start restore used on every process start.
 
 ### 3.2 Switching watch directory during a session (required)
 
-The main window MUST include a top header/panel and a menu action analogous to `guisaxs_skills`’ “Open working directory…” flow:
+The main window MUST include a menu action **“Open working directory…”**:
 
-- **UI affordance**: provide either (or both):
-  - a top header/panel action (button/link) “Change watch directory…”
-  - a menu action “Open watch directory…” / “Change watch directory…”
-- **Selection**: must reuse the same directory selection dialog/logic as above.
-- **Reset semantics (hard requirement)**: when a new watch directory is accepted, the app MUST:
-  - stop watching the old directory
-  - clear the incoming `.tif` queue
-  - clear all live views (middle + right)
-  - reset session state to defaults (State A, analysis mode **Off**, no calibration, no buffer)
-  - start watching the newly selected directory
-  - apply the “only process new files” rule relative to the new watcher start time
+- **Selection**: reuse the same directory selection dialog/logic as `guisaxs_skills` working-directory selection (Qt directory picker with non-native dialog, detail view sizing, and validation that the directory exists and is writable).
+- **Semantics (hard requirement)**: changing the watch directory MUST be equivalent to **quit + cold-start on the new directory**. The running process MUST NOT mutate its in-memory session to the new folder in place.
+- When a new watch directory is accepted (and differs from the current one), the app MUST:
+  - refuse if a skill subprocess is still running (same idle gate as Update)
+  - persist the **current** session to the **old** watch directory’s `.guisaxs_liveview/session.yaml`
+  - spawn a new `guisaxs-liveview` process with working directory set to the newly selected path (same restart argv family as post-update relaunch)
+  - quit the current process only after the spawn succeeds
+  - leave all further setup to the new process’s cold start (§3.1), including loading that directory’s `session.yaml` when present and applying the “only process new files” rule relative to the new watcher start time
 
 ### 3.3 Live processing evolves during the session
 
-- At launch, the processing pipeline is minimal (State A).
+- At cold start with no persisted session, the processing pipeline is minimal (State A). With a restored `session.yaml`, the session MAY open already in State B or C.
 - User may run calibration (transition to State B).
 - User may set a buffer `.dat` (transition to State C).
 
@@ -199,7 +197,7 @@ In calibrated states, whether analysis runs is determined **only** by the drop-d
 
 **Invariant:** Analysis skills are never run in State A.
 
-**Default:** On app launch and after **change watch directory** (§3.2), analysis mode MUST reset to **`Off`**.
+**Default:** On every cold start (including after **change watch directory** §3.2), analysis windows MUST start **disarmed** (`Off`). Persisted calibration/buffer from the watchdir’s `session.yaml` MAY restore States **B** / **C**; analysis arming is not restored from that file.
 
 ---
 
@@ -254,8 +252,9 @@ Use a three-column main window (a horizontal splitter) consistent with `guisaxs_
 
 #### 6.2.1 Watch directory
 
-- The watch directory MUST be selected using the same dialog/logic as `guisaxs_skills` working-directory selection (see §3.1).
-- After selection, show the chosen watch directory as a **read-only, selectable text** label in the main window header area (matching the `Workdir: ...` label pattern in `guisaxs_skills`).
+- At launch, the watch directory is the process cwd (see §3.1); there is no startup picker.
+- **File → Open working directory…** uses the `guisaxs_skills` working-directory picker to choose a new folder, then performs quit + cold-start relaunch (§3.2).
+- Show the current watch directory as a **read-only, selectable text** label in the main window header area (matching the `Workdir: ...` label pattern in `guisaxs_skills`).
 - Start/Stop watching controls (or Watch toggle), plus current status indicator.
 
 #### 6.2.2 Calibration panel (top)

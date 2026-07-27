@@ -5,13 +5,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt5.QtWidgets import QMessageBox
-
-from ...core.paths import runs_dir
 from ..ingest.dir_tree_observer import TREE_STABILITY, TreeDirObserver, TreeObserverConfig
-from ..pipeline import LiveviewJobExecutor
 from ..ingest.poll_watcher import POLL_TRIGGERED_STABILITY, ProcessedTiffPoller, PollWatcherConfig
-from ..session import load_liveview_session_settings, save_liveview_session_settings
 from ..ingest.stability import StabilityConfig
 from ..session.state import LiveviewWatchMode
 from ..ingest.tiff_revision import TiffRevision, TiffRevisionSource, make_revision
@@ -52,11 +47,6 @@ class LiveviewIngestHandler:
                 stop()
             except Exception:
                 pass
-
-    def reconnect_idle_checks(self, executor: LiveviewJobExecutor) -> None:
-        self._poll_watcher.set_idle_check(executor.is_idle)
-        self._tree_observer.set_idle_check(executor.is_idle)
-        executor.session_file_completed.connect(self._poll_watcher.track_processed_path)
 
     def set_watch_mode(self, new_mode: LiveviewWatchMode) -> None:
         if new_mode == self._c.state.watch_mode:
@@ -139,66 +129,3 @@ class LiveviewIngestHandler:
 
     def _on_revision_from_tree(self, revision: TiffRevision) -> None:
         self._enqueue_revision(revision, stability_cfg=TREE_STABILITY)
-
-
-class LiveviewWatchdirHandler:
-    def __init__(self, controller: LiveviewController) -> None:
-        self._c = controller
-
-    def switch(self, new_p: Path) -> bool:
-        if not self._c.require_idle(
-            "Watch folder",
-            "A skill is still running. Wait for it to finish, then change the watch folder.",
-        ):
-            return False
-        self._c.persist_session_settings()
-        self._c.runner.cancel()
-        if not self._c.runner.wait_until_idle():
-            parent = self._c.parent_widget
-            if parent is not None:
-                QMessageBox.warning(
-                    parent,
-                    "Watch folder",
-                    "The running subprocess did not stop in time. Try again after it finishes.",
-                )
-            return False
-
-        self._c.ingest.stop_all()
-        try:
-            self._c.executor.stop()
-        except Exception:
-            pass
-
-        self._c.state.reset_for_new_watchdir(new_p)
-        load_liveview_session_settings(self._c.state)
-        if self._c.right is not None:
-            self._c.right.reload_configs_from_watchdir()
-        try:
-            self._c.runner.set_workdir(new_p)
-        except RuntimeError:
-            parent = self._c.parent_widget
-            if parent is not None:
-                QMessageBox.warning(parent, "Watch folder", "Cannot switch while a skill is running.")
-            return False
-
-        runs_dir(self._c.state.watchdir).mkdir(parents=True, exist_ok=True)
-        self._c.ingest._poll_watcher.clear()
-        self._c.ingest._tree_observer.clear()
-        try:
-            self._c.executor.deleteLater()
-        except Exception:
-            pass
-        self._c._executor = LiveviewJobExecutor(state=self._c.state, runner=self._c.runner)
-        self._c._connect_executor(self._c._executor)
-        self._c._executor.start()
-        self._c._watchdir = new_p.resolve()
-        self._c.history.clear_2d_cache()
-        self._c.history.reset_index()
-        self._c.ingest.apply_watch_mode_watchers()
-        self._c.ingest.reconnect_idle_checks(self._c.executor)
-        if self._c.right is not None:
-            self._c.right.clear_output_previews()
-            self._c.right.sync_modeling_ui_to_session_state()
-        self._c.session.apply_loaded_to_ui()
-        self._c.history.refresh_chrome()
-        return True

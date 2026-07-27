@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Detector calibration</title>
+<link rel="stylesheet" href="../../style/help.css"/>
+</head>
+<body>
+<p class="nav-top"><a href="index.html">← Algorithms</a> · Detector calibration</p>
+<h1>Detector calibration</h1>
+
+<p><b>Purpose.</b> Detector pixels must be mapped to scattering vector <i>q</i> before integrated curves
+are physically meaningful. A calibrant (typically silver behenate, AgBh) produces known Bragg rings;
+geometry is refined so that those rings sit at the correct radii for the stated wavelength.</p>
+
+<p><b>What autosaxs does (custom).</b> Calibration does <b>not</b> start from a hand-picked beam center.
+The custom ring pipeline:</p>
+<ol>
+<li>Smooths / prepares the calibrant image and finds ring-like sources (log-smoothed Laplacian
+response → clustering of candidate points → circle fits per ring group).</li>
+<li>Estimates an initial sample–detector distance from the <b>innermost</b> detected ring radius and
+the calibrant’s smallest theoretical 2θ at the given wavelength.</li>
+<li>Applies the chosen mask mode (from file / auto beam-stop / combined).</li>
+<li>Hands the geometry guess to <b>pyFAI</b> for final refinement (<code>refine3</code>) and writes a
+reusable integrator under <code>calibration/</code>.</li>
+</ol>
+
+<p><b>What you should set.</b> Wavelength (Å), calibrant name, and a sensible mask. Distance guess is
+optional — the ring-based estimate usually suffices. A bad mask or wrong wavelength will refine to a
+plausible-looking but wrong <i>q</i> scale.</p>
+
+<p><b>Engines.</b> Custom ring finding + pyFAI geometry refinement.</p>
+<p class="nav-top"><a href="integrate_proxy.html">Uncalibrated quick-look →</a> ·
+<a href="../calibration.html">Calibration UI →</a></p>
+</body>
+</html>

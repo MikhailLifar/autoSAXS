@@ -61,5 +61,7 @@ class MonodisperseWizardDialog(QDialog):
         self._wizard.set_running(bool(running))
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        self.closed.emit()
+        # Emit after hide so attention coach sees isVisible() == False.
         super().closeEvent(event)
+        if event.isAccepted():
+            self.closed.emit()

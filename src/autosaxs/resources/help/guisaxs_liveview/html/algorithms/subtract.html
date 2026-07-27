@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Buffer subtraction</title>
+<link rel="stylesheet" href="../../style/help.css"/>
+</head>
+<body>
+<p class="nav-top"><a href="index.html">← Algorithms</a> · Buffer subtraction</p>
+<h1>Buffer subtraction</h1>
+
+<p><b>Purpose.</b> Solute scattering is I<sub>sample</sub> − <i>s</i>·I<sub>buffer</sub>. The hard part is
+choosing the scale <i>s</i> so that solvent / capillary contributions cancel while the solute signal
+remains. Visually, sample and scaled buffer should match in the high-<i>q</i> “tail”, especially past
+the Porod region / before a detector “knee”.</p>
+
+<p><b>What autosaxs does (custom) — default <code>point_match</code>.</b></p>
+<ol>
+<li>Restrict both curves to a user window [<i>q</i><sub>min</sub>, <i>q</i><sub>max</sub>] (liveview:
+<b>q min</b> / <b>q max</b> in <b>Set buffer</b>). Prefer a high-<i>q</i> band where both curves follow a
+simple form, ending just before any sharp knee.</li>
+<li>Fit sample and buffer intensities in that window to analytic forms (default: sample
+<b>Porod + linear</b>, buffer <b>linear</b>; alternatives: Porod or linear alone).</li>
+<li>Set the scale so that at <i>q</i><sub>max</sub>:
+<code>0.995 · I_sample_fit(q_max) = s · I_buffer_fit(q_max)</code>
+(the factor 0.995 keeps the buffer slightly below the sample tail by default).</li>
+<li>Write I<sub>sub</sub> = I<sub>sample</sub> − <i>s</i>·I<sub>buffer</sub> with propagated errors.
+Flag <b>over-subtracted</b> if any point has I<sub>sub</sub>+σ<sub>sub</sub> &lt; 0.</li>
+</ol>
+
+<p>A fixed <b>scaling factor</b> (Subtraction wizard) overrides automatic scaling. Legacy
+<code>match_tail</code> exists but is not the recommended default.</p>
+
+<p><b>Engines.</b> Fully custom (no ATSAS).</p>
+<p class="nav-top"><a href="integrate.html">← Azimuthal integration</a> ·
+<a href="guinier.html">Guinier analysis →</a> ·
+<a href="../main_window.html">Main window (buffer recipes) →</a></p>
+</body>
+</html>

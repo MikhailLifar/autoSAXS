@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Guinier analysis</title>
+<link rel="stylesheet" href="../../style/help.css"/>
+</head>
+<body>
+<p class="nav-top"><a href="index.html">← Algorithms</a> · Guinier analysis</p>
+<h1>Guinier analysis</h1>
+
+<p><b>Purpose.</b> At low <i>q</i>, ln&nbsp;I vs <i>q</i>² is approximately linear for a compact particle.
+The slope gives the radius of gyration Rg; the intercept gives I(0). The chosen interval also defines
+where later tools (GNOM, BODIES) should start reading the curve.</p>
+
+<p><b>What autosaxs does (custom) — adaptive Guinier.</b> Rather than trusting a single fixed window or
+ATSAS AUTORG alone, autosaxs:</p>
+<ol>
+<li>Enumerates many candidate Guinier intervals on the curve.</li>
+<li>Fits each interval and <b>validates</b> the linear model on points beyond the fit window (validation
+R²), not only on the fitted points.</li>
+<li>Selects a winner (preferring validation quality, then interval quality) and classifies the local
+shape: linear / upturn / downturn / chaotic.</li>
+<li>Still reports comparison methods (fixed first-<i>N</i> points, AUTORG when available) for context;
+the <b>adaptive</b> result is the one used downstream when it succeeds.</li>
+</ol>
+
+<p>In liveview you may override <b>first</b> / <b>last</b> (1-based point indices) for a fixed-interval
+fit; that suspends auto-processing until you resume.</p>
+
+<p><b>How to read the UI.</b> Quality / classification / Rg summarize the selected interval. A
+“chaotic” or poor class means the low-<i>q</i> region is unreliable for Rg even if a number is shown —
+treat GNOM and shape steps with caution.</p>
+
+<p><b>Engines.</b> Custom adaptive search (+ optional ATSAS AUTORG for comparison).</p>
+<p class="nav-top"><a href="subtract.html">← Buffer subtraction</a> ·
+<a href="fit_distances.html">p(r) →</a></p>
+</body>
+</html>

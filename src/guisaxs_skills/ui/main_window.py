@@ -83,7 +83,6 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(container)
         layout.setContentsMargins(6, 6, 6, 6)
         self._workdir_label = QLabel(f"Workdir: {workdir}")
-        self._workdir_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self._workdir_label)
         layout.addWidget(self._splitter, 1)
         self.setCentralWidget(container)

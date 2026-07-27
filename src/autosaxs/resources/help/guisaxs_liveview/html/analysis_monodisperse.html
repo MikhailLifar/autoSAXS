@@ -6,30 +6,68 @@
 <link rel="stylesheet" href="../style/help.css"/>
 </head>
 <body>
+<p class="nav-top"><a href="main_window.html">← Main window</a> · Monodisperse</p>
 <h1>Monodisperse analysis</h1>
-<p>Open the monodisperse analysis wizard from the right-column icon (or focus it if already open).
-While the window is open, new TIFFs run Guinier → GNOM → optional shape automatically.
-Selecting BODIES, DAMMIF, or DENSS is <b>configuration</b> for automatic TIFF processing — it does not pause the queue.
-Guinier artifacts are stored under <code>guinier_mono/</code> (separate from polydisperse).</p>
-<h2>Guinier</h2>
-<p><b>fit_guinier</b>. Interval edits pause auto-processing and re-run Guinier then GNOM for the current profile (shape is not chained from this manual edit).</p>
-<h2>p(r)</h2>
-<p><b>fit_distances</b> (AUTORG + GNOM). Wizard options: <code>fit_distances/fit_distances.conf</code>.
-Per-TIFF results: <code>fit_distances/&lt;stem&gt;/</code> — fit PNG, p(r) plot, GNOM .out.
-Editing GNOM parameters re-runs GNOM only; use <b>Re-run shape</b> if you also need DAMMIF/BODIES/DENSS again.</p>
-<h2>DAM</h2>
-<p>When DAMMIF is selected, automatic TIFF jobs run Guinier → GNOM → <b>model_dam</b> (FAST) on the GNOM output.
-If you select DAMMIF while a TIFF job is already mid-run (Guinier/GNOM), a shape follow-up job runs after that job finishes.
-Additional folder: <code>dammif/&lt;stem&gt;/</code> — bead model, CIF, 3D preview.</p>
-<h2>DENSS</h2>
-<p>When DENSS is selected, automatic TIFF jobs run Guinier → GNOM → <b>model_density</b>.
-Default protocol is <b>pilot</b> (single reconstruction). <b>average</b>/<b>refined</b> run denss-all (and refine).
-The 3D view is a dark point cloud (ρ ≥ 15% of max): point density, cold color, and opacity encode electron density;
-fullscreen dialog can toggle color/opacity to the ensemble σ map when present.
-Per-TIFF: <code>denss/&lt;stem&gt;/</code> — MRC density, optional σ map, I(q) fit.</p>
-<h2>Primitives</h2>
-<p>When BODIES is selected, automatic TIFF jobs include <b>model_bodies</b> after GNOM.
-Shape list: <code>model_bodies/model_bodies.conf</code>.
-Per-TIFF: <code>model_bodies/&lt;stem&gt;/</code> — CSV, fit PNGs, 3D for best shape.</p>
+
+<p>Open this window from the right-column monodisperse icon. While it stays open, new TIFFs that reach a
+calibrated (and optionally subtracted) 1D profile run <b>Guinier → GNOM (p(r)) → optional shape</b>
+automatically. Closing the window disarms that chain. Selecting BODIES, DAMMIF, or DENSS configures
+what shape step follows GNOM for automatic jobs; it does not by itself pause the queue.</p>
+
+<p>Manual edits in Guinier or GNOM pause auto-processing until you <b>Resume auto-processing</b>.
+Guinier artifacts for this window live under <code>guinier_mono/</code> (separate from polydisperse).</p>
+
+<p class="shot-wrap"><img class="shot" src="assets/mono_overview.png" alt="Monodisperse analysis window"/></p>
+<h2>Layout</h2>
+<ul>
+<li><b>Guinier</b> — plot; Quality / Classification / Rg; <b>first</b> / <b>last</b> (auto allowed).</li>
+<li><b>GNOM</b> — <b>I(q)</b> and <b>P(r)</b>; Rg, first, last, smooth.</li>
+<li><b>Shape</b> — <b>None</b> / <b>BODIES</b> / <b>DAMMIF</b> / <b>DENSS</b>; <b>Re-run shape</b>; I(q) fit,
+3D preview, controls.</li>
+<li>Global — <b>Stop auto-processing</b> / <b>Resume auto-processing</b>.</li>
+</ul>
+
+<h2>Recipes</h2>
+
+<div class="recipe">
+<h3>To arm monodisperse analysis</h3>
+<p>Main window right → monodisperse icon → window opens (armed while open).</p>
+<p class="shot-wrap"><img class="shot" src="assets/main_mono_icon.png" alt="Highlight monodisperse analysis icon"/></p>
+</div>
+
+<div class="recipe">
+<h3>To change Guinier limits</h3>
+<p>Edit <b>first</b> / <b>last</b> → auto-processing pauses → Guinier then GNOM re-run for the current
+profile → <b>Resume auto-processing</b> when ready for new files.</p>
+</div>
+
+<div class="recipe">
+<h3>To adjust GNOM</h3>
+<p>Edit GNOM parameters → GNOM re-runs for the current profile → use <b>Re-run shape</b> if you also need
+BODIES / DAMMIF / DENSS again → <b>Resume auto-processing</b> if paused.</p>
+</div>
+
+<div class="recipe">
+<h3>To enable shape modeling</h3>
+<p>Under <b>Shape</b>, choose <b>BODIES</b>, <b>DAMMIF</b>, or <b>DENSS</b> (and options as needed). New TIFF
+jobs include that step after GNOM. Use <b>Re-run shape</b> for the current profile;
+<b>Open model folder…</b> opens the on-disk 3D outputs.</p>
+</div>
+
+<div class="recipe">
+<h3>To pause or resume the auto chain</h3>
+<p><b>Stop auto-processing</b> → new files skip analysis until <b>Resume auto-processing</b>.</p>
+</div>
+
+<h2>Outputs (per TIFF)</h2>
+<ul>
+<li><code>guinier_mono/&lt;stem&gt;/</code> — Guinier region / quality</li>
+<li><code>fit_distances/&lt;stem&gt;/</code> — GNOM <code>.out</code>, p(r) / fit plots</li>
+<li><code>model_bodies/</code>, <code>dammif/</code>, or <code>denss/</code> under the stem when shape is enabled</li>
+</ul>
+
+<p class="nav-top"><a href="analysis_polydisperse.html">Polydisperse →</a> ·
+<a href="algorithms/guinier.html">Algorithms: Guinier</a> ·
+<a href="algorithms/fit_distances.html">p(r)</a></p>
 </body>
 </html>

@@ -6,6 +6,7 @@ from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QAction,
+    QApplication,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -14,6 +15,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ..logic.app_relaunch import launch_guisaxs_liveview
 from ..logic.path_display import contracted_path_label
 from ..ui.about_dialog import AboutDialog
 from ..ui.html_help_dialog import HtmlHelpDialog
@@ -47,7 +49,6 @@ class LiveviewMainWindow(QMainWindow):
         self._left.set_coach_peers(
             middle=self._middle,
             right=self._right,
-            has_processed_images=lambda: bool(self._controller.executor.session_processed_tiffs),
         )
         self._left.refresh_attention_coach()
 
@@ -57,7 +58,6 @@ class LiveviewMainWindow(QMainWindow):
         wd_short, wd_full = contracted_path_label(watchdir)
         self._watchdir_label = QLabel(wd_short)
         self._watchdir_label.setToolTip(f"Working dir\n{wd_full}")
-        self._watchdir_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self._watchdir_label)
         layout.addWidget(self._splitter, 1)
         self.setCentralWidget(container)
@@ -70,6 +70,7 @@ class LiveviewMainWindow(QMainWindow):
         self._wire_ui()
         self._sub_wizard: SubtractionWizardDialog | None = None
         self._sub_apply_pending = False
+        self._help_dialog: HtmlHelpDialog | None = None
 
     def _enforce_column_width_ratio(self) -> None:
         sp = self._splitter
@@ -152,9 +153,23 @@ class LiveviewMainWindow(QMainWindow):
             self._act_switch_tree.setVisible(not tree)
 
     def _on_help_requested(self) -> None:
+        dlg = self._help_dialog
+        if dlg is not None:
+            try:
+                if dlg.isVisible():
+                    dlg.raise_()
+                    dlg.activateWindow()
+                    return
+            except RuntimeError:
+                self._help_dialog = None
+                dlg = None
         dlg = HtmlHelpDialog(title="guisaxs-liveview Help", parent=self)
-        if dlg.is_ready():
-            dlg.exec_()
+        if not dlg.is_ready():
+            return
+        self._help_dialog = dlg
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def _on_about_requested(self) -> None:
         AboutDialog(parent=self).exec_()
@@ -191,12 +206,24 @@ class LiveviewMainWindow(QMainWindow):
         new_p = Path(chosen).resolve()
         if new_p == self._controller.watchdir:
             return
-        if not self._controller.switch_watchdir(new_p):
+        if not self._controller.require_idle(
+            "Watch folder",
+            "A skill is still running. Wait for it to finish, then change the watch folder.",
+        ):
             return
-        wd_short, wd_full = contracted_path_label(new_p)
-        self._watchdir_label.setText(wd_short)
-        self._watchdir_label.setToolTip(f"Working dir\n{wd_full}")
-        self._sync_watch_mode_menu()
+        self._controller.persist_session_settings()
+        try:
+            launch_guisaxs_liveview(cwd=new_p)
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                "Watch folder",
+                f"Could not restart guisaxs-liveview:\n{exc}",
+            )
+            return
+        app = QApplication.instance()
+        if app is not None:
+            QTimer.singleShot(0, app.quit)
 
     def _wire_ui(self) -> None:
         self._left.calibration_changed.connect(self._controller.run_calibration)

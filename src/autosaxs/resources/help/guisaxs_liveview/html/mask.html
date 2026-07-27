@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Mask</title>
+<link rel="stylesheet" href="../style/help.css"/>
+</head>
+<body>
+<p class="nav-top"><a href="calibration.html">← Calibration</a> · Mask</p>
+<h1>Mask</h1>
+
+<p>The <b>Create / edit mask</b> window draws beam-stop and bad-pixel masks for calibration. Open it from
+the calibration wizard via <b>Create mask</b> (or by left-clicking the calibrant image when one is loaded).
+Saved masks are referenced by the calibration form’s mask path and used when you <b>Run</b> calibration.</p>
+
+<p>Work on the canvas with a drawing mode (polygon, pixel, or rectangular), undo as needed, then
+<b>Save mask</b>. Prefer excluding the beam-stop and obvious dead regions before running calibration.</p>
+
+<p class="shot-wrap"><img class="shot" src="assets/mask_overview.png" alt="Mask wizard overview"/></p>
+<h2>Layout</h2>
+<ul>
+<li><b>Inputs</b> — <b>Calibration image (.tif)</b>, <b>Mask path</b>.</li>
+<li><b>Tools</b> — <b>Mode:</b> Polygon / Pixel / Rectangular; undo / clear buttons; help <b>?</b>.</li>
+<li><b>Canvas</b> — draw and preview the mask over the calibration image.</li>
+<li><b>Save mask</b> — writes the mask file and returns the path to the calibration wizard.</li>
+</ul>
+
+<h2>Recipes</h2>
+
+<div class="recipe">
+<h3>To open the mask wizard</h3>
+<p>From <a href="calibration.html">Calibration</a>: <b>Create mask</b> (or left-click the loaded calibrant
+image when not zooming/panning).</p>
+</div>
+
+<div class="recipe">
+<h3>To draw a polygon mask</h3>
+<p>Set <b>Mode:</b> to <b>Polygon</b> → click vertices on the canvas to add points →
+<b>double-click</b> to finish the current polygon. Use <b>Undo last point</b> /
+<b>Undo last polygon</b> if needed. You can draw multiple polygons; their interiors are combined.</p>
+</div>
+
+<div class="recipe">
+<h3>To draw a rectangular mask</h3>
+<p>Set <b>Mode:</b> to <b>Rectangular</b> → first click sets the top-left corner → second click sets the
+bottom-right corner and finishes the rectangle. Use <b>Undo last corner</b> /
+<b>Undo last rectangle</b> if needed. You can draw multiple rectangles; their interiors are combined.
+<b>Clear all</b> starts over.</p>
+</div>
+
+<div class="recipe">
+<h3>To draw a pixel mask</h3>
+<p>Set <b>Mode:</b> to <b>Pixel</b> → click a pixel on the canvas to mask or unmask it (masked pixels
+show in red). Use <b>Undo last edit</b> to reverse the last toggle. <b>Clear all</b> starts over.</p>
+</div>
+
+<div class="recipe">
+<h3>To save the mask</h3>
+<p>Confirm <b>Mask path</b> → <b>Save mask</b> → wizard commits the file and updates the calibration form.</p>
+<p class="shot-wrap"><img class="shot" src="assets/mask_save.png" alt="Highlight Save mask"/></p>
+</div>
+
+<p class="nav-top"><a href="calibration.html">← Calibration</a> · <a href="main_window.html">Main window</a></p>
+</body>
+</html>

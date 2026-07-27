@@ -38,8 +38,8 @@ Each entry links to a procedure doc. Purpose and use-cases come from that file (
 ## Sequencing
 
 - Common patterns: calibration / geometry → azimuthal integration → buffer subtraction (if the notion of buffer is applicable)  → plots → analysis / fits.  
-  - Typical monodisperse analysis: **fit-distances → model-dam or model-density** (bead model vs continuous density; prefer model-dam as the most well-established approach)  
-  - Typical polydisperse analysis (assuming spherical shape of the particles): **fit-sizes → model-dr-mc → model-mixture**  
+  - Typical monodisperse analysis: **fit-guinier → analyze-kratky → fit-distances → model-dam or model-density** (bead model vs continuous density; prefer model-dam as the most well-established approach)  
+  - Typical polydisperse analysis (assuming spherical shape of the particles): **fit-guinier → fit-sizes → model-dr-mc → model-mixture**. **fit-guinier** usually outputs low quality fit in polydisperse case, this is normal.  
 - State the sequence as explicit steps: **order → subskill path → rationale → what is still unknown or assumed**.  
 - After a step completes, **revisit the plan** before pulling in additional leaf skills.  
 
@@ -62,6 +62,7 @@ When you need to inspect, transform, or create SAXS data files from Python, pref
 ## Notes
 Some skills create per-sample dirs outputs within output dir, and some do not. Read the documentation carefully.  
 GNOM skills (`fit-distances`, `fit-sizes`) results are preliminary - don't ever present them as the final scientific results. Modeling skills results (`model-dam`, `model-density`, `model-mixture`) are the final.  
+GNOM quality checks are important indicators, which should not be ignored. By default, you should not run complex modeling if GNOM checks indicate poor data quality and unreliable fit. If the user insists on modeling, despite checks, then you should do it.
 
 ## Implementation note (`autosaxs`)
 

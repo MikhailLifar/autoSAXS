@@ -64,7 +64,6 @@ class LiveviewLeftPanel(QWidget):
         self._buf_wizard: BufferWizardDialog | None = None
         self._middle = None
         self._right = None
-        self._has_processed_images = None
 
         self._cal_group = QGroupBox("Calibration")
         self._cal_open = QPushButton("Set calibration")
@@ -127,11 +126,10 @@ class LiveviewLeftPanel(QWidget):
         self._refresh_buffer_preview_from_state()
         self.refresh_attention_coach()
 
-    def set_coach_peers(self, *, middle, right, has_processed_images=None) -> None:
+    def set_coach_peers(self, *, middle, right) -> None:
         """Middle/right panels used for post-setup coaching (canvas + analysis icons)."""
         self._middle = middle
         self._right = right
-        self._has_processed_images = has_processed_images
 
     def refresh_attention_coach(self) -> None:
         """Pulse the next calibration / buffer / analysis setup control(s)."""
@@ -182,13 +180,7 @@ class LiveviewLeftPanel(QWidget):
             analysis_open = False
             if right is not None and hasattr(right, "analysis_windows_open"):
                 analysis_open = bool(right.analysis_windows_open())
-            processed = False
-            if callable(self._has_processed_images):
-                try:
-                    processed = bool(self._has_processed_images())
-                except Exception:
-                    processed = False
-            if not analysis_open and not processed:
+            if not analysis_open:
                 if right is not None:
                     if hasattr(right, "mono_analysis_button"):
                         targets.append(right.mono_analysis_button())

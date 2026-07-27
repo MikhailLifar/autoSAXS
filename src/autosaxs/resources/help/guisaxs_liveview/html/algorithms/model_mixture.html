@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Parametric sphere mixture</title>
+<link rel="stylesheet" href="../../style/help.css"/>
+</head>
+<body>
+<p class="nav-top"><a href="index.html">← Algorithms</a> · Parametric sphere mixture</p>
+<h1>Parametric sphere mixture</h1>
+
+<p><b>Purpose.</b> When <i>D</i>(<i>R</i>) or I(<i>q</i>) suggests one or more spherical populations,
+a parametric mixture (mean radii, polydispersities, volume fractions) is a compact physical model —
+easier to interpret than a free <i>D</i>(<i>R</i>) alone, and useful for comparing samples.</p>
+
+<p><b>Engine.</b> ATSAS <b>MIXTURE</b> fits hard-sphere populations. Autosaxs decides <b>which models to
+try</b> and <b>which fit wins</b>.</p>
+
+<p><b>What autosaxs adds (custom).</b></p>
+<ol>
+<li>Runs a fixed grid over phase count (up to <code>max_nph</code>, default 3) and size-distribution
+families (Gauss / Schultz) for SPHERE phases.</li>
+<li>Applies careful initialization (e.g. radius / polydispersity bounds; defaults for <i>r</i><sub>max</sub>
+often taken from <a href="fit_sizes.html">fit_sizes</a> when unset).</li>
+<li>Selects the preferred model by minimizing <b>BIC<sub>log</sub></b> (Bayesian information criterion
+on the log-intensity fit), balancing goodness-of-fit against extra phases.</li>
+<li>Writes comparison plots and a results table so you can inspect runners-up, not only the winner.</li>
+</ol>
+
+<p>Enable MIXTURE in the polydisperse window when you want this step after D(R); it is optional.</p>
+
+<p class="nav-top"><a href="fit_sizes.html">← D(R)</a> ·
+<a href="model_bodies.html">Geometric bodies →</a></p>
+</body>
+</html>

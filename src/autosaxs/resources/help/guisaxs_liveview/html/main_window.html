@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Main window</title>
+<link rel="stylesheet" href="../style/help.css"/>
+</head>
+<body>
+<p class="nav-top"><a href="index.html">Welcome</a> · Main window</p>
+<h1>Main window</h1>
+
+<p><b>guisaxs-liveview</b> is a three-column desktop app that watches a working directory for new
+<code>.tif</code> / <code>.tiff</code> detector frames, queues them, and runs them through calibration,
+integration, optional buffer subtraction, and optional analysis. The middle column is the live stage
+(queue, 2D drop target, 1D / subtraction plots, session history). The left column holds setup wizards
+(calibration and buffer). The right column opens analysis windows and shows the live log.</p>
+
+<p>For how the pieces fit together (working directory, queue, auto vs manual, TIFF revision), see
+<a href="concepts.html">Concepts</a>.</p>
+
+<p>Typical session workflow:</p>
+<ol>
+<li><b>Calibrate</b> (once per geometry) — see <a href="calibration.html">Calibration</a>.</li>
+<li>Optionally <b>integrate a buffer TIFF</b>, then <b>set buffer</b> (subtraction settings for the session).</li>
+<li><b>Integrate</b> sample TIFFs (automatic as they arrive, or via <b>Process</b> on history).</li>
+<li>With buffer configured, each sample is <b>subtracted</b> automatically; adjust scaling in the
+Subtraction wizard if needed.</li>
+<li>Optionally open <a href="analysis_monodisperse.html">Monodisperse</a> or
+<a href="analysis_polydisperse.html">Polydisperse</a> analysis so new files run those chains while the
+window stays open.</li>
+</ol>
+
+<p class="shot-wrap"><img class="shot" src="assets/main_overview.png" alt="Main window overview"/></p>
+<h2>Layout</h2>
+<ul>
+<li><b>Menu</b> — File (working directory, Advanced flat/tree, Exit), Update, Help.</li>
+<li><b>Working dir line</b> — contracted path; tooltip shows the full path.</li>
+<li><b>Left</b> — <b>Set calibration</b> / <b>Reset</b>; <b>Set buffer</b> / <b>Reset</b>; previews.</li>
+<li><b>Middle</b> — queue status, <b>2D</b> (<b>Drop .tif</b>), <b>1D</b> or <b>S + buffer</b> / <b>Sub</b>,
+history <b>&lt;</b> <b>&gt;</b> <b>Process</b>.</li>
+<li><b>Right</b> — Analysis icons (monodisperse / polydisperse), <b>Logs</b> (<b>Full</b> / <b>App</b>).</li>
+</ul>
+
+<h2>Recipes</h2>
+
+<div class="recipe">
+<h3>To calibrate</h3>
+<p><b>Set calibration</b> (left) → wizard opens → set calibrant / mask / options → <b>Run</b> → wait for Idle →
+<b>Close</b>. Details: <a href="calibration.html">Calibration</a> (mask editing:
+<a href="mask.html">Mask</a>).</p>
+<p class="shot-wrap"><img class="shot" src="assets/main_set_calibration.png" alt="Highlight Set calibration"/></p>
+</div>
+
+<div class="recipe">
+<h3>To feed images</h3>
+<p>Drop <code>.tif</code> / <code>.tiff</code> onto the middle <b>2D</b> panel (<b>Drop .tif</b>), or copy files
+into the working directory after the app has started. See also
+<a href="concepts.html">Concepts</a> (feeding / queue / revision).</p>
+<p class="shot-wrap"><img class="shot" src="assets/main_drop_tif.png" alt="Highlight Drop .tif"/></p>
+</div>
+
+<div class="recipe">
+<h3>To set buffer (subtraction settings)</h3>
+<p>Integrate a buffer frame first (drop a buffer TIFF and wait for
+<code>averaged/int_&lt;stem&gt;.dat</code>). Then:</p>
+<p><b>Set buffer</b> (left) → wizard opens → choose <b>buffer_1d</b> <code>.dat</code> → set <b>q min</b> /
+<b>q max</b> (matching window for auto-scale) → <b>Apply subtraction settings</b> → <b>Close</b>.</p>
+<p>Settings stay in the session and apply to new samples. Outputs go under <code>subtracted/</code>.</p>
+<p class="shot-wrap"><img class="shot" src="assets/main_set_buffer.png" alt="Highlight Set buffer"/></p>
+<p class="shot-wrap"><img class="shot" src="assets/main_buffer_wizard.png" alt="Buffer wizard Apply subtraction settings"/></p>
+</div>
+
+<div class="recipe">
+<h3>To adjust subtraction for the current file</h3>
+<p>After buffer is configured and a sample has been subtracted (middle shows <b>S + buffer</b> / <b>Sub</b>):
+click the <b>S + buffer</b> plot → Subtraction wizard opens → change <b>Scaling factor</b> → <b>Apply</b>
+(rewrites the subtracted curve and may re-run analysis) → close the wizard.</p>
+<p class="shot-wrap"><img class="shot" src="assets/main_s_buffer.png" alt="Highlight S + buffer plot"/></p>
+<p class="shot-wrap"><img class="shot" src="assets/main_subtraction_wizard.png" alt="Subtraction wizard"/></p>
+</div>
+
+<div class="recipe">
+<h3>To revisit a processed file</h3>
+<p>Use history <b>&lt;</b> / <b>&gt;</b> to step through session files. <b>Process</b> re-enqueues the selected
+file through the live pipeline (same as a new upload).</p>
+<p class="shot-wrap"><img class="shot" src="assets/main_process_history.png" alt="History and Process"/></p>
+</div>
+
+<div class="recipe">
+<h3>To arm analysis</h3>
+<p>Right column → click the monodisperse or polydisperse icon → window opens and that chain is armed for
+new TIFFs while it stays open. Closing the window disarms that chain.</p>
+<p class="shot-wrap"><img class="shot" src="assets/main_analysis_icons.png" alt="Analysis icons"/></p>
+</div>
+
+<p class="nav-top"><a href="calibration.html">Calibration →</a> ·
+<a href="analysis_monodisperse.html">Monodisperse →</a> ·
+<a href="analysis_polydisperse.html">Polydisperse →</a></p>
+</body>
+</html>

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Concepts</title>
+<link rel="stylesheet" href="../style/help.css"/>
+</head>
+<body>
+<p class="nav-top"><a href="index.html">Welcome</a> · Concepts</p>
+<h1>Concepts</h1>
+
+<p>This page is a mental model of how <b>guisaxs-liveview</b> behaves — for someone who already
+understands SAXS (frames → I(q) → subtraction → Guinier / GNOM / …) and wants to know how the app
+organizes that work. It is not a click-by-click manual; recipes live on the
+<a href="main_window.html">Main window</a> and wizard pages. Scientific procedures:
+<a href="algorithms/index.html">Algorithms</a>.</p>
+
+<div class="note">Rough reading order below matches how a beamline session usually unfolds:
+where files live → how frames enter → what runs → how you steer it → where results appear.</div>
+
+<h2>Working directory</h2>
+<p>The <b>working directory</b> (path under the menu bar; tooltip shows the full path) is the folder
+the app watches and, in the usual flat layout, where pipeline outputs are written. Session settings
+(watch mode, calibration, buffer / subtraction options) are remembered under that folder in
+<code>.guisaxs_liveview/session.yaml</code>.</p>
+<p><b>File → Open working directory…</b> switches folders: the current session is saved, the app
+restarts on the new directory, and any saved session there is reloaded. You cannot switch while a
+skill is still running.</p>
+
+<h2>How frames enter the app</h2>
+<p>New detector images are <code>.tif</code> / <code>.tiff</code> files that appear <b>after</b> the app
+has started. Typical paths:</p>
+<ul>
+<li>Drag-and-drop onto the middle <b>2D</b> panel (<b>Drop .tif</b>) — files outside the working
+directory are <b>copied</b> into it, then queued.</li>
+<li>Copy or save TIFFs into the watch folder from the beamline software or a script.</li>
+</ul>
+<p>TIFFs already sitting in the folder at launch are <b>not</b> auto-queued. To process them, drop them
+again, overwrite them, or use history <b>Process</b> after they have been seen once in this session.</p>
+
+<h2>Flat vs tree layout</h2>
+<p>Under <b>File → Advanced…</b> you choose how discovery and outputs are organized
+(only when the queue is idle):</p>
+<ul>
+<li><b>Flat directory</b> (default) — watches only the <b>top-level</b> working directory (not nested
+folders); outputs (<code>averaged/</code>, <code>subtracted/</code>, analysis folders, …) live under
+that same root. Suits a single beamline hot folder.</li>
+<li><b>Tree directory</b> — discovers TIFFs recursively; each TIFF’s outputs sit beside it in its
+own folder tree. Suits experiments already organized in nested directories.</li>
+</ul>
+
+<h2>The task queue</h2>
+<p>Everything the app does to a TIFF (integrate, subtract, analysis steps) goes through a single
+sequential <b>queue</b>. The middle status line shows:</p>
+<ul>
+<li><b>Idle</b> — nothing waiting or running.</li>
+<li><b>Queue · N</b> — work remaining (incoming files + pending / current jobs), with the current
+file path when busy.</li>
+</ul>
+<p>Jobs for different files are handled one after another (FIFO). If the same TIFF path is revised
+while still queued, the queue updates that slot instead of stacking duplicate work.</p>
+
+<h2>What each TIFF goes through</h2>
+<p>Think of a per-file pipeline whose length depends on what you have configured:</p>
+<ol>
+<li><b>Integrate</b> — always. Before calibration succeeds, this is a coarse <b>proxy</b> curve
+(pixel-like axis, under <code>averaged_proxy/</code>). After <b>Set calibration</b>, you get calibrated
+I(q) under <code>averaged/</code>.</li>
+<li><b>Subtract</b> — only if you applied <b>Set buffer</b> for the session. Then each sample gets a
+buffer-subtracted curve under <code>subtracted/</code>, and the middle column shows <b>S + buffer</b> /
+<b>Sub</b> instead of a single <b>1D</b> plot.</li>
+<li><b>Analyze</b> — only while an analysis window is open (see next section).</li>
+</ol>
+<p>Calibration and buffer are <b>session setup</b>, not per-file wizards you repeat for every frame.</p>
+
+<h2>Auto processing vs manual control</h2>
+<p>By default the app is in <b>auto</b> mode: when a TIFF reaches the front of the queue, the current
+pipeline runs without further clicks.</p>
+<p><b>Arming analysis.</b> Opening the monodisperse or polydisperse window from the right-column icons
+<b>arms</b> that analysis chain for new files while the window stays open. Closing the window disarms
+it. With neither open, only integrate (+ subtract if configured) runs. Both windows may be open;
+each keeps its own chain and output tree
+(<a href="analysis_monodisperse.html">Monodisperse</a> /
+<a href="analysis_polydisperse.html">Polydisperse</a>).</p>
+<p><b>Pausing auto analysis.</b> On an analysis window, <b>Stop auto-processing</b> /
+<b>Resume auto-processing</b> suspend or restore automatic TIFF analysis (you can still run manual /
+wizard actions). Editing Guinier / GNOM parameters or applying a new subtraction scale also moves you
+into a more manual posture until you resume.</p>
+<p><b>Manual re-run of a file.</b> History <b>Process</b> re-enqueues the selected TIFF through the same
+live pipeline as a new upload — useful after changing calibration, buffer, or analysis settings.</p>
+
+<h2>Session history</h2>
+<p>After at least one TIFF finishes in this run, the middle column shows <b>&lt;</b> / <b>&gt;</b> and
+<b>Process</b>. Stepping history reloads that file’s plots from disk for review; it does <b>not</b>
+re-run skills by itself (missing artifacts leave plots empty). While you are looking at an older entry,
+the live “tail” of new files does not force the view forward until you step to the latest again.</p>
+
+<h2>TIFF revision (same name, new content)</h2>
+<p>Beamlines often overwrite <code>sample.tif</code> in place. Liveview treats a replaced (or
+overwrite-detected) TIFF as a <b>revision</b> of that path: queued work for it is superseded, and the
+pipeline runs again on the new bytes. In flat mode a poll watcher also helps catch NFS-style overwrites
+of existing names. <b>Process</b> on history is the explicit version of the same idea. After a successful
+re-run, that path is treated as the latest session entry.</p>
+
+<h2>Where results live</h2>
+<p>Under the output root (working directory in flat mode; next to the TIFF in tree mode):</p>
+<ul>
+<li><code>runs/latest/</code> — last skill request/result logs (<code>request.yml</code>,
+<code>result.yml</code>, <code>stdout.log</code>, <code>stderr.log</code>)</li>
+<li><code>calibration/</code> — integrator and refined geometry</li>
+<li><code>averaged_proxy/</code>, <code>averaged/</code> — 1D curves before / after calibration</li>
+<li><code>subtracted/</code> — buffer-subtracted curves</li>
+<li><code>guinier_mono/</code>, <code>guinier_poly/</code>, <code>fit_distances/</code>,
+<code>fit_sizes/</code>, <code>model_bodies/</code>, <code>dammif/</code>, <code>denss/</code>,
+<code>mixture/</code> — analysis products when those chains are armed (often per-TIFF subfolders)</li>
+</ul>
+<p>Shared wizard configs (for example <code>fit_distances.conf</code>) sit next to per-stem folders.
+Calibration / buffer source files keep their original paths; they are not copied into the working dir
+unless you drop them there yourself.</p>
+
+<h2>Logs</h2>
+<p>The right column <b>Logs</b> panel has two tabs: <b>Full</b> (skill stdout/stderr plus app messages)
+and <b>App</b> (arming, queue notices, and other application-level lines). Use <b>App</b> when you want
+a quieter trail of what the GUI decided; use <b>Full</b> when a skill fails and you need the underlying
+tool output.</p>
+
+<h2>Pulsing next-step hints</h2>
+<p>A blue pulsing border on a control is not a separate mode — it is a soft hint for the next likely
+setup action (for example <b>Set calibration</b>, then later <b>Set buffer</b>, an empty <b>Drop .tif</b>
+target, analysis icons, or <b>Resume auto-processing</b> when auto analysis is paused). You can ignore
+it and use the menus and buttons directly.</p>
+
+<p class="nav-top"><a href="main_window.html">Main window (recipes) →</a> ·
+<a href="algorithms/index.html">Algorithms →</a> ·
+<a href="troubleshooting.html">Troubleshooting →</a></p>
+</body>
+</html>

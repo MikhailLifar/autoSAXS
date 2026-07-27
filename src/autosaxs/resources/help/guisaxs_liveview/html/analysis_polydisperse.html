@@ -6,31 +6,60 @@
 <link rel="stylesheet" href="../style/help.css"/>
 </head>
 <body>
+<p class="nav-top"><a href="main_window.html">← Main window</a> · Polydisperse</p>
 <h1>Polydisperse analysis</h1>
-<p>Open the <b>Polydisperse analysis</b> window from the right-column icon (same chrome pattern as monodisperse).
-While it is open, new TIFFs run that chain automatically. Guinier for this window is independent of monodisperse
-and is stored under <code>guinier_poly/</code>.</p>
 
-<h2>Window panes</h2>
-<ol>
-<li><b>Guinier</b> — runs <code>fit_guinier</code> independently for display / quality.
-Interval edits do <b>not</b> feed <code>fit_sizes</code> (polydisperse Guinier is often poor; that is expected).</li>
-<li><b>fit_sizes (D(R))</b> — ATSAS GNOM system=1 (spheres). Default <code>first=1</code> (editable).
-Shows I(q) and D(R) from source data (<code>.out</code>, D(R) CSV), plus Shannon <code>s_min</code> diagnostics.
-Param edits re-run <code>fit_sizes</code> (debounced).</li>
-<li><b>model_mixture</b> — optional (radio None / Mixture; default None).
-When enabled, auto TIFF jobs include <code>model_mixture</code>.
-<code>r_max</code> / <code>poly_max</code> start as <b>(auto)</b> (skill derives them; controls update after the run).
-Use the model selector to explore individual MIXTURE fits (best selected by default).</li>
-</ol>
+<p>Open this window from the right-column polydisperse icon. While it stays open, new TIFFs run
+<b>Guinier → fit_sizes (D(R)) → optional MIXTURE</b> automatically. Closing the window disarms that chain.
+Guinier here is independent of the monodisperse window and is stored under <code>guinier_poly/</code>.</p>
+
+<p>Polydisperse Guinier quality is often poor; that is expected and does not feed <code>fit_sizes</code>.
+Parameter edits pause auto-processing until you <b>Resume auto-processing</b>.</p>
+
+<p class="shot-wrap"><img class="shot" src="assets/poly_overview.png" alt="Polydisperse analysis window"/></p>
+<h2>Layout</h2>
+<ul>
+<li><b>Guinier</b> — independent display / quality (same style as monodisperse Guinier pane).</li>
+<li><b>GNOM D(R)</b> — <b>I(q)</b> and <b>D(R)</b>; first, last, rmin, rmax, alpha.</li>
+<li><b>D(R)</b> mixture pane — <b>None</b> / <b>MIXTURE</b>; <b>Re-run D(R)</b>; model and range controls.</li>
+<li>Global — <b>Stop auto-processing</b> / <b>Resume auto-processing</b>.</li>
+</ul>
+
+<h2>Recipes</h2>
+
+<div class="recipe">
+<h3>To arm polydisperse analysis</h3>
+<p>Main window right → polydisperse icon → window opens (armed while open).</p>
+<p class="shot-wrap"><img class="shot" src="assets/main_poly_icon.png" alt="Highlight polydisperse analysis icon"/></p>
+</div>
+
+<div class="recipe">
+<h3>To adjust D(R) / fit_sizes</h3>
+<p>Edit first / last / rmin / rmax / alpha in <b>GNOM D(R)</b> → fit_sizes re-runs (debounced) for the
+current profile → <b>Resume auto-processing</b> if paused.</p>
+</div>
+
+<div class="recipe">
+<h3>To enable MIXTURE</h3>
+<p>Under the mixture pane, choose <b>MIXTURE</b> (vs <b>None</b>) → set model / ranges as needed → new TIFF
+jobs include <code>model_mixture</code>. Use <b>Re-run D(R)</b> for the current profile. <code>r_max</code> /
+<code>poly_max</code> may start as <b>(auto)</b> and update after the run.</p>
+</div>
+
+<div class="recipe">
+<h3>To pause or resume the auto chain</h3>
+<p><b>Stop auto-processing</b> → <b>Resume auto-processing</b> when ready.</p>
+</div>
 
 <h2>Outputs (per TIFF)</h2>
 <ul>
 <li><code>guinier_poly/&lt;stem&gt;/</code> — Guinier region YAML</li>
 <li><code>fit_sizes/&lt;stem&gt;/</code> — GNOM <code>.out</code>, D(R) CSV, quality YAML</li>
-<li><code>mixture/&lt;stem&gt;/</code> — per-model work dirs, <code>mixture_results.csv</code> (when mixture enabled)</li>
+<li><code>mixture/&lt;stem&gt;/</code> — per-model dirs, <code>mixture_results.csv</code> (when MIXTURE enabled)</li>
 </ul>
 
-<p><a href="analysis_overview.html">← Analysis overview</a></p>
+<p class="nav-top"><a href="analysis_monodisperse.html">← Monodisperse</a> ·
+<a href="algorithms/fit_sizes.html">Algorithms: D(R)</a> ·
+<a href="algorithms/model_mixture.html">Mixture</a></p>
 </body>
 </html>

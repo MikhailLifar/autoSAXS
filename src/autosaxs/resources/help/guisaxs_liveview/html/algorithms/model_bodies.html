@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Geometric bodies</title>
+<link rel="stylesheet" href="../../style/help.css"/>
+</head>
+<body>
+<p class="nav-top"><a href="index.html">← Algorithms</a> · Geometric bodies</p>
+<h1>Geometric bodies</h1>
+
+<p><b>Purpose.</b> If the particle is expected to resemble a simple solid (ellipsoid, cylinder, …),
+fitting analytical form factors is faster and more interpretable than free ab initio shapes. Comparing
+several body types ranks which primitive best matches I(<i>q</i>).</p>
+
+<p><b>Engine.</b> ATSAS <b>bodies</b>. Autosaxs orchestrates which shapes to run and how results are
+exported for liveview.</p>
+
+<p><b>What autosaxs adds.</b></p>
+<ol>
+<li>Optionally runs a subset of body models (or all bundled defaults).</li>
+<li>Sets <code>--first</code> from the Guinier interval when you do not override it, so the fit starts
+where the low-<i>q</i> region is trusted.</li>
+<li>Ranks fits and builds visualization aids, including a Monte Carlo <i>p</i>(<i>r</i>)-style view from
+voxelized body shapes for the 3D pane.</li>
+</ol>
+
+<p>This is mostly ATSAS science; the custom layer is selection, Guinier coupling, and presentation.</p>
+
+<p class="nav-top"><a href="model_mixture.html">← Mixture</a> ·
+<a href="model_dam.html">Ab initio DAM →</a></p>
+</body>
+</html>

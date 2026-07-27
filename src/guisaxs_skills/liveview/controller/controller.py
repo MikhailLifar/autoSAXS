@@ -13,7 +13,7 @@ from ..session.state import LiveviewSessionState, LiveviewWatchMode
 from ..ui.panels import LiveviewLeftPanel, LiveviewMiddlePanel, LiveviewRightPanel
 
 from .history import LiveviewHistoryHandler
-from .ingest import LiveviewIngestHandler, LiveviewWatchdirHandler
+from .ingest import LiveviewIngestHandler
 from .monodisperse import LiveviewMonodisperseHandler
 from .polydisperse import LiveviewPolydisperseHandler
 from .processing_mode import ProcessingModeGate
@@ -52,7 +52,6 @@ class LiveviewController(QObject):
 
         self.history = LiveviewHistoryHandler(self)
         self.ingest = LiveviewIngestHandler(self)
-        self.watchdir_switch = LiveviewWatchdirHandler(self)
         self.session = LiveviewSessionHandler(self)
         self.skill_runs = LiveviewSkillRunsHandler(self)
         self.outcomes = LiveviewSkillOutcomesHandler(self)
@@ -174,9 +173,6 @@ class LiveviewController(QObject):
 
     def set_watch_mode(self, new_mode: LiveviewWatchMode) -> None:
         self.ingest.set_watch_mode(new_mode)
-
-    def switch_watchdir(self, new_p: Path) -> bool:
-        return self.watchdir_switch.switch(new_p)
 
     def ingest_dropped_tiffs(self, paths: list[str]) -> None:
         self.ingest.ingest_dropped_tiffs(paths)

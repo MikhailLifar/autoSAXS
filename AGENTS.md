@@ -190,6 +190,7 @@ guisaxs_skills/
 | `ui/style.py` | **Canonical** PyQt theme/colors (`COLOR_MUTED_TEXT`, `apply_style`) |
 | `ui/path_field.py` | Path input with DnD |
 | `logic/runner_qprocess.py` | `SkillRunner` — subprocess CLI, streams logs |
+| `logic/app_relaunch.py` | Detached liveview process relaunch (watchdir change, post-update) |
 | `logic/autosaxs_cli.py` | Blocking `get-default-config` helper |
 | `liveview/pipeline/executor.py` | **Active** liveview orchestrator (`LiveviewJobExecutor`) |
 | `liveview/session/state.py` | Session states A → B → BD → C → CD |

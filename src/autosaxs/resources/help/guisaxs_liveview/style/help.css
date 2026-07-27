@@ -9,14 +9,14 @@ body {
 h1, h2, h3 { color: #a7c4ff; margin-top: 1.2em; }
 h1 { font-size: 1.6em; border-bottom: 1px solid #2a3646; padding-bottom: 0.3em; }
 h2 { font-size: 1.25em; }
+h3 { font-size: 1.05em; color: #c5d6f5; }
 a { color: #6aa0ff; }
 code, pre {
   background: #0f151d;
   border: 1px solid #2a3646;
-  border-radius: 6px;
 }
 code { padding: 0.1em 0.35em; }
-pre { padding: 0.8em 1em; overflow-x: auto; }
+pre { padding: 0.8em 1em; }
 table { border-collapse: collapse; width: 100%; margin: 1em 0; }
 th, td { border: 1px solid #2a3646; padding: 0.45em 0.65em; text-align: left; }
 th { background: #182232; }
@@ -28,3 +28,25 @@ ul, ol { padding-left: 1.4em; }
   margin: 1em 0;
 }
 .nav-top { font-size: 0.9em; margin-bottom: 1em; color: #728195; }
+/* Screenshots: keep block separation in HTML (<p class="shot-wrap">).
+   Do not use max-width/height:auto here — QTextBrowser ignores them and can
+   distort images (and nearby text). Viewport fitting is done in HtmlHelpBrowser. */
+p.shot-wrap {
+  margin: 0.9em 0 1.2em;
+}
+img.shot {
+  border: 1px solid #2a3646;
+  background: #0f151d;
+  vertical-align: top;
+}
+.recipe {
+  border: 1px solid #2a3646;
+  background: #141c26;
+  padding: 0.4em 1em 0.8em;
+  margin: 1em 0 1.4em;
+}
+.recipe h3 {
+  margin-top: 0.6em;
+  margin-bottom: 0.4em;
+}
+.recipe p { margin: 0.45em 0; }

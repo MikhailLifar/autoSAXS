@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Pair-distance distribution p(r)</title>
+<link rel="stylesheet" href="../../style/help.css"/>
+</head>
+<body>
+<p class="nav-top"><a href="index.html">← Algorithms</a> · Pair-distance distribution p(r)</p>
+<h1>Pair-distance distribution p(r)</h1>
+
+<p><b>Purpose.</b> For a (approximately) monodisperse particle, the pair-distance distribution
+<i>p</i>(<i>r</i>) is the real-space counterpart of I(<i>q</i>). It yields D<sub>max</sub>, an integral
+Rg, and a shape-sensitive histogram of intramolecular distances — the usual prerequisite for ab initio
+bead or density models.</p>
+
+<p><b>Engine.</b> ATSAS <b>DATGNOM</b> performs the regularized transform. Autosaxs does not replace
+GNOM’s math; it <b>chooses parameters and grades the result</b>.</p>
+
+<p><b>What autosaxs adds (custom orchestration).</b></p>
+<ol>
+<li>Obtains an Rg span (from <a href="guinier.html">Guinier analysis</a> or a supplied Rg) and searches
+candidate Rg values for DATGNOM (bounded search, time-capped).</li>
+<li>Scores candidates using GNOM’s <b>Total Estimate</b> penalized by negative <i>p</i>(<i>r</i>)
+fraction — prefer physically non-negative, high-quality transforms.</li>
+<li>Builds a small <b>D<sub>max</sub>±10%</b> ensemble of close fits and probes force-zero-at-D<sub>max</sub>
+behavior to expose unstable maxima.</li>
+<li>Issues a <b>quality passport</b>: Shannon sampling diagnostics, ΔRg between Guinier and
+<i>p</i>(<i>r</i>), Total Estimate thresholds, and short tips when checks fail.</li>
+</ol>
+
+<p>Manual <b>first</b> / <b>last</b> / <b>smooth</b> in liveview re-run DATGNOM with those overrides for
+the current profile.</p>
+
+<p class="nav-top"><a href="guinier.html">← Guinier</a> ·
+<a href="fit_sizes.html">D(R) →</a> ·
+<a href="../analysis_monodisperse.html">Monodisperse UI →</a></p>
+</body>
+</html>

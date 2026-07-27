@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Ab initio bead model (DAM)</title>
+<link rel="stylesheet" href="../../style/help.css"/>
+</head>
+<body>
+<p class="nav-top"><a href="index.html">← Algorithms</a> · Ab initio bead model (DAM)</p>
+<h1>Ab initio bead model (DAM)</h1>
+
+<p><b>Purpose.</b> Recover a low-resolution molecular envelope without assuming a geometric primitive.
+Dummy-atom models (DAMs) place beads in space so that their scattering matches the experimental curve
+(within the information content of SAXS). Useful when shape is unknown but the sample is reasonably
+monodisperse and <i>p</i>(<i>r</i>) is trustworthy.</p>
+
+<p><b>Engine.</b> ATSAS <b>DAMMIF</b> (fast/slow annealing). When several independent runs are requested,
+<b>DAMAVER</b> aligns models and builds an averaged occupancy / “most probable” representation.</p>
+
+<p><b>What autosaxs adds.</b></p>
+<ol>
+<li>Requires a GNOM/DATGNOM <code>.out</code> from <a href="fit_distances.html">fit_distances</a>
+(runs it in-process if missing).</li>
+<li>Launches <code>n_runs</code> DAMMIF replicas; for <code>n_runs</code>&nbsp;&gt;&nbsp;1, runs DAMAVER and
+exports a consensus CIF / occupancy view.</li>
+<li>Computes per-replica Monte Carlo bead-pair <i>p</i>(<i>r</i>) curves for comparison with the GNOM
+distribution, and supports overlap visualization in liveview.</li>
+</ol>
+
+<p>Autosaxs does not invent a new reconstruction algorithm — it standardizes the Grant/ATSAS workflow
+and QC artifacts for automated TIFF processing.</p>
+
+<p class="nav-top"><a href="model_bodies.html">← Geometric bodies</a> ·
+<a href="model_density.html">Continuous density →</a></p>
+</body>
+</html>

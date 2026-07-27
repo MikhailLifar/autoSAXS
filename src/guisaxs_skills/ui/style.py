@@ -1,12 +1,35 @@
 from __future__ import annotations
 
+from PyQt5.QtCore import QEvent, QObject, Qt
 from PyQt5.QtGui import QColor, QFont, QPalette
-from PyQt5.QtWidgets import QApplication, QStyleFactory
+from PyQt5.QtWidgets import QApplication, QLabel, QStyleFactory
 
 COLOR_MUTED_TEXT = "#728195"
 COLOR_REQUIRED_STAR = "#ff4d4f"
 # Same red as required-field star — poor fit / data-quality hints in analysis panes.
 COLOR_QUALITY_POOR = COLOR_REQUIRED_STAR
+
+_SELECTABLE_LABELS_FILTER_ATTR = "_autosaxs_selectable_labels_filter"
+
+
+class _SelectableLabelsFilter(QObject):
+    """Enable mouse select-copy on every QLabel as it is polished by Qt."""
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt naming
+        if event.type() == QEvent.Polish and isinstance(obj, QLabel):
+            flags = obj.textInteractionFlags()
+            if not (flags & Qt.TextSelectableByMouse):
+                obj.setTextInteractionFlags(flags | Qt.TextSelectableByMouse)
+        return False
+
+
+def _enable_selectable_labels(app: QApplication) -> None:
+    """Install once: all current/future QLabels become mouse-selectable."""
+    if getattr(app, _SELECTABLE_LABELS_FILTER_ATTR, None) is not None:
+        return
+    filt = _SelectableLabelsFilter(app)
+    app.installEventFilter(filt)
+    setattr(app, _SELECTABLE_LABELS_FILTER_ATTR, filt)
 
 
 def apply_quality_hint_style(widget, *, poor: bool) -> None:
@@ -21,11 +44,14 @@ def apply_quality_hint_style(widget, *, poor: bool) -> None:
 def apply_style(app: QApplication) -> None:
     """
     Apply a modern, readable theme (dark-ish neutral + blue accent) and a slightly larger font.
+    Also enables select-copy on all QLabels app-wide (no per-label flags needed).
     """
     # Fusion respects palette + stylesheet on all platforms; the Windows native style
     # often keeps pale widget backgrounds while still using our light Text color.
     if "Fusion" in QStyleFactory.keys():
         app.setStyle("Fusion")
+
+    _enable_selectable_labels(app)
 
     font = QFont()
     font.setPointSize(11)

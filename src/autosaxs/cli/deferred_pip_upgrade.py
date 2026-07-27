@@ -335,19 +335,6 @@ if __name__ == "__main__":
 '''
 
 
-def guisaxs_liveview_restart_argv() -> List[str]:
-    """Return argv to start guisaxs-liveview from the current environment."""
-    scripts = Path(sys.executable).resolve().parent
-    if sys.platform == "win32":
-        exe = scripts / "guisaxs-liveview.exe"
-        if exe.is_file():
-            return [str(exe)]
-    script = scripts / "guisaxs-liveview"
-    if script.is_file():
-        return [str(script)]
-    return [sys.executable, "-m", "guisaxs_liveview"]
-
-
 def deferred_upgrade_log_path() -> Path:
     stamp = time.strftime("%Y%m%d-%H%M%S")
     return Path(tempfile.gettempdir()) / f"autosaxs-update-{stamp}-{os.getpid()}.log"
@@ -376,7 +363,8 @@ def _write_updater_files(
     return script_path, config_path
 
 
-def _spawn_detached(argv: List[str]) -> None:
+def _spawn_detached(argv: List[str]) -> int:
+    """Spawn the ephemeral updater process (no cwd override)."""
     kwargs: dict = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
@@ -391,7 +379,7 @@ def _spawn_detached(argv: List[str]) -> None:
     else:
         kwargs["start_new_session"] = True
 
-    subprocess.Popen(argv, **kwargs)
+    return int(subprocess.Popen(argv, **kwargs).pid)
 
 
 def launch_deferred_pip_upgrade(
@@ -400,11 +388,17 @@ def launch_deferred_pip_upgrade(
     force: bool = False,
     restart_argv: List[str] | None = None,
 ) -> Path:
-    """Write a temp updater script, spawn it detached, return the log file path."""
+    """Write a temp updater script, spawn it detached, return the log file path.
+
+    ``restart_argv`` is the command the updater runs after a successful pip upgrade.
+    Callers in guisaxs_skills should pass ``guisaxs_liveview_restart_argv()`` from
+    ``guisaxs_skills.logic.app_relaunch``. When omitted, falls back to
+    ``python -m guisaxs_liveview``.
+    """
     log_path = deferred_upgrade_log_path()
     pip_argv = pip_upgrade_argv(force=force)
     if restart_argv is None:
-        restart_argv = guisaxs_liveview_restart_argv()
+        restart_argv = [sys.executable, "-m", "guisaxs_liveview"]
     script_path, config_path = _write_updater_files(
         parent_pid=parent_pid,
         pip_argv=pip_argv,

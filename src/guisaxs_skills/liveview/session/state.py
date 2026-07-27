@@ -141,35 +141,6 @@ class LiveviewSessionState:
         self.polydisperse_mixture_mode = PolydisperseMixtureMode.NONE
         self.polydisperse_window_params = None
 
-    def reset_for_new_watchdir(self, watchdir: Path) -> None:
-        """Point session at a new folder and clear in-memory state (then load ``.guisaxs_liveview/`` if present)."""
-        self.watchdir = watchdir.expanduser().resolve()
-        self.integrator_dir = None
-        self.calibration_curve_plot_path = None
-        self.calibration_refined_yml_path = None
-        self.last_integrated_dat_path = None
-        self.last_subtracted_dat_path = None
-        self.buffer_dat_path = None
-        self.subtract_options = None
-        self.monodisperse_armed = False
-        self.polydisperse_armed = False
-        self.fit_distances_conf_path = None
-        self.fit_guinier_mono_conf_path = None
-        self.fit_guinier_poly_conf_path = None
-        self.fit_sizes_conf_path = None
-        self.model_mixture_config_path = None
-        self.model_mixture_options = None
-        self.model_bodies_shapes = None
-        self.model_bodies_conf_path = None
-        self.monodisperse_shape_mode = MonodisperseShapeMode.NONE
-        self.model_dam_n_runs = 1
-        self.model_density_mode = "pilot"
-        self.model_density_denss_mode = "fast"
-        self.model_density_n_maps = 20
-        self.monodisperse_wizard_params = None
-        self.polydisperse_mixture_mode = PolydisperseMixtureMode.NONE
-        self.polydisperse_window_params = None
-
     def default_fit_distances_profile_path(self) -> Optional[Path]:
         """State B/BD: last integrated .dat. State C/CD: last subtracted .dat (else last integrated)."""
         st = self.current_state()

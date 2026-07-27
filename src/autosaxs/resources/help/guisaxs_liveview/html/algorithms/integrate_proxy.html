@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Uncalibrated quick-look</title>
+<link rel="stylesheet" href="../../style/help.css"/>
+</head>
+<body>
+<p class="nav-top"><a href="index.html">← Algorithms</a> · Uncalibrated quick-look</p>
+<h1>Uncalibrated quick-look</h1>
+
+<p><b>Purpose.</b> Before geometry is known, you may still want a 1D intensity curve to see whether a
+frame looks sane (beam on sample, strong scatterer, empty beam). This is a <b>diagnostic</b> curve,
+not a <i>q</i>-calibrated profile for Guinier or GNOM.</p>
+
+<p><b>What autosaxs does (custom).</b> The skill radially averages the TIFF in <b>pixel-radius</b> space.
+If the beam center is not supplied, it <b>estimates</b> the center by optimizing radial symmetry of the
+image (and can write a center diagnostic plot). Masked pixels are excluded when a mask is provided.</p>
+
+<p><b>In liveview.</b> Until <b>Set calibration</b> succeeds, new TIFFs use this path; outputs go under
+<code>averaged_proxy/</code>. After calibration, frames use true azimuthal integration instead.</p>
+
+<p><b>Limitation.</b> Do not interpret Rg, D<sub>max</sub>, or absolute <i>q</i> from proxy curves.</p>
+
+<p><b>Engines.</b> Custom center estimate + radial binning (not pyFAI geometry).</p>
+<p class="nav-top"><a href="calibrate.html">← Detector calibration</a> ·
+<a href="integrate.html">Azimuthal integration →</a></p>
+</body>
+</html>
