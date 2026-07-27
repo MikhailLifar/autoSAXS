@@ -3,7 +3,7 @@
 **autoSAXS** is a Python toolkit for reproducible small-angle X-ray scattering (SAXS) pipelines — from detector images to subtracted curves, size distributions, and shape models — usable from a **CLI**, from **Python**, from desktop GUIs or through your favourite AI agent.
 
 <p align="center">
-  <img src="readme-assets/hero_model_dam_frequency.gif" alt="model_dam frequency / occupancy map" width="420"/>
+  <img src="https://raw.githubusercontent.com/MikhailLifar/autoSAXS/main/readme-assets/hero_model_dam_frequency.gif" alt="model_dam frequency / occupancy map" width="420"/>
 </p>
 
 ## Why autoSAXS
@@ -37,6 +37,12 @@ With desktop GUIs (`guisaxs-skills`, `guisaxs-liveview`):
 
 ```bash
 python -m pip install "autosaxs[gui] @ git+https://github.com/MikhailLifar/autoSAXS.git"
+```
+
+Optional LLM helper stack (`openai` / `httpx` / `requests`):
+
+```bash
+python -m pip install "autosaxs[llm] @ git+https://github.com/MikhailLifar/autoSAXS.git"
 ```
 
 Helper commands (export docs and defaults into a directory):

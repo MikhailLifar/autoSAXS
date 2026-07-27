@@ -1,14 +1,15 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "autosaxs"
-version = "2.12.2"
+version = "3.0.0"
 description = "Interactive SAXS pipeline core: calibration, integration, subtraction, ATSAS descriptors, plots, shape fitting, reports. After install, run `autosaxs --help`: epilog lists get-docs, get-skills, get-default-config (export docs and default config into your workspace)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
     { name = "Mikhail S. Lifar", email = "mikhailkulkov11@gmail.com" },
 ]
@@ -16,6 +17,7 @@ keywords = ["saxs", "small-angle scattering", "pyFAI", "ATSAS", "calibration", "
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -35,19 +37,18 @@ dependencies = [
     "PyYAML",
     "reportlab",
     "sasmodels",
-    "scipy",
     "scikit-image",
     "scikit-learn",
+    "scipy",
     "seaborn",
     "squarify",
-    "openai",
-    "requests",
-    "httpx",
 ]
 
 [project.urls]
 Homepage = "https://github.com/MikhailLifar/autoSAXS"
 Repository = "https://github.com/MikhailLifar/autoSAXS"
+Issues = "https://github.com/MikhailLifar/autoSAXS/issues"
+Documentation = "https://github.com/MikhailLifar/autoSAXS#readme"
 
 [project.scripts]
 autosaxs = "autosaxs.cli:main"
@@ -55,8 +56,9 @@ guisaxs-skills = "guisaxs_skills.__main__:main"
 guisaxs-liveview = "guisaxs_liveview.__main__:main"
 
 [project.optional-dependencies]
+dev = ["build", "import-linter", "pip", "twine"]
 gui = ["customtkinter", "PyQt5", "watchdog"]
-dev = ["build", "pip", "import-linter"]
+llm = ["httpx", "openai", "requests"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -65,11 +67,11 @@ include = ["autosaxs*", "guisaxs_skills*", "guisaxs_liveview*"]
 [tool.setuptools.package-data]
 autosaxs = [
     "resources/agent_quickstart.txt",
+    "resources/ai_skills/*.md",
     "resources/config_base.conf",
+    "resources/help/guisaxs_liveview/**/*",
     "resources/prompts/**/*.txt",
     "resources/readme/*.md",
     "resources/readme/images/**/*",
-    "resources/ai_skills/*.md",
     "resources/schemas/*.json",
-    "resources/help/guisaxs_liveview/**/*",
 ]

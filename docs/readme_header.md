@@ -1,9 +1,9 @@
 # autoSAXS
 
-**autoSAXS** is a Python toolkit for reproducible small-angle X-ray scattering (SAXS) pipelines — from detector images to subtracted curves, size distributions, and shape models — usable from a **CLI**, from **Python**, or from desktop GUIs.
+**autoSAXS** is a Python toolkit for reproducible small-angle X-ray scattering (SAXS) pipelines — from detector images to subtracted curves, size distributions, and shape models — usable from a **CLI**, from **Python**, from desktop GUIs or through your favourite AI agent.
 
 <p align="center">
-  <img src="readme-assets/hero_model_dam_frequency.gif" alt="model_dam frequency / occupancy map" width="420"/>
+  <img src="https://raw.githubusercontent.com/MikhailLifar/autoSAXS/main/readme-assets/hero_model_dam_frequency.gif" alt="model_dam frequency / occupancy map" width="420"/>
 </p>
 
 ## Why autoSAXS
@@ -19,7 +19,7 @@
 ## Use cases
 
 - Synchrotron or lab SAXS: calibrate geometry, integrate TIFF stacks, average frames, and subtract buffer.
-- Monodisperse analysis: Guinier → pair-distance distribution p(r) → optional ab initio (DAMMIF) / bodies / DENSS density maps.
+- Monodisperse analysis: Guinier → pair-distance distribution p(r) → optional ab initio shape recovery, 3d primitives modeling or electron density inference.
 - Polydisperse analysis: Guinier → size distribution D(R) → optional McSAS or ATSAS MIXTURE.
 - Live experiments: watch a folder for new detector images and process them as they arrive.
 - Scripting and agents: drive the full pipeline from Python or `autosaxs` without reimplementing I/O conventions.
@@ -39,19 +39,27 @@ With desktop GUIs (`guisaxs-skills`, `guisaxs-liveview`):
 python -m pip install "autosaxs[gui] @ git+https://github.com/MikhailLifar/autoSAXS.git"
 ```
 
+Optional LLM helper stack (`openai` / `httpx` / `requests`):
+
+```bash
+python -m pip install "autosaxs[llm] @ git+https://github.com/MikhailLifar/autoSAXS.git"
+```
+
 Helper commands (export docs and defaults into a directory):
 
 - `autosaxs get-docs` — write the short `README.md` and detailed `autosaxs-docs/skills_reference.md`
-- `autosaxs get-skills` — write Cursor-style `saxs-processing/` skill procedures
+- `autosaxs get-skills` — write Cursor-style `saxs-processing/` skill
 - `autosaxs get-default-config` — copy bundled `config_base.conf`
 
 Upgrade from git `main`: `autosaxs -U`
 
 ## Main features
 
-Pipeline stages exposed as skills: **calibrate → integrate / average → subtract → analyze → report**, including Guinier, Kratky, `fit_distances` (p(r)), `fit_sizes` (D(R)), `model_dam`, `model_bodies`, `model_density` (DENSS), `model_dr_mc` (McSAS), `model_mixture`, and reporting helpers.
+Pipeline stages exposed as skills: **calibrate → integrate / average → subtract → analyze → model → report**, including Guinier, Kratky, `fit-distances` (p(r)), `fit-sizes` (D(R)), `model-dam`, `model-bodies`, `model-density` (DENSS), `model-dr-mc` (McSAS), `model-mixture`, and reporting helpers.
 
-Apps: **guisaxs-skills** (catalog + forms + isolated CLI runs) and **guisaxs-liveview** (queued live integration, buffer subtraction, optional analysis wizards).
+Apps: 
+**guisaxs-skills** (catalog + forms + isolated CLI runs, beta version)
+**guisaxs-liveview** (queued live integration, buffer subtraction, optional analysis wizards).
 
 Full per-skill documentation: [`autosaxs-docs/skills_reference.md`](autosaxs-docs/skills_reference.md).
 
@@ -108,8 +116,6 @@ autosaxs process-monodisperse subtracted/sub_ihs27_sample.dat
 ### Online GUI
 
 ```bash
-guisaxs-skills
-# or
 guisaxs-liveview
 ```
 

@@ -11,12 +11,23 @@ import string
 from copy import deepcopy
 
 import numpy as np
-import requests
-from openai import OpenAI
-import openai
-import httpx
 
 logger = logging.getLogger(name=__name__)
+
+
+def _require_llm_deps():
+    """Import optional LLM stack; used only when an LLM call is made."""
+    try:
+        import httpx
+        import openai
+        import requests
+        from openai import OpenAI
+    except ImportError as exc:
+        raise ImportError(
+            "LLM helpers require the optional extra: pip install 'autosaxs[llm]'"
+        ) from exc
+    return httpx, openai, requests, OpenAI
+
 
 # Optional: GigaChat (only used if model is GigaChat-Pro or GigaChat)
 try:
@@ -133,6 +144,7 @@ def calc_confidence(chat_completion):
 
 def send_request_to_llm(model, messages, temperature=1.0, max_tokens=4096, disable_cache=True, return_confidence=False):
     assert model in available_models, f"Unknown model {model}. List: {available_models}"
+    httpx, openai, requests, OpenAI = _require_llm_deps()
     logger.info('Send request to the model %s', model)
     API = _get_api()
 
