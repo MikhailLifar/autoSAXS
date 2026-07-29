@@ -9,7 +9,7 @@
 ## Why autoSAXS
 
 - **One skills API for everything** — the same processing steps run as `autosaxs <skill> …` or as Python functions with stable signatures, so scripts, GUIs, and agents share one surface.
-- **Unique algorithms** — **automatic calibration** from calibrant frames (no priors on sample-detector-distances or center coordinates!) and **automatic buffer scaling** for robust sample−buffer subtraction, reducing manual tuning at the beamline.
+- **Unique algorithms** — **automatic calibration** from calibrant frames (no priors on sample-detector distance or center coordinates!) and **automatic buffer scaling** for robust sample−buffer subtraction, reducing manual tuning at the beamline.
 - **Flexible inputs** — path expressions (file, directory, or glob) instead of “one file only,” allowing to process multiple failes as easy as processing one.
 - **Opt-in caching** — re-run interactive work without recomputing unchanged steps.
 - **GUI when you want** — `guisaxs-liveview` (fast online processing, watch-folder live processing with optional monodisperse / polydisperse analysis).
