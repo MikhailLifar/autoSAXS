@@ -114,6 +114,7 @@ autosaxs process-monodisperse subtracted/sub_ihs27_sample.dat
 ```bash
 guisaxs-liveview
 ```
+Then find "Help" at the top tool-bar and follow.
 
 ## Acknowledgements
 
