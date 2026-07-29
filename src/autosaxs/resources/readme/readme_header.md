@@ -50,9 +50,9 @@ From git `main` (development): `python -m pip install "autosaxs @ git+https://gi
 
 Pipeline stages exposed as skills: **calibrate → integrate / average → subtract → analyze → model → report**, including Guinier, Kratky, `fit-distances` (p(r)), `fit-sizes` (D(R)), `model-dam`, `model-bodies`, `model-density` (DENSS), `model-dr-mc` (McSAS), `model-mixture`, and reporting helpers.
 
-Apps: 
-**guisaxs-liveview** (queued live integration, buffer subtraction, optional analysis wizards).
-**guisaxs-skills** (catalog + forms + isolated CLI runs, beta version)
+Apps:  
+**guisaxs-liveview** (queued live integration, buffer subtraction, optional analysis wizards).  
+**guisaxs-skills** (catalog + forms + isolated CLI runs, beta version)  
 
 Full per-skill documentation: [`autosaxs-docs/skills_reference.md`](autosaxs-docs/skills_reference.md).
 
