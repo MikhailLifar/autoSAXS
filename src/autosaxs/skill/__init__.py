@@ -70,6 +70,34 @@ SKILL_ORDER = [
 ]
 
 
+def _make_lazy_skill_entrypoint(name: str, mod_path: str) -> Callable[..., Any]:
+    """
+    Create a thin callable wrapper that imports the real skill function on demand.
+
+    This avoids a Python import pitfall:
+    - `autosaxs.skill` is a package that also contains submodules/packages named
+      `calibrate`, `integrate`, ...
+    - Without this, `from autosaxs.skill import calibrate` resolves the *submodule*
+      (a module object) instead of the callable skill function.
+    """
+
+    def _entrypoint(*args: Any, **kwargs: Any) -> Any:
+        mod = importlib.import_module(mod_path)
+        fn = getattr(mod, name)
+        return fn(*args, **kwargs)
+
+    _entrypoint.__name__ = name
+    _entrypoint.__qualname__ = name
+    _entrypoint.__doc__ = f"Lazy-loaded entry point for `{name}` from `{mod_path}`."
+    return _entrypoint
+
+
+# Pre-populate public names so `from autosaxs.skill import X` resolves to a callable
+# even when `X` also exists as a submodule package.
+for _name, _mod_path in _SKILL_IMPORTS.items():
+    globals()[_name] = _make_lazy_skill_entrypoint(_name, _mod_path)
+
+
 def list_skills(*, include_reports: bool = True) -> Dict[str, Callable[..., Any]]:
     """
     Return a mapping of public skill name -> callable entry point.
@@ -90,11 +118,7 @@ def list_skills(*, include_reports: bool = True) -> Dict[str, Callable[..., Any]
 
 def __getattr__(name: str) -> Any:
     """
-    Lazy-export public skill functions without shadowing submodules.
-
-    This avoids the common Python package pitfall where `autosaxs.skill.plot_2d` could
-    refer to either the submodule or the function, which breaks monkeypatching and
-    submodule imports.
+    Lazy-export public skill functions.
     """
     mod_path = _SKILL_IMPORTS.get(name)
     if mod_path is None:

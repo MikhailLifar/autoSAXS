@@ -630,3 +630,18 @@ def _subtract_paths(
         "diff_log_plot_path": diff_log_plot_path,
     }
 
+
+# Allow `from autosaxs.skill import subtract` to return a callable even if Python
+# resolves `subtract` as this *module* (not the `subtract()` function).
+import sys
+import types
+
+
+class _CallableSkillModule(types.ModuleType):
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # type: ignore[name-defined]
+        fn = getattr(self, self.__name__.rsplit(".", 1)[-1])
+        return fn(*args, **kwargs)
+
+
+sys.modules[__name__].__class__ = _CallableSkillModule
+

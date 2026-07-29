@@ -211,3 +211,18 @@ def _integrate_paths(
         out["validation_png"] = validation_pngs
     return out
 
+
+# Allow `from autosaxs.skill import integrate` to return a callable even if Python
+# resolves `integrate` as this *module* (not the `integrate()` function).
+import sys
+import types
+
+
+class _CallableSkillModule(types.ModuleType):
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # type: ignore[name-defined]
+        fn = getattr(self, self.__name__.rsplit(".", 1)[-1])
+        return fn(*args, **kwargs)
+
+
+sys.modules[__name__].__class__ = _CallableSkillModule
+

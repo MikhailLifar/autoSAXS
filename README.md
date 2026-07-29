@@ -66,7 +66,7 @@ Monodisperse protein walkthrough using [`examples/monodisperse_protein/`](exampl
 from pathlib import Path
 from autosaxs.skill import calibrate, integrate, subtract, process_monodisperse
 
-ex = Path("examples/monodisperse_protein")
+ex = Path(__file__).resolve().parent / "examples" / "monodisperse_protein" if "__file__" in globals() else Path("examples/monodisperse_protein")
 
 calibrate(
     ex / "AgBh700_96.9_calib.tif",
@@ -86,7 +86,10 @@ subtract(
     q_min=4.8,
     q_max=5.8,
 )
-process_monodisperse(ex / "subtracted" / "sub_ihs27_sample.dat")
+process_monodisperse(
+    ex / "subtracted" / "sub_ihs27_sample.dat",
+    output_dir=str(ex),
+)
 ```
 
 ### CLI

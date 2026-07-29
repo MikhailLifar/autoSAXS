@@ -307,3 +307,18 @@ def process_monodisperse(
         "model_dam": out_dam,
         "report_individual": out_report,
     }
+
+
+# Allow `from autosaxs.skill import process_monodisperse` to return a callable even
+# if Python resolves `process_monodisperse` as this *module* (not the function).
+import sys
+import types
+
+
+class _CallableSkillModule(types.ModuleType):
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # type: ignore[name-defined]
+        fn = getattr(self, self.__name__.rsplit(".", 1)[-1])
+        return fn(*args, **kwargs)
+
+
+sys.modules[__name__].__class__ = _CallableSkillModule

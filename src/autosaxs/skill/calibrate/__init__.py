@@ -309,3 +309,18 @@ def _calibrate_paths(
         "calibration_curve_dat_path": calibration_curve_dat_path,
         "calibration_mask_path": calibration_mask_path,
     }
+
+
+# Allow `from autosaxs.skill import calibrate` to return a callable even if Python
+# resolves `calibrate` as this *module* (not the `calibrate()` function).
+import sys
+import types
+
+
+class _CallableSkillModule(types.ModuleType):
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # type: ignore[name-defined]
+        fn = getattr(self, self.__name__.rsplit(".", 1)[-1])
+        return fn(*args, **kwargs)
+
+
+sys.modules[__name__].__class__ = _CallableSkillModule
