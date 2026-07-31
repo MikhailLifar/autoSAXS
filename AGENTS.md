@@ -30,7 +30,7 @@ Single distribution (`pyproject.toml`, version in `[project].version`). Three co
 | `guisaxs-skills` | `src/guisaxs_skills/` | **active** | PyQt5 skill console |
 | `guisaxs-liveview` | `src/guisaxs_liveview/` | **active** | Thin launcher → `guisaxs_skills.liveview` |
 
-GUI extras: `pip install -e .[gui]` (adds `customtkinter`, `PyQt5`, `watchdog`).
+GUI extras: `pip install -e .[gui]` (adds `PyQt5`, `watchdog`).
 
 ---
 

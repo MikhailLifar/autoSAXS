@@ -65,7 +65,6 @@ import sklearn.metrics
 import matplotlib.pyplot as plt
 import matplotlib.pylab as pl
 import seaborn as sns
-import squarify
 
 from matplotlib import ticker
 
@@ -366,6 +365,8 @@ def basic_map(data, ax, **kwargs):
 @wrap_fig
 @wrap_ax
 def basic_treemap(sizes, label, color, ax, cmap, isColorDiscrete, **kwargs):
+    import squarify
+
     color = color_arr_to_correct_rgb(color, cmap, isColorDiscrete)
     squarify.plot(sizes, label=label, color=color, ax=ax, **kwargs)
 

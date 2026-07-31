@@ -1155,6 +1155,56 @@ def fit_circle_xy_r2(
     }
 
 
+def circle_quality_vs_line(
+    points_xy: np.ndarray,
+    *,
+    center_x: float,
+    center_y: float,
+    r_px: float,
+) -> float:
+    """
+    Circle quality vs best-fit line (punishes thin strips at any orientation).
+
+        1 - Q_0.95(|d_i - r|) / Q_0.95(dist_to_fitted_line)
+
+    Line is the first principal axis (orthogonal distances via SVD).
+    Separate from `circle_r2` in `fit_circle_xy_r2` (kept for ring_analysis).
+    """
+    pts = np.asarray(points_xy, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 2 or pts.shape[0] < 3:
+        return float("nan")
+    if not (np.isfinite(center_x) and np.isfinite(center_y) and np.isfinite(r_px)):
+        return float("nan")
+
+    x = pts[:, 0]
+    y = pts[:, 1]
+    d_circle = np.abs(
+        np.sqrt((x - float(center_x)) ** 2 + (y - float(center_y)) ** 2) - float(r_px)
+    )
+
+    mean = pts.mean(axis=0)
+    centered = pts - mean
+    # Rank-deficient / near-collinear blobs: SVD still gives a line direction.
+    try:
+        _u, _s, vh = np.linalg.svd(centered, full_matrices=False)
+    except np.linalg.LinAlgError:
+        return float("nan")
+    if vh.shape[0] < 2:
+        return float("nan")
+    normal = vh[-1]
+    nrm = float(np.linalg.norm(normal))
+    if not np.isfinite(nrm) or nrm <= 0.0:
+        return float("nan")
+    normal = normal / nrm
+    d_line = np.abs(centered @ normal)
+
+    q_circle = float(np.quantile(d_circle, 0.95))
+    q_line = float(np.quantile(d_line, 0.95))
+    if not np.isfinite(q_circle) or not np.isfinite(q_line) or q_line <= 0.0:
+        return float("nan")
+    return float(1.0 - q_circle / q_line)
+
+
 # Volume per dummy atom (Å³) for DAM models; used in compute_dammif_descriptors.
 V_ATOM_DAM = 20.0
 

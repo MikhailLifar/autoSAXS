@@ -26,22 +26,20 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
-    "ase",
-    "denss>=1.8.0",
-    "fabio",
-    "matplotlib",
-    "mcsas3>=1.0.6",
+    "ase>=3.22,<4",
+    "denss>=1.8.0,<2",
+    "fabio>=2023.1,<2027",
+    "matplotlib>=3.7,<3.12",
+    "mcsas3>=1.0.6,<2",
     "numpy>=2.0,<2.4",
-    "pandas",
-    "pyFAI",
-    "PyYAML",
-    "reportlab",
-    "sasmodels",
-    "scikit-image",
-    "scikit-learn",
-    "scipy",
-    "seaborn",
-    "squarify",
+    "pandas>=2.0,<3.1",
+    "pyFAI>=2024.1,<2027",
+    "PyYAML>=6.0,<7",
+    "reportlab>=4.0,<6",
+    "scikit-image>=0.22,<0.27",
+    "scikit-learn>=1.3,<1.10",
+    "scipy>=1.11,<1.19",
+    "seaborn>=0.12,<0.15",
 ]
 
 [project.urls]
@@ -57,7 +55,7 @@ guisaxs-liveview = "guisaxs_liveview.__main__:main"
 
 [project.optional-dependencies]
 dev = ["build", "import-linter", "pip", "twine"]
-gui = ["customtkinter", "PyQt5", "watchdog"]
+gui = ["PyQt5>=5.15,<6", "watchdog>=4,<7"]
 llm = ["httpx", "openai", "requests"]
 
 [tool.setuptools.packages.find]

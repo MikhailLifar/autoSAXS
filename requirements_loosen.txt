@@ -1,7 +1,6 @@
 ase
-customtkinter
 cycler
-darkdetect
+denss
 fabio
 fonttools
 h5py
@@ -12,6 +11,7 @@ kiwisolver
 lazy-loader
 lxml
 matplotlib
+mcsas3
 networkx
 numexpr
 numpy
@@ -20,9 +20,11 @@ pandas
 pillow
 pyfai
 pyparsing
+PyQt5
 python-dateutil
 pytz
 pyyaml
+reportlab
 scikit-image
 scikit-learn
 scipy
@@ -30,9 +32,8 @@ seaborn
 setuptools
 silx
 six
-squarify
 threadpoolctl
 tifffile
 tzdata
-uv
+watchdog
 wheel
