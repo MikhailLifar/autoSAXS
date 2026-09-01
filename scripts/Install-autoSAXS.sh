@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ASSETS_DIR="${SCRIPT_DIR}/assets"
 ICON_PNG="${ASSETS_DIR}/autosaxs_icon.png"
 ENV_NAME="autosaxs"
+DEFAULT_ENV_NAME="autosaxs"
 PIP_SPEC="autosaxs[gui]"
 MINICONDA_URL="https://docs.anaconda.com/miniconda/miniconda-install/"
 
@@ -55,24 +56,183 @@ question_yesno() {
 
 find_conda() {
   if command -v conda >/dev/null 2>&1; then
-    command -v conda
-    return 0
+    local c
+    c="$(command -v conda)"
+    if validate_conda "$c"; then
+      printf '%s\n' "$c"
+      return 0
+    fi
   fi
+  local root c
+  while IFS= read -r root; do
+    [[ -n "$root" && -d "$root" ]] || continue
+    if c="$(resolve_conda_from_dir "$root")" && validate_conda "$c"; then
+      printf '%s\n' "$c"
+      return 0
+    fi
+  done < <(ls -td "${HOME}"/miniconda* "${HOME}"/Miniconda* "${HOME}"/anaconda* "${HOME}"/Anaconda* /opt/conda /usr/local/miniconda3 2>/dev/null | awk '!seen[tolower($0)]++')
+  return 1
+}
+
+resolve_conda_from_dir() {
+  local root="$1"
+  root="${root%/}"
+  root="${root#\"}"
+  root="${root%\"}"
+  [[ -d "$root" ]] || return 1
   local c
-  for c in \
-    "${HOME}/miniconda3/bin/conda" \
-    "${HOME}/Miniconda3/bin/conda" \
-    "${HOME}/anaconda3/bin/conda" \
-    "${HOME}/Anaconda3/bin/conda" \
-    "/opt/conda/bin/conda" \
-    "/usr/local/miniconda3/bin/conda"
-  do
+  for c in "${root}/bin/conda" "${root}/Scripts/conda.exe"; do
     if [[ -x "$c" ]]; then
       printf '%s\n' "$c"
       return 0
     fi
   done
   return 1
+}
+
+validate_conda() {
+  local conda_exe="$1"
+  [[ -n "$conda_exe" && -x "$conda_exe" ]] || return 1
+  "$conda_exe" --version >/dev/null 2>&1
+}
+
+confirm_conda_choice() {
+  if [[ "$DIALOG" == zenity ]]; then
+    choice="$(zenity --list --title="Install autoSAXS" --width=520 --height=280 \
+      --text="Miniconda / Anaconda ready:
+
+${CONDA}
+
+How do you want to continue?" \
+      --column="Action" \
+      "Continue to install options" \
+      "Choose a different install folder…" \
+      "Exit" \
+      || true)"
+    case "$choice" in
+      "Continue to install options") return 0 ;;
+      "Choose a different install folder…")
+        CONDA=""
+        if prompt_manual_conda_dir; then
+          confirm_conda_choice
+          return $?
+        fi
+        return 1
+        ;;
+      *) return 1 ;;
+    esac
+  else
+    choice="$(kdialog --title "Install autoSAXS" --menu \
+      "Miniconda / Anaconda ready:
+
+${CONDA}" \
+      continue "Continue to install options" \
+      manual "Choose a different install folder…" \
+      exit "Exit" \
+      continue 2>/dev/null || true)"
+    case "$choice" in
+      continue) return 0 ;;
+      manual)
+        CONDA=""
+        if prompt_manual_conda_dir; then
+          confirm_conda_choice
+          return $?
+        fi
+        return 1
+        ;;
+      *) return 1 ;;
+    esac
+  fi
+}
+
+prompt_manual_conda_dir() {
+  local dir="" exe=""
+  while true; do
+    if [[ "$DIALOG" == zenity ]]; then
+      dir="$(zenity --file-selection --directory --title="Select Miniconda/Anaconda install folder" 2>/dev/null || true)"
+      [[ -z "$dir" ]] && return 1
+    else
+      dir="$(kdialog --getexistingdirectory "${HOME}" --title "Select Miniconda/Anaconda install folder" 2>/dev/null || true)"
+      [[ -z "$dir" ]] && return 1
+    fi
+    if exe="$(resolve_conda_from_dir "$dir")" && validate_conda "$exe"; then
+      CONDA="$exe"
+      return 0
+    fi
+    error "That folder does not look like a Miniconda / Anaconda install.
+
+Choose the top-level folder that contains bin/conda (for example ${HOME}/miniconda3)."
+  done
+}
+
+handle_conda_missing_page() {
+  if [[ "$DIALOG" == zenity ]]; then
+    choice="$(zenity --list --title="Install autoSAXS" --width=520 --height=300 \
+      --text="autoSAXS needs Miniconda (a free Python toolbox).\nIt was not found automatically.\n\nInstall Miniconda, enter your conda directory path, or click Retry." \
+      --column="Action" \
+      "Open Miniconda download page" \
+      "Enter conda directory path…" \
+      "Retry search" \
+      "Exit" \
+      || true)"
+    case "$choice" in
+      "Open Miniconda download page")
+        (xdg-open "$MINICONDA_URL" >/dev/null 2>&1 || true)
+        ;;
+      "Enter conda directory path…")
+        if prompt_manual_conda_dir; then
+          return 0
+        fi
+        ;;
+      "Retry search") ;;
+      *) exit 1 ;;
+    esac
+  else
+    choice="$(kdialog --title "Install autoSAXS" --menu \
+      "autoSAXS needs Miniconda (not found automatically)." \
+      manual "Enter conda directory path…" \
+      download "Open Miniconda download page" \
+      retry "Retry search" \
+      exit "Exit" \
+      manual 2>/dev/null || true)"
+    case "$choice" in
+      manual)
+        if prompt_manual_conda_dir; then
+          return 0
+        fi
+        ;;
+      download)
+        xdg-open "$MINICONDA_URL" >/dev/null 2>&1 || true
+        ;;
+      retry) ;;
+      *) exit 1 ;;
+    esac
+  fi
+  return 1
+}
+
+validate_env_name() {
+  local name="$1"
+  [[ -n "$name" && ${#name} -le 64 && "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]
+}
+
+prompt_env_name() {
+  local name=""
+  while true; do
+    if [[ "$DIALOG" == zenity ]]; then
+      name="$(zenity --entry --title="Install autoSAXS" --width=420 \
+        --text="Conda environment name for autoSAXS:" \
+        --entry-text="${DEFAULT_ENV_NAME}" 2>/dev/null || true)"
+    else
+      name="$(kdialog --title "Install autoSAXS" --inputbox "Conda environment name for autoSAXS:" "${DEFAULT_ENV_NAME}" 2>/dev/null || true)"
+    fi
+    [[ -z "$name" ]] && exit 0
+    if validate_env_name "$name"; then
+      ENV_NAME="$name"
+      return 0
+    fi
+    error "Invalid environment name. Use letters, numbers, dots, hyphens, and underscores (for example: autosaxs)."
+  done
 }
 
 create_shortcut() {
@@ -108,37 +268,25 @@ EOF
 # --- Page 1: conda ---
 CONDA=""
 while true; do
-  if CONDA="$(find_conda)"; then
-    if question_yesno "Miniconda / Anaconda found:\n\n${CONDA}\n\nContinue to install options?"; then
+  if [[ -z "$CONDA" ]]; then
+    CONDA="$(find_conda || true)"
+  fi
+  if [[ -n "$CONDA" ]]; then
+    if confirm_conda_choice; then
       break
     else
+      CONDA=""
       exit 0
     fi
   fi
-  if [[ "$DIALOG" == zenity ]]; then
-    choice="$(zenity --list --title="Install autoSAXS" --width=480 --height=260 \
-      --text="autoSAXS needs Miniconda (a free Python toolbox).\nIt was not found on this computer.\n\nInstall Miniconda with the official installer, then click Retry." \
-      --column="Action" "Open Miniconda download page" "Retry" "Exit" \
-      || true)"
-    case "$choice" in
-      "Open Miniconda download page")
-        (xdg-open "$MINICONDA_URL" >/dev/null 2>&1 || true)
-        ;;
-      "Retry") continue ;;
-      *) exit 1 ;;
-    esac
-  else
-    if kdialog --title "Install autoSAXS" --yesno \
-      "autoSAXS needs Miniconda (not found).\n\nOpen the Miniconda download page?"; then
-      xdg-open "$MINICONDA_URL" >/dev/null 2>&1 || true
-    fi
-    if ! kdialog --title "Install autoSAXS" --yesno "Retry conda search?"; then
-      exit 1
-    fi
+  if handle_conda_missing_page; then
+    continue
   fi
 done
 
-# --- Page 2: options (Create Desktop shortcut) ---
+# --- Page 2: options (environment name + Desktop shortcut) ---
+prompt_env_name
+
 CREATE_SHORTCUT=1
 if question_yesno "Create a Desktop shortcut for GUISAXS-LiveView?\n\n(Recommended: Yes)"; then
   CREATE_SHORTCUT=1
@@ -158,12 +306,24 @@ STATUS=0
 run_install() {
   echo "Using conda: ${CONDA}"
   if ! "${CONDA}" env list | awk '{print $1}' | grep -qx "${ENV_NAME}"; then
-    echo "Creating environment ${ENV_NAME} (python 3.12)…"
-    "${CONDA}" create -n "${ENV_NAME}" python=3.12 pip -y
+    echo "Creating environment ${ENV_NAME} (python 3.12)..."
+    set +e
+    CONDA_ALWAYS_YES=true "${CONDA}" create -n "${ENV_NAME}" python=3.12 pip -y
+    local create_rc=$?
+    if [[ "$create_rc" -ne 0 ]]; then
+      echo "Clearing incomplete conda package downloads and retrying once..."
+      CONDA_ALWAYS_YES=true "${CONDA}" clean --packages -y
+      CONDA_ALWAYS_YES=true "${CONDA}" create -n "${ENV_NAME}" python=3.12 pip -y
+      create_rc=$?
+    fi
+    set -e
+    if [[ "$create_rc" -ne 0 ]]; then
+      return "$create_rc"
+    fi
   else
-    echo "Environment ${ENV_NAME} already exists — upgrading package…"
+    echo "Environment ${ENV_NAME} already exists - upgrading package..."
   fi
-  echo "Installing ${PIP_SPEC}…"
+  echo "Installing ${PIP_SPEC}..."
   "${CONDA}" run -n "${ENV_NAME}" python -m pip install -U "${PIP_SPEC}"
   local prefix
   prefix="$("${CONDA}" run -n "${ENV_NAME}" python -c 'import sys; print(sys.prefix)')"

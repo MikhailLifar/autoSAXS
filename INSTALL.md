@@ -37,7 +37,7 @@ Unzip it anywhere convenient (for example your Desktop).
 
 ### 3. Run the installer
 
-**Windows:** double-click `Install-autoSAXS.bat`.
+**Windows:** double-click **`Install autoSAXS.bat`** (the only file at the top level of the ZIP).
 
 **Linux:** double-click `Install-autoSAXS.sh` (or right-click → Run as Program). If the file manager asks, allow executing as a program. You need `zenity` or `kdialog` (most desktops already have one; on Ubuntu: `sudo apt install zenity`).
 

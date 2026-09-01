@@ -26,7 +26,7 @@
 
 ## Install
 
-**New to Python?** See **[INSTALL.md](INSTALL.md)**: install Miniconda once, download the small installer ZIP, double-click **Install-autoSAXS**, then use the **GUISAXS-LiveView** Desktop shortcut.
+**New to Python?** See **[INSTALL.md](INSTALL.md)**: install Miniconda once, download the small installer ZIP, double-click **Install autoSAXS.bat**, then use the **GUISAXS-LiveView** Desktop shortcut.
 
 Installer ZIPs (Windows / Linux): [GitHub Releases](https://github.com/MikhailLifar/autoSAXS/releases).
 

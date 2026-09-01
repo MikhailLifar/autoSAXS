@@ -7,7 +7,7 @@ autosaxs runs from the SAME Python environment where the package was installed: 
   /path/to/env/bin/autosaxs ...
 when PATH might point at a different interpreter.
 
-Beginners (humans): see INSTALL.md — Miniconda once, then the installer ZIP (double-click Install-autoSAXS).
+Beginners (humans): see INSTALL.md — Miniconda once, then the installer ZIP (double-click Install autoSAXS.bat on Windows).
 Agents: run ``autosaxs doctor`` before processing if the environment may be incomplete.
 
 Shipped commands (no input data required)
