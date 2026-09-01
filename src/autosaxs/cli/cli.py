@@ -400,6 +400,14 @@ def _skill_to_agent_skill_md(*, name: str, fn: Callable[..., Any]) -> str:
     ).rstrip() + "\n"
 
 
+def _add_doctor_subparser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "doctor",
+        help="Check that autosaxs (and optional ATSAS / GUI) are installed correctly",
+    )
+    p.set_defaults(_autosaxs_internal_cmd="doctor")
+
+
 def _add_get_docs_subparser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "get-docs",
@@ -677,8 +685,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         prog="autosaxs",
         formatter_class=AutosaxsHelpFormatter,
         description=(
-            "SAXS pipeline: processing skills plus helpers that write README, IDE skills, and "
-            "default config into your workspace (see epilog)."
+            "SAXS pipeline: processing skills plus helpers (doctor, get-docs, get-skills, "
+            "get-default-config — see epilog)."
         ),
         epilog=_read_agent_quickstart_epilog(),
     )
@@ -708,6 +716,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         description="Run a skill or helper (autosaxs COMMAND --help for details).",
     )
 
+    _add_doctor_subparser(subparsers)
     _add_get_docs_subparser(subparsers)
     _add_get_skills_subparser(subparsers)
     _add_get_default_config_subparser(subparsers)
@@ -780,6 +789,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("the following arguments are required: command")
 
     internal_cmd = getattr(args, "_autosaxs_internal_cmd", None)
+    if internal_cmd == "doctor":
+        from .doctor import doctor
+
+        return doctor()
     if internal_cmd == "get-docs":
         from ..resources.readme.autosaxs_skills_explained import generate_docs
 

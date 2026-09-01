@@ -1,0 +1,10 @@
+# Developer convenience only — beginners should use the Install-autoSAXS ZIP
+# (see INSTALL.md). This file is not required by the desktop installer.
+name: autosaxs
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10,<3.14
+  - pip
+  - pip:
+      - "autosaxs[gui]"

@@ -59,21 +59,21 @@ def warn_atsas_on_import() -> None:
     if version is None:
         warnings.warn(
             "ATSAS appears to be installed (dammif found), but its version could not be parsed from "
-            "`dammif -v` output. Some autosaxs functions may not work as expected.",
+            "`dammif -v` output. Some autosaxs functions may not work as expected. "
+            "Run `autosaxs doctor` for a full install report.",
             RuntimeWarning,
             stacklevel=2,
         )
-        print("ATSAS installed - autosaxs is ready for use!")
         return
     if version != RECOMMENDED_ATSAS_VERSION:
         warnings.warn(
             f"ATSAS version mismatch: autosaxs was developed/tested with ATSAS "
             f"{RECOMMENDED_ATSAS_VERSION}, but detected ATSAS {version}. "
-            "Some autosaxs functions may not work due to the mismatch.",
+            "Some autosaxs functions may not work due to the mismatch. "
+            "Run `autosaxs doctor` for a full install report.",
             RuntimeWarning,
             stacklevel=2,
         )
-    print(f"ATSAS {version} installed - autosaxs is ready for use!")
 
 
 def ensure_atsas_installed() -> str:

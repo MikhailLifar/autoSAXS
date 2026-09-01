@@ -26,25 +26,19 @@
 
 ## Install
 
-Core + CLI:
+**New to Python?** See **[INSTALL.md](INSTALL.md)**: install Miniconda once, download the small installer ZIP, double-click **Install-autoSAXS**, then use the **GUISAXS-LiveView** Desktop shortcut.
 
-```bash
-python -m pip install autosaxs
-autosaxs --help
-```
+Installer ZIPs (Windows / Linux): [GitHub Releases](https://github.com/MikhailLifar/autoSAXS/releases).
 
-With desktop GUIs (`guisaxs-skills`, `guisaxs-liveview`):
+Helper commands (after install):
 
-```bash
-python -m pip install "autosaxs[gui]"
-```
-
-Helper commands (export docs and defaults into a directory):
-
+- `autosaxs doctor` — check that the install (and optional ATSAS) looks healthy
 - `autosaxs get-docs` — write the short `README.md` and detailed `autosaxs-docs/skills_reference.md`
 - `autosaxs get-skills` — write `saxs-processing/` skill for an AI-agent (Cursor-style)
 
-From git `main` (development): `python -m pip install "autosaxs @ git+https://github.com/MikhailLifar/autoSAXS.git"` or `autosaxs -U`
+**Developers:** `python -m pip install "autosaxs[gui]"` or editable `pip install -e ".[gui]"` (see INSTALL.md § Developers). From git `main`: `autosaxs -U`.
+
+ATSAS is optional and proprietary — see [INSTALL.md](INSTALL.md#optional-atsas).
 
 ## Main features
 

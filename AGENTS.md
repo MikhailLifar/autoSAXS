@@ -277,6 +277,7 @@ Run all (CI order): `helpers/run_tests.sh`.
 
 | Doc | Topic |
 |-----|-------|
+| `INSTALL.md` | Beginner install (Linux/Windows, Miniconda, ATSAS optional) |
 | `README.md` | Short PyPI / GitHub landing page (generated) |
 | `autosaxs-docs/skills_reference.md` | Detailed per-skill reference (generated) |
 | `docs/skills_paradigm.md` | Skills architecture spec |
@@ -294,9 +295,12 @@ Run all (CI order): `helpers/run_tests.sh`.
 
 ## Install & dev commands
 
+**End users (Linux / Windows):** see [`INSTALL.md`](INSTALL.md) — Miniconda once, then double-click the installer ZIP (`scripts/pack_installers.sh` builds `dist/autoSAXS-installer-*.zip`).
+
 ```bash
 cd /home/mikl/KurchatovCoop/autosaxs
 /home/mikl/.conda/envs/dev_autosaxs/bin/pip install -e ".[gui]"
+/home/mikl/.conda/envs/dev_autosaxs/bin/autosaxs doctor
 /home/mikl/.conda/envs/dev_autosaxs/bin/autosaxs --help
 /home/mikl/.conda/envs/dev_autosaxs/bin/python -m guisaxs_skills      # skills console
 /home/mikl/.conda/envs/dev_autosaxs/bin/python -m guisaxs_liveview     # liveview

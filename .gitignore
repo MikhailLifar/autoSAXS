@@ -9,3 +9,8 @@ dist/
 *.egg
 src/autosaxs/temp/
 guisaxs_temp/
+
+# Example data (small teaching TIFFs — must be versioned).
+# Keep any future blanket *.tif ignore from excluding this tree.
+!examples/**/*.tif
+!examples/**/*.tiff

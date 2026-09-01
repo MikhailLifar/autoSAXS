@@ -7,17 +7,22 @@ autosaxs runs from the SAME Python environment where the package was installed: 
   /path/to/env/bin/autosaxs ...
 when PATH might point at a different interpreter.
 
+Beginners (humans): see INSTALL.md — Miniconda once, then the installer ZIP (double-click Install-autoSAXS).
+Agents: run ``autosaxs doctor`` before processing if the environment may be incomplete.
+
 Shipped commands (no input data required)
 -----------------------------------------
+  doctor                       Check Python, autosaxs, pyFAI, GUI extras, and optional ATSAS.
   get-docs -o <dir>            Write README.md (short) and autosaxs-docs/skills_reference.md (detailed skills).
   get-skills -o <dir>          Replace dir/saxs-processing/ entirely (orchestrator SKILL.md + <name>/<name>.md leaves).
   get-default-config -o <dir>  Copy bundled config_base.conf into <dir> (skill-keyed YAML template for overrides).
 
 Suggested first steps for an agent
 ----------------------------------
-  1. autosaxs get-docs -o .
-  2. autosaxs get-default-config -o .   (optional: edit config_base.conf, pass --conf to skills)
-  3. autosaxs get-skills -o .          (optional, for Cursor-style skills)
-  4. autosaxs <subcommand> --help       processing skills: calibrate, integrate, subtract, ...
+  1. autosaxs doctor           (fix core deps; ATSAS is optional)
+  2. autosaxs get-docs -o .
+  3. autosaxs get-default-config -o .   (optional: edit config_base.conf, pass --conf to skills)
+  4. autosaxs get-skills -o .          (optional, for Cursor-style skills)
+  5. autosaxs <subcommand> --help       processing skills: calibrate, integrate, subtract, ...
 
 Every processing subcommand also accepts --description (full docstring, no args required).
