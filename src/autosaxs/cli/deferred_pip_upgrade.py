@@ -387,6 +387,7 @@ def launch_deferred_pip_upgrade(
     parent_pid: int,
     force: bool = False,
     restart_argv: List[str] | None = None,
+    package_spec: str | None = None,
 ) -> Path:
     """Write a temp updater script, spawn it detached, return the log file path.
 
@@ -394,9 +395,10 @@ def launch_deferred_pip_upgrade(
     Callers in guisaxs_skills should pass ``guisaxs_liveview_restart_argv()`` from
     ``guisaxs_skills.logic.app_relaunch``. When omitted, falls back to
     ``python -m guisaxs_liveview``.
+    ``package_spec`` selects the pip install target (stable PyPI vs nightbuilt git).
     """
     log_path = deferred_upgrade_log_path()
-    pip_argv = pip_upgrade_argv(force=force)
+    pip_argv = pip_upgrade_argv(force=force, package_spec=package_spec)
     if restart_argv is None:
         restart_argv = [sys.executable, "-m", "guisaxs_liveview"]
     script_path, config_path = _write_updater_files(

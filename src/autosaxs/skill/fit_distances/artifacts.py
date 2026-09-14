@@ -326,9 +326,13 @@ def write_success_artifacts(
 
     md_parts = ["### DATGNOM / p(r) (fit_distances)\n"]
     if fit_vs_exp_png_path and os.path.isfile(fit_vs_exp_png_path):
-        md_parts.append(f"![Fit vs experiment]({os.path.basename(fit_vs_exp_png_path)})\n")
+        fit_dat = os.path.splitext(fit_vs_exp_png_path)[0] + ".dat"
+        md_parts.append(
+            f"![Fit vs experiment]({os.path.basename(fit_dat if os.path.isfile(fit_dat) else fit_vs_exp_png_path)})\n"
+        )
     if best_pr_png_path and os.path.isfile(best_pr_png_path):
-        md_parts.append(f"![p(r)]({os.path.basename(best_pr_png_path)})\n")
+        pr_dat = os.path.splitext(best_pr_png_path)[0] + ".dat"
+        md_parts.append(f"![p(r)]({os.path.basename(pr_dat if os.path.isfile(pr_dat) else best_pr_png_path)})\n")
     md_parts.append(_pr_quality_markdown(pr_quality))
     summary_refs: List[Dict[str, Any]] = [
         {"role": "fit_distances_summary", "path": os.path.basename(log_path), "format": "text"},

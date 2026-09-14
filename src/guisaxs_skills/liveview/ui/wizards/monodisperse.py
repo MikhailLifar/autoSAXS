@@ -47,8 +47,8 @@ class MonodisperseWizardDialog(QDialog):
         lay.setContentsMargins(10, 10, 10, 10)
         lay.addWidget(
             QLabel(
-                "Guinier → GNOM → optional shape (BODIES / DAMMIF). "
-                "Control changes suspend auto-processing until you resume."
+                "Guinier → P(r) → optional shape (BODIES / DAMMIF / DENSS). "
+                "Use Adjust on P(r) to refine GNOM. Control changes suspend auto-processing until you resume."
             )
         )
         lay.addWidget(self._wizard, 1)

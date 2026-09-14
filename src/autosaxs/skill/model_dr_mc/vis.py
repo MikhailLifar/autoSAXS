@@ -84,15 +84,37 @@ def write_dr_png(
 
 
 def write_all_plots(result: Dict[str, Any], output_dir: str | Path, base: str) -> Dict[str, str]:
+    from autosaxs.core.utils import write_data
+    import pandas as pd
+
     output_dir = Path(output_dir)
     fit_path = output_dir / f"{base}_mcsas_fit.png"
     dr_path = output_dir / f"{base}_mcsas_dr.png"
+    fit_dat = output_dir / f"{base}_mcsas_fit.dat"
+    dr_dat = output_dir / f"{base}_mcsas_dr.dat"
 
     gof = result.get("gof_mean")
     title_fit = "McSAS3 fit"
     if gof is not None and np.isfinite(float(gof)):
         title_fit = f"McSAS3 fit (gof={float(gof):.3g})"
 
+    write_data(
+        str(fit_dat),
+        pd.DataFrame(
+            {
+                "q": np.asarray(result["q_nm"], dtype=float),
+                "I_exp": np.asarray(result["I_exp"], dtype=float),
+                "I_fit": np.asarray(result["I_fit"], dtype=float),
+            }
+        ),
+        metadata={
+            "type": "multi_curve",
+            "title": title_fit,
+            "xlabel": "q (nm^-1)",
+            "ylabel": "I (a.u.)",
+            "log_y": True,
+        },
+    )
     write_fit_png(
         q_nm=result["q_nm"],
         I_exp=result["I_exp"],
@@ -101,6 +123,23 @@ def write_all_plots(result: Dict[str, Any], output_dir: str | Path, base: str) -
         sigma=result.get("sigma"),
         out_path=fit_path,
         title=title_fit,
+    )
+    write_data(
+        str(dr_dat),
+        pd.DataFrame(
+            {
+                "R": np.asarray(result["r_nm"], dtype=float),
+                "D(R)": np.asarray(result["D"], dtype=float),
+            }
+        ),
+        metadata={
+            "type": "multi_curve",
+            "title": "McSAS3 volume-weighted D(R)",
+            "xlabel": "R (nm)",
+            "ylabel": "D(R)",
+            "log_x": True,
+            "legend": False,
+        },
     )
     write_dr_png(
         r_nm=result["r_nm"],
@@ -114,4 +153,6 @@ def write_all_plots(result: Dict[str, Any], output_dir: str | Path, base: str) -
     return {
         "fit_png_path": str(fit_path),
         "dr_png_path": str(dr_path),
+        "fit_dat_path": str(fit_dat),
+        "dr_dat_path": str(dr_dat),
     }

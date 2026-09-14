@@ -306,7 +306,7 @@ class PLTViewer(Viewer):
             ax.grid(True, alpha=0.3)
         if plotFilePath is not None:
             if savefigArgs is None:
-                savefigArgs = {}
+                savefigArgs = {"dpi": 150, "bbox_inches": "tight"}
             fig.savefig(plotFilePath, **savefigArgs)
         if show_duration is not None:
             PLTViewer.show(show_duration)
@@ -323,7 +323,7 @@ class PLTViewer(Viewer):
         sigma: Optional[np.ndarray] = None,
         q_min: Optional[float] = None,
         q_max: Optional[float] = None,
-        q2_max: float = 30.0,
+        q2_max: float = 4.0,
         title: str = "Guinier fit",
         plotFilePath: Optional[str] = None,
         show_duration: Optional[float] = None,
@@ -331,7 +331,7 @@ class PLTViewer(Viewer):
         """
         Guinier plot: ln(I) vs q² (no error bars), plus the chosen Guinier line on [q_min, q_max].
 
-        Display is limited to ``q² ≤ q2_max`` (default 30 nm⁻²). When a Guinier interval is
+        Display is limited to ``q² ≤ q2_max`` (default 4 nm⁻²). When a Guinier interval is
         given, the x-axis zooms to a few× that window (still capped by ``q2_max``) so the fit
         remains visible. ``sigma`` is accepted for API compatibility but is not plotted.
         """
@@ -387,7 +387,7 @@ class PLTViewer(Viewer):
         ax.legend(loc="best")
         ax.grid(True, alpha=0.3)
         if plotFilePath is not None:
-            fig.savefig(plotFilePath, bbox_inches="tight")
+            fig.savefig(plotFilePath, dpi=150, bbox_inches="tight")
         if show_duration is not None:
             PLTViewer.show(show_duration)
         elif plotFilePath is not None:

@@ -20,7 +20,8 @@ Parameter edits pause auto-processing until you <b>Resume auto-processing</b>.</
 <h2>Layout</h2>
 <ul>
 <li><b>Guinier</b> — independent display / quality (same style as monodisperse Guinier pane).</li>
-<li><b>GNOM D(R)</b> — <b>I(q)</b> and <b>D(R)</b>; first, last, rmin, rmax, alpha.</li>
+<li><b>GNOM D(R)</b> — <b>I(q)</b> and <b>D(R)</b> plots, quality <b>Passport</b>, and <b>Adjust</b>
+(opens the D(R) / GNOM wizard).</li>
 <li><b>D(R)</b> mixture pane — <b>None</b> / <b>MIXTURE</b>; <b>Re-run D(R)</b>; model and range controls.</li>
 <li>Global — <b>Stop auto-processing</b> / <b>Resume auto-processing</b>.</li>
 </ul>
@@ -35,8 +36,11 @@ Parameter edits pause auto-processing until you <b>Resume auto-processing</b>.</
 
 <div class="recipe">
 <h3>To adjust D(R) / fit_sizes</h3>
-<p>Edit first / last / rmin / rmax / alpha in <b>GNOM D(R)</b> → fit_sizes re-runs (debounced) for the
-current profile → <b>Resume auto-processing</b> if paused.</p>
+<p>Click <b>Adjust</b> (or either embedded GNOM plot) → edit first / last / rmin / rmax / alpha and
+boundary checkboxes in the wizard. Plots and passport update live; after a short idle the app
+re-runs <code>fit_sizes</code> (pinned Rmax refine). Opening the wizard alone does not pause the queue —
+the first control change does. Use <b>Restore auto</b> to return to the last auto-fit snapshot, then
+<b>Resume auto-processing</b> when ready.</p>
 </div>
 
 <div class="recipe">

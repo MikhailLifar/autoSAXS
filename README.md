@@ -36,7 +36,7 @@ Helper commands (after install):
 - `autosaxs get-docs` — write the short `README.md` and detailed `autosaxs-docs/skills_reference.md`
 - `autosaxs get-skills` — write `saxs-processing/` skill for an AI-agent (Cursor-style)
 
-**Developers:** `python -m pip install "autosaxs[gui]"` or editable `pip install -e ".[gui]"` (see INSTALL.md § Developers). From git `main`: `autosaxs -U`.
+**Developers:** `python -m pip install "autosaxs[gui]"` or editable `pip install -e ".[gui]"` (see INSTALL.md § Developers). Upgrade: `autosaxs update` / `autosaxs -U` (PyPI); nightbuilt: `autosaxs update --nightbuilt` / `autosaxs -Unb`.
 
 ATSAS is optional and proprietary — see [INSTALL.md](INSTALL.md#optional-atsas).
 

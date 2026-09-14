@@ -70,6 +70,8 @@ flowchart TB
 
 **GUI rule:** PyQt apps **do not** call skill functions in-process for execution. They introspect `autosaxs.skill` for metadata, then run `python -m autosaxs.cli.cli <skill> ...` via `guisaxs_skills/logic/runner_qprocess.py` (`SkillRunner`).
 
+**Exception:** the liveview monodisperse **P(r) / GNOM adjust** wizard and polydisperse **D(R) / GNOM adjust** wizard may call `autosaxs.core.atsas_gnom` in-process for interactive plot/passport preview. Disk persistence still goes through `SkillRunner` → `fit_distances` (GNOM-only when `dmax_nm` is set) or `fit_sizes` (single GNOM when `rmax_nm` is set).
+
 ---
 
 ## `autosaxs/` — where is what
@@ -93,7 +95,7 @@ autosaxs/
 
 | Skill | Module | Notes |
 |-------|--------|-------|
-| calibrate | `skill/calibrate/` | Ring analysis + geometry refinement; requires mask |
+| calibrate | `skill/calibrate/` | Ring analysis + geometry refinement; optional user mask (else auto → `effective_mask.npy`) |
 | integrate | `skill/integrate.py` | 2D→1D via saved integrator |
 | average | `skill/average.py` | CorMap frame selection |
 | integrate_proxy | `skill/integrate_proxy.py` | Quick-look without calibration |
@@ -102,7 +104,7 @@ autosaxs/
 | plot_2d | `skill/plot_2d.py` | 2D detector PNGs |
 | fit_guinier | `skill/fit_guinier/` | Adaptive Guinier region |
 | analyze_kratky | `skill/analyze_kratky.py` | Dimensionless Kratky conformation analysis |
-| fit_distances | `skill/fit_distances.py` | DATGNOM monodisperse p(r) |
+| fit_distances | `skill/fit_distances.py` | DATGNOM monodisperse p(r); GNOM refine when `dmax_nm` set |
 | fit_sizes | `skill/fit_sizes.py` | GNOM polydisperse D(R) |
 | model_mixture | `skill/model_mixture/` | ATSAS MIXTURE (`fit_mixture` deprecated alias) |
 | model_bodies | `skill/model_bodies.py` | ATSAS BODIES (`fit_bodies` deprecated alias) |
@@ -194,9 +196,10 @@ guisaxs_skills/
 | `logic/autosaxs_cli.py` | Blocking `get-default-config` helper |
 | `liveview/pipeline/executor.py` | **Active** liveview orchestrator (`LiveviewJobExecutor`) |
 | `liveview/session/state.py` | Session states A → B → BD → C → CD |
-| `liveview/ingest/watcher.py` | watchdog TIFF detection |
+| `liveview/ingest/watcher.py` | FLAT mode: watchdog TIFF detection (known path→stat baseline; no mtime-vs-start gate) |
+| `liveview/ingest/dir_tree_observer.py` | TREE mode: hierarchical mtime/ctime/ino scan + prune |
 
-**Liveview note:** orchestration in `liveview/controller/` (`LiveviewController` + handlers); skill execution via `liveview/pipeline/`; package `__init__.py` files re-export common symbols for shorter imports.
+**Liveview note:** orchestration in `liveview/controller/` (`LiveviewController` + handlers); skill execution via `liveview/pipeline/`; package `__init__.py` files re-export common symbols for shorter imports. TIFF change identity is `FileStatSnapshot` (size, mtime, ctime, dev, ino) in `liveview/ingest/stability.py`.
 
 ### `guisaxs_liveview/`
 

@@ -10,18 +10,19 @@
 <h1>Monodisperse analysis</h1>
 
 <p>Open this window from the right-column monodisperse icon. While it stays open, new TIFFs that reach a
-calibrated (and optionally subtracted) 1D profile run <b>Guinier → GNOM (p(r)) → optional shape</b>
+calibrated (and optionally subtracted) 1D profile run <b>Guinier → P(r) / GNOM → optional shape</b>
 automatically. Closing the window disarms that chain. Selecting BODIES, DAMMIF, or DENSS configures
 what shape step follows GNOM for automatic jobs; it does not by itself pause the queue.</p>
 
-<p>Manual edits in Guinier or GNOM pause auto-processing until you <b>Resume auto-processing</b>.
+<p>Manual edits in Guinier or in the P(r) Adjust wizard pause auto-processing until you <b>Resume auto-processing</b>.
 Guinier artifacts for this window live under <code>guinier_mono/</code> (separate from polydisperse).</p>
 
 <p class="shot-wrap"><img class="shot" src="assets/mono_overview.png" alt="Monodisperse analysis window"/></p>
 <h2>Layout</h2>
 <ul>
 <li><b>Guinier</b> — plot; Quality / Classification / Rg; <b>first</b> / <b>last</b> (auto allowed).</li>
-<li><b>GNOM</b> — <b>I(q)</b> and <b>P(r)</b>; Rg, first, last, smooth.</li>
+<li><b>P(r)</b> — embedded <b>I(q)</b> and <b>P(r)</b> plots; quality passport; <b>Adjust</b> opens the GNOM wizard
+(or click either plot). Controls live only in that wizard.</li>
 <li><b>Shape</b> — <b>None</b> / <b>BODIES</b> / <b>DAMMIF</b> / <b>DENSS</b>; <b>Re-run shape</b>; I(q) fit,
 3D preview, controls.</li>
 <li>Global — <b>Stop auto-processing</b> / <b>Resume auto-processing</b>.</li>
@@ -42,9 +43,11 @@ profile → <b>Resume auto-processing</b> when ready for new files.</p>
 </div>
 
 <div class="recipe">
-<h3>To adjust GNOM</h3>
-<p>Edit GNOM parameters → GNOM re-runs for the current profile → use <b>Re-run shape</b> if you also need
-BODIES / DAMMIF / DENSS again → <b>Resume auto-processing</b> if paused.</p>
+<h3>To adjust P(r) / GNOM</h3>
+<p>Click <b>Adjust</b> (or the embedded P(r) / I(q) plots) → dedicated wizard with P(r), I(q) fit, first/last,
+Dmax, alpha, boundary checkboxes, and passport. Plots and passport update live; the first edit pauses
+auto-processing and re-runs <code>fit_distances</code> (GNOM refine). Use <b>Restore auto</b> to return to the
+auto-fit Dmax/alpha snapshot. Resume auto-processing when ready; re-run shape if needed.</p>
 </div>
 
 <div class="recipe">

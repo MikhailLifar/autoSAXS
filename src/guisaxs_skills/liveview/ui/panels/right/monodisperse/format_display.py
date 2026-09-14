@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Union
+from typing import Any, Mapping, Optional, Union
 
 _GUINIER_QUALITY_POOR = frozenset({"weak", "degenerate", "interval_only"})
 _GUINIER_CLASS_POOR = frozenset({"upturn", "downturn", "chaotic"})
@@ -108,3 +108,126 @@ def format_display_number(value: Union[float, int, str, None]) -> str:
             if nonzero >= 3:
                 break
     return f"{sign}{intpart}.{''.join(out)}"
+
+
+def format_gnom_passport_rows(
+    result: Mapping[str, Any],
+    *,
+    guinier_handoff: Optional[Mapping[str, Any]] = None,
+) -> list[tuple[str, bool]]:
+    """
+    Passport rows as ``(text, poor)``.
+
+    ``poor`` marks rows that indicate failure (for per-line red styling in the adjust wizard).
+    """
+    from autosaxs.core.gnom_quality import PrQualityThresholds
+
+    handoff = dict(guinier_handoff or {})
+    t = PrQualityThresholds()
+    rows: list[tuple[str, bool]] = []
+
+    te = scalar_value(result.get("total_estimate"))
+    if te is not None and te not in ("", None):
+        te_poor = False
+        try:
+            te_poor = float(te) < float(t.total_estimate_min)
+        except (TypeError, ValueError):
+            te_poor = False
+        rows.append((f"Total est. = {format_display_number(te)}", te_poor))
+
+    s_min = scalar_value(result.get("shannon_s_min"))
+    s_class = str(scalar_value(result.get("shannon_class")) or "unknown")
+    s_status = str(scalar_value(result.get("overall_status")) or "")
+    if s_status in ("", None) and result.get("shannon_ok") is not None:
+        s_status = "ok" if scalar_value(result.get("shannon_ok")) else "fail"
+    q_min = scalar_value(result.get("q_min_fit_nm"))
+    dmax = scalar_value(result.get("dmax_nm"))
+    if s_min is not None and s_min not in ("", None):
+        shannon_ok_v = result.get("shannon_ok")
+        if isinstance(shannon_ok_v, str):
+            shannon_fail = shannon_ok_v.strip().lower() in ("false", "0", "no", "fail")
+        elif shannon_ok_v is None:
+            shannon_fail = s_class.lower() in ("unreliable", "failed", "fail") or str(s_status).upper() == "FAILED"
+        else:
+            shannon_fail = not bool(shannon_ok_v)
+        if q_min is not None and dmax is not None:
+            text = (
+                f"s_min = (q_min · Dmax) / π = {format_display_number(s_min)} "
+                f"(class {s_class}, status {s_status or '—'})"
+            )
+        else:
+            text = f"s_min = {format_display_number(s_min)} (class {s_class}, status {s_status or '—'})"
+        rows.append((text, shannon_fail))
+
+    rg_g = scalar_value(result.get("rg_guinier_nm"))
+    if rg_g is None:
+        rg_g = handoff.get("rg")
+    i0_g = handoff.get("i0")
+    rg_parts: list[str] = []
+    if rg_g is not None and scalar_value(rg_g) not in ("", None):
+        rg_parts.append(f"Rg_guinier = {format_display_number(rg_g)}")
+    if i0_g is not None and scalar_value(i0_g) not in ("", None):
+        rg_parts.append(f"I(0)_guinier = {format_display_number(i0_g)}")
+    if rg_parts:
+        rows.append((", ".join(rg_parts), False))
+
+    pr_parts: list[str] = []
+    rg_pr = result.get("rg_pr_nm")
+    if rg_pr is not None and scalar_value(rg_pr) not in ("", None):
+        pr_parts.append(f"Rg_P(r) = {format_display_number(rg_pr)}")
+    i0_pr = result.get("i0_pr")
+    if i0_pr is not None and scalar_value(i0_pr) not in ("", None):
+        pr_parts.append(f"I0_P(r) = {format_display_number(i0_pr)}")
+    if pr_parts:
+        rows.append(("; ".join(pr_parts), False))
+
+    drg = scalar_value(result.get("delta_rg_pct"))
+    if drg is not None and drg not in ("", None):
+        try:
+            drg_f = float(drg)
+            if drg_f > t.delta_rg_pct_acceptable:
+                drg_status = "failed"
+                drg_poor = True
+            elif drg_f > t.delta_rg_pct_max:
+                drg_status = "marginal"
+                drg_poor = False  # caution only — not full failure red
+            else:
+                drg_status = "ok"
+                drg_poor = False
+        except (TypeError, ValueError):
+            drg_status = str(scalar_value(result.get("pr_quality_class")) or "—")
+            drg_poor = str(drg_status).lower() in ("failed", "fail")
+        rows.append((f"ΔRg = {format_display_number(drg)}% (status {drg_status})", drg_poor))
+
+    if dmax is not None and dmax not in ("", None):
+        rows.append((f"Dmax = {format_display_number(dmax)}", False))
+
+    return rows
+
+
+def format_gnom_passport_text(
+    result: Mapping[str, Any],
+    *,
+    guinier_handoff: Optional[Mapping[str, Any]] = None,
+) -> str:
+    """Plain-text passport (monodisperse P(r) pane)."""
+    return "\n".join(t for t, _poor in format_gnom_passport_rows(result, guinier_handoff=guinier_handoff))
+
+
+def format_gnom_passport_html(
+    result: Mapping[str, Any],
+    *,
+    guinier_handoff: Optional[Mapping[str, Any]] = None,
+    poor_color: str = "#ff4d4f",
+) -> str:
+    """Rich-text passport with only failing rows colored red."""
+    import html as html_mod
+
+    parts: list[str] = []
+    for text, poor in format_gnom_passport_rows(result, guinier_handoff=guinier_handoff):
+        esc = html_mod.escape(text)
+        if poor:
+            parts.append(f'<span style="color:{poor_color}">{esc}</span>')
+        else:
+            parts.append(esc)
+    return "<br/>".join(parts) if parts else "—"

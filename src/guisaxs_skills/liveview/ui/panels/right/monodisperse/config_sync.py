@@ -2,18 +2,32 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
 
 from .....session.output_paths import fit_distances_dir, guinier_mono_dir
 from .....session.state import LiveviewSessionState, MonodisperseShapeMode
 
+_GNOM_CONF_KEYS = (
+    "rg_nm",
+    "first",
+    "last",
+    "dmax_nm",
+    "alpha",
+    "force_zero_rmin",
+    "force_zero_rmax",
+)
+
 
 class MonodisperseConfigSync:
     def __init__(self, *, state: LiveviewSessionState, wizard: Any) -> None:
         self._state = state
         self._wizard = wizard
+        self._gnom_adjust: Any = None
+
+    def set_gnom_adjust_wizard(self, dlg: Any) -> None:
+        self._gnom_adjust = dlg
 
     def sync_params_to_state(self) -> None:
         wp = dict(self._state.monodisperse_wizard_params or {})
@@ -24,10 +38,14 @@ class MonodisperseConfigSync:
         else:
             wp["guinier_first"] = g_first
             wp["guinier_last"] = g_last
-        # Drop legacy shared keys so Guinier interval cannot leak into DATGNOM.
-        wp.pop("first", None)
-        wp.pop("last", None)
-        wp.update(self._wizard.gnom_pane.gnom_params())
+        # Working GNOM refine params come from the adjust wizard when open.
+        gnom = self._gnom_params_from_ui()
+        if gnom:
+            for k in ("first", "last", "dmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax", "rg_nm"):
+                if k in gnom:
+                    wp[k] = gnom[k]
+                elif k in ("last", "alpha") and k not in gnom:
+                    wp.pop(k, None)
         self._state.monodisperse_wizard_params = wp
         mode = self._wizard.shape_pane.shape_mode()
         try:
@@ -41,6 +59,16 @@ class MonodisperseConfigSync:
         self.apply_denss_settings()
         self.persist_confs()
 
+    def _gnom_params_from_ui(self) -> dict:
+        dlg = self._gnom_adjust
+        if dlg is not None and hasattr(dlg, "gnom_params"):
+            try:
+                return dict(dlg.gnom_params())
+            except Exception:
+                pass
+        wp = self._state.monodisperse_wizard_params or {}
+        return {k: wp[k] for k in _GNOM_CONF_KEYS if wp.get(k) is not None}
+
     def persist_confs(self) -> None:
         wd = self._state.watchdir
         gdir = guinier_mono_dir(wd)
@@ -52,7 +80,6 @@ class MonodisperseConfigSync:
         g_first = wp.get("guinier_first")
         g_last = wp.get("guinier_last")
         if g_first is None or g_last is None:
-            # Fall back to live spins if wp not yet keyed.
             try:
                 g_first, g_last = self._wizard.guinier_pane.first_last()
             except Exception:
@@ -61,11 +88,13 @@ class MonodisperseConfigSync:
         if g_first is not None and g_last is not None:
             gopts["first"] = int(g_first)
             gopts["last"] = int(g_last)
-        # Always take DATGNOM options from the GNOM pane so Guinier interval cannot leak in.
-        try:
-            dopts = dict(self._wizard.gnom_pane.gnom_params())
-        except Exception:
-            dopts = {k: wp[k] for k in ("rg_nm", "first", "last", "smooth") if wp.get(k) is not None}
+        dopts = self._gnom_params_from_ui()
+        # Auto conf must not pin Dmax (that would force GNOM refine on every TIFF).
+        # Refine keys live in monodisperse_wizard_params and are merged only for manual DISTANCES_ONLY jobs.
+        for k in ("dmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax"):
+            dopts.pop(k, None)
+        # Drop smooth from persisted conf unless explicitly set for rare DATGNOM re-auto use.
+        dopts.pop("smooth", None)
         try:
             gpath.write_text(yaml.safe_dump(gopts, sort_keys=True), encoding="utf-8")
             self._state.fit_guinier_mono_conf_path = gpath
@@ -76,6 +105,36 @@ class MonodisperseConfigSync:
             self._state.fit_distances_conf_path = dpath
         except OSError:
             pass
+
+    def store_gnom_working(self, params: Mapping[str, Any]) -> None:
+        wp = dict(self._state.monodisperse_wizard_params or {})
+        for k in _GNOM_CONF_KEYS:
+            if k in params:
+                if params[k] is None:
+                    wp.pop(k, None)
+                else:
+                    wp[k] = params[k]
+        # Clear keys omitted by gnom_params (e.g. last/alpha auto).
+        if "last" not in params:
+            wp.pop("last", None)
+        if "alpha" not in params:
+            wp.pop("alpha", None)
+        self._state.monodisperse_wizard_params = wp
+        self.persist_confs()
+
+    def store_gnom_auto_snapshot(self, params: Mapping[str, Any]) -> None:
+        wp = dict(self._state.monodisperse_wizard_params or {})
+        auto = {k: params[k] for k in _GNOM_CONF_KEYS if params.get(k) is not None}
+        if params.get("force_zero_rmin") is None:
+            auto.setdefault("force_zero_rmin", "Y")
+        if params.get("force_zero_rmax") is None:
+            auto.setdefault("force_zero_rmax", "Y")
+        wp["gnom_auto"] = auto
+        # Seed working params from auto when first available.
+        for k, v in auto.items():
+            wp.setdefault(k, v)
+        self._state.monodisperse_wizard_params = wp
+        self.persist_confs()
 
     def apply_shape_mode(self, mode: str) -> None:
         try:

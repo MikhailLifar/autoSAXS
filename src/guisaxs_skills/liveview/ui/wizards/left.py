@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QSizePolicy,
@@ -20,17 +21,16 @@ from ...services.calibration.storage import calibration_subdir, ensure_tiff_in_c
 from ....core.models import RunRequest
 from ....logic.session_state import SessionPathHints
 from ....logic.skill_catalog import discover_skills
+from ....logic.smart_defaults import find_calibrant_image_in_workdir
 from ....ui.path_field import PathField
 from ....ui.skill_form import SkillForm
 from ..skill_form_utils import (
     liveview_run_controls,
     liveview_skill_form,
-    normalize_calibrate_mask_mode,
     prepare_liveview_calibrate_form,
     prepare_liveview_subtract_form,
 )
 from ..widgets.plots import DropTiffImageCanvas, LogCurvePlot, open_dat_curve_dialog
-from PyQt5.QtWidgets import QLineEdit
 from ..widgets.plots import mpl_navigation_toolbar
 
 
@@ -95,11 +95,12 @@ def _disable_subtract_sample_field(form: SkillForm, meta) -> None:
 class CalibrationWizardDialog(QDialog):
     reset_requested = pyqtSignal()
     attention_context_changed = pyqtSignal()
+    mask_path_edited = pyqtSignal(str)
 
     def __init__(self, *, watchdir: Path, parent=None) -> None:
         super().__init__(parent)
         self._watchdir = watchdir
-        self.setWindowTitle("Set calibration")
+        self.setWindowTitle("Calibrate")
         # Make it a true top-level window (not a "dialog" window type) so WMs show min/max controls.
         self.setWindowFlags(
             Qt.Window
@@ -131,7 +132,6 @@ class CalibrationWizardDialog(QDialog):
         self._meta = meta
         self._viewer = DropTiffImageCanvas()
         self._viewer_toolbar = None
-        self._mask_wizard = None
         self._run_coach_dismissed = False
         self._close_coach_armed = False
         self._btn_close = QPushButton("Close")
@@ -172,8 +172,8 @@ class CalibrationWizardDialog(QDialog):
             right_lay.setContentsMargins(0, 0, 0, 0)
             top_row = QHBoxLayout()
             top_row.addStretch(1)
-            self._btn_create_mask = QPushButton("Create mask")
-            self._btn_create_mask.setToolTip("Create or edit a mask for this calibration image")
+            self._btn_create_mask = QPushButton("View/Configure mask")
+            self._btn_create_mask.setToolTip("View or edit a mask for this calibration image")
             top_row.addWidget(self._btn_create_mask, 0, Qt.AlignRight)
             right_lay.addLayout(top_row)
             right_lay.addWidget(self._form, 1)
@@ -240,6 +240,24 @@ class CalibrationWizardDialog(QDialog):
         f = self._mask_field()
         return f.browse_button if f is not None else None
 
+    def mask_path_field(self):
+        """Mask PathField (or its line edit) for coaching highlight."""
+        f = self._mask_field()
+        if f is None:
+            return None
+        return getattr(f, "_edit", None) or f
+
+    def calibrant_browse_button(self):
+        f = self._calib_image_field()
+        return f.browse_button if f is not None else None
+
+    def calibrant_path_field(self):
+        """Calibrant PathField line edit for coaching highlight."""
+        f = self._calib_image_field()
+        if f is None:
+            return None
+        return getattr(f, "_edit", None) or f
+
     def create_mask_button(self):
         return getattr(self, "_btn_create_mask", None)
 
@@ -254,7 +272,53 @@ class CalibrationWizardDialog(QDialog):
         return getattr(self, "_viewer", None)
 
     def mask_wizard(self):
-        return self._mask_wizard
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "shared_mask_wizard"):
+            return parent.shared_mask_wizard()  # type: ignore[attr-defined]
+        return None
+
+    def calibrant_image_path(self) -> str:
+        f = self._calib_image_field()
+        return f.text().strip() if f is not None else ""
+
+    def mask_path_text(self) -> str:
+        f = self._mask_field()
+        return f.text().strip() if f is not None else ""
+
+    def set_mask_path(self, path: str) -> None:
+        f = self._mask_field()
+        if f is None:
+            return
+        f.set_text((path or "").strip())
+
+    def set_calibrant_image_path(self, path: str) -> None:
+        f = self._calib_image_field()
+        if f is None:
+            return
+        chosen = (path or "").strip()
+        if not chosen or chosen == f.text().strip():
+            return
+        f.set_text(chosen)
+        self._refresh_viewer_from_form()
+
+    def maybe_apply_empty_calibrant_hint(self) -> bool:
+        """
+        If ``calibrant_image`` is empty, re-run the workdir calibrant TIFF guess and fill it.
+
+        Liveview-specific: call on each incoming ``.tif`` revision so a late-arriving
+        AgBh/calib/LaB6 file is picked up without rebuilding the form.
+        """
+        if self.has_calibrant_image():
+            return False
+        found = find_calibrant_image_in_workdir(self._watchdir)
+        if found is None:
+            return False
+        self.set_calibrant_image_path(str(found))
+        f = self._calib_image_field()
+        if f is not None:
+            f.set_browse_start_dir(str(found.parent))
+        self.attention_context_changed.emit()
+        return True
 
     def _on_tiff_dropped_to_viewer(self, paths_obj: object) -> None:
         if not isinstance(paths_obj, list):
@@ -289,13 +353,6 @@ class CalibrationWizardDialog(QDialog):
             return None
         return w if isinstance(w, PathField) else None
 
-    def _mask_mode_field(self):
-        try:
-            w = self._form._opt_fields.get("mask_mode")  # type: ignore[attr-defined]
-        except Exception:
-            return None
-        return w if isinstance(w, QLineEdit) else None
-
     def _wire_viewer_updates(self) -> None:
         f = self._calib_image_field()
         if f is not None:
@@ -316,8 +373,18 @@ class CalibrationWizardDialog(QDialog):
                 mask_f.path_changed.disconnect(self._on_coach_path_changed)
             except TypeError:
                 pass
+            try:
+                mask_f.path_changed.disconnect(self._on_mask_field_edited)
+            except TypeError:
+                pass
             mask_f.path_changed.connect(self._on_coach_path_changed)
+            mask_f.path_changed.connect(self._on_mask_field_edited)
             mask_f.set_browse_start_dir(str(calibration_subdir(self._watchdir)))
+
+    def _on_mask_field_edited(self) -> None:
+        f = self._mask_field()
+        text = f.text().strip() if f is not None else ""
+        self.mask_path_edited.emit(text)
 
     def _on_coach_path_changed(self) -> None:
         self._run_coach_dismissed = False
@@ -352,40 +419,34 @@ class CalibrationWizardDialog(QDialog):
         self._open_mask_wizard()
 
     def _open_mask_wizard(self) -> None:
-        # Lazy import to avoid circular imports while editing.
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "open_shared_mask_wizard"):
+            parent.open_shared_mask_wizard()  # type: ignore[attr-defined]
+            self.attention_context_changed.emit()
+            return
+        # Fallback if not hosted by LiveviewLeftPanel.
         from .mask import MaskWizardDialog  # type: ignore
 
-        calib_field = self._calib_image_field()
-        mask_field = self._mask_field()
-        calib_path = calib_field.text().strip() if calib_field is not None else ""
-        mask_path = mask_field.text().strip() if mask_field is not None else ""
-        if self._mask_wizard is None:
-            self._mask_wizard = MaskWizardDialog(
-                watchdir=self._watchdir,
-                default_image_path=calib_path,
-                default_mask_path=mask_path,
-                parent=self,
-            )
-            self._mask_wizard.attention_context_changed.connect(self.attention_context_changed.emit)
-            self._mask_wizard.mask_committed.connect(self._on_mask_committed)
-        else:
-            self._mask_wizard.set_defaults(
-                image_path=calib_path,
-                mask_path=mask_path,
-            )
-        self._mask_wizard.show()
-        self._mask_wizard.raise_()
-        self._mask_wizard.activateWindow()
+        calib_path = self.calibrant_image_path()
+        mask_path = self.mask_path_text()
+        wiz = MaskWizardDialog(
+            watchdir=self._watchdir,
+            default_image_path=calib_path,
+            default_mask_path=mask_path,
+            parent=self,
+        )
+        wiz.attention_context_changed.connect(self.attention_context_changed.emit)
+        wiz.mask_committed.connect(self._on_mask_committed)
+        wiz.show()
+        wiz.raise_()
+        wiz.activateWindow()
         self.attention_context_changed.emit()
 
     def _on_mask_committed(self, path: str) -> None:
         chosen = (path or "").strip()
-        mask_field = self._mask_field()
-        if chosen and mask_field is not None:
-            mask_field.set_text(chosen)
-            mm = self._mask_mode_field()
-            if mm is not None and not mm.text().strip():
-                mm.setText("from_file")
+        if chosen:
+            self.set_mask_path(chosen)
+            self.mask_path_edited.emit(chosen)
         self._run_coach_dismissed = False
         self.attention_context_changed.emit()
 
@@ -429,11 +490,13 @@ class CalibrationWizardDialog(QDialog):
     def build_calibrate_request(self):
         req = self._form.build_request()
         opts = dict(req.options or {})
-        mm = normalize_calibrate_mask_mode(opts.get("mask_mode") if isinstance(opts.get("mask_mode"), str) else None)
-        if mm is not None:
-            opts["mask_mode"] = mm
-        elif "mask_mode" in opts:
-            opts.pop("mask_mode", None)
+        # mask_mode is hidden in liveview; skill infers auto vs combined from mask presence.
+        opts.pop("mask_mode", None)
+        mask = (opts.get("mask") or "").strip() if isinstance(opts.get("mask"), str) else opts.get("mask")
+        if isinstance(mask, dict):
+            mask = (mask.get("text") or "").strip()
+        if not mask:
+            opts.pop("mask", None)
         return RunRequest(skill_name=req.skill_name, positional=list(req.positional), options=opts)
 
     def set_running(self, running: bool) -> None:
@@ -444,7 +507,14 @@ class BufferWizardDialog(QDialog):
     reset_requested = pyqtSignal()
     attention_context_changed = pyqtSignal()
 
-    def __init__(self, *, watchdir: Path, hints: SessionPathHints, parent=None) -> None:
+    def __init__(
+        self,
+        *,
+        watchdir: Path,
+        hints: SessionPathHints,
+        saved_state: dict | None = None,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Set buffer")
         self.setWindowFlags(
@@ -492,7 +562,7 @@ class BufferWizardDialog(QDialog):
                 workdir=watchdir,
                 default_output_dir=str(out),
                 hints=hints,
-                saved_state=None,
+                saved_state=saved_state,
             )
             prepare_liveview_subtract_form(self._form, outdir=str(out))
             _disable_subtract_sample_field(self._form, meta)
@@ -530,6 +600,7 @@ class BufferWizardDialog(QDialog):
             splitter.setStretchFactor(1, 2)
             lay.addWidget(splitter, 1)
             self._attach_options_help_button()
+            self._autofill_q_range_from_buffer(force=False)
             self._refresh_buffer_plot()
         else:
             lay.addWidget(QLabel("subtract skill is not available."))
@@ -595,14 +666,14 @@ class BufferWizardDialog(QDialog):
         buf = self._buffer_field()
         if buf is not None:
             try:
-                buf.path_changed.disconnect(self._refresh_buffer_plot)
+                buf.path_changed.disconnect(self._on_buffer_path_changed)
             except TypeError:
                 pass
             try:
                 buf.path_changed.disconnect(self._on_coach_inputs_changed)
             except TypeError:
                 pass
-            buf.path_changed.connect(self._refresh_buffer_plot)
+            buf.path_changed.connect(self._on_buffer_path_changed)
             buf.path_changed.connect(self._on_coach_inputs_changed)
         for name in ("q_min", "q_max"):
             w = self._form._opt_fields.get(name)  # type: ignore[attr-defined]
@@ -622,6 +693,11 @@ class BufferWizardDialog(QDialog):
         self._apply_coach_dismissed = False
         self.attention_context_changed.emit()
 
+    def _on_buffer_path_changed(self, *_args) -> None:
+        # New buffer → suggest a fresh pre-knee window (user may still edit).
+        self._autofill_q_range_from_buffer(force=True)
+        self._refresh_buffer_plot()
+
     def _on_q_text_changed(self, _text: str = "") -> None:
         self._refresh_buffer_plot()
 
@@ -640,6 +716,15 @@ class BufferWizardDialog(QDialog):
         f = self._buffer_field()
         return f.text().strip() if f is not None else ""
 
+    def _resolved_buffer_path(self) -> Path | None:
+        path = self._buffer_path_text()
+        if not path:
+            return None
+        resolved = Path(path).expanduser()
+        if not resolved.is_absolute():
+            resolved = (self._watchdir / resolved).resolve()
+        return resolved if resolved.is_file() else None
+
     def _q_range(self) -> tuple[object, object]:
         def _read(name: str):
             w = self._form._opt_fields.get(name)  # type: ignore[attr-defined]
@@ -654,6 +739,25 @@ class BufferWizardDialog(QDialog):
                 return None
 
         return _read("q_min"), _read("q_max")
+
+    def _autofill_q_range_from_buffer(self, *, force: bool = False) -> None:
+        if not force and self.has_q_range():
+            return
+        resolved = self._resolved_buffer_path()
+        if resolved is None:
+            return
+        try:
+            from autosaxs.core.subtract_scale import pre_knee_q_window_from_dat
+
+            q0, q1, _knee = pre_knee_q_window_from_dat(str(resolved))
+        except Exception:
+            return
+        for name, value in (("q_min", float(q0)), ("q_max", float(q1))):
+            w = self._form._opt_fields.get(name)  # type: ignore[attr-defined]
+            if isinstance(w, QLineEdit):
+                w.blockSignals(True)
+                w.setText(f"{value:.6g}")
+                w.blockSignals(False)
 
     def _refresh_buffer_plot(self) -> None:
         path = self._buffer_path_text()
@@ -723,15 +827,17 @@ class BufferWizardDialog(QDialog):
         _disable_subtract_sample_field(self._form, self._meta)
         self._wire_form_plot_updates()
         self._attach_options_help_button()
+        self._autofill_q_range_from_buffer(force=False)
         self._refresh_buffer_plot()
         self._apply_coach_dismissed = False
         self._close_coach_armed = False
         self.attention_context_changed.emit()
 
-    def rebuild(self, hints: SessionPathHints) -> None:
+    def rebuild(self, hints: SessionPathHints, *, saved_state: dict | None = None) -> None:
         if self._meta is None:
             return
-        saved = self._form.state()
+        # Prefer an explicit seed (e.g. session restore); otherwise keep in-progress form edits.
+        saved = saved_state if saved_state is not None else self._form.state()
         out = self._watchdir / "subtracted"
         out.mkdir(parents=True, exist_ok=True)
         self._form.set_skill(
@@ -745,6 +851,7 @@ class BufferWizardDialog(QDialog):
         _disable_subtract_sample_field(self._form, self._meta)
         self._wire_form_plot_updates()
         self._attach_options_help_button()
+        self._autofill_q_range_from_buffer(force=False)
         self._refresh_buffer_plot()
         self.attention_context_changed.emit()
 
@@ -766,10 +873,11 @@ class BufferWizardDialog(QDialog):
         QMessageBox.information(
             self,
             "Options",
-            "Auto-scale relies on Porod and linear approximations of SAXS data in higher q region. "
-            "q min and q max are the boundaries of the region where approximations hold.\n"
-            "q max is also a point where the algorithm matches buffer and sample. "
-            'Choose it close to the "knee" of a SAXS curve',
+            "Buffer subtraction auto-scales the buffer using a min-ratio match in the "
+            "high-q plateau just before the detector knee.\n\n"
+            "q min / q max define that matching window. They are filled automatically "
+            "from the buffer curve (pre-knee band) when you choose a buffer; edit them "
+            "if you want a different interval.",
         )
 
     def _on_apply(self) -> None:

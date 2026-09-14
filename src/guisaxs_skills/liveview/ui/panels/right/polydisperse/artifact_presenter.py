@@ -15,7 +15,8 @@ from .....services.artifacts import (
     norm_artifact_path,
     resolve_artifact_path,
 )
-from ..monodisperse.format_display import format_display_number, is_passport_quality_poor, scalar_value
+from ..monodisperse.format_display import format_display_number, scalar_value
+from .format_display import format_sizes_passport_text
 from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
 
 
@@ -31,6 +32,7 @@ class PolydisperseArtifactPresenter:
         self._last_mixture_subdir: str = ""
         self._last_sizes_summary: str = ""
         self._last_mixture_summary: str = ""
+        self._last_sizes_result: dict = {}
 
     def set_context(
         self,
@@ -65,6 +67,7 @@ class PolydisperseArtifactPresenter:
         self._last_mixture_subdir = ""
         self._last_sizes_summary = ""
         self._last_mixture_summary = ""
+        self._last_sizes_result = {}
 
     def _artifact_bases(self) -> list[Path]:
         bases: list[Path] = []
@@ -186,47 +189,9 @@ class PolydisperseArtifactPresenter:
         except Exception:
             pass
 
-    def _format_sizes_diagnostics(self, result: dict) -> str:
-        """Compact D(R) quality preview — one value per metric, short labels."""
-        lines: list[str] = []
-        te = scalar_value(result.get("total_estimate"))
-        status = scalar_value(result.get("overall_status")) or ""
-        head: list[str] = []
-        if te is not None:
-            head.append(f"TE = {format_display_number(te)}")
-        if status:
-            head.append(str(status))
-        if head:
-            lines.append(" · ".join(head))
-
-        s_min = scalar_value(result.get("shannon_s_min"))
-        s_class = scalar_value(result.get("shannon_class")) or ""
-        if s_min is not None:
-            s_line = f"s_min = {format_display_number(s_min)}"
-            if s_class and s_class != "unknown":
-                s_line += f" ({s_class})"
-            lines.append(s_line)
-
-        size_parts: list[str] = []
-        d_avg = scalar_value(result.get("d_avg_nm"))
-        d_std = scalar_value(result.get("d_std_nm"))
-        pdi = scalar_value(result.get("pdi"))
-        modality = scalar_value(result.get("modality_class"))
-        if d_avg is not None:
-            if d_std is not None:
-                size_parts.append(f"⟨R⟩ = {format_display_number(d_avg)} ± {format_display_number(d_std)}")
-            else:
-                size_parts.append(f"⟨R⟩ = {format_display_number(d_avg)}")
-        if pdi is not None:
-            size_parts.append(f"PDI = {format_display_number(pdi)}")
-        if modality:
-            size_parts.append(str(modality))
-        if size_parts:
-            lines.append(" · ".join(size_parts))
-        return "\n".join(lines) if lines else "—"
-
     def _ingest_sizes(self, result: dict) -> None:
         result = merge_fit_sizes_quality_fields(dict(result or {}), watchdir=self._state.watchdir)
+        self._last_sizes_result = dict(result)
         sub = norm_artifact_path(result.get("output_subdir"))
         if sub:
             self._last_sizes_subdir = self._resolve_result_path(sub) or sub
@@ -239,24 +204,74 @@ class PolydisperseArtifactPresenter:
         gnom_out = self._resolve_result_path(result.get("best_gnom_out_path"))
         if gnom_out:
             self._last_gnom_out = gnom_out
-        if result.get("selected_first") is not None:
-            self._window.sizes_pane.set_params({"first": result["selected_first"]})
-        if result.get("selected_last") is not None:
-            self._window.sizes_pane.set_params({"last": result["selected_last"]})
         prof = self._effective_profile_path()
         if gnom_out and os.path.isfile(gnom_out):
             self._window.sizes_pane.show_sizes(prof, gnom_out)
         else:
             self._window.sizes_pane.clear_view()
-        diag = self._format_sizes_diagnostics(result)
-        poor = is_passport_quality_poor(
-            overall_status=str(scalar_value(result.get("overall_status")) or ""),
-            quality_class=str(scalar_value(result.get("sizes_quality_class")) or ""),
-            stability_class=str(scalar_value(result.get("stability_class")) or ""),
-        )
-        self._window.sizes_pane.set_diagnostics(text=diag, poor=poor)
-        self._last_sizes_summary = diag.replace("\n", "; ")
+        self._window.sizes_pane.set_diagnostics(quality=result)
+        self._last_sizes_summary = format_sizes_passport_text(result).replace("\n", "; ")
         self._window.mixture_pane.set_rerun_enabled(self.can_rerun_mixture())
+        if gnom_out and os.path.isfile(gnom_out):
+            self._update_sizes_params_from_result(result, gnom_out_path=gnom_out)
+
+    def _update_sizes_params_from_result(self, result: dict, *, gnom_out_path: str) -> None:
+        """Seed working sizes params; refresh sizes_auto after full auto (not refine) runs."""
+        from autosaxs.core.gnom import parse_gnom_out
+
+        snap: dict = {}
+        first = result.get("selected_first")
+        if first is None:
+            first = result.get("first")
+        last = result.get("selected_last")
+        if last is None:
+            last = result.get("last")
+        if first is not None:
+            try:
+                snap["first"] = int(scalar_value(first))
+            except (TypeError, ValueError):
+                pass
+        if last is not None:
+            try:
+                snap["last"] = int(scalar_value(last))
+            except (TypeError, ValueError):
+                pass
+        rmax = scalar_value(result.get("dmax_nm"))
+        if rmax is None:
+            rmax = scalar_value(result.get("rmax_nm"))
+        if rmax is not None and rmax not in ("", None):
+            try:
+                snap["rmax_nm"] = float(rmax)
+            except (TypeError, ValueError):
+                pass
+        alpha = None
+        try:
+            parsed = parse_gnom_out(Path(gnom_out_path).read_text(errors="replace"))
+            alpha = parsed.get("current_alpha")
+            if snap.get("rmax_nm") is None and parsed.get("real_space_rmax") is not None:
+                snap["rmax_nm"] = float(parsed["real_space_rmax"])
+        except Exception:
+            parsed = {}
+        if alpha is not None:
+            try:
+                snap["alpha"] = float(alpha)
+            except (TypeError, ValueError):
+                pass
+        snap["force_zero_rmin"] = "Y"
+        snap["force_zero_rmax"] = "Y"
+
+        wp = dict(self._state.polydisperse_window_params or {})
+        for k, v in snap.items():
+            wp[k] = v
+        # Full auto runs write an Rmax ensemble; refine skips it — only then refresh sizes_auto.
+        ens = str(result.get("ensemble_dir") or "").strip()
+        if ens or not wp.get("sizes_auto"):
+            wp["sizes_auto"] = {
+                k: snap[k]
+                for k in ("first", "last", "rmin_nm", "rmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax")
+                if k in snap
+            }
+        self._state.polydisperse_window_params = wp
 
     def _ingest_mixture(self, result: dict) -> None:
         if self._state.polydisperse_mixture_mode == PolydisperseMixtureMode.NONE:
@@ -396,3 +411,11 @@ class PolydisperseArtifactPresenter:
     @property
     def output_root(self) -> Optional[Path]:
         return self._output_root
+
+    @property
+    def last_gnom_out(self) -> str:
+        return self._last_gnom_out
+
+    @property
+    def last_sizes_result(self) -> dict:
+        return dict(self._last_sizes_result or {})

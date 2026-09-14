@@ -333,12 +333,29 @@ def _analyze_kratky_paths(
     write_data(
         kratky_classical_dat_path,
         pd.DataFrame({"q": q_arr, "I * q^2": classical_y}),
-        metadata={"type": "kratky", "parent": profile},
+        metadata={
+            "type": "kratky",
+            "title": f"Kratky: {base}",
+            "xlabel": "q (nm-1)",
+            "ylabel": "I * q^2 (a.u.)",
+            "parent": profile,
+        },
     )
     write_data(
         kratky_dimensionless_dat_path,
         pd.DataFrame({"q * Rg": q_rg, "Y": y_dim}),
-        metadata={"type": "kratky_dimensionless", "parent": profile, "Rg_nm": rg_nm, "I0": i0},
+        metadata={
+            "type": "kratky_dimensionless",
+            "title": f"Dimensionless Kratky: {base}",
+            "xlabel": "q · Rg",
+            "ylabel": "(q · Rg)² · I(q) / I(0)",
+            "parent": profile,
+            "Rg_nm": rg_nm,
+            "I0": i0,
+            "classification": classification,
+            "x_max": x_peak,
+            "y_max": y_peak,
+        },
     )
 
     PLTViewer.view_curves(
@@ -422,14 +439,22 @@ def _analyze_kratky_paths(
     if x_peak is not None and y_peak is not None:
         md_lines.append(f" (peak at q·Rg = {x_peak:.3f}, Y = {y_peak:.3f})")
     md_lines.append(".\n")
-    if os.path.isfile(kratky_dimensionless_plot_path):
-        md_lines.append(f"![Dimensionless Kratky]({os.path.basename(kratky_dimensionless_plot_path)})\n")
+    if os.path.isfile(kratky_dimensionless_dat_path):
+        md_lines.append(f"![Dimensionless Kratky]({os.path.basename(kratky_dimensionless_dat_path)})\n")
 
     summary_refs = [
         {"role": "kratky_results", "path": os.path.basename(results_path), "format": "text"},
         {"role": "kratky_classification", "path": os.path.basename(results_path), "format": "text"},
     ]
-    if os.path.isfile(kratky_dimensionless_plot_path):
+    if os.path.isfile(kratky_dimensionless_dat_path):
+        summary_refs.append(
+            {
+                "role": "kratky_dimensionless_dat",
+                "path": os.path.basename(kratky_dimensionless_dat_path),
+                "format": "dat",
+            }
+        )
+    elif os.path.isfile(kratky_dimensionless_plot_path):
         summary_refs.append(
             {
                 "role": "kratky_dimensionless_plot",

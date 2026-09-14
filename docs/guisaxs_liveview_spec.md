@@ -261,6 +261,9 @@ Use a three-column main window (a horizontal splitter) consistent with `guisaxs_
 
 - Must reuse the existing “calibrate skill panel” patterns from `guisaxs_skills`.
 - User sets parameters for `calibrate` (matching the existing calibrate panel in `src/guisaxs_skills/`).
+- **Mask path is optional** (empty ⇒ skill auto-mask). Do **not** expose `mask_mode` in the liveview form.
+- **View/Configure mask** and click-on-calibrant open the shared Mask wizard (same instance as the left Mask panel).
+- Coach (calibrant present, no mask): pulse **Run + View/Configure mask + mask PathField** together.
 - On “Run”:
   - invoke `calibrate` (isolated process)
   - on success: transition to State B
@@ -268,7 +271,14 @@ Use a three-column main window (a horizontal splitter) consistent with `guisaxs_
   - clicking the preview opens the standard `.png` viewer from `guisaxs_skills`
  - Calibration results MUST be written under a dedicated `calibration/` subdirectory in the watch directory (see §7.1).
 
-#### 6.2.3 Buffer panel (bottom)
+#### 6.2.3 Mask panel (between Calibration and Buffer)
+
+- Left-column **Mask** group: **Set mask**, **Reset**, hint, embedded preview.
+- Opens the shared `MaskWizardDialog` (also launched from Calibration).
+- Session state owns `mask_path` (and optional `mask_preview_path`); mask survives calibration reset.
+- Preview click opens the wizard. Reset clears the session path only (does not delete the file).
+
+#### 6.2.4 Buffer panel (bottom)
 
 - Must reuse the existing `subtract` skill panel patterns from `guisaxs_skills`:
   - a file picker for a buffer `.dat`
@@ -357,21 +367,27 @@ No mode in this spec uses a different input source than the above.
 
 The GUI MUST treat each skill as a **black box**: display artifacts, logs, and plots produced by the skill (and standard autosaxs run metadata). It MUST NOT reimplement scientific logic in-process.
 
-Cross-pane parameter handoff in the monodisperse wizard (Guinier interval → GNOM, GNOM → shape) is **orchestration**: the GUI reads YAML/metadata from prior skill outputs and passes explicit options into subsequent skill invocations. All fits still run via skills; the wizard does not perform Guinier/GNOM/BODIES/DAMMIF math in-process.
+**Exception — monodisperse P(r) / GNOM adjust wizard:** For interactive refine only, the dedicated GNOM wizard MAY call the shared ATSAS GNOM primitive in `autosaxs.core.atsas_gnom` in-process to update P(r) / I(q) plots and a lightweight quality passport while the user edits parameters. Persistence and the embedded P(r) pane remain driven by an ordinary manual `fit_distances` skill run (GNOM-only branch when `dmax_nm` is set) via `SkillRunner`. Auto TIFF processing still uses the full DATGNOM + ensemble path.
+
+**Exception — polydisperse D(R) / GNOM adjust wizard:** For interactive refine only, the dedicated D(R) adjust wizard MAY call `autosaxs.core.atsas_gnom.run_gnom` in-process with `--system=1` (spheres) to update D(R) / I(q) plots and a lightweight quality passport while the user edits parameters. Persistence and the embedded GNOM D(R) pane remain driven by an ordinary manual `fit_sizes` skill run (single GNOM when `rmax_nm` is set; no Rmax search / ensemble) via `SkillRunner`. Auto TIFF processing still uses full Rmax optimization + ensemble.
+
+Cross-pane parameter handoff in the monodisperse wizard (Guinier interval → GNOM, GNOM → shape) is **orchestration**: the GUI reads YAML/metadata from prior skill outputs and passes explicit options into subsequent skill invocations. All fits still run via skills; the wizard does not perform Guinier/GNOM/BODIES/DAMMIF math in-process, except for the P(r) / D(R) adjust exceptions above.
 
 ### 8.3 Per-mode skill sequence and UI mapping
 
 | Drop-down label | Skill(s) (in order) | Right-column content (minimum) |
 |-----------------|---------------------|--------------------------------|
 | `Off` | *(none)* | Mode selector + idle / placeholder |
-| `Monodisperse analysis` | `fit_guinier` → `fit_distances` (auto); optional `model_bodies` / `model_dam` (manual) | Separate wizard window: Guinier, GNOM, shape (None/BODIES/DAMMIF) |
-| `Polydisperse analysis` | `fit_guinier` → `fit_sizes` (auto); optional `model_mixture` (when enabled) | Separate analysis window: Guinier (independent), fit_sizes / D(R), optional mixture |
+| `Monodisperse analysis` | `fit_guinier` → `fit_distances` (auto); optional `model_bodies` / `model_dam` (manual) | Separate wizard window: Guinier, P(r) (plots + passport + Adjust), shape (None/BODIES/DAMMIF/DENSS) |
+| `Polydisperse analysis` | `fit_guinier` → `fit_sizes` (auto); optional `model_mixture` (when enabled) | Separate analysis window: Guinier (independent), GNOM D(R) (plots + passport + Adjust), optional mixture |
 
 **Monodisperse shape chaining:** When the user selects **BODIES** or **DAMMIF** and presses **Re-run shape**, `model_dam` MUST consume the **GNOM result** from the latest `fit_distances` run (`best_gnom_out_path`). `model_bodies` uses the profile curve plus Guinier/GNOM handoff parameters. Shape skills do **not** run automatically in the TIFF pipeline (default shape mode is **None**).
 
-**Polydisperse chaining:** Guinier pane edits re-run **only** `fit_guinier` (no handoff into `fit_sizes`). `fit_sizes` always uses `shape=spheres` and an explicit `first` (default **1**). When mixture mode is **Mixture**, auto TIFF jobs append `model_mixture`; enabling mixture mid-run may enqueue a mixture-only follow-up after a successful `fit_sizes`. Mixture `r_max` / `poly_max` start unset (skill-derived) and the pane controls update from the resolved values after a run (same pattern as fit_sizes `last`). Window panes use **data-driven matplotlib viewers** (`.dat`, GNOM `.out`, `dr_csv`, MIXTURE `.fit` / CSV) — not PNG thumbnails.
+**Polydisperse chaining:** Guinier pane edits re-run **only** `fit_guinier` (no handoff into `fit_sizes`). `fit_sizes` always uses `shape=spheres` and an explicit `first` (default **1**). The GNOM D(R) pane is minimized (plots + passport + **Adjust**); parameter edits live in the dedicated D(R) adjust wizard. Auto TIFF jobs must **not** pin `rmax_nm` / `alpha` / force-zero in `fit_sizes.conf` (those refine keys live in `polydisperse_window_params` and are merged only for manual `SIZES_ONLY` refine). When mixture mode is **Mixture**, auto TIFF jobs append `model_mixture`; enabling mixture mid-run may enqueue a mixture-only follow-up after a successful `fit_sizes`. Mixture `r_max` / `poly_max` start unset (skill-derived) and the pane controls update from the resolved values after a run. Window panes use **data-driven matplotlib viewers** (`.dat`, GNOM `.out`, `dr_csv`, MIXTURE `.fit` / CSV) — not PNG thumbnails.
 
-**Monodisperse queue suspension:** Any wizard control change (Guinier interval, GNOM parameters, shape mode, body checklist) MUST **pause** the FIFO queue, **cancel** the running skill (requeue current job), and allow unlimited re-processing of the **current curve** via manual jobs. Incoming TIFFs remain queued but are not processed until the user presses **Resume auto-processing** (enabled only when no skill is running). This mirrors subtraction-wizard intervention semantics but stays embedded (explicit resume required).
+**Monodisperse queue suspension:** Any wizard control change (Guinier interval, P(r)/GNOM adjust parameters, shape mode, body checklist) MUST **pause** the FIFO queue, **cancel** the running skill (requeue current job), and allow unlimited re-processing of the **current curve** via manual jobs. Opening the P(r) Adjust wizard alone does not pause; the first control change inside it does. Incoming TIFFs remain queued but are not processed until the user presses **Resume auto-processing** (enabled only when no skill is running). This mirrors subtraction-wizard intervention semantics but stays embedded (explicit resume required).
+
+**Polydisperse queue suspension:** Guinier interval edits, D(R) adjust parameter changes, and mixture parameter edits MUST **pause** the FIFO queue (same resume semantics as monodisperse). Opening the D(R) Adjust wizard alone does not pause; the first control change inside it does.
 
 ### 8.4 Performance and queueing
 

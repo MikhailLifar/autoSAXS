@@ -1,18 +1,15 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from matplotlib.path import Path as MplPath
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QGuiApplication, QKeySequence
+from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import (
+    QButtonGroup,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -23,444 +20,33 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QShortcut,
     QSplitter,
+    QToolButton,
     QTreeView,
     QVBoxLayout,
     QWidget,
 )
+from PyQt5.QtGui import QKeySequence
 
-from ...services.calibration.storage import (
-    calibration_subdir,
-    ensure_tiff_in_calibration,
-)
-from ....logic.path_normalize import normalize_pathish
-from ....logic.smart_defaults import (
+from ....services.calibration.storage import calibration_subdir, ensure_tiff_in_calibration
+from .....logic.path_normalize import normalize_pathish
+from .....logic.smart_defaults import (
     anchor_dir_from_resolved_path_list,
     browse_start_dir_for_resolved_paths,
     find_mask_near,
 )
-from ....ui.path_field import PathField
-from ..widgets.plots import DropTiffImageCanvas, Image2DPlot, mpl_navigation_toolbar
-
-
-def _load_tiff_shape(path: str) -> Optional[tuple[int, int]]:
-    p = (path or "").strip()
-    if not p or not os.path.isfile(p):
-        return None
-    arr = None
-    try:
-        import fabio
-
-        arr = fabio.open(p).data
-    except Exception:
-        arr = None
-    if arr is None:
-        try:
-            import tifffile
-
-            arr = tifffile.imread(p)
-        except Exception:
-            arr = None
-    if arr is None:
-        return None
-    a = np.asarray(arr)
-    if a.ndim > 2:
-        a = a.reshape((-1,) + a.shape[-2:])[0]
-    try:
-        return int(a.shape[0]), int(a.shape[1])
-    except Exception:
-        return None
-
-
-def _read_mask_bool(path: str) -> Optional[np.ndarray]:
-    """
-    Load an existing mask as bool using the same loader as autosaxs expects.
-    Returns None if path is empty/invalid.
-    """
-    p = (path or "").strip()
-    if not p or not os.path.isfile(p):
-        return None
-    try:
-        from autosaxs.core.integrator import IntegratorExtended
-
-        m = IntegratorExtended.read_mask(p)
-        return np.asarray(m, dtype=bool)
-    except Exception:
-        return None
-
-
-def _polygon_to_mask(vertices_xy: list[tuple[float, float]], shape_hw: tuple[int, int]) -> np.ndarray:
-    """
-    Rasterize polygon interior to a boolean mask with True for masked pixels.
-    vertices_xy are in image pixel coordinates (x=col, y=row) consistent with imshow origin='lower'.
-    """
-    H, W = int(shape_hw[0]), int(shape_hw[1])
-    if H <= 0 or W <= 0 or len(vertices_xy) < 3:
-        return np.zeros((max(H, 0), max(W, 0)), dtype=bool)
-
-    xs = np.asarray([v[0] for v in vertices_xy], dtype=float)
-    ys = np.asarray([v[1] for v in vertices_xy], dtype=float)
-    if not (np.all(np.isfinite(xs)) and np.all(np.isfinite(ys))):
-        return np.zeros((H, W), dtype=bool)
-
-    # Tight bounding box for speed.
-    x0 = int(max(0, np.floor(np.min(xs))))
-    x1 = int(min(W - 1, np.ceil(np.max(xs))))
-    y0 = int(max(0, np.floor(np.min(ys))))
-    y1 = int(min(H - 1, np.ceil(np.max(ys))))
-    if x1 < x0 or y1 < y0:
-        return np.zeros((H, W), dtype=bool)
-
-    # Use pixel centers (x+0.5, y+0.5) to avoid boundary/path degeneracies.
-    xx, yy = np.meshgrid(
-        np.arange(x0, x1 + 1, dtype=float) + 0.5,
-        np.arange(y0, y1 + 1, dtype=float) + 0.5,
-    )
-    pts = np.column_stack([xx.ravel(), yy.ravel()])
-    verts = np.asarray(vertices_xy, dtype=float)
-    # Ensure the closing segment exists (fixes missing last triangle in some cases).
-    if verts.shape[0] >= 1 and not np.allclose(verts[0], verts[-1]):
-        verts = np.vstack([verts, verts[0]])
-    path = MplPath(verts, closed=True)
-    inside = path.contains_points(pts)
-    out = np.zeros((H, W), dtype=bool)
-    out[y0 : y1 + 1, x0 : x1 + 1] = inside.reshape((y1 - y0 + 1, x1 - x0 + 1))
-    return out
-
-
-def _rect_to_mask(
-    x0: float, y0: float, x1: float, y1: float, shape_hw: tuple[int, int]
-) -> np.ndarray:
-    """Rasterize axis-aligned rectangle interior (masked=True)."""
-    H, W = int(shape_hw[0]), int(shape_hw[1])
-    if H <= 0 or W <= 0:
-        return np.zeros((max(H, 0), max(W, 0)), dtype=bool)
-    xs = sorted((float(x0), float(x1)))
-    ys = sorted((float(y0), float(y1)))
-    col0 = int(max(0, np.floor(xs[0])))
-    col1 = int(min(W - 1, np.ceil(xs[1])))
-    row0 = int(max(0, np.floor(ys[0])))
-    row1 = int(min(H - 1, np.ceil(ys[1])))
-    out = np.zeros((H, W), dtype=bool)
-    if col1 < col0 or row1 < row0:
-        return out
-    out[row0 : row1 + 1, col0 : col1 + 1] = True
-    return out
-
-
-class MaskMode(str, Enum):
-    POLYGON = "polygon"
-    PIXEL = "pixel"
-    RECTANGULAR = "rectangular"
-
-
-@dataclass
-class MaskModel:
-    image_shape_hw: Optional[tuple[int, int]] = None
-    base_mask: Optional[np.ndarray] = None  # from existing file, bool
-    mode: MaskMode = MaskMode.POLYGON
-    polygons: list[list[tuple[float, float]]] = field(default_factory=list)  # completed
-    current: list[tuple[float, float]] = field(default_factory=list)  # in-progress polygon
-    rects: list[tuple[float, float, float, float]] = field(default_factory=list)  # x0,y0,x1,y1
-    rect_first: Optional[tuple[float, float]] = None  # in-progress rectangle corner
-    _pixel_toggles: list[tuple[int, int]] = field(default_factory=list)  # applied flip operations
-
-    def clear(self, *, include_base: bool = False) -> None:
-        self.polygons = []
-        self.current = []
-        self.rects = []
-        self.rect_first = None
-        self._pixel_toggles = []
-        if include_base:
-            self.base_mask = None
-
-    def sync_context(
-        self,
-        shape_hw: Optional[tuple[int, int]],
-        *,
-        base_mask: Optional[np.ndarray],
-        reset_edits: bool,
-    ) -> None:
-        if reset_edits:
-            self.clear()
-        self.image_shape_hw = shape_hw
-        if base_mask is not None and shape_hw is not None:
-            bm = np.asarray(base_mask, dtype=bool)
-            if bm.shape == shape_hw:
-                self.base_mask = bm
-            else:
-                self.base_mask = None
-        elif reset_edits:
-            self.base_mask = None
-
-    def start_for_image(self, shape_hw: Optional[tuple[int, int]], *, base_mask: Optional[np.ndarray]) -> None:
-        self.sync_context(shape_hw, base_mask=base_mask, reset_edits=True)
-
-    def commit_in_progress(self) -> None:
-        if self.mode == MaskMode.POLYGON:
-            if len(self.current) >= 3:
-                self.finish_polygon()
-            else:
-                self.current = []
-            return
-        if self.mode == MaskMode.RECTANGULAR:
-            self.rect_first = None
-
-    def mask_for_save(self) -> Optional[np.ndarray]:
-        self.commit_in_progress()
-        return self.mask_union()
-
-    def set_mode(self, mode: MaskMode) -> None:
-        self.mode = mode
-        self.current = []
-        self.rect_first = None
-
-    def has_user_geometry(self) -> bool:
-        if self.current or self.polygons or self.rects or self.rect_first is not None:
-            return True
-        if self._pixel_toggles:
-            return True
-        return False
-
-    def undo_point(self) -> None:
-        if self.mode == MaskMode.POLYGON:
-            if self.current:
-                self.current.pop()
-                return
-            if not self.polygons:
-                return
-            last = list(self.polygons.pop())
-            if len(last) > 1:
-                self.current = last[:-1]
-            return
-        if self.mode == MaskMode.RECTANGULAR:
-            if self.rect_first is not None:
-                self.rect_first = None
-                return
-            if not self.rects:
-                return
-            x0, y0, _x1, _y1 = self.rects.pop()
-            self.rect_first = (x0, y0)
-
-    def undo_shape(self) -> None:
-        """Undo last polygon (polygon mode) or last rectangle (rectangular mode)."""
-        if self.mode == MaskMode.POLYGON:
-            if self.current:
-                self.current = []
-                return
-            if self.polygons:
-                self.polygons.pop()
-            return
-        if self.mode == MaskMode.RECTANGULAR:
-            if self.rect_first is not None:
-                self.rect_first = None
-                return
-            if self.rects:
-                self.rects.pop()
-
-    def undo_pixel_edit(self) -> None:
-        if self._pixel_toggles:
-            self._pixel_toggles.pop()
-
-    def undo(self) -> None:
-        if self.mode == MaskMode.POLYGON or self.mode == MaskMode.RECTANGULAR:
-            self.undo_point()
-        elif self.mode == MaskMode.PIXEL:
-            self.undo_pixel_edit()
-
-    def add_point(self, x: float, y: float) -> None:
-        if not (np.isfinite(x) and np.isfinite(y)):
-            return
-        self.current.append((float(x), float(y)))
-
-    def finish_polygon(self) -> bool:
-        if len(self.current) < 3:
-            self.current = []
-            return False
-        self.polygons.append(list(self.current))
-        self.current = []
-        return True
-
-    def _pixel_indices(self, x: float, y: float) -> Optional[tuple[int, int]]:
-        if self.image_shape_hw is None:
-            return None
-        H, W = self.image_shape_hw
-        # imshow default extent: pixel centers at integer coordinates.
-        col = int(np.clip(np.round(float(x)), 0, W - 1))
-        row = int(np.clip(np.round(float(y)), 0, H - 1))
-        return row, col
-
-    def toggle_pixel(self, x: float, y: float) -> None:
-        idx = self._pixel_indices(x, y)
-        if idx is None:
-            return
-        self._pixel_toggles.append(idx)
-
-    def add_rect_click(self, x: float, y: float) -> None:
-        if not (np.isfinite(x) and np.isfinite(y)):
-            return
-        pt = (float(x), float(y))
-        if self.rect_first is None:
-            self.rect_first = pt
-            return
-        x0, y0 = self.rect_first
-        self.rects.append((x0, y0, float(x), float(y)))
-        self.rect_first = None
-
-    def mask_union(self) -> Optional[np.ndarray]:
-        if self.image_shape_hw is None:
-            return None
-        H, W = self.image_shape_hw
-        out = np.zeros((H, W), dtype=bool)
-        if self.base_mask is not None:
-            bm = np.asarray(self.base_mask, dtype=bool)
-            if bm.shape == out.shape:
-                out |= bm
-        for poly in self.polygons:
-            out |= _polygon_to_mask(poly, self.image_shape_hw)
-        for rect in self.rects:
-            out |= _rect_to_mask(*rect, self.image_shape_hw)
-        for row, col in self._pixel_toggles:
-            if 0 <= row < H and 0 <= col < W:
-                out[row, col] = not bool(out[row, col])
-        return out
-
-
-class MaskCanvas(DropTiffImageCanvas):
-    """
-    Matplotlib TIFF canvas with mask drawing overlays (mode-dependent interaction).
-    """
-
-    edited = pyqtSignal()
-
-    def __init__(self, *, model: MaskModel) -> None:
-        super().__init__()
-        self._model = model
-        self._toolbar: Optional[NavigationToolbar2QT] = None
-        self._mask_overlay = None
-        self._poly_line_artist = None
-        self._poly_pts_artist = None
-        self._rect_artists = []
-        self.mpl_connect("button_press_event", self._on_click)
-
-    def set_toolbar(self, toolbar: Optional[NavigationToolbar2QT]) -> None:
-        self._toolbar = toolbar
-
-    def set_model(self, model: MaskModel) -> None:
-        self._model = model
-        self.refresh_overlays()
-
-    def _is_left_click_in_axes(self, ev: object) -> bool:
-        if getattr(ev, "inaxes", None) is None:
-            return False
-        return int(getattr(ev, "button", 0)) == 1
-
-    def _on_click(self, ev: object) -> None:
-        # If zoom/pan is active, don't treat clicks as drawing.
-        if self._toolbar is not None and str(getattr(self._toolbar, "mode", "") or ""):
-            return
-        if not self._is_left_click_in_axes(ev):
-            return
-        x = getattr(ev, "xdata", None)
-        y = getattr(ev, "ydata", None)
-        if x is None or y is None:
-            return
-        try:
-            x_f = float(x)
-            y_f = float(y)
-        except Exception:
-            return
-        mode = self._model.mode
-        if mode == MaskMode.POLYGON:
-            self._on_click_polygon(x_f, y_f, bool(getattr(ev, "dblclick", False)))
-        elif mode == MaskMode.PIXEL:
-            if bool(getattr(ev, "dblclick", False)):
-                return
-            self._model.toggle_pixel(x_f, y_f)
-        elif mode == MaskMode.RECTANGULAR:
-            if bool(getattr(ev, "dblclick", False)):
-                return
-            self._model.add_rect_click(x_f, y_f)
-        self.edited.emit()
-        self.refresh_overlays()
-
-    def _on_click_polygon(self, x_f: float, y_f: float, dblclick: bool) -> None:
-        if dblclick:
-            if not self._model.current:
-                self._model.add_point(x_f, y_f)
-            else:
-                lx, ly = self._model.current[-1]
-                if abs(lx - x_f) > 1e-9 or abs(ly - y_f) > 1e-9:
-                    self._model.add_point(x_f, y_f)
-            self._model.finish_polygon()
-        else:
-            self._model.add_point(x_f, y_f)
-
-    def _clear_overlay_artists(self) -> None:
-        for a in (self._poly_line_artist, self._poly_pts_artist, self._mask_overlay):
-            if a is None:
-                continue
-            try:
-                a.remove()
-            except Exception:
-                pass
-        self._poly_line_artist = None
-        self._poly_pts_artist = None
-        self._mask_overlay = None
-        for a in list(self._rect_artists):
-            try:
-                a.remove()
-            except Exception:
-                pass
-        self._rect_artists = []
-
-    def refresh_overlays(self) -> None:
-        ax = self._ax
-        self._clear_overlay_artists()
-
-        # Mask overlay from union (base + polygons)
-        m = self._model.mask_union()
-        if m is not None and m.size:
-            try:
-                rgba = np.zeros((m.shape[0], m.shape[1], 4), dtype=float)
-                rgba[m, 0] = 1.0
-                rgba[m, 3] = 0.40
-                self._mask_overlay = ax.imshow(
-                    rgba,
-                    origin="lower",
-                    aspect="equal",
-                    interpolation="nearest",
-                    zorder=10,
-                )
-            except Exception:
-                self._mask_overlay = None
-
-        # In-progress rectangle (first corner only)
-        if self._model.rect_first is not None:
-            x0, y0 = self._model.rect_first
-            try:
-                (pt,) = ax.plot([x0], [y0], marker="s", linestyle="None", color="white", markersize=6, alpha=0.95)
-                self._rect_artists.append(pt)
-            except Exception:
-                pass
-
-        # Current polygon (in-progress)
-        cur = list(self._model.current)
-        if cur:
-            xs = [p[0] for p in cur]
-            ys = [p[1] for p in cur]
-            try:
-                (pts,) = ax.plot(xs, ys, marker="o", linestyle="None", color="white", markersize=4, alpha=0.95)
-                self._poly_pts_artist = pts
-            except Exception:
-                self._poly_pts_artist = None
-            if len(cur) >= 2:
-                try:
-                    (ln,) = ax.plot(xs, ys, color="white", linewidth=1.0, alpha=0.9)
-                    self._poly_line_artist = ln
-                except Exception:
-                    self._poly_line_artist = None
-
-        self.draw_idle()
+from .....ui.path_field import PathField
+from ...widgets.plots import mpl_navigation_toolbar
+from .canvas import MaskCanvas
+from .histogram import IntensityHistogramPanel
+from .model import (
+    MaskMode,
+    MaskModel,
+    PaintPolarity,
+    default_log1p_band,
+    load_tiff_array,
+    load_tiff_shape,
+    read_mask_bool,
+)
 
 
 class MaskWizardDialog(QDialog):
@@ -486,7 +72,6 @@ class MaskWizardDialog(QDialog):
         self._calib_sync_image_path: str = ""
 
         self.setWindowTitle("Create / edit mask")
-        # Make it a top-level window so WMs show min/max controls.
         self.setWindowFlags(
             Qt.Window
             | Qt.CustomizeWindowHint
@@ -496,7 +81,6 @@ class MaskWizardDialog(QDialog):
             | Qt.WindowMinMaxButtonsHint
         )
         self.setSizeGripEnabled(True)
-        # Default size: 75% width, 80% height of available screen.
         try:
             scr = QGuiApplication.primaryScreen()
             geo = scr.availableGeometry() if scr is not None else None
@@ -516,6 +100,10 @@ class MaskWizardDialog(QDialog):
         self._canvas.tiff_files_dropped.connect(self._on_tiff_dropped_to_canvas)
         self._canvas.edited.connect(self._mark_dirty)
 
+        self._histogram = IntensityHistogramPanel()
+        self._histogram.range_changed.connect(self._on_threshold_preview)
+        self._histogram.range_committed.connect(self._on_threshold_committed)
+
         self._image_field = PathField(mode="any", allow_multiple=False, expected_exts=(".tif", ".tiff"))
         self._image_field.set_workdir(watchdir)
         self._mask_field = PathField(
@@ -533,18 +121,51 @@ class MaskWizardDialog(QDialog):
         self._btn_undo_pixel = QPushButton("Undo last edit")
         self._btn_clear = QPushButton("Clear all")
         self._btn_save = QPushButton("Save mask")
+        self._btn_apply_threshold = QPushButton("Apply threshold")
+        self._btn_reset_threshold = QPushButton("Reset range")
 
         self._mode_combo = QComboBox()
         self._mode_combo.addItem("Polygon", MaskMode.POLYGON.value)
         self._mode_combo.addItem("Pixel", MaskMode.PIXEL.value)
         self._mode_combo.addItem("Rectangular", MaskMode.RECTANGULAR.value)
+        self._mode_combo.addItem("Threshold", MaskMode.THRESHOLD.value)
         self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+
+        self._btn_polarity_mask = QToolButton()
+        self._btn_polarity_mask.setText("Mask")
+        self._btn_polarity_mask.setCheckable(True)
+        self._btn_polarity_mask.setChecked(True)
+        self._btn_polarity_mask.setToolTip("Paint regions that should be masked")
+        self._btn_polarity_unmask = QToolButton()
+        self._btn_polarity_unmask.setText("Unmask")
+        self._btn_polarity_unmask.setCheckable(True)
+        self._btn_polarity_unmask.setToolTip("Clear masking inside drawn regions")
+        self._polarity_group = QButtonGroup(self)
+        self._polarity_group.setExclusive(True)
+        self._polarity_group.addButton(self._btn_polarity_mask)
+        self._polarity_group.addButton(self._btn_polarity_unmask)
+        self._btn_polarity_mask.clicked.connect(lambda: self._set_polarity(PaintPolarity.MASK))
+        self._btn_polarity_unmask.clicked.connect(lambda: self._set_polarity(PaintPolarity.UNMASK))
+        self._polarity_wrap = QWidget()
+        pol_lay = QHBoxLayout(self._polarity_wrap)
+        pol_lay.setContentsMargins(0, 0, 0, 0)
+        pol_lay.setSpacing(0)
+        pol_lay.addWidget(self._btn_polarity_mask)
+        pol_lay.addWidget(self._btn_polarity_unmask)
+        self._polarity_wrap.setStyleSheet(
+            "QToolButton { padding: 4px 12px; border: 1px solid #4a5560; background: #2a323a; color: #dce3ea; }"
+            "QToolButton:checked { background: #5ec8a0; color: #102018; border-color: #5ec8a0; font-weight: 600; }"
+            "QToolButton#unmaskBtn:checked { background: #5b8def; border-color: #5b8def; color: #0e1624; }"
+        )
+        self._btn_polarity_unmask.setObjectName("unmaskBtn")
 
         self._btn_undo_point.clicked.connect(self._on_undo_point)
         self._btn_undo_shape.clicked.connect(self._on_undo_shape)
         self._btn_undo_pixel.clicked.connect(self._on_undo_pixel)
         self._btn_clear.clicked.connect(self._on_clear)
         self._btn_save.clicked.connect(self._on_save)
+        self._btn_apply_threshold.clicked.connect(self._on_apply_threshold)
+        self._btn_reset_threshold.clicked.connect(self._on_reset_threshold)
 
         undo_shortcut = QShortcut(QKeySequence.Undo, self)
         undo_shortcut.activated.connect(self._on_undo)
@@ -556,14 +177,20 @@ class MaskWizardDialog(QDialog):
         self._image_field.path_changed.connect(self.attention_context_changed.emit)
         self._mask_field.path_changed.connect(self.attention_context_changed.emit)
 
-        # Layout
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
+
         left = QWidget()
         left_lay = QVBoxLayout(left)
         left_lay.setContentsMargins(0, 0, 0, 0)
         left_lay.addWidget(self._toolbar, 0)
-        left_lay.addWidget(self._canvas, 1)
+        img_hist = QSplitter(Qt.Vertical)
+        img_hist.setChildrenCollapsible(False)
+        img_hist.addWidget(self._canvas)
+        img_hist.addWidget(self._histogram)
+        img_hist.setStretchFactor(0, 7)
+        img_hist.setStretchFactor(1, 3)
+        left_lay.addWidget(img_hist, 1)
         splitter.addWidget(left)
 
         right = QWidget()
@@ -598,10 +225,13 @@ class MaskWizardDialog(QDialog):
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("Mode:"))
         mode_row.addWidget(self._mode_combo, 1)
+        mode_row.addWidget(self._polarity_wrap, 0)
         tools_lay.addLayout(mode_row)
         tools_lay.addWidget(self._btn_undo_point)
         tools_lay.addWidget(self._btn_undo_shape)
         tools_lay.addWidget(self._btn_undo_pixel)
+        tools_lay.addWidget(self._btn_apply_threshold)
+        tools_lay.addWidget(self._btn_reset_threshold)
         tools_lay.addWidget(self._btn_clear)
         tools_lay.addStretch(1)
         tools_lay.addWidget(self._btn_save)
@@ -614,11 +244,7 @@ class MaskWizardDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.addWidget(splitter, 1)
 
-        # Defaults
-        self.set_defaults(
-            image_path=default_image_path,
-            mask_path=default_mask_path,
-        )
+        self.set_defaults(image_path=default_image_path, mask_path=default_mask_path)
         self._update_mode_controls()
 
     def showEvent(self, event) -> None:  # type: ignore[override]
@@ -627,7 +253,6 @@ class MaskWizardDialog(QDialog):
 
     def hideEvent(self, event) -> None:  # type: ignore[override]
         super().hideEvent(event)
-        # Sync mask path back to the calibration form when the window is closed/hidden.
         path = (self._mask_field.text().strip() or self._saved_mask_path or "").strip()
         if path:
             self.mask_committed.emit(path)
@@ -652,8 +277,18 @@ class MaskWizardDialog(QDialog):
         except Exception:
             return MaskMode.POLYGON
 
+    def _set_polarity(self, polarity: PaintPolarity) -> None:
+        self._model.set_paint_polarity(polarity)
+        self._canvas.refresh_overlays()
+
     def _on_mode_changed(self, _index: int = 0) -> None:
         self._model.set_mode(self._current_mode())
+        self._canvas.set_threshold_preview(None)
+        if self._current_mode() == MaskMode.THRESHOLD and self._model.threshold_active:
+            lo = self._model.threshold_lo
+            hi = self._model.threshold_hi
+            if lo is not None and hi is not None:
+                self._histogram.set_range(lo, hi, emit=False)
         self._canvas.refresh_overlays()
         self._update_mode_controls()
 
@@ -662,14 +297,33 @@ class MaskWizardDialog(QDialog):
         is_polygon = mode == MaskMode.POLYGON
         is_pixel = mode == MaskMode.PIXEL
         is_rect = mode == MaskMode.RECTANGULAR
+        is_thr = mode == MaskMode.THRESHOLD
 
+        self._polarity_wrap.setVisible(is_polygon or is_rect)
         self._btn_undo_point.setVisible(is_polygon or is_rect)
         self._btn_undo_point.setText("Undo last point" if is_polygon else "Undo last corner")
-
-        self._btn_undo_shape.setVisible(is_polygon or is_rect)
-        self._btn_undo_shape.setText("Undo last polygon" if is_polygon else "Undo last rectangle")
-
+        self._btn_undo_shape.setVisible(is_polygon or is_rect or is_thr)
+        if is_thr:
+            self._btn_undo_shape.setText("Clear threshold")
+        else:
+            self._btn_undo_shape.setText("Undo last polygon" if is_polygon else "Undo last rectangle")
         self._btn_undo_pixel.setVisible(is_pixel)
+        self._btn_apply_threshold.setVisible(is_thr)
+        self._btn_reset_threshold.setVisible(is_thr)
+        # Histogram / threshold interaction only in Threshold mode.
+        self._histogram.setVisible(is_thr)
+        self._histogram.setEnabled(is_thr)
+
+    def _ensure_default_threshold_applied(self) -> None:
+        """Apply default keep-band [0, max] so raw I<0 are masked as soon as an image is loaded."""
+        intensity = self._model.intensity
+        if intensity is None or self._model.image_shape_hw is None:
+            return
+        lo, hi = default_log1p_band(intensity)
+        self._model.apply_threshold_band(lo, hi)
+        self._histogram.set_range(lo, hi, emit=False)
+        self._canvas.set_threshold_preview(None)
+        self._canvas.refresh_overlays()
 
     def set_defaults(self, *, image_path: str, mask_path: str) -> None:
         self._applying_defaults = True
@@ -687,6 +341,12 @@ class MaskWizardDialog(QDialog):
 
     def _push_image_to_calibration_parent(self) -> None:
         parent = self.parent()
+        # Prefer explicit callback if parent is left panel hosting shared wizard.
+        if parent is not None and hasattr(parent, "on_mask_wizard_image_changed"):
+            img = self._image_field.text().strip()
+            if img:
+                parent.on_mask_wizard_image_changed(img)  # type: ignore[attr-defined]
+            return
         if parent is None or not hasattr(parent, "_calib_image_field"):
             return
         calib_field = parent._calib_image_field()  # type: ignore[attr-defined]
@@ -732,9 +392,7 @@ class MaskWizardDialog(QDialog):
         return None
 
     def _smart_drop_paths(self, paths: list[str], source: PathField) -> bool:
-        if not paths:
-            return False
-        if len(paths) != 1:
+        if not paths or len(paths) != 1:
             return False
         raw = normalize_pathish(paths[0])
         if not raw:
@@ -758,7 +416,6 @@ class MaskWizardDialog(QDialog):
         img_paths = [normalize_pathish(p) for p in self._image_field.paths() if normalize_pathish(p)]
         img_start = browse_start_dir_for_resolved_paths(img_paths, workdir) or cal_dir
         self._image_field.set_browse_start_dir(img_start)
-
         mask_paths = [normalize_pathish(p) for p in self._mask_field.paths() if normalize_pathish(p)]
         mask_start = browse_start_dir_for_resolved_paths(mask_paths, workdir)
         if mask_start is None:
@@ -791,22 +448,51 @@ class MaskWizardDialog(QDialog):
         self._try_load_mask_from_field()
 
     def _try_load_mask_from_field(self) -> None:
-        """Load mask from the path field when the file exists (same auto-load idea as the image field)."""
         mask_path = self._mask_field.text().strip()
         self._ctx_mask_path = mask_path
-        if self._ctx_shape is None:
-            return
         if not mask_path:
             self._model.base_mask = None
-            self._canvas.refresh_overlays()
+            if self._ctx_shape is not None:
+                self._ensure_default_threshold_applied()
+                self._canvas.refresh_overlays()
             return
         p = Path(mask_path).expanduser()
         if not p.is_file():
             return
-        base = _read_mask_bool(str(p))
-        if base is None or tuple(base.shape) != self._ctx_shape:
+        base = read_mask_bool(str(p))
+        if base is None:
             return
-        self._model.sync_context(self._ctx_shape, base_mask=base, reset_edits=True)
+        mask_shape = (int(base.shape[0]), int(base.shape[1]))
+        img = self._image_field.text().strip()
+        # Mask without TIFF: show blank (cmap-min) frame sized to the mask.
+        if not img or not os.path.isfile(img):
+            if self._ctx_shape != mask_shape:
+                self._dirty = False
+            self._canvas.show_blank_frame(mask_shape)
+            self._model.sync_context(
+                mask_shape,
+                base_mask=base,
+                reset_edits=True,
+                intensity=None,
+            )
+            self._ctx_shape = mask_shape
+            self._histogram.set_intensity(None)
+            self._canvas.set_threshold_preview(None)
+            self._canvas.refresh_overlays()
+            self._dirty = False
+            self._update_mode_controls()
+            return
+        if self._ctx_shape is None:
+            return
+        if tuple(base.shape) != self._ctx_shape:
+            return
+        self._model.sync_context(
+            self._ctx_shape,
+            base_mask=base,
+            reset_edits=True,
+            intensity=self._model.intensity,
+        )
+        self._ensure_default_threshold_applied()
         self._canvas.refresh_overlays()
         self._dirty = False
 
@@ -814,24 +500,70 @@ class MaskWizardDialog(QDialog):
         if self._suppress_context_reload:
             return
         img = self._image_field.text().strip()
-        if img:
+        intensity = None
+        if img and os.path.isfile(img):
             try:
                 self._canvas.show_tiff(img)
             except Exception:
                 self._canvas.clear()
-        else:
-            self._canvas.clear()
+            intensity = load_tiff_array(img)
+            shape = self._canvas.last_image_shape() or load_tiff_shape(img)
+            if intensity is not None and shape is not None and intensity.shape != shape:
+                intensity = None
+            reset_edits = shape != self._ctx_shape
+            base = None if reset_edits else self._model.base_mask
+            self._model.sync_context(shape, base_mask=base, reset_edits=reset_edits, intensity=intensity)
+            self._ctx_shape = shape
+            self._histogram.set_intensity(intensity)
+            self._canvas.set_threshold_preview(None)
+            if reset_edits:
+                self._dirty = False
+            self._try_load_mask_from_field()
+            if not self._model.threshold_active:
+                self._ensure_default_threshold_applied()
+            else:
+                self._canvas.refresh_overlays()
+            self._update_mode_controls()
+            return
 
-        shape = self._canvas.last_image_shape() or _load_tiff_shape(img)
-        reset_edits = shape != self._ctx_shape
-        base = None if reset_edits else self._model.base_mask
+        # No TIFF: if a mask file is present, draw it on a blank frame; else clear.
+        mask_path = self._mask_field.text().strip()
+        if mask_path and os.path.isfile(mask_path):
+            self._try_load_mask_from_field()
+            return
 
-        self._model.sync_context(shape, base_mask=base, reset_edits=reset_edits)
-        self._ctx_shape = shape
+        self._canvas.clear()
+        self._model.sync_context(None, base_mask=None, reset_edits=True, intensity=None)
+        self._ctx_shape = None
+        self._histogram.set_intensity(None)
+        self._canvas.set_threshold_preview(None)
+        self._dirty = False
+        self._update_mode_controls()
+    def _on_threshold_preview(self, lo: float, hi: float) -> None:
+        if self._current_mode() != MaskMode.THRESHOLD:
+            self._canvas.set_threshold_preview(None)
+            return
+        preview = self._model.threshold_preview_mask(lo, hi)
+        self._canvas.set_threshold_preview(preview)
+
+    def _on_threshold_committed(self, lo: float, hi: float) -> None:
+        if self._current_mode() != MaskMode.THRESHOLD:
+            return
+        # Live preview only until Apply; still refresh preview on release.
+        self._on_threshold_preview(lo, hi)
+
+    def _on_apply_threshold(self) -> None:
+        self._model.apply_threshold_band(self._histogram.lo(), self._histogram.hi())
+        self._canvas.set_threshold_preview(None)
         self._canvas.refresh_overlays()
-        if reset_edits:
-            self._dirty = False
-        self._try_load_mask_from_field()
+        self._mark_dirty()
+
+    def _on_reset_threshold(self) -> None:
+        self._histogram.reset_to_default()
+        self._model.apply_threshold_band(self._histogram.lo(), self._histogram.hi())
+        self._canvas.set_threshold_preview(None)
+        self._canvas.refresh_overlays()
+        self._mark_dirty()
 
     def _on_drawing_help(self) -> None:
         mode = self._current_mode()
@@ -843,17 +575,25 @@ class MaskWizardDialog(QDialog):
             )
         elif mode == MaskMode.RECTANGULAR:
             text = (
-                "• First click sets the top-left corner.\n"
-                "• Second click sets the bottom-right corner.\n"
+                "• Use Mask / Unmask to choose whether the rectangle adds or clears masking.\n"
+                "• First click sets one corner; second click finishes the rectangle.\n"
                 "• Ctrl+Z undoes the last corner, or reopens the last rectangle.\n\n"
-                "You can draw multiple rectangles; their interiors are combined."
+                "Unmask strokes are shown dashed in blue."
+            )
+        elif mode == MaskMode.THRESHOLD:
+            text = (
+                "• Drag the handles on the log(1+I) histogram to choose the keep band.\n"
+                "• Pixels outside the band are masked (raw I < 0 are always outside).\n"
+                "• Double-click the histogram to reset to [0, max].\n"
+                "• Click Apply threshold to commit the band into the mask."
             )
         else:
             text = (
+                "• Use Mask / Unmask to choose whether the polygon adds or clears masking.\n"
                 "• Click on the image to add a polygon point.\n"
                 "• Ctrl+Z removes the last point.\n"
                 "• Double-click to finish the current polygon.\n\n"
-                "You can draw multiple polygons; their interiors are combined."
+                "Unmask strokes are shown dashed in blue."
             )
         QMessageBox.information(self, "Drawing masks", text)
 
@@ -879,6 +619,7 @@ class MaskWizardDialog(QDialog):
 
     def _on_clear(self) -> None:
         self._model.clear(include_base=True)
+        self._canvas.set_threshold_preview(None)
         self._canvas.refresh_overlays()
         self._mark_dirty()
 
@@ -932,7 +673,6 @@ class MaskWizardDialog(QDialog):
             QMessageBox.warning(self, "Mask", "No image is loaded; cannot compute mask.")
             return
 
-        # Overwrite confirmation
         if dp.exists():
             resp = QMessageBox.question(
                 self,
@@ -963,9 +703,15 @@ class MaskWizardDialog(QDialog):
         finally:
             self._suppress_context_reload = False
 
-        saved_base = _read_mask_bool(self._saved_mask_path)
-        self._model.sync_context(self._ctx_shape, base_mask=saved_base, reset_edits=True)
+        saved_base = read_mask_bool(self._saved_mask_path)
+        self._model.sync_context(
+            self._ctx_shape,
+            base_mask=saved_base,
+            reset_edits=True,
+            intensity=self._model.intensity,
+        )
         self._ctx_mask_path = self._saved_mask_path
+        self._canvas.set_threshold_preview(None)
         self._canvas.refresh_overlays()
         self._dirty = False
         QMessageBox.information(self, "Mask", f"Saved mask:\n\n{self._saved_mask_path}")
@@ -993,4 +739,3 @@ class MaskWizardDialog(QDialog):
             QMessageBox.Cancel,
         )
         return resp == QMessageBox.Ok
-

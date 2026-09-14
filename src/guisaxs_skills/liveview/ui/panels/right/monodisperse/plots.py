@@ -146,18 +146,32 @@ class GuinierCurvePlot(_BaseMplPlot):
         x = q ** 2
         y = np.log(I)
         y_fit = np.log(float(i0)) - (float(rg) ** 2 / 3.0) * x
-        self._click_path = profile_path
+        # Embedded Guinier preview is not a click-to-enlarge viewer.
+        self._click_path = None
+        self._click_viewer = None
         self._ax.clear()
         self._ax.scatter(x[~band], y[~band], s=8, alpha=0.35, c="0.6", label="out")
         self._ax.scatter(x[band], y[band], s=10, alpha=0.9, c="C0", label="fit region")
         self._ax.plot(x[band], y_fit[band], "r-", lw=1.5, label="Guinier")
         self._ax.set_xlabel("q² (nm⁻²)")
         self._ax.set_ylabel("ln I")
+        x_hi = float(np.nanmax(x)) if x.size else 1.0
+        self._ax.set_xlim(0.0, x_hi * 1.05 if x_hi > 0 else 1.0)
+        y_parts = [y]
+        if band.any():
+            y_parts.append(y_fit[band])
+        y_all = np.concatenate(y_parts)
+        y_all = y_all[np.isfinite(y_all)]
+        if y_all.size:
+            ymin = float(np.nanmin(y_all))
+            ymax = float(np.nanmax(y_all))
+            pad = 0.08 * (ymax - ymin) if ymax > ymin else 0.5
+            self._ax.set_ylim(ymin - pad, ymax + pad)
         self._ax.legend(fontsize=7, loc="best")
         self._ax.grid(True, alpha=0.2)
         self._fig.tight_layout()
         self.draw_idle()
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.ArrowCursor)
 
 
 class GnomFitPlot(_BaseMplPlot):
@@ -201,7 +215,23 @@ class GnomFitPlot(_BaseMplPlot):
 
 
 class PrPlot(_BaseMplPlot):
-    def plot_from_gnom_out(self, gnom_out_path: str) -> None:
+    def plot_from_gnom_out(
+        self,
+        gnom_out_path: str,
+        *,
+        close_fits: bool = True,
+        force_zero_off: bool = True,
+        overlay_gnom_out: str | None = None,
+    ) -> None:
+        """
+        Plot P(r) from a GNOM ``.out``.
+
+        - ``close_fits``: faint Dmax±10% ensemble overlays (auto pane default).
+        - ``force_zero_off``: thin black force-zero-off overlay from ``ensemble/``.
+        - ``overlay_gnom_out``: optional second ``.out`` (e.g. auto best) drawn faintly
+          under the primary curve; its sibling ``ensemble/`` supplies force-zero-off when
+          the primary path has none (adjust-wizard preview temp outs).
+        """
         if not gnom_out_path or not os.path.isfile(gnom_out_path):
             self._show_status("No GNOM .out")
             return
@@ -224,47 +254,66 @@ class PrPlot(_BaseMplPlot):
         self._click_path = gnom_out_path
         self._click_viewer = "gnom_pr"
         self._ax.clear()
-        # Faint close-fits / force-zero-off overlays when present next to the best .out.
-        out_dir = os.path.dirname(os.path.abspath(gnom_out_path))
-        ens_dir = os.path.join(out_dir, "ensemble")
-        close_dir = os.path.join(ens_dir, "close_fits")
-        close_labeled = False
-        if os.path.isdir(close_dir):
-            for name in sorted(os.listdir(close_dir)):
-                if not name.endswith(".out"):
+
+        primary_dir = os.path.dirname(os.path.abspath(gnom_out_path))
+        overlay_path = (overlay_gnom_out or "").strip()
+        ens_dirs: list[str] = []
+        if close_fits or force_zero_off:
+            ens_dirs.append(os.path.join(primary_dir, "ensemble"))
+        if overlay_path and os.path.isfile(overlay_path):
+            odir = os.path.dirname(os.path.abspath(overlay_path))
+            o_ens = os.path.join(odir, "ensemble")
+            if o_ens not in ens_dirs:
+                ens_dirs.append(o_ens)
+            try:
+                ov_arr = distribution_arrays(parse_gnom_out(overlay_path).get("distribution"))
+            except Exception:
+                ov_arr = None
+            if ov_arr is not None:
+                rr, pp, _ee = ov_arr
+                self._ax.plot(rr, pp, color="C1", lw=1.0, alpha=0.55, zorder=1, label="auto best")
+
+        if close_fits:
+            for ens_dir in ens_dirs:
+                close_dir = os.path.join(ens_dir, "close_fits")
+                close_labeled = False
+                if not os.path.isdir(close_dir):
                     continue
-                cf_path = os.path.join(close_dir, name)
-                try:
-                    cf_arr = distribution_arrays(
-                        parse_gnom_out(cf_path).get("distribution")
-                    )
-                except Exception:
+                for name in sorted(os.listdir(close_dir)):
+                    if not name.endswith(".out"):
+                        continue
+                    cf_path = os.path.join(close_dir, name)
+                    try:
+                        cf_arr = distribution_arrays(parse_gnom_out(cf_path).get("distribution"))
+                    except Exception:
+                        continue
+                    if cf_arr is None:
+                        continue
+                    rr, pp, _ee = cf_arr
+                    label = "close fits (Dmax±10%)" if not close_labeled else None
+                    self._ax.plot(rr, pp, color="0.65", lw=0.8, alpha=0.5, zorder=1, label=label)
+                    close_labeled = True
+
+        if force_zero_off:
+            fz_labeled = False
+            for ens_dir in ens_dirs:
+                if not os.path.isdir(ens_dir):
                     continue
-                if cf_arr is None:
-                    continue
-                rr, pp, _ee = cf_arr
-                label = "close fits (Dmax±10%)" if not close_labeled else None
-                self._ax.plot(
-                    rr, pp, color="0.65", lw=0.8, alpha=0.5, zorder=1, label=label
-                )
-                close_labeled = True
-        if os.path.isdir(ens_dir):
-            for name in sorted(os.listdir(ens_dir)):
-                if not name.endswith("_force_zero_off.out"):
-                    continue
-                fz_path = os.path.join(ens_dir, name)
-                try:
-                    fz_arr = distribution_arrays(
-                        parse_gnom_out(fz_path).get("distribution")
-                    )
-                except Exception:
-                    continue
-                if fz_arr is None:
-                    continue
-                rr, pp, _ee = fz_arr
-                self._ax.plot(
-                    rr, pp, color="k", lw=0.8, alpha=1.0, zorder=1, label="force-zero-off"
-                )
+                for name in sorted(os.listdir(ens_dir)):
+                    if not name.endswith("_force_zero_off.out"):
+                        continue
+                    fz_path = os.path.join(ens_dir, name)
+                    try:
+                        fz_arr = distribution_arrays(parse_gnom_out(fz_path).get("distribution"))
+                    except Exception:
+                        continue
+                    if fz_arr is None:
+                        continue
+                    rr, pp, _ee = fz_arr
+                    label = "force-zero-off" if not fz_labeled else None
+                    self._ax.plot(rr, pp, color="k", lw=0.8, alpha=1.0, zorder=1, label=label)
+                    fz_labeled = True
+
         if err is not None:
             e = np.asarray(err, dtype=float)
             me = m & np.isfinite(e)
@@ -279,7 +328,8 @@ class PrPlot(_BaseMplPlot):
                     zorder=2,
                     label=r"$\pm\sigma$",
                 )
-        self._ax.plot(r[m], pr[m], "C0-", lw=1.2, zorder=3, label="best")
+        primary_label = "current" if overlay_path else "best"
+        self._ax.plot(r[m], pr[m], "C0-", lw=1.2, zorder=3, label=primary_label)
         self._ax.set_xlabel("r (nm)")
         self._ax.set_ylabel("P(r)")
         self._ax.grid(True, alpha=0.2)

@@ -58,20 +58,22 @@ SAXS / small-angle x-ray scattering: calibrate detector geometry using calibrant
 - `calibrant_image` (str): Path to the calibrant image (e.g. TIFF).
 - `output_dir` (str, default `.`): Directory where results are written.
 - `config_path` (str | None, default `None`): Depricated. Path to a YAML config file with a `calibrate` section. When omitted, bundled defaults are used.
-- `mask` (str): Path to a detector pixel mask. Supports .txt (NuPy format), .msk (Fit2d)
-- `mask_mode` (str | None, default `None`): Mask mode selector (`f`/`from_file`, `a`/`auto`, `c`/`combined`). Defaults to `f`/`from_file`.
+- `mask` (str | None, default `None`): Optional user detector pixel mask (`.txt` / `.npy` / `.msk`). When omitted, an automatic mask is used. When provided, it is OR-combined with the automatic mask into `effective_mask.npy` inside `integrator_dir` (the user mask file is never overwritten). The automatic component is also written as `auto_mask.npy` so later `integrate --mask` overrides can re-OR with it.
+- `mask_mode` (str | None, default `None`): Deprecated compatibility selector (`f`/`from_file`, `a`/`auto`, `c`/`combined`). Effective mask is always `auto | optional user mask`; this flag only records intent for configs/GUIs. Defaults to `a`/`auto` when no user mask is given, else `c`/`combined`.
 - `calibrant` (str | None, default `None`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`). Defaults to `AgBh`.
 - `wavelength` (float | None, default `None`): X-ray wavelength in **Ångström**. Defaults to 1.445 Å.
 - `dist_guess` (float | None, default `None`): Optional initial sample–detector distance in **metres** passed to pyFAI before geometry refinement. When omitted, distance is estimated from the innermost calibrant ring. Usually works well if not set.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
-Important constraints:
+Notes:
 
-- `mask` is always required by the skill and the CLI.
+- Automatic mask always includes the beam-stop disk and all negative-intensity pixels (plus optional IQR outliers).
+- The integrator stores the combined result as `effective_mask.npy` and the automatic component as `auto_mask.npy` (not the user mask path).
 
 ### Short parameter list
 
-- mask_mode: Default: load mask from file as is.
+- mask: Optional user mask; default: automatic mask only.
+- mask_mode: Deprecated; default: auto (or combined when a user mask is set).
 - calibrant: name of the calibrant, default: AgBh.
 - wavelength: X-ray wavelength in Ångström, default: 1.445 Å.
 - dist_guess: Optional: initial sample-detector distance in metres (algorithm works good if this is not set).
@@ -80,7 +82,7 @@ Important constraints:
 
 `dict[str, str]` with these output path roles:
 
-- `integrator_dir`: Directory containing the calibrated integrator (used by `integrate`).
+- `integrator_dir`: Directory containing the calibrated integrator (used by `integrate`), including `effective_mask.npy` and `auto_mask.npy`.
 - `refined_path`: Path to the refined detector geometry YAML.
 - `calibration_plots_dir`: Directory containing calibration plots.
 - `calibration_curve_plot_path`: Path to the calibrantion q/I curve plot (PNG).
@@ -95,8 +97,7 @@ from autosaxs.skill import calibrate
 out = calibrate(
     calibrant_image="AgBh.tif",
     output_dir="calibration/",
-    mask="mask.msk",
-    mask_mode="f",
+    mask="mask.msk",  # optional
     use_cache=False,
 )
 
@@ -107,6 +108,7 @@ print(out["refined_path"])
 ### CLI usage
 
 ```bash
+autosaxs calibrate AgBh.tif --output-dir calibration
 autosaxs calibrate AgBh.tif --output-dir calibration --mask mask.msk
 autosaxs calibrate AgBh.tif --conf my_config.conf -o calibration/
 ```

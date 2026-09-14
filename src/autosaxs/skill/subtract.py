@@ -3,11 +3,16 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
-from autosaxs.core.utils import read_saxs, subtraction_correctness, write_saxs
+from autosaxs.core.subtract_scale import (
+    knee_info_as_dict,
+    minimal_ratio_scale,
+    pre_knee_q_window,
+)
+from autosaxs.core.utils import read_saxs, subtraction_correctness, write_data, write_saxs
 
 from .deps import (
     EventBus,
@@ -127,77 +132,39 @@ def _fit_intensity_at_q(
     return best_val
 
 
-def _minimal_ratio_scale(
-    q: np.ndarray,
-    I_sample: np.ndarray,
-    I_buffer: np.ndarray,
+def _resolve_q_range_abs(
+    algo_ops: Dict,
     *,
-    window_q_fraction: float = 0.025,
-    approach_factor: float = 0.99,
-    window_log_ratio_std_max: float = 1.0,
-    q_min: Optional[float] = None,
-    q_max: Optional[float] = None,
-) -> float:
-    """
-    Non-parametric buffer scale (experimental; not exposed via ``subtract()``).
-
-    Sliding q-range windows (fraction of total q span), median of I_sample/I_buffer
-    per window, global min, × approach_factor. Windows with std(log(ratio)) above
-    ``window_log_ratio_std_max`` are skipped (noisy low-intensity tails).
-    """
-    q = np.asarray(q, dtype=float)
-    I_s = np.asarray(I_sample, dtype=float)
-    I_b = np.asarray(I_buffer, dtype=float)
-    frac = float(window_q_fraction)
-    if not np.isfinite(frac) or frac <= 0.0:
-        raise ValueError(f"minimal_ratio window_q_fraction must be finite and > 0, got {window_q_fraction!r}")
-
-    if q_min is None and q_max is None:
-        q_lo = float(np.min(q))
-        q_hi = float(np.max(q))
-        mask = np.ones(q.shape, dtype=bool)
-    elif q_min is not None and q_max is not None:
-        q_lo = float(q_min)
-        q_hi = float(q_max)
-        mask = (q >= q_lo) & (q <= q_hi)
-    else:
-        raise ValueError("minimal_ratio: q_min and q_max must both be set or both omitted")
-
-    q_span = q_hi - q_lo
-    if q_span <= 0.0:
-        raise ValueError("minimal_ratio: q range must have positive span")
-    win_dq = frac * q_span
-
-    q_sel = q[mask]
-    I_s_sel = I_s[mask]
-    I_b_sel = I_b[mask]
-    point_ok = (I_b_sel > 0.0) & (I_s_sel >= 0.0) & np.isfinite(I_s_sel) & np.isfinite(I_b_sel)
-    q_sel = q_sel[point_ok]
-    I_s_sel = I_s_sel[point_ok]
-    I_b_sel = I_b_sel[point_ok]
-    n = int(q_sel.size)
-    if n < 2:
-        raise ValueError(f"minimal_ratio requires at least 2 valid points in the q range, got {n}")
-
-    ratios = I_s_sel / I_b_sel
-    log_std_max = float(window_log_ratio_std_max)
-    window_medians: List[float] = []
-    for i in range(n):
-        q_start = float(q_sel[i])
-        in_win = (q_sel >= q_start) & (q_sel <= q_start + win_dq)
-        if not np.any(in_win):
-            continue
-        win_ratios = ratios[in_win]
-        pos = win_ratios > 0.0
-        if np.count_nonzero(pos) < 2:
-            continue
-        log_r = np.log(win_ratios[pos])
-        if float(np.std(log_r)) > log_std_max:
-            continue
-        window_medians.append(float(np.median(win_ratios)))
-    if not window_medians:
-        raise ValueError("minimal_ratio: no valid sliding windows in q range")
-    return float(approach_factor) * min(window_medians)
+    q_sample: np.ndarray,
+    q_buff: np.ndarray,
+    I_buff_orig: np.ndarray,
+    sigma_buff_orig: Optional[np.ndarray],
+    auto_pre_knee: bool,
+) -> Tuple[float, float, Optional[Dict]]:
+    """Return ``(q_min, q_max, knee_meta_or_None)``; auto-fill from buffer knee when needed."""
+    q_range_abs = algo_ops.get("q_range_abs")
+    if q_range_abs is not None:
+        q0, q1 = q_range_abs
+        if q1 is None:
+            q1 = float(np.max(q_sample))
+        return float(q0), float(q1), None
+    if not auto_pre_knee:
+        raise ValueError("subtract_buffer: q_range_abs is required (set q_min and q_max)")
+    pre_frac = float(algo_ops.get("pre_knee_fraction", 0.35))
+    q0, q1, knee = pre_knee_q_window(
+        np.asarray(q_buff, dtype=float),
+        np.asarray(I_buff_orig, dtype=float),
+        None if sigma_buff_orig is None else np.asarray(sigma_buff_orig, dtype=float),
+        pre_knee_fraction=pre_frac,
+    )
+    # Clamp to sample q coverage.
+    q0 = max(q0, float(np.min(q_sample)))
+    q1 = min(q1, float(np.max(q_sample)))
+    if q1 <= q0:
+        raise ValueError(f"subtract_buffer: auto pre-knee band empty after clamp [{q0}, {q1}]")
+    algo_ops["q_range_abs"] = (q0, q1)
+    algo_ops["knee"] = knee_info_as_dict(knee)
+    return q0, q1, algo_ops["knee"]
 
 
 def subtract_buffer(
@@ -205,12 +172,14 @@ def subtract_buffer(
     src_path,
     destpath,
     image_path=None,
-    method="match_tail",
+    method="minimal_ratio",
     match_tail_ops=None,
     scaling_factor: Optional[float] = None,
 ):
     q_buff, I_buff, sigma_buff, _ = read_saxs(buffer_path)
     q_buff_orig = np.asarray(q_buff, dtype=float)
+    I_buff_orig = np.asarray(I_buff, dtype=float)
+    sigma_buff_orig = None if sigma_buff is None else np.asarray(sigma_buff, dtype=float)
 
     manual_scale: Optional[float] = None
     if scaling_factor is not None:
@@ -224,23 +193,26 @@ def subtract_buffer(
             )
 
     q, I, sigma, _ = read_saxs(src_path)
+    q = np.asarray(q, dtype=float)
+    I = np.asarray(I, dtype=float)
     scaling_factor = 1.00 if manual_scale is None else float(manual_scale)
     method_key = str(method).strip().lower().replace("-", "_")
     algo_ops = None
-    # minimal_ratio branch kept for internal/experimental use via subtract_buffer only.
     if manual_scale is None and method_key in ("match_tail", "point_match", "minimal_ratio"):
         if method_key == "minimal_ratio":
             algo_ops = {
                 "q_range_abs": None,
-                "window_q_fraction": 0.025,
+                "window_q_fraction": 0.05,
                 "approach_factor": 0.99,
-                "window_log_ratio_std_max": 1.0,
+                "snr_min": 2.0,
+                "pre_knee_fraction": 0.35,
             }
         else:
             algo_ops = {
                 "approach_factor": 1.00,
                 "n_min": 2,
                 "n_max": 6,
+                "pre_knee_fraction": 0.35,
             }
         if match_tail_ops is None:
             match_tail_ops = dict()
@@ -250,39 +222,41 @@ def subtract_buffer(
                 "subtract_buffer: q_range_rel is no longer supported; use q_range_abs (q_min and q_max)"
             )
 
-        if not np.array_equal(q, q_buff):
-            I_buff = np.interp(q, q_buff, I_buff)
+        if not np.array_equal(q, q_buff_orig):
+            I_buff = np.interp(q, q_buff_orig, I_buff_orig)
+            if sigma_buff_orig is not None:
+                sigma_buff = np.interp(q, q_buff_orig, sigma_buff_orig)
+        else:
+            I_buff = I_buff_orig.copy()
+
+        # Auto pre-knee when q_range_abs omitted (all methods).
+        q0, q1, _knee_meta = _resolve_q_range_abs(
+            algo_ops,
+            q_sample=q,
+            q_buff=q_buff_orig,
+            I_buff_orig=I_buff_orig,
+            sigma_buff_orig=sigma_buff_orig,
+            auto_pre_knee=True,
+        )
+        algo_ops["q_range_abs"] = (q0, q1)
 
         if method_key == "minimal_ratio":
-            q_range_abs = algo_ops.get("q_range_abs")
-            if q_range_abs is None:
-                q0 = max(float(np.min(q)), float(np.min(q_buff_orig)))
-                q1 = min(float(np.max(q)), float(np.max(q_buff_orig)))
-                algo_ops["q_range_abs"] = (q0, q1)
-            else:
-                q0, q1 = q_range_abs
-            scaling_factor = _minimal_ratio_scale(
+            scale, mr_diag = minimal_ratio_scale(
                 q,
                 I,
                 I_buff,
-                window_q_fraction=float(algo_ops.get("window_q_fraction", 0.025)),
+                sigma_sample=None if sigma is None else np.asarray(sigma, dtype=float),
+                sigma_buffer=None if sigma_buff is None else np.asarray(sigma_buff, dtype=float),
+                q_min=q0,
+                q_max=q1,
+                window_q_fraction=float(algo_ops.get("window_q_fraction", 0.05)),
                 approach_factor=float(algo_ops.get("approach_factor", 0.99)),
-                window_log_ratio_std_max=float(algo_ops.get("window_log_ratio_std_max", 1.0)),
-                q_min=float(q0),
-                q_max=float(q1),
+                snr_min=float(algo_ops.get("snr_min", 2.0)),
             )
+            scaling_factor = float(scale)
+            algo_ops["minimal_ratio"] = mr_diag
         else:
-            q_range_abs = algo_ops.get("q_range_abs")
-            if q_range_abs is None:
-                raise ValueError(
-                    f"subtract_buffer: q_range_abs is required for method {method_key!r} "
-                    "(set q_min and q_max)"
-                )
-            q0, q1 = q_range_abs
-            if q1 is None:
-                q1 = float(np.max(q))
             idx = (q0 < q) & (q < q1)
-
             q_tail = q[idx]
             I_tail = I[idx]
             I_buff_tail = I_buff[idx]
@@ -315,10 +289,11 @@ def subtract_buffer(
     I_sub = I - I_buffer_scaled
 
     if sigma_buff is not None and sigma is not None:
-        sigma_buffer_scaled = sigma_buff * scaling_factor
-        sigma_sub = np.hypot(sigma, sigma_buffer_scaled)
+        sigma_buffer_scaled = np.asarray(sigma_buff, dtype=float) * scaling_factor
+        sigma_sub = np.hypot(np.asarray(sigma, dtype=float), sigma_buffer_scaled)
     else:
         sigma_sub = None
+        sigma_buffer_scaled = None
 
     used_ops = None
     try:
@@ -368,48 +343,52 @@ def subtract(
     buffer_1d: SingletonDatPathExpressionArg,
     output_dir: str = ".",
     *,
-    q_min: float,
-    q_max: float,
+    q_min: Optional[float] = None,
+    q_max: Optional[float] = None,
     config_path: Optional[ConfigPathExpressionArg] = None,
     method: Optional[str] = None,
     sample_form: Optional[str] = None,
     buffer_form: Optional[str] = None,
     point_match_factor: Optional[float] = None,
     scaling_factor: Optional[float] = None,
+    window_q_fraction: Optional[float] = None,
+    pre_knee_fraction: Optional[float] = None,
+    snr_min: Optional[float] = None,
+    approach_factor: Optional[float] = None,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    SAXS / small-angle x-ray scattering: subtract a buffer curve from a sample 1D profile (background subtraction). Scaling uses either `point_match` (default)
-    or legacy `match_tail`, optionally restricted to a q window (`q_min` / `q_max`).
+    SAXS / small-angle x-ray scattering: subtract a buffer curve from a sample 1D profile (background subtraction).
+
+    Default scaling is ``minimal_ratio`` in an auto pre-knee ``q`` band detected on the
+    buffer alone. Legacy ``point_match`` / ``match_tail`` remain available via ``method``.
 
     ### Arguments
 
     - `sample_1d` (str): Sample path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
     - `buffer_1d` (str): Path to the buffer 1D `.dat` curve (must be an existing file).
     - `output_dir` (str, default `.`): Directory where subtraction outputs are written.
-    - `config_path` (str | None, default `None`): Optional path to a YAML config file with a `subtract` section. When omitted, bundled defaults apply for method/forms; q-window keys come from CLI or user file only.
-    - `method` (str | None, default `None`): `point_match` or `match_tail`. Defaults from bundled config when omitted.
-    - `q_min` (float): Lower bound of matching q-range (nm⁻¹). Required. Recommended to choose in "hihg q region", where sample and buffer curve follwo Porod/linear/Porod+linear law.
-    - `q_max` (float): Upper bound of matching q-range (nm⁻¹). Required. Recommended to choose in "hihg q region", just before the "knee" of SAXS profile.
-    - `sample_form` / `buffer_form` (str | None): For `point_match` only — each is `linear`, `Porod`, or `Porod-plus-linear`.
-    - `point_match_factor` (float | None, default `None`): For `point_match`, scale satisfies `point_match_factor * I_sample_fit(q_max) = scale * I_buffer_fit(q_max)`.
-    - `scaling_factor` (float | None, default `None`): If provided, overrides automatic scaling and uses this factor directly (must be finite and > 0).
+    - `config_path` (str | None, default `None`): Optional path to a YAML config file with a `subtract` section. When omitted, bundled defaults apply.
+    - `method` (str | None, default `None`): `minimal_ratio` (default), `point_match`, or `match_tail`.
+    - `q_min` / `q_max` (float | None): Matching q-window (nm⁻¹). Optional; when omitted, auto from buffer pre-knee detection.
+    - `sample_form` / `buffer_form` (str | None): For `point_match` only — `linear`, `Porod`, or `Porod-plus-linear`.
+    - `point_match_factor` (float | None): For `point_match` only.
+    - `window_q_fraction` / `pre_knee_fraction` / `snr_min` / `approach_factor`: For `minimal_ratio` (and pre-knee auto band).
+    - `scaling_factor` (float | None): Manual scale override (finite, > 0).
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
-    The q window (`q_min`, `q_max`) is always required at the Python API and CLI. A user config file may supply values that override the arguments passed to `subtract()`.
-
     ### Notes
-    Correctness criteria: buffer and sample visually matched at "tail region". Negative values in the subtracted curve are possible due to high variance at the "tail" region. But overall the curves look just match, especially after the "knee".
+    Correctness criteria: buffer and sample visually matched at the high-q tail / pre-knee region.
+    Negative values in the subtracted curve are possible due to high variance at the tail.
 
     ### Short parameter list
 
-    - method: internal parameter, changing the default is not recommended, default: point-match
-    - sample_form: default: Porod+linear
-    - buffer_form: default: linear
-    - point_match_factor: internal parameter, changing the default is not recommended, default: 0.995
-    - q_min: Required, start of matching region
-    - q_max: Required, end of matching region, matching point
-    - scaling_factor: Manual scaling factor. When this set, it replaces auto-scale
+    - method: default `minimal_ratio` (set `point_match` to restore the previous default)
+    - q_min / q_max: optional; auto pre-knee band when omitted
+    - window_q_fraction: default 0.05
+    - pre_knee_fraction: default 0.35
+    - snr_min: default 2.0
+    - scaling_factor: Manual scaling factor; replaces auto-scale when set
 
     ### Returns
 
@@ -421,7 +400,8 @@ def subtract(
     - `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
     Subtraction quality (`correct` or `over-subtracted`) is written into the subtracted `.dat` metadata
     (``subtract.correctness``) and into per-sample report fragments (individual Markdown and summary YAML).
-    The individual report embeds the subtracted curve from the `.dat` (not from `sub_plot_path`).
+    The individual report shows subtraction quality, re-plots the log-scale difference
+    curves from ``diff_log_*.dat``, then the subtracted curve (log I vs q) from the ``.dat``.
 
     ### Python usage
 
@@ -432,9 +412,6 @@ def subtract(
         sample_1d="integration/int_sample_01.dat",
         buffer_1d="integration/int_buffer.dat",
         output_dir="subtracted",
-        method="point_match",
-        q_min=4.0,
-        q_max=6.0,
         use_cache=False,
     )
 
@@ -444,8 +421,9 @@ def subtract(
     ### CLI usage
 
     ```bash
-    autosaxs subtract integration/int_sample_01.dat integration/int_buffer.dat \
-      --output-dir subtracted --method point_match --q-min 4.0 --q-max 6.0
+    autosaxs subtract integration/int_sample_01.dat integration/int_buffer.dat \\
+      --output-dir subtracted
+    # optional restore: --method point_match --q-min 4.0 --q-max 6.0
     ```
     """
     cfg_path = _resolve_config_path(config_path)
@@ -459,23 +437,37 @@ def subtract(
         buffer_form=buffer_form,
         point_match_factor=point_match_factor,
         scaling_factor=scaling_factor,
+        window_q_fraction=window_q_fraction,
+        pre_knee_fraction=pre_knee_fraction,
+        snr_min=snr_min,
+        approach_factor=approach_factor,
     )
-    method_eff = str(merged.get("method", "point_match")).strip().lower().replace("-", "_")
-    if method_eff == "minimal_ratio":
+    method_eff = str(merged.get("method", "minimal_ratio")).strip().lower().replace("-", "_")
+    if method_eff not in ("minimal_ratio", "point_match", "match_tail"):
         raise ValueError(
-            "subtract: method 'minimal_ratio' is not supported via the public API "
-            "(experimental; reserved for future development). Use 'point_match' or 'match_tail'."
+            f"subtract: unknown method {method_eff!r}; "
+            "expected 'minimal_ratio', 'point_match', or 'match_tail'"
         )
     q_min_eff = merged.get("q_min", q_min)
     q_max_eff = merged.get("q_max", q_max)
-    if q_min_eff is None or q_max_eff is None:
-        raise ValueError("subtract: q_min and q_max must both be set (no defaults)")
+    if (q_min_eff is None) ^ (q_max_eff is None):
+        raise ValueError("subtract: q_min and q_max must both be set or both omitted")
     sample_form_eff = merged.get("sample_form", "Porod-plus-linear")
     buffer_form_eff = merged.get("buffer_form", "linear")
     point_match_factor_eff = float(merged.get("point_match_factor", 0.995))
     scaling_factor_eff = merged.get("scaling_factor", scaling_factor)
-    match_tail_ops: Dict = {"q_range_abs": (float(q_min_eff), float(q_max_eff))}
-    if method_eff == "point_match":
+    match_tail_ops: Dict = {
+        "pre_knee_fraction": float(merged.get("pre_knee_fraction", 0.35)),
+    }
+    if q_min_eff is not None and q_max_eff is not None:
+        match_tail_ops["q_range_abs"] = (float(q_min_eff), float(q_max_eff))
+    else:
+        match_tail_ops["q_range_abs"] = None
+    if method_eff == "minimal_ratio":
+        match_tail_ops["window_q_fraction"] = float(merged.get("window_q_fraction", 0.05))
+        match_tail_ops["snr_min"] = float(merged.get("snr_min", 2.0))
+        match_tail_ops["approach_factor"] = float(merged.get("approach_factor", 0.99))
+    elif method_eff == "point_match":
         match_tail_ops["sample_form"] = sample_form_eff
         match_tail_ops["buffer_form"] = buffer_form_eff
         match_tail_ops["point_match_factor"] = point_match_factor_eff
@@ -516,8 +508,8 @@ def _subtract_paths(
     event_bus: Optional[EventBus] = None,
     use_cache: bool = False,
     sample_index: int = 0,
-    method: str = "point_match",
-    match_tail_ops: Optional[Dict] = None,  # required q_range_abs when called via subtract()
+    method: str = "minimal_ratio",
+    match_tail_ops: Optional[Dict] = None,
     scaling_factor: Optional[float] = None,
 ) -> Dict[str, Union[str, List[str]]]:
     _ = config, use_cache, sample_index
@@ -546,7 +538,8 @@ def _subtract_paths(
     sub_plot_path = os.path.join(output_dir, f"sub_{base}.png")
     diff_plot_path = os.path.join(output_dir, f"diff_{base}.png")
     diff_log_plot_path = os.path.join(output_dir, f"diff_log_{base}.png")
-    # Artifact PNG (log I vs q); report still embeds the curve from `.dat`.
+    diff_log_dat_path = os.path.join(output_dir, f"diff_log_{base}.dat")
+    # Artifact PNGs; report fragment links the log-diff ``.dat`` so assembly re-plots it.
     import matplotlib
 
     matplotlib.use("Agg")
@@ -568,6 +561,7 @@ def _subtract_paths(
     fig.tight_layout()
     fig.savefig(sub_plot_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+    _savefig = {"dpi": 150, "bbox_inches": "tight"}
     PLTViewer.view_curves(
         q_sample,
         I_sample,
@@ -578,10 +572,29 @@ def _subtract_paths(
         sigmas=(sigma_sample, sigma_buff_scaled),
         legend=True,
         plotFilePath=diff_plot_path,
-        save=False,
+        savefigArgs=_savefig,
     )
     I_sample_log = np.where(np.asarray(I_sample, dtype=float) > 0.0, np.log(np.asarray(I_sample, dtype=float)), np.nan)
     I_buff_log = np.where(np.asarray(I_buff_scaled, dtype=float) > 0.0, np.log(np.asarray(I_buff_scaled, dtype=float)), np.nan)
+    import pandas as pd
+
+    write_data(
+        diff_log_dat_path,
+        pd.DataFrame(
+            {
+                "q": np.asarray(q_sample, dtype=float),
+                "sample (log)": I_sample_log,
+                "buffer scaled (log)": I_buff_log,
+            }
+        ),
+        metadata={
+            "type": "multi_curve",
+            "title": f"Difference log scale: {base}",
+            "xlabel": "q (nm^-1)",
+            "ylabel": "ln(I) (a.u.)",
+            "parent": sample_1d,
+        },
+    )
     PLTViewer.view_curves(
         q_sample,
         I_sample_log,
@@ -593,7 +606,7 @@ def _subtract_paths(
         ylabel="ln(I) (a.u.)",
         legend=True,
         plotFilePath=diff_log_plot_path,
-        save=False,
+        savefigArgs=_savefig,
     )
     from autosaxs.core.report_fragments import write_skill_report_fragments
 
@@ -606,10 +619,8 @@ def _subtract_paths(
     )
     md_lines = [
         "### Buffer subtraction\n",
-        f"Scaling method: **{method}**.\n",
         f"Subtraction quality: **{correctness}**.\n",
-        f"![Difference sample vs scaled buffer]({os.path.basename(diff_plot_path)})\n",
-        f"![Difference log scale]({os.path.basename(diff_log_plot_path)})\n",
+        f"![Difference log scale]({os.path.basename(diff_log_dat_path)})\n",
         f"![Subtracted curve]({os.path.basename(dest)})\n",
     ]
     summary_refs = [

@@ -135,11 +135,19 @@ def _plot_paths(
     kratky_plot_path = os.path.join(output_dir, f"kratky_{base}.png")
     loglog_plot_path = os.path.join(output_dir, f"loglog_{base}.png")
     guinier_dat_path = os.path.join(output_dir, f"guinier_{base}.dat")
+    kratky_dat_path = os.path.join(output_dir, f"kratky_{base}.dat")
+    loglog_dat_path = os.path.join(output_dir, f"loglog_{base}.dat")
 
     write_data(
         guinier_dat_path,
         pd.DataFrame({"q^2": q * q, "log(I)": np.log(I)}),
-        metadata={"type": "guinier", "parent": profile},
+        metadata={
+            "type": "multi_curve",
+            "title": f"Guinier: {base}",
+            "xlabel": "q^2 (nm-2)",
+            "ylabel": "ln(I) (a.u.)",
+            "parent": profile,
+        },
     )
     PLTViewer.view_curves(
         q * q,
@@ -151,9 +159,15 @@ def _plot_paths(
         plotFilePath=guinier_plot_path,
     )
     write_data(
-        os.path.join(output_dir, f"kratky_{base}.dat"),
+        kratky_dat_path,
         pd.DataFrame({"q": q, "I * q^2": q * q * I}),
-        metadata={"type": "kratky", "parent": profile},
+        metadata={
+            "type": "kratky",
+            "title": f"Kratky: {base}",
+            "xlabel": "q (nm-1)",
+            "ylabel": "I * q^2 (a.u.)",
+            "parent": profile,
+        },
     )
     PLTViewer.view_curves(
         q,
@@ -165,9 +179,15 @@ def _plot_paths(
         plotFilePath=kratky_plot_path,
     )
     write_data(
-        os.path.join(output_dir, f"loglog_{base}.dat"),
+        loglog_dat_path,
         pd.DataFrame({"log(q)": np.log(q), "log(I)": np.log(I)}),
-        metadata={"type": "loglog", "parent": profile},
+        metadata={
+            "type": "multi_curve",
+            "title": f"Log-log: {base}",
+            "xlabel": "ln(q)",
+            "ylabel": "ln(I)",
+            "parent": profile,
+        },
     )
     PLTViewer.view_curves(
         np.log(q),
@@ -182,9 +202,9 @@ def _plot_paths(
 
     md_lines = [
         "### Diagnostic 1D plots\n",
-        f"![Guinier]({os.path.basename(guinier_plot_path)})\n",
-        f"![Kratky]({os.path.basename(kratky_plot_path)})\n",
-        f"![Log-log]({os.path.basename(loglog_plot_path)})\n",
+        f"![Guinier]({os.path.basename(guinier_dat_path)})\n",
+        f"![Kratky]({os.path.basename(kratky_dat_path)})\n",
+        f"![Log-log]({os.path.basename(loglog_dat_path)})\n",
     ]
     summary_refs = [
         {"role": "guinier_dat", "path": os.path.basename(guinier_dat_path), "format": "dat"},

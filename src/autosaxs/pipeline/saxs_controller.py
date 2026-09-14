@@ -725,7 +725,7 @@ class Controller:
                     calibrant_path,
                     directory,
                     config_path=config_path,
-                    mask=mask_path or "",
+                    mask=mask_path,
                     mask_mode=mask_mode,
                     use_cache=fast_forward,
                 )
@@ -739,10 +739,16 @@ class Controller:
             ai_subdir = 'integrator_params'
 
             def exit_condition():
-                return all(
-                    os.path.exists(os.path.join(directory, ai_subdir, p))
-                    for p in ['ai_params.json', 'detector_params.json', 'mask.npy']
+                base = os.path.join(directory, ai_subdir)
+                has_core = all(
+                    os.path.exists(os.path.join(base, p))
+                    for p in ['ai_params.json', 'detector_params.json']
                 )
+                has_mask = (
+                    os.path.exists(os.path.join(base, 'effective_mask.npy'))
+                    or os.path.exists(os.path.join(base, 'mask.npy'))
+                )
+                return has_core and has_mask
 
             while not exit_condition():
                 self._send_message(
@@ -750,7 +756,7 @@ class Controller:
                     f'Provide them by uploading directory named "{ai_subdir}" which contains:\n'
                     f'ai_params.json\n'
                     f'detector_params.json\n'
-                    f'mask.npy\n'
+                    f'effective_mask.npy (or legacy mask.npy)\n'
                 )
                 self._request_file(
                     directory,
@@ -1257,8 +1263,16 @@ class Controller:
         if 'integration' in steps and 'calibration' not in steps:
             ai_subdir = 'integrator_params'
             def exists_condition():
-                return all(os.path.exists(os.path.join(directory, ai_subdir, p)) 
-                for p in ['ai_params.json', 'detector_params.json', 'mask.npy']) 
+                base = os.path.join(directory, ai_subdir)
+                has_core = all(
+                    os.path.exists(os.path.join(base, p))
+                    for p in ['ai_params.json', 'detector_params.json']
+                )
+                has_mask = (
+                    os.path.exists(os.path.join(base, 'effective_mask.npy'))
+                    or os.path.exists(os.path.join(base, 'mask.npy'))
+                )
+                return has_core and has_mask
             
             assert exists_condition(), 'IntegratorExtended object can not be created - the data does not exist'
             ai = IntegratorExtended.from_disk(os.path.join(directory, ai_subdir))

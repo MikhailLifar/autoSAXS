@@ -9,7 +9,7 @@ from ..logic.package_update import launch_deferred_pip_upgrade
 from .toast import ConfirmToast
 
 
-def request_app_update(*, parent: QWidget) -> None:
+def request_app_update(*, parent: QWidget, package_spec: str | None = None) -> None:
     """Ask once, then close the app and run the deferred pip upgrade."""
     toast = ConfirmToast(
         text="Updating the app requires closing it. It will re-open when the update finishes. Continue?",
@@ -18,7 +18,11 @@ def request_app_update(*, parent: QWidget) -> None:
 
     def on_accept() -> None:
         try:
-            launch_deferred_pip_upgrade(parent_pid=os.getpid(), force=False)
+            launch_deferred_pip_upgrade(
+                parent_pid=os.getpid(),
+                force=False,
+                package_spec=package_spec,
+            )
         except OSError as exc:
             QMessageBox.critical(
                 parent,

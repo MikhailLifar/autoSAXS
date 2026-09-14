@@ -62,6 +62,8 @@ def save_liveview_session_settings(state: LiveviewSessionState) -> None:
             "subtract_options": state.subtract_options,
             "calibration_curve_plot_path": _as_rel_if_under(wd, state.calibration_curve_plot_path),
             "calibration_refined_yml_path": _as_rel_if_under(wd, state.calibration_refined_yml_path),
+            "mask_path": _as_rel_if_under(wd, state.mask_path),
+            "mask_preview_path": _as_rel_if_under(wd, state.mask_preview_path),
         }
         text = yaml.safe_dump(data, sort_keys=True, allow_unicode=True)
         tmp = path.with_name(path.name + ".tmp")
@@ -92,10 +94,10 @@ def load_liveview_session_settings(state: LiveviewSessionState) -> bool:
         return True
 
     wm = raw.get("watch_mode")
-    if wm == LiveviewWatchMode.TREE.value:
-        state.watch_mode = LiveviewWatchMode.TREE
-    else:
+    if wm == LiveviewWatchMode.FLAT.value:
         state.watch_mode = LiveviewWatchMode.FLAT
+    else:
+        state.watch_mode = LiveviewWatchMode.TREE
 
     integ = _resolve_saved_path(wd, raw.get("integrator_dir") if raw.get("integrator_dir") else None)
     if integ is not None and integ.is_dir():
@@ -132,5 +134,19 @@ def load_liveview_session_settings(state: LiveviewSessionState) -> bool:
         cand = state.integrator_dir.parent / "refined.yml"
         if cand.is_file():
             state.calibration_refined_yml_path = cand
+
+    mask = _resolve_saved_path(wd, raw.get("mask_path") if raw.get("mask_path") else None)
+    if mask is not None and mask.is_file():
+        state.mask_path = mask
+    else:
+        state.mask_path = None
+
+    mask_prev = _resolve_saved_path(
+        wd, raw.get("mask_preview_path") if raw.get("mask_preview_path") else None
+    )
+    if mask_prev is not None and mask_prev.is_file():
+        state.mask_preview_path = mask_prev
+    else:
+        state.mask_preview_path = None
 
     return True

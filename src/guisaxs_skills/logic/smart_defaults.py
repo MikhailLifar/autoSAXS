@@ -195,6 +195,50 @@ def find_mask_near(base: Path) -> Optional[Path]:
     return None
 
 
+_CALIBRANT_IMAGE_GLOBS = ("*AgBh*.tif", "*calib*.tif", "*LaB6*.tif")
+
+
+def find_calibrant_image_in_workdir(workdir: Path) -> Optional[Path]:
+    """
+    Guess a calibrant TIFF under ``workdir`` (and one level of subdirs).
+
+    Patterns: ``*AgBh*.tif``, ``*calib*.tif``, ``*LaB6*.tif``.
+    When several match, the newest by mtime wins.
+    """
+    try:
+        root = workdir.expanduser().resolve()
+    except OSError:
+        return None
+    if not root.is_dir():
+        return None
+
+    search_dirs: List[Path] = [root]
+    try:
+        for child in root.iterdir():
+            if child.is_dir():
+                search_dirs.append(child)
+    except OSError:
+        pass
+
+    candidates: List[Path] = []
+    for directory in search_dirs:
+        for pattern in _CALIBRANT_IMAGE_GLOBS:
+            try:
+                candidates.extend(p for p in directory.glob(pattern) if p.is_file())
+            except OSError:
+                continue
+    if not candidates:
+        return None
+
+    def _mtime(p: Path) -> float:
+        try:
+            return float(p.stat().st_mtime)
+        except OSError:
+            return 0.0
+
+    return max(candidates, key=_mtime).resolve()
+
+
 def browse_start_dir_for_resolved_paths(paths: List[str], workdir: Path) -> Optional[str]:
     """
     Directory for QFileDialog: parent of the first existing file, or the path itself if it is an existing directory.
@@ -424,7 +468,12 @@ def session_hint_for_positional_path(
 ) -> Optional[str]:
     """Resolve a positional parameter default from global hints (skill-specific mapping)."""
     if skill_name == "calibrate" and param_name == "calibrant_image":
-        return _dir_hint_if_exists(hints.two_d_tif_dir, workdir)
+        # File path only (never a directory — PathField is a TIFF, and a dir string
+        # would falsely satisfy "has calibrant" coaching checks).
+        found = find_calibrant_image_in_workdir(workdir)
+        if found is not None:
+            return str(found)
+        return None
     if skill_name == "integrate" and param_name == "images":
         return _dir_hint_if_exists(hints.two_d_tif_dir, workdir)
     if skill_name == "integrate_proxy" and param_name == "image":
@@ -437,6 +486,9 @@ def session_hint_for_positional_path(
     if skill_name == "subtract" and param_name == "sample_1d":
         return _dir_hint_if_exists(hints.one_d_profile_dir, workdir)
     if skill_name == "subtract" and param_name == "buffer_1d":
+        buf = _file_hint_if_exists(getattr(hints, "buffer_dat_path", None), workdir)
+        if buf:
+            return buf
         return _file_hint_if_exists(hints.last_integrated_dat_path, workdir)
     if skill_name in ANALYSIS_SKILLS_WITH_PROFILE and param_name == "profile":
         pf = _file_hint_if_exists(hints.preferred_profile_dat_path, workdir)

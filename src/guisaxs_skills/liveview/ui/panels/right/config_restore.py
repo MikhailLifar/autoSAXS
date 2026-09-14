@@ -151,11 +151,12 @@ class RightPanelConfigRestore:
         if not isinstance(data, dict):
             return
         wp = dict(self._state.polydisperse_window_params or {})
-        for key in ("first", "last", "rmin_nm", "rmax_nm", "alpha"):
+        for key in ("first", "last"):
             if data.get(key) is not None:
                 wp[key] = data[key]
         if wp.get("first") is None:
             wp["first"] = 1
+        # Do not restore rmax/alpha/force_zero into window params — those are refine-only.
         self._state.polydisperse_window_params = wp
 
     def restore_bodies(self) -> None:

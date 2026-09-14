@@ -34,6 +34,7 @@ def fit_sizes_opts(
     state: LiveviewSessionState,
     output_root: Path,
     load_yaml: YamlOptionsLoader,
+    refine: bool = False,
 ) -> dict:
     outdir = fit_sizes_dir(output_root)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -42,14 +43,22 @@ def fit_sizes_opts(
         opts.update(load_yaml(state.fit_sizes_conf_path))
     wp = state.polydisperse_window_params
     if isinstance(wp, dict):
-        for key in ("first", "last", "rmin_nm", "rmax_nm", "alpha"):
+        for key in ("first", "last"):
             if wp.get(key) is not None:
                 opts[key] = wp[key]
+        if refine:
+            for key in ("rmin_nm", "rmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax"):
+                if wp.get(key) is not None:
+                    opts[key] = wp[key]
     opts["shape"] = "spheres"
     if coerce_opt_int(opts.get("first")) is None:
         opts["first"] = 1
     else:
         opts["first"] = int(coerce_opt_int(opts.get("first")) or 1)
+    if not refine:
+        # Auto path must always search Rmax — never pin refine keys from window params / conf.
+        for key in ("rmin_nm", "rmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax"):
+            opts.pop(key, None)
     opts.pop("output_dir", None)
     opts.pop("use_cache", None)
     opts["output_dir"] = str(outdir.resolve())
@@ -143,7 +152,12 @@ def build_polydisperse_steps(
         )
 
     if parts in (PolydispersePipelineParts.SIZES_ONLY, PolydispersePipelineParts.FULL):
-        s_opts = fit_sizes_opts(state=state, output_root=root, load_yaml=load_yaml)
+        s_opts = fit_sizes_opts(
+            state=state,
+            output_root=root,
+            load_yaml=load_yaml,
+            refine=(parts == PolydispersePipelineParts.SIZES_ONLY),
+        )
         steps.append(JobStep(name="fit_sizes", request=RunRequest("fit_sizes", [prof], s_opts)))
 
     if parts == PolydispersePipelineParts.MIXTURE_ONLY or (

@@ -14,22 +14,19 @@ choosing the scale <i>s</i> so that solvent / capillary contributions cancel whi
 remains. Visually, sample and scaled buffer should match in the high-<i>q</i> “tail”, especially past
 the Porod region / before a detector “knee”.</p>
 
-<p><b>What autosaxs does (custom) — default <code>point_match</code>.</b></p>
+<p><b>What autosaxs does.</b></p>
 <ol>
-<li>Restrict both curves to a user window [<i>q</i><sub>min</sub>, <i>q</i><sub>max</sub>] (liveview:
-<b>q min</b> / <b>q max</b> in <b>Set buffer</b>). Prefer a high-<i>q</i> band where both curves follow a
-simple form, ending just before any sharp knee.</li>
-<li>Fit sample and buffer intensities in that window to analytic forms (default: sample
-<b>Porod + linear</b>, buffer <b>linear</b>; alternatives: Porod or linear alone).</li>
-<li>Set the scale so that at <i>q</i><sub>max</sub>:
-<code>0.995 · I_sample_fit(q_max) = s · I_buffer_fit(q_max)</code>
-(the factor 0.995 keeps the buffer slightly below the sample tail by default).</li>
+<li>Detect the detector <b>knee on the buffer alone</b> (SNR-weighted descending-edge contrast on
+rolling-median log&nbsp;<i>I</i>). Set <i>q</i><sub>max</sub> just before that cliff.</li>
+<li>Take the late pre-knee band (default: last 35% of [<i>q</i><sub>min,data</sub>, <i>q</i><sub>knee</sub>]).
+Optional manual <i>q</i><sub>min</sub> / <i>q</i><sub>max</sub> override this.</li>
+<li>In that band, gate low-SNR points, form raw ratios I<sub>sample</sub>/I<sub>buffer</sub>, take
+sliding-window medians, then <i>s</i> = approach_factor × min(medians).</li>
 <li>Write I<sub>sub</sub> = I<sub>sample</sub> − <i>s</i>·I<sub>buffer</sub> with propagated errors.
 Flag <b>over-subtracted</b> if any point has I<sub>sub</sub>+σ<sub>sub</sub> &lt; 0.</li>
 </ol>
 
-<p>A fixed <b>scaling factor</b> (Subtraction wizard) overrides automatic scaling. Legacy
-<code>match_tail</code> exists but is not the recommended default.</p>
+<p>A fixed <b>scaling factor</b> (Subtraction wizard) overrides automatic scaling.</p>
 
 <p><b>Engines.</b> Fully custom (no ATSAS).</p>
 <p class="nav-top"><a href="integrate.html">← Azimuthal integration</a> ·

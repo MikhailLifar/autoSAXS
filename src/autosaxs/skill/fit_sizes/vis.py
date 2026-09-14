@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 
 from autosaxs.core.gnom import distribution_arrays, parse_gnom_out
+from autosaxs.core.utils import write_data
 from autosaxs.core.viewer import write_iq_fit_comparison_png
 
 from ..deps import EventBus, EventType
@@ -27,7 +28,7 @@ def write_fit_vs_exp_png(
     best: Dict[str, Any],
     event_bus: Optional[EventBus],
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Write I(q) fit-vs-experiment PNG. Returns (path, error)."""
+    """Write I(q) fit-vs-experiment PNG (+ sibling ``.dat`` for report re-plot). Returns (path, error)."""
     fit_vs_exp_png_path: Optional[str] = None
     fit_vs_exp_png_error: Optional[str] = None
     try:
@@ -37,13 +38,33 @@ def write_fit_vs_exp_png(
         if iq_table is None:
             fit_vs_exp_png_error = "could not parse I(q) table from .out"
         else:
+            import pandas as pd
+
             q, I_exp, sigma_arr, I_fit = iq_table
             fit_vs_exp_png_path = os.path.join(output_dir, f"{base}_fits.png")
+            fit_vs_exp_dat_path = os.path.join(output_dir, f"{base}_fits.dat")
             te = best.get("total_estimate")
             if te is not None:
                 title = f"GNOM fit (system={system}): Total Estimate={float(te):.3f}"
             else:
                 title = f"GNOM fit (system={system})"
+            write_data(
+                fit_vs_exp_dat_path,
+                pd.DataFrame(
+                    {
+                        "q": np.asarray(q, dtype=float),
+                        "I_exp": np.asarray(I_exp, dtype=float),
+                        "I_fit": np.asarray(I_fit, dtype=float),
+                    }
+                ),
+                metadata={
+                    "type": "multi_curve",
+                    "title": title,
+                    "xlabel": "q (nm^-1)",
+                    "ylabel": "I (a.u.)",
+                    "log_y": True,
+                },
+            )
             write_iq_fit_comparison_png(
                 fit_vs_exp_png_path,
                 q,
@@ -136,7 +157,29 @@ def write_dr_png(
         return best_dr_png_path, best_dr_png_error
     r, d, err = arrays
     png_path = os.path.splitext(out_path)[0] + ".png"
+    dat_path = os.path.splitext(out_path)[0] + ".dat"
     try:
+        import pandas as pd
+
+        te = best.get("total_estimate")
+        title_parts = [f"GNOM D(R), system={system}"]
+        if te is not None:
+            title_parts.append(f"TE={float(te):.3f}")
+        pdi = dr_quality.get("pdi")
+        if pdi is not None and np.isfinite(float(pdi)):
+            title_parts.append(f"PDI={float(pdi):.3f}")
+        title = ", ".join(title_parts)
+        write_data(
+            dat_path,
+            pd.DataFrame({"R": np.asarray(r, dtype=float), "D(R)": np.asarray(d, dtype=float)}),
+            metadata={
+                "type": "multi_curve",
+                "title": title,
+                "xlabel": "R (nm)",
+                "ylabel": "D(R)",
+                "legend": False,
+            },
+        )
         fig, ax = plt.subplots(figsize=(7, 4))
         close_labeled = False
         for cf_path in close_fit_out_paths or []:
@@ -168,14 +211,7 @@ def write_dr_png(
         ax.plot(r, d, "C0-", lw=2, zorder=3, label="best")
         ax.set_xlabel("R (nm)")
         ax.set_ylabel("D(R)")
-        te = best.get("total_estimate")
-        title_parts = [f"GNOM D(R), system={system}"]
-        if te is not None:
-            title_parts.append(f"TE={float(te):.3f}")
-        pdi = dr_quality.get("pdi")
-        if pdi is not None and np.isfinite(float(pdi)):
-            title_parts.append(f"PDI={float(pdi):.3f}")
-        ax.set_title(", ".join(title_parts))
+        ax.set_title(title)
         ax.grid(True, alpha=0.25)
         handles, _labels = ax.get_legend_handles_labels()
         if handles:

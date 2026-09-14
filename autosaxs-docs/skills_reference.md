@@ -51,20 +51,22 @@ SAXS / small-angle x-ray scattering: calibrate detector geometry using calibrant
 - `calibrant_image` (str): Path to the calibrant image (e.g. TIFF).
 - `output_dir` (str, default `.`): Directory where results are written.
 - `config_path` (str | None, default `None`): Depricated. Path to a YAML config file with a `calibrate` section. When omitted, bundled defaults are used.
-- `mask` (str): Path to a detector pixel mask. Supports .txt (NuPy format), .msk (Fit2d)
-- `mask_mode` (str | None, default `None`): Mask mode selector (`f`/`from_file`, `a`/`auto`, `c`/`combined`). Defaults to `f`/`from_file`.
+- `mask` (str | None, default `None`): Optional user detector pixel mask (`.txt` / `.npy` / `.msk`). When omitted, an automatic mask is used. When provided, it is OR-combined with the automatic mask into `effective_mask.npy` inside `integrator_dir` (the user mask file is never overwritten). The automatic component is also written as `auto_mask.npy` so later `integrate --mask` overrides can re-OR with it.
+- `mask_mode` (str | None, default `None`): Deprecated compatibility selector (`f`/`from_file`, `a`/`auto`, `c`/`combined`). Effective mask is always `auto | optional user mask`; this flag only records intent for configs/GUIs. Defaults to `a`/`auto` when no user mask is given, else `c`/`combined`.
 - `calibrant` (str | None, default `None`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`). Defaults to `AgBh`.
 - `wavelength` (float | None, default `None`): X-ray wavelength in **Ångström**. Defaults to 1.445 Å.
 - `dist_guess` (float | None, default `None`): Optional initial sample–detector distance in **metres** passed to pyFAI before geometry refinement. When omitted, distance is estimated from the innermost calibrant ring. Usually works well if not set.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
-Important constraints:
+Notes:
 
-- `mask` is always required by the skill and the CLI.
+- Automatic mask always includes the beam-stop disk and all negative-intensity pixels (plus optional IQR outliers).
+- The integrator stores the combined result as `effective_mask.npy` and the automatic component as `auto_mask.npy` (not the user mask path).
 
 ### Short parameter list
 
-- mask_mode: Default: load mask from file as is.
+- mask: Optional user mask; default: automatic mask only.
+- mask_mode: Deprecated; default: auto (or combined when a user mask is set).
 - calibrant: name of the calibrant, default: AgBh.
 - wavelength: X-ray wavelength in Ångström, default: 1.445 Å.
 - dist_guess: Optional: initial sample-detector distance in metres (algorithm works good if this is not set).
@@ -73,7 +75,7 @@ Important constraints:
 
 `dict[str, str]` with these output path roles:
 
-- `integrator_dir`: Directory containing the calibrated integrator (used by `integrate`).
+- `integrator_dir`: Directory containing the calibrated integrator (used by `integrate`), including `effective_mask.npy` and `auto_mask.npy`.
 - `refined_path`: Path to the refined detector geometry YAML.
 - `calibration_plots_dir`: Directory containing calibration plots.
 - `calibration_curve_plot_path`: Path to the calibrantion q/I curve plot (PNG).
@@ -88,8 +90,7 @@ from autosaxs.skill import calibrate
 out = calibrate(
     calibrant_image="AgBh.tif",
     output_dir="calibration/",
-    mask="mask.msk",
-    mask_mode="f",
+    mask="mask.msk",  # optional
     use_cache=False,
 )
 
@@ -100,6 +101,7 @@ print(out["refined_path"])
 ### CLI usage
 
 ```bash
+autosaxs calibrate AgBh.tif --output-dir calibration
 autosaxs calibrate AgBh.tif --output-dir calibration --mask mask.msk
 autosaxs calibrate AgBh.tif --conf my_config.conf -o calibration/
 ```
@@ -119,12 +121,14 @@ SAXS / small-angle x-ray scattering: integrate 2D SAXS images to 1D curves (q, I
   - a comma-separated list of file paths (e.g. from multi-file drag & drop)
 - `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`).
 - `output_dir` (str, default `.`): Directory where integrated curves are written.
+- `mask` (str | None, default `None`): Optional mask override (`.txt` / `.npy` / `.msk`). When set, does not rewrite `integrator_dir`. If `auto_mask.npy` is present in `integrator_dir` (written by `calibrate`), the run uses `auto_mask | override`; otherwise the override replaces the stored effective mask as-is.
 - `npt` (int, default `1000`): Number of points in the output q grid.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 - `validation_png` (bool, default `False`): If `True`, write a PNG next to each integrated curve showing the source image (log-intensity) with integrator-masked pixels highlighted in semi-transparent red.
 
 ### Short parameter list
 
+- mask: Optional mask override for this integrate run.
 - npt: Number of integrated points, default: 1000
 - validation_png: Show validation image
 
@@ -155,6 +159,7 @@ print(out["integrated_1d"])
 
 ```bash
 autosaxs integrate "/data/sample_01.tif, /data/sample_02.tif" calibration/integrator       --output-dir integration --npt 1000
+autosaxs integrate sample.tif calibration/integrator --mask my_mask.npy -o integration
 ```
 
 ---
@@ -257,37 +262,37 @@ autosaxs integrate-proxy raw/sample_01.tif --output-dir integration_proxy --mask
 
 ## `subtract`
 
-SAXS / small-angle x-ray scattering: subtract a buffer curve from a sample 1D profile (background subtraction). Scaling uses either `point_match` (default)
-or legacy `match_tail`, optionally restricted to a q window (`q_min` / `q_max`).
+SAXS / small-angle x-ray scattering: subtract a buffer curve from a sample 1D profile (background subtraction).
+
+Default scaling is ``minimal_ratio`` in an auto pre-knee ``q`` band detected on the
+buffer alone. Legacy ``point_match`` / ``match_tail`` remain available via ``method``.
 
 ### Arguments
 
 - `sample_1d` (str): Sample path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `buffer_1d` (str): Path to the buffer 1D `.dat` curve (must be an existing file).
 - `output_dir` (str, default `.`): Directory where subtraction outputs are written.
-- `config_path` (str | None, default `None`): Optional path to a YAML config file with a `subtract` section. When omitted, bundled defaults apply for method/forms; q-window keys come from CLI or user file only.
-- `method` (str | None, default `None`): `point_match` or `match_tail`. Defaults from bundled config when omitted.
-- `q_min` (float): Lower bound of matching q-range (nm⁻¹). Required. Recommended to choose in "hihg q region", where sample and buffer curve follwo Porod/linear/Porod+linear law.
-- `q_max` (float): Upper bound of matching q-range (nm⁻¹). Required. Recommended to choose in "hihg q region", just before the "knee" of SAXS profile.
-- `sample_form` / `buffer_form` (str | None): For `point_match` only — each is `linear`, `Porod`, or `Porod-plus-linear`.
-- `point_match_factor` (float | None, default `None`): For `point_match`, scale satisfies `point_match_factor * I_sample_fit(q_max) = scale * I_buffer_fit(q_max)`.
-- `scaling_factor` (float | None, default `None`): If provided, overrides automatic scaling and uses this factor directly (must be finite and > 0).
+- `config_path` (str | None, default `None`): Optional path to a YAML config file with a `subtract` section. When omitted, bundled defaults apply.
+- `method` (str | None, default `None`): `minimal_ratio` (default), `point_match`, or `match_tail`.
+- `q_min` / `q_max` (float | None): Matching q-window (nm⁻¹). Optional; when omitted, auto from buffer pre-knee detection.
+- `sample_form` / `buffer_form` (str | None): For `point_match` only — `linear`, `Porod`, or `Porod-plus-linear`.
+- `point_match_factor` (float | None): For `point_match` only.
+- `window_q_fraction` / `pre_knee_fraction` / `snr_min` / `approach_factor`: For `minimal_ratio` (and pre-knee auto band).
+- `scaling_factor` (float | None): Manual scale override (finite, > 0).
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
-The q window (`q_min`, `q_max`) is always required at the Python API and CLI. A user config file may supply values that override the arguments passed to `subtract()`.
-
 ### Notes
-Correctness criteria: buffer and sample visually matched at "tail region". Negative values in the subtracted curve are possible due to high variance at the "tail" region. But overall the curves look just match, especially after the "knee".
+Correctness criteria: buffer and sample visually matched at the high-q tail / pre-knee region.
+Negative values in the subtracted curve are possible due to high variance at the tail.
 
 ### Short parameter list
 
-- method: internal parameter, changing the default is not recommended, default: point-match
-- sample_form: default: Porod+linear
-- buffer_form: default: linear
-- point_match_factor: internal parameter, changing the default is not recommended, default: 0.995
-- q_min: Required, start of matching region
-- q_max: Required, end of matching region, matching point
-- scaling_factor: Manual scaling factor. When this set, it replaces auto-scale
+- method: default `minimal_ratio` (set `point_match` to restore the previous default)
+- q_min / q_max: optional; auto pre-knee band when omitted
+- window_q_fraction: default 0.05
+- pre_knee_fraction: default 0.35
+- snr_min: default 2.0
+- scaling_factor: Manual scaling factor; replaces auto-scale when set
 
 ### Returns
 
@@ -299,7 +304,8 @@ Correctness criteria: buffer and sample visually matched at "tail region". Negat
 - `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
 Subtraction quality (`correct` or `over-subtracted`) is written into the subtracted `.dat` metadata
 (``subtract.correctness``) and into per-sample report fragments (individual Markdown and summary YAML).
-The individual report embeds the subtracted curve from the `.dat` (not from `sub_plot_path`).
+The individual report shows subtraction quality, re-plots the log-scale difference
+curves from ``diff_log_*.dat``, then the subtracted curve (log I vs q) from the ``.dat``.
 
 ### Python usage
 
@@ -310,9 +316,6 @@ out = subtract(
     sample_1d="integration/int_sample_01.dat",
     buffer_1d="integration/int_buffer.dat",
     output_dir="subtracted",
-    method="point_match",
-    q_min=4.0,
-    q_max=6.0,
     use_cache=False,
 )
 
@@ -322,7 +325,9 @@ print(out["subtracted_1d"])
 ### CLI usage
 
 ```bash
-autosaxs subtract integration/int_sample_01.dat integration/int_buffer.dat       --output-dir subtracted --method point_match --q-min 4.0 --q-max 6.0
+autosaxs subtract integration/int_sample_01.dat integration/int_buffer.dat \
+  --output-dir subtracted
+# optional restore: --method point_match --q-min 4.0 --q-max 6.0
 ```
 
 ---
@@ -525,7 +530,11 @@ SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance
 - `rg_nm` (float | None, default `None`): Expected Rg in nm, usually passed from Guinier analysis. If omitted, in-process Guinier analysis (`fit_guinier`) is run for an Rg span, then 1D Rg optimization in `[0, 1.5 × rg_max]` (30 s max) takes place.
 - `first` (int | None, default `None`): DATGNOM `--first` (1-based point index). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
 - `last` (int | None, default `None`): DATGNOM `--last`. If omitted, `--last` is not passed to DATGNOM.
-- `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`.
+- `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`. Unused when `dmax_nm` is set (GNOM refine).
+- `dmax_nm` (float | None, default `None`): When set, skip DATGNOM and the Dmax ensemble; run a single monodisperse GNOM (`--rmax`) refine with this Dmax (nm).
+- `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted, GNOM chooses automatically. Ignored when `dmax_nm` is unset.
+- `force_zero_rmin` (str | None, default `None`): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y` when refining.
+- `force_zero_rmax` (str | None, default `None`): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y` when refining.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
@@ -583,6 +592,7 @@ print(out["best_gnom_out_path"])
 ```bash
 autosaxs fit_distances subtracted/sub_sample_01.dat --output-dir distances/
 autosaxs fit_distances subtracted/sub_sample_01.dat --rg-nm 10.0 --first 10 --last 100 --smooth 2.0 -o distances/
+autosaxs fit_distances subtracted/sub_sample_01.dat --dmax-nm 8.5 --first 10 --alpha 0.5 -o distances/
 ```
 
 ---
@@ -598,12 +608,14 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtai
 - `shape` (str, default `spheres`): Polydisperse system model. Options: `spheres` (GNOM `--system=1` volume distribution for solid spheres), `rods` (GNOM `--system=5` length distribution for long cylinders, requires `rad56_nm` cylinder radius, deprecated), `ellipsoids` (accepted for API compatibility but **not supported by GNOM command-line** (GNOM system 2 is interactive-only), the skill will raise a clear error if selected).
 - `rg_nm` (float | None): Optional metadata only (not passed to GNOM); recorded in outputs if set.
 - `rmin_nm` (float | None): GNOM `--rmin` (nm). If omitted, not passed to GNOM.
-- `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, optimized in `[ε, 3 × rg_max]` from in-process `fit_guinier` (30 s max).
+- `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, optimized in `[ε, 3 × rg_max]` from in-process `fit_guinier` (30 s max). When set, skip Rmax search and the Rmax±10% ensemble (single GNOM refine).
 - `rad56_nm` (float | None): GNOM `--rad56` for `shape=rods` (nm cylinder radius), deprecated. Ignored for spheres.
 - `first` (int | None): GNOM `--first` (1-based). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
 - `last` (int | None): GNOM `--last`. If omitted, not passed to GNOM.
 - `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
 - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
+- `force_zero_rmin` (str | None): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
+- `force_zero_rmax` (str | None): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y`.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Short parameter list

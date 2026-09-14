@@ -44,6 +44,10 @@ def fit_distances_dir(root: Path) -> Path:
     return root / "fit_distances"
 
 
+def analyze_kratky_dir(root: Path) -> Path:
+    return root / "analyze_kratky"
+
+
 def fit_sizes_dir(root: Path) -> Path:
     return root / "fit_sizes"
 

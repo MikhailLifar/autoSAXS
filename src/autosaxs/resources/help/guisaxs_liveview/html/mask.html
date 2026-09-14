@@ -9,54 +9,63 @@
 <p class="nav-top"><a href="calibration.html">← Calibration</a> · Mask</p>
 <h1>Mask</h1>
 
-<p>The <b>Create / edit mask</b> window draws beam-stop and bad-pixel masks for calibration. Open it from
-the calibration wizard via <b>Create mask</b> (or by left-clicking the calibrant image when one is loaded).
-Saved masks are referenced by the calibration form’s mask path and used when you <b>Run</b> calibration.</p>
-
-<p>Work on the canvas with a drawing mode (polygon, pixel, or rectangular), undo as needed, then
-<b>Save mask</b>. Prefer excluding the beam-stop and obvious dead regions before running calibration.</p>
+<p>The <b>Create / edit mask</b> window draws detector masks for calibration and integration.
+You can open the <b>same</b> wizard from:</p>
+<ul>
+<li>Left column <b>Mask</b> → <b>Set mask</b> (or click the mask preview)</li>
+<li>Calibration wizard → <b>View/Configure mask</b> (or left-click the calibrant image when one is loaded)</li>
+</ul>
+<p>The mask path is optional for calibration: leave it empty to use the automatic mask
+(beam-stop + negative pixels). When you save a user mask, it is stored as a session path and
+synced into the calibration form. After calibration, a new session mask is applied on each
+<strong>integrate</strong> as <code>auto_mask | user</code> (using <code>auto_mask.npy</code>
+from the integrator directory when present).</p>
 
 <p class="shot-wrap"><img class="shot" src="assets/mask_overview.png" alt="Mask wizard overview"/></p>
 <h2>Layout</h2>
 <ul>
 <li><b>Inputs</b> — <b>Calibration image (.tif)</b>, <b>Mask path</b>.</li>
-<li><b>Tools</b> — <b>Mode:</b> Polygon / Pixel / Rectangular; undo / clear buttons; help <b>?</b>.</li>
-<li><b>Canvas</b> — draw and preview the mask over the calibration image.</li>
-<li><b>Save mask</b> — writes the mask file and returns the path to the calibration wizard.</li>
+<li><b>Tools</b> — <b>Mode:</b> Polygon / Pixel / Rectangular / Threshold; <b>Mask | Unmask</b> for polygon/rectangle; undo / clear; help <b>?</b>.</li>
+<li><b>Canvas + histogram</b> — draw/preview the mask; in Threshold mode, drag a log-intensity keep band.</li>
+<li><b>Save mask</b> — writes the mask file and updates the session / calibration path.</li>
 </ul>
 
 <h2>Recipes</h2>
 
 <div class="recipe">
 <h3>To open the mask wizard</h3>
-<p>From <a href="calibration.html">Calibration</a>: <b>Create mask</b> (or left-click the loaded calibrant
-image when not zooming/panning).</p>
+<p>Left <b>Set mask</b>, or from <a href="calibration.html">Calibration</a>: <b>View/Configure mask</b>
+(or left-click the loaded calibrant image when not zooming/panning).</p>
 </div>
 
 <div class="recipe">
 <h3>To draw a polygon mask</h3>
-<p>Set <b>Mode:</b> to <b>Polygon</b> → click vertices on the canvas to add points →
-<b>double-click</b> to finish the current polygon. Use <b>Undo last point</b> /
-<b>Undo last polygon</b> if needed. You can draw multiple polygons; their interiors are combined.</p>
+<p>Set <b>Mode:</b> to <b>Polygon</b>. Use <b>Mask</b> to add masked regions or <b>Unmask</b> to clear
+masking inside the polygon. Click vertices → <b>double-click</b> to finish. Undo / clear as needed.</p>
 </div>
 
 <div class="recipe">
 <h3>To draw a rectangular mask</h3>
-<p>Set <b>Mode:</b> to <b>Rectangular</b> → first click sets the top-left corner → second click sets the
-bottom-right corner and finishes the rectangle. Use <b>Undo last corner</b> /
-<b>Undo last rectangle</b> if needed. You can draw multiple rectangles; their interiors are combined.
-<b>Clear all</b> starts over.</p>
+<p>Set <b>Mode:</b> to <b>Rectangular</b>, choose <b>Mask</b> or <b>Unmask</b>, then two clicks for corners.</p>
 </div>
 
 <div class="recipe">
 <h3>To draw a pixel mask</h3>
-<p>Set <b>Mode:</b> to <b>Pixel</b> → click a pixel on the canvas to mask or unmask it (masked pixels
-show in red). Use <b>Undo last edit</b> to reverse the last toggle. <b>Clear all</b> starts over.</p>
+<p>Set <b>Mode:</b> to <b>Pixel</b> → click pixels to toggle (red = masked).</p>
+</div>
+
+<div class="recipe">
+<h3>To threshold by intensity</h3>
+<p>Set <b>Mode:</b> to <b>Threshold</b>. Drag the histogram handles to choose the keep band in
+<code>log(1+I)</code> for non-negative pixels. Everything outside the band is masked — including
+raw <code>I &lt; 0</code> (intensities are never shifted). Double-click the histogram to reset to
+<code>[0, max]</code>, then <b>Apply threshold</b>.</p>
 </div>
 
 <div class="recipe">
 <h3>To save the mask</h3>
-<p>Confirm <b>Mask path</b> → <b>Save mask</b> → wizard commits the file and updates the calibration form.</p>
+<p>Confirm <b>Mask path</b> → <b>Save mask</b> → wizard commits the file and updates the left Mask
+panel and calibration form.</p>
 <p class="shot-wrap"><img class="shot" src="assets/mask_save.png" alt="Highlight Save mask"/></p>
 </div>
 

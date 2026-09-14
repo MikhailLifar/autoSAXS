@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from autosaxs.core.event_bus import EventBus, EventType
 from autosaxs.core.guinier import parse_guinier_results_txt
-from autosaxs.core.utils import ensure_q_nm, load_saxs_1d_any, write_saxs_atsas_format
+from autosaxs.core.utils import ensure_q_nm, load_saxs_1d_any, write_data, write_saxs_atsas_format
 from autosaxs.core.viewer import PLTViewer
 
 from ..common import (
@@ -121,6 +121,7 @@ def _fit_guinier_paths(
     results_path = os.path.join(output_dir, f"{base}_results.txt")
     atsas_dat_path = os.path.join(output_dir, f"{base}_atsas.dat")
     guinier_plot_path = os.path.join(output_dir, f"{base}_guinier_fit.png")
+    guinier_fit_dat_path = os.path.join(output_dir, f"{base}_guinier_fit.dat")
 
     if event_bus:
         event_bus.publish(EventType.MESSAGE, {"text": "Guinier fit…"})
@@ -189,6 +190,28 @@ def _fit_guinier_paths(
         rg_plot = guinier_region.get("rg")
         i0_plot = guinier_region.get("i0")
         if rg_plot is not None and i0_plot is not None:
+            import numpy as np
+            import pandas as pd
+
+            q_arr_f = np.asarray(q_arr, dtype=float)
+            I_arr_f = np.asarray(I_arr, dtype=float)
+            mask = np.isfinite(q_arr_f) & np.isfinite(I_arr_f) & (I_arr_f > 0)
+            write_data(
+                guinier_fit_dat_path,
+                pd.DataFrame({"q^2": (q_arr_f[mask] ** 2), "ln(I)": np.log(I_arr_f[mask])}),
+                metadata={
+                    "type": "guinier_fit",
+                    "title": f"Guinier fit: {base}",
+                    "xlabel": "q^2 (nm^-2)",
+                    "ylabel": "ln(I) (a.u.)",
+                    "rg_nm": float(rg_plot),
+                    "i0": float(i0_plot),
+                    "q_min": guinier_region.get("q_min"),
+                    "q_max": guinier_region.get("q_max"),
+                    "q2_max": 4.0,
+                    "parent": profile,
+                },
+            )
             PLTViewer.view_guinier_fit(
                 q_arr,
                 I_arr,
@@ -197,6 +220,7 @@ def _fit_guinier_paths(
                 sigma=sigma_arr,
                 q_min=guinier_region.get("q_min"),
                 q_max=guinier_region.get("q_max"),
+                q2_max=4.0,
                 title=f"Guinier fit: {base}",
                 plotFilePath=guinier_plot_path,
             )
@@ -315,22 +339,76 @@ def _fit_guinier_paths(
     from autosaxs.core.report_fragments import write_skill_report_fragments
 
     rg_nm = None
-    if isinstance(guinier_region, dict) and guinier_region.get("rg") is not None:
-        try:
-            rg_nm = float(guinier_region["rg"])
-        except (TypeError, ValueError):
-            rg_nm = None
+    i0_val = None
+    if isinstance(guinier_region, dict):
+        if guinier_region.get("rg") is not None:
+            try:
+                rg_nm = float(guinier_region["rg"])
+            except (TypeError, ValueError):
+                rg_nm = None
+        if guinier_region.get("i0") is not None:
+            try:
+                i0_val = float(guinier_region["i0"])
+            except (TypeError, ValueError):
+                i0_val = None
     rg_txt = f"{rg_nm:.4f} nm" if rg_nm is not None else "N/A"
+    i0_txt = f"{i0_val:.4g}" if i0_val is not None else "N/A"
     md_lines = [
         "### Guinier fit\n",
         f"Rg ≈ **{rg_txt}**.\n",
+        f"I(0) ≈ **{i0_txt}**.\n",
     ]
-    if os.path.isfile(guinier_plot_path):
+    if isinstance(guinier_region, dict):
+        fp = guinier_region.get("first_point_1based")
+        lp = guinier_region.get("last_point_1based")
+        qmn, qmx = guinier_region.get("q_min"), guinier_region.get("q_max")
+        interval_bits = []
+        if fp is not None and lp is not None:
+            interval_bits.append(f"points {int(fp)}–{int(lp)}")
+        if qmn is not None and qmx is not None:
+            try:
+                interval_bits.append(f"q ∈ [{float(qmn):.5g}, {float(qmx):.5g}] nm⁻¹")
+            except (TypeError, ValueError):
+                pass
+        if interval_bits:
+            md_lines.append(f"Interval: {' · '.join(interval_bits)}.\n")
+        # Quality passport (same fields as results.txt / liveview Guinier pane).
+        qcls = guinier_region.get("quality_class")
+        if qcls is not None:
+            md_lines.append(f"Quality class: **{qcls}**.\n")
+        cl = guinier_region.get("classification")
+        if cl is not None:
+            md_lines.append(f"Classification: **{cl}**.\n")
+        ir2 = guinier_region.get("interval_r2")
+        if ir2 is not None:
+            try:
+                md_lines.append(f"Interval R²: **{float(ir2):.4f}**.\n")
+            except (TypeError, ValueError):
+                md_lines.append(f"Interval R²: **{ir2}**.\n")
+        fq = guinier_region.get("fit_quality")
+        if fq is not None:
+            try:
+                md_lines.append(f"Fit quality: **{float(fq):.4f}**.\n")
+            except (TypeError, ValueError):
+                md_lines.append(f"Fit quality: **{fq}**.\n")
+        val_r2 = guinier_region.get("validation_r2")
+        if val_r2 is not None:
+            try:
+                md_lines.append(f"Validation R²: **{float(val_r2):.4f}**.\n")
+            except (TypeError, ValueError):
+                md_lines.append(f"Validation R²: **{val_r2}**.\n")
+    if os.path.isfile(guinier_fit_dat_path):
+        md_lines.append(f"![Guinier fit]({os.path.basename(guinier_fit_dat_path)})\n")
+    elif os.path.isfile(guinier_plot_path):
         md_lines.append(f"![Guinier fit]({os.path.basename(guinier_plot_path)})\n")
     summary_refs = [
         {"role": "guinier_results", "path": os.path.basename(results_path), "format": "text"},
     ]
-    if os.path.isfile(guinier_plot_path):
+    if os.path.isfile(guinier_fit_dat_path):
+        summary_refs.append(
+            {"role": "guinier_fit_dat", "path": os.path.basename(guinier_fit_dat_path), "format": "dat"}
+        )
+    elif os.path.isfile(guinier_plot_path):
         summary_refs.append(
             {"role": "guinier_plot", "path": os.path.basename(guinier_plot_path), "format": "png"}
         )
@@ -354,4 +432,5 @@ def _fit_guinier_paths(
         "results_path": results_path,
         "atsas_dat_path": atsas_dat_path,
         "guinier_plot_path": guinier_plot_path,
+        "guinier_fit_dat_path": guinier_fit_dat_path if os.path.isfile(guinier_fit_dat_path) else "",
     }

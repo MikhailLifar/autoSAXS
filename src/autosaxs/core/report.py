@@ -45,6 +45,27 @@ SUMMARY_DESCRIPTOR_COLUMNS = [
 
 
 REPORT_IMAGE_WIDTH = 14 * cm  # fit to A4 width with margins
+REPORT_IMAGE_MAX_HEIGHT = 18 * cm
+
+
+def _flowable_image(path: str) -> Image:
+    """Embed ``path`` at report width while preserving the source aspect ratio (no stretch)."""
+    from reportlab.lib.utils import ImageReader
+
+    try:
+        iw, ih = ImageReader(path).getSize()
+    except Exception:
+        iw, ih = 0, 0
+    if not iw or not ih:
+        # Fallback near figsize 8×5 if size cannot be read.
+        return Image(path, width=REPORT_IMAGE_WIDTH, height=REPORT_IMAGE_WIDTH * 0.625)
+    aspect = float(ih) / float(iw)
+    w = float(REPORT_IMAGE_WIDTH)
+    h = w * aspect
+    if h > float(REPORT_IMAGE_MAX_HEIGHT):
+        h = float(REPORT_IMAGE_MAX_HEIGHT)
+        w = h / aspect
+    return Image(path, width=w, height=h)
 
 
 def _fig_from_curve_dat(dat_path: str) -> Optional[str]:
@@ -169,7 +190,7 @@ def _add_image_if_exists(
     if not path or not os.path.isfile(path):
         return
     try:
-        img = Image(path, width=REPORT_IMAGE_WIDTH, height=REPORT_IMAGE_WIDTH * 0.6)
+        img = _flowable_image(path)
         block = KeepTogether(
             [
                 Paragraph(caption, styles['Heading3']),
@@ -901,8 +922,7 @@ def build_pdf_from_assembled_markdown(
                     img_path = os.path.normpath(os.path.join(markdown_base_dir, img_path))
                 if img_path and os.path.isfile(img_path):
                     try:
-                        img = Image(img_path, width=REPORT_IMAGE_WIDTH, height=REPORT_IMAGE_WIDTH * 0.6)
-                        story.append(img)
+                        story.append(_flowable_image(img_path))
                         story.append(Spacer(1, 0.3 * cm))
                     except Exception:
                         story.append(Paragraph("(image render error)", body_style))

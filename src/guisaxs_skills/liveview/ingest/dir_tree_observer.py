@@ -15,7 +15,7 @@ from .tiff_revision import TiffRevision, TiffRevisionSource, is_tiff_path
 
 TREE_STABILITY = POLL_TRIGGERED_STABILITY
 
-_CACHE_VERSION = 1
+_CACHE_VERSION = 3
 _SLOW_INTERVAL_MIN_S = 1.0
 _SLOW_INTERVAL_SCAN_FACTOR = 2.0
 
@@ -26,11 +26,7 @@ def slow_scan_interval_s(*, scan_duration_s: float, min_s: float = _SLOW_INTERVA
 
 
 def _try_stat_dir(path: Path) -> Optional[FileStatSnapshot]:
-    try:
-        st = os.stat(path)
-        return FileStatSnapshot(size=int(st.st_size), mtime_ns=int(st.st_mtime_ns))
-    except Exception:
-        return None
+    return _try_stat(str(path))
 
 
 @dataclass(frozen=True)
@@ -51,14 +47,26 @@ class TreeCache:
 
     @staticmethod
     def _snap_to_json(s: FileStatSnapshot) -> dict:
-        return {"mtime_ns": s.mtime_ns, "size": s.size}
+        return {
+            "mtime_ns": s.mtime_ns,
+            "size": s.size,
+            "dev": s.dev,
+            "ino": s.ino,
+            "ctime_ns": s.ctime_ns,
+        }
 
     @staticmethod
     def _snap_from_json(raw: object) -> Optional[FileStatSnapshot]:
         if not isinstance(raw, dict):
             return None
         try:
-            return FileStatSnapshot(size=int(raw["size"]), mtime_ns=int(raw["mtime_ns"]))
+            return FileStatSnapshot(
+                size=int(raw["size"]),
+                mtime_ns=int(raw["mtime_ns"]),
+                dev=int(raw.get("dev", 0) or 0),
+                ino=int(raw.get("ino", 0) or 0),
+                ctime_ns=int(raw.get("ctime_ns", 0) or 0),
+            )
         except (KeyError, TypeError, ValueError):
             return None
 
@@ -171,8 +179,30 @@ class TreeScanEngine:
             return False
         return prev is None or prev != snap
 
+    def _prune_missing_tiffs(self, dir_path: Path, present: Set[str]) -> None:
+        """Drop cache entries for TIFFs that no longer exist in ``dir_path``."""
+        try:
+            dir_key = str(dir_path.resolve())
+        except OSError:
+            return
+        stale: List[str] = []
+        for file_key in self._cache.files:
+            if file_key in present:
+                continue
+            try:
+                if str(Path(file_key).resolve().parent) == dir_key:
+                    stale.append(file_key)
+            except OSError:
+                continue
+        if not stale:
+            return
+        for file_key in stale:
+            del self._cache.files[file_key]
+        self._cache.dirty = True
+
     def _scan_tiffs_in_dir(self, dir_path: Path) -> List[str]:
         found: List[str] = []
+        present: Set[str] = set()
         for pattern in ("*.tif", "*.tiff"):
             try:
                 entries = list(dir_path.glob(pattern))
@@ -185,8 +215,10 @@ class TreeScanEngine:
                 snap = _try_stat(file_key)
                 if snap is None:
                     continue
+                present.add(file_key)
                 if self._record_tiff(file_key, snap):
                     found.append(file_key)
+        self._prune_missing_tiffs(dir_path, present)
         return found
 
     def _scan_directory(
@@ -203,6 +235,12 @@ class TreeScanEngine:
         dir_key = str(dir_path.resolve())
         st = _try_stat_dir(dir_path)
         if st is None:
+            # Directory gone: drop cached TIFFs that lived here.
+            self._prune_missing_tiffs(dir_path, set())
+            if dir_key in self._cache.dirs:
+                del self._cache.dirs[dir_key]
+                self._cache.dirty = True
+            self._hot_dirs.pop(dir_key, None)
             return candidates
 
         cached = self._cache.dirs.get(dir_key)
@@ -212,7 +250,9 @@ class TreeScanEngine:
             self._cache.dirty = True
             self._touch_hot(dir_key)
 
-        if dir_changed or force_tif_scan:
+        # Full slow scans always re-stat TIFFs (ctime/ino + prune). Fast path only
+        # when the directory changed or was marked hot.
+        if dir_changed or force_tif_scan or recurse_all:
             candidates.extend(self._scan_tiffs_in_dir(dir_path))
 
         try:

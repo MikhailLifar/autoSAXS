@@ -75,7 +75,6 @@ class PolydisperseWindowWidget(QWidget):
         g_last = wp.get("guinier_last")
         if g_first and g_last:
             self.guinier_pane.set_range(int(g_first), int(g_last))
-        self.sizes_pane.set_params(wp)
         mix = wp.get("mixture") if isinstance(wp.get("mixture"), dict) else None
         if mix:
             self.mixture_pane.set_mixture_params(mix)

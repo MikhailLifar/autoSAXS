@@ -39,7 +39,7 @@ class PolydisperseMixtureMode(str, Enum):
 @dataclass
 class LiveviewSessionState:
     watchdir: Path
-    watch_mode: LiveviewWatchMode = LiveviewWatchMode.FLAT
+    watch_mode: LiveviewWatchMode = LiveviewWatchMode.TREE
 
     # Calibration artifacts
     integrator_dir: Optional[Path] = None
@@ -51,6 +51,11 @@ class LiveviewSessionState:
     last_integrated_dat_path: Optional[Path] = None
     # Last subtracted 1D curve (state CD: preferred default profile for wizards).
     last_subtracted_dat_path: Optional[Path] = None
+
+    # Last user mask path (detector property; kept across calibration reset).
+    mask_path: Optional[Path] = None
+    # Optional PNG preview of image+mask overlay for the left Mask panel.
+    mask_preview_path: Optional[Path] = None
 
     # Buffer + subtraction config
     buffer_dat_path: Optional[Path] = None

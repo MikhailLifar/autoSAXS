@@ -1,24 +1,28 @@
 from __future__ import annotations
 
-from PyQt5.QtCore import QTimer, pyqtSignal
+import html
+from typing import Any, Mapping
+
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QDoubleSpinBox,
-    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-from ......ui.style import apply_quality_hint_style
+from ......ui.style import COLOR_QUALITY_POOR
+from .format_display import format_sizes_passport_html
 from .plots import DrPlot, GnomFitPlot
 
 
 class SizesPane(QWidget):
-    params_changed = pyqtSignal()
+    """Minimized GNOM D(R) pane: embedded plots, passport, and Adjust."""
+
+    adjust_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -40,44 +44,20 @@ class SizesPane(QWidget):
         plots_row.addWidget(iq_box, 1)
         plots_row.addWidget(dr_box, 1)
 
-        self._first = QSpinBox()
-        self._first.setMinimum(1)
-        self._first.setMaximum(99999)
-        self._first.setValue(1)
-        self._last = QSpinBox()
-        self._last.setMinimum(0)
-        self._last.setMaximum(99999)
-        self._last.setSpecialValueText("(none)")
-        self._rmin = QDoubleSpinBox()
-        self._rmin.setDecimals(4)
-        self._rmin.setRange(0.0, 1e6)
-        self._rmin.setSpecialValueText("(auto)")
-        self._rmin.setValue(0.0)
-        self._rmax = QDoubleSpinBox()
-        self._rmax.setDecimals(4)
-        self._rmax.setRange(0.0, 1e6)
-        self._rmax.setSpecialValueText("(auto)")
-        self._rmax.setValue(0.0)
-        self._alpha = QDoubleSpinBox()
-        self._alpha.setDecimals(4)
-        self._alpha.setRange(0.0, 1e6)
-        self._alpha.setSpecialValueText("(auto)")
-        self._alpha.setValue(0.0)
-
         self._lbl_diagnostics = QLabel("—")
         self._lbl_diagnostics.setWordWrap(True)
-
-        form = QFormLayout()
-        form.addRow("first", self._first)
-        form.addRow("last", self._last)
-        form.addRow("rmin", self._rmin)
-        form.addRow("rmax", self._rmax)
-        form.addRow("alpha", self._alpha)
+        self._lbl_diagnostics.setTextFormat(Qt.RichText)
+        self._lbl_diagnostics.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self._btn_adjust = QPushButton("Adjust")
+        self._btn_adjust.clicked.connect(self.adjust_requested.emit)
 
         right = QVBoxLayout()
-        right.addLayout(form)
+        right.setSpacing(0)
+        right.addWidget(QLabel("Passport"), 0)
         right.addWidget(self._lbl_diagnostics, 1)
-        right.addStretch(1)
+        right.addSpacing(6)
+        right.addWidget(self._btn_adjust, 0)
+        right.addStretch(0)
 
         body = QHBoxLayout()
         body.setSpacing(10)
@@ -89,67 +69,40 @@ class SizesPane(QWidget):
         lay.setSpacing(6)
         lay.addLayout(body, 1)
 
-        self._debounce = QTimer(self)
-        self._debounce.setSingleShot(True)
-        self._debounce.setInterval(300)
-        self._debounce.timeout.connect(self.params_changed.emit)
-        for w in (self._first, self._last, self._rmin, self._rmax, self._alpha):
-            w.valueChanged.connect(self._schedule_emit)
-
     def set_running(self, running: bool) -> None:
-        if running:
-            self._debounce.stop()
-        for w in (self._first, self._last, self._rmin, self._rmax, self._alpha):
-            w.setEnabled(not running)
+        self._btn_adjust.setEnabled(not running)
 
-    def _schedule_emit(self, *_args) -> None:
-        self._debounce.start()
-
-    def sizes_params(self) -> dict:
-        out: dict = {"first": int(self._first.value())}
-        last = int(self._last.value())
-        if last > 0:
-            out["last"] = last
-        rmin = float(self._rmin.value())
-        if rmin > 0.0:
-            out["rmin_nm"] = rmin
-        rmax = float(self._rmax.value())
-        if rmax > 0.0:
-            out["rmax_nm"] = rmax
-        alpha = float(self._alpha.value())
-        if alpha > 0.0:
-            out["alpha"] = alpha
-        return out
-
-    def set_params(self, params: dict) -> None:
-        if not isinstance(params, dict):
+    def set_diagnostics(
+        self,
+        *,
+        text: str = "",
+        poor: bool = False,
+        html_text: str = "",
+        quality: Mapping[str, Any] | None = None,
+    ) -> None:
+        self._lbl_diagnostics.setStyleSheet("")
+        if quality is not None:
+            body = format_sizes_passport_html(quality, poor_color=COLOR_QUALITY_POOR)
+            self._lbl_diagnostics.setTextFormat(Qt.RichText)
+            self._lbl_diagnostics.setText(body)
             return
-        self._debounce.stop()
-        widgets = (self._first, self._last, self._rmin, self._rmax, self._alpha)
-        for w in widgets:
-            w.blockSignals(True)
-        try:
-            if params.get("first") is not None:
-                self._first.setValue(max(1, int(params["first"])))
-            if params.get("last") is not None:
-                self._last.setValue(max(0, int(params["last"])))
-            if params.get("rmin_nm") is not None:
-                self._rmin.setValue(float(params["rmin_nm"]))
-            if params.get("rmax_nm") is not None:
-                self._rmax.setValue(float(params["rmax_nm"]))
-            if params.get("alpha") is not None:
-                self._alpha.setValue(float(params["alpha"]))
-        finally:
-            for w in widgets:
-                w.blockSignals(False)
+        if html_text:
+            self._lbl_diagnostics.setTextFormat(Qt.RichText)
+            self._lbl_diagnostics.setText(html_text)
+            return
+        msg = text or "—"
+        if poor and text:
+            esc = html.escape(text)
+            self._lbl_diagnostics.setTextFormat(Qt.RichText)
+            self._lbl_diagnostics.setText(f'<span style="color:{COLOR_QUALITY_POOR}">{esc}</span>')
+            return
+        self._lbl_diagnostics.setTextFormat(Qt.PlainText)
+        self._lbl_diagnostics.setText(msg)
 
-    def set_diagnostics(self, *, text: str = "", poor: bool = False) -> None:
-        self._lbl_diagnostics.setText(text or "—")
-        apply_quality_hint_style(self._lbl_diagnostics, poor=bool(poor) and bool(text))
-
-    def show_sizes(self, profile_path: str, gnom_out: str) -> None:
-        self._fit_plot.plot_from_gnom_out(gnom_out)
-        self._dr_plot.plot_from_gnom_out(gnom_out)
+    def show_sizes(self, profile_path: str, gnom_out_path: str) -> None:
+        _ = profile_path
+        self._fit_plot.plot_from_gnom_out(gnom_out_path)
+        self._dr_plot.plot_from_gnom_out(gnom_out_path)
 
     def clear_view(self) -> None:
         self._fit_plot.clear_plot()

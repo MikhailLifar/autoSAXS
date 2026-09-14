@@ -55,8 +55,10 @@ from autosaxs.core.report_fragments import write_skill_report_fragments
 
 from .common import (
     ConfigPathExpressionArg,
+    SingletonMaskPathExpressionArg,
     TiffPathExpressionArg,
     SingletonPathExpressionArg,
+    coerce_optional_singleton_mask_expression,
     coerce_path_expression,
     coerce_singleton_path_expression,
     expand_files_from_unwrapped,
@@ -69,6 +71,7 @@ def integrate(
     output_dir: str = ".",
     *,
     config_path: Optional[ConfigPathExpressionArg] = None,
+    mask: Optional[SingletonMaskPathExpressionArg] = None,
     npt: int = 1000,
     use_cache: bool = False,
     validation_png: bool = False,
@@ -85,12 +88,14 @@ def integrate(
       - a comma-separated list of file paths (e.g. from multi-file drag & drop)
     - `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`).
     - `output_dir` (str, default `.`): Directory where integrated curves are written.
+    - `mask` (str | None, default `None`): Optional mask override (`.txt` / `.npy` / `.msk`). When set, does not rewrite `integrator_dir`. If `auto_mask.npy` is present in `integrator_dir` (written by `calibrate`), the run uses `auto_mask | override`; otherwise the override replaces the stored effective mask as-is.
     - `npt` (int, default `1000`): Number of points in the output q grid.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
     - `validation_png` (bool, default `False`): If `True`, write a PNG next to each integrated curve showing the source image (log-intensity) with integrator-masked pixels highlighted in semi-transparent red.
 
     ### Short parameter list
 
+    - mask: Optional mask override for this integrate run.
     - npt: Number of integrated points, default: 1000
     - validation_png: Show validation image
 
@@ -122,16 +127,27 @@ def integrate(
     ```bash
     autosaxs integrate "/data/sample_01.tif, /data/sample_02.tif" calibration/integrator \
       --output-dir integration --npt 1000
+    autosaxs integrate sample.tif calibration/integrator --mask my_mask.npy -o integration
     ```
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
     images = coerce_path_expression(images)
     integrator_dir = coerce_singleton_path_expression(integrator_dir)
+    mask_expr = coerce_optional_singleton_mask_expression(mask)
     expanded_images = expand_files_from_unwrapped(images.unwrap(), kind="2d_tif")
     int_dir = integrator_dir.unwrap()[0]
+    mask_path = mask_expr.unwrap()[0] if mask_expr is not None else None
+    if mask_path is not None and not os.path.isfile(mask_path):
+        raise FileNotFoundError(f"integrate mask must be an existing file path; got {mask_path!r}")
+    input_paths: Dict[str, Union[str, List[str]]] = {
+        "images": expanded_images,
+        "integrator_dir": int_dir,
+    }
+    if mask_path is not None:
+        input_paths["mask"] = mask_path
     return _integrate_paths(
-        input_paths={"images": expanded_images, "integrator_dir": int_dir},
+        input_paths=input_paths,
         output_dir=output_dir,
         event_bus=bus,
         use_cache=use_cache,
@@ -142,7 +158,7 @@ def integrate(
 
 @apply_batch(stem_from_keys="images", single_output_dir=True)
 @run_with_cache(
-    path_keys_for_hash=["images", "integrator_dir"],
+    path_keys_for_hash=["images", "integrator_dir", "mask"],
     kwargs_for_hash_keys=["npt", "validation_png"],
     include_config_in_hash=False,
 )
@@ -168,6 +184,11 @@ def _integrate_paths(
     if not integrator_dir or not os.path.isdir(integrator_dir):
         raise FileNotFoundError("integrate requires input_paths['integrator_dir']")
     integrator = IntegratorExtended.from_disk(integrator_dir)
+    mask_override = input_paths.get("mask")
+    if isinstance(mask_override, list):
+        mask_override = mask_override[0] if mask_override else None
+    if mask_override:
+        integrator.apply_user_mask_override(mask_override)
     os.makedirs(output_dir, exist_ok=True)
     integrated: List[str] = []
     validation_pngs: List[str] = []

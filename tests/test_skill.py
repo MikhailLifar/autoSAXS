@@ -169,18 +169,20 @@ def test_subtract_contract():
         assert os.path.isfile(str(result["subtracted_1d"]))
 
 
-def test_subtract_requires_q_min_q_max():
+def test_subtract_q_min_q_max_both_or_neither():
+    """q_min/q_max are optional; setting only one is rejected."""
     with tempfile.TemporaryDirectory() as tmp:
         q = np.linspace(0.1, 2.0, 20)
         sample_path = os.path.join(tmp, "sample.dat")
         buffer_path = os.path.join(tmp, "buffer.dat")
         write_saxs(sample_path, q, np.exp(-q**2), 0.01 * np.exp(-q**2), {})
         write_saxs(buffer_path, q, 0.05 * np.exp(-q**2), 0.01 * np.exp(-q**2), {})
-        with pytest.raises(TypeError):
+        with pytest.raises(ValueError, match="both be set or both omitted"):
             subtract(
                 sample_path,
                 buffer_path,
                 output_dir=os.path.join(tmp, "out"),
+                q_min=0.2,
                 use_cache=False,
             )
 
@@ -446,20 +448,58 @@ def test_calibrate_rejects_unknown_calibrant():
         )
 
 
-def test_calibrate_requires_mask_for_default_from_file_mode():
+def test_calibrate_allows_omitted_mask(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         calib_path = os.path.join(tmp, "calib.tif")
         Path(calib_path).write_bytes(b"dummy")
 
-        with pytest.raises(TypeError):
-            calibrate(
-                calibrant_image=calib_path,
-                output_dir=os.path.join(tmp, "out"),
-                use_cache=False,
-            )
+        monkeypatch.setattr(
+            "autosaxs.skill.calibrate.merge_skill_params",
+            lambda *_a, **_k: {
+                "calibrant": "AgBh",
+                "wavelength": 1.445,
+                "ring_analysis": {},
+                "detector_geometry": {"pixel_size": [1e-4, 1e-4], "rot1": 0.0, "rot2": 0.0, "rot3": 0.0},
+            },
+        )
+
+        class _DummyIntegrator:
+            mask = np.ones((4, 4), dtype=bool)
+
+            def to_disk(self, path):
+                os.makedirs(path, exist_ok=True)
+                Path(os.path.join(path, "ai_params.json")).write_text("{}")
+                Path(os.path.join(path, "detector_params.json")).write_text("{}")
+                np.save(os.path.join(path, "effective_mask.npy"), self.mask)
+
+        def _fake_autocalib_ring_analysis(_calib_image, cfg, **kwargs):
+            assert kwargs.get("mask_path") is None
+            assert cfg["mask_config"]["mode"] == "auto"
+            return {
+                "integrator": _DummyIntegrator(),
+                "refined": {"dist": 0.7},
+                "calib_data": np.zeros((8, 8), dtype=np.float32),
+                "curve_calibrated": (
+                    np.array([0.1, 0.2]),
+                    np.array([1.0, 2.0]),
+                    np.array([0.1, 0.2]),
+                ),
+                "theoretical_peaks": np.array([0.15]),
+            }
+
+        monkeypatch.setattr("autosaxs.skill.calibrate.autocalib_ring_analysis", _fake_autocalib_ring_analysis)
+        monkeypatch.setattr("autosaxs.skill.calibrate.PLTViewer.view_mask", lambda *args, **kwargs: None)
+
+        out = calibrate(
+            calibrant_image=calib_path,
+            output_dir=os.path.join(tmp, "out"),
+            use_cache=False,
+        )
+        assert os.path.isdir(out["integrator_dir"])
+        assert os.path.isfile(os.path.join(out["integrator_dir"], "effective_mask.npy"))
 
 
-def test_calibrate_default_mask_mode_is_from_file(monkeypatch):
+def test_calibrate_user_mask_records_combined_mode(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         calib_path = os.path.join(tmp, "calib.tif")
         mask_path = os.path.join(tmp, "mask.npy")
@@ -470,7 +510,7 @@ def test_calibrate_default_mask_mode_is_from_file(monkeypatch):
             "autosaxs.skill.calibrate.merge_skill_params",
             lambda *_a, **_k: {
                 "calibrant": "AgBh",
-                "mask_mode": "f",
+                "mask_mode": "a",
                 "wavelength": 1.445,
                 "ring_analysis": {},
                 "detector_geometry": {"pixel_size": [1e-4, 1e-4], "rot1": 0.0, "rot2": 0.0, "rot3": 0.0},
@@ -485,8 +525,9 @@ def test_calibrate_default_mask_mode_is_from_file(monkeypatch):
                 Path(os.path.join(path, "ai_params.json")).write_text("{}")
                 Path(os.path.join(path, "detector_params.json")).write_text("{}")
 
-        def _fake_autocalib_ring_analysis(_calib_image, cfg, **_kwargs):
-            assert cfg["mask_config"]["mode"] == "from_file"
+        def _fake_autocalib_ring_analysis(_calib_image, cfg, **kwargs):
+            assert kwargs.get("mask_path") == mask_path
+            assert cfg["mask_config"]["mode"] == "combined"
             return {
                 "integrator": _DummyIntegrator(),
                 "refined": {"dist": 0.7},
@@ -942,7 +983,7 @@ def test_fit_sizes_contract(monkeypatch):
         out_path.write_text(_fake_gnom_out_text(), encoding="utf-8")
         return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr("autosaxs.skill.fit_sizes.runners.subprocess.run", _fake_run)
+    monkeypatch.setattr("autosaxs.core.atsas_gnom.subprocess.run", _fake_run)
 
     with tempfile.TemporaryDirectory() as tmp:
         q = np.linspace(0.1, 2.0, 40)
@@ -1036,7 +1077,7 @@ def test_fit_sizes_rmax_optimization_invoked(monkeypatch):
         out_path.write_text(_fake_gnom_out_text(), encoding="utf-8")
         return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr("autosaxs.skill.fit_sizes.runners.subprocess.run", _fake_run)
+    monkeypatch.setattr("autosaxs.core.atsas_gnom.subprocess.run", _fake_run)
     monkeypatch.setattr("autosaxs.skill.fit_sizes.sizes._optimize_rmax_nm", _fake_optimize)
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -1819,7 +1860,7 @@ def test_fit_sizes_all_runs_failed(monkeypatch):
         profile_path = os.path.join(tmp, "profile.dat")
         write_saxs(profile_path, q, I, sigma, {})
 
-        monkeypatch.setattr("autosaxs.skill.fit_sizes.runners.subprocess.run", _fake_run)
+        monkeypatch.setattr("autosaxs.core.atsas_gnom.subprocess.run", _fake_run)
 
         out_dir = os.path.join(tmp, "sizes")
         result = fit_sizes(

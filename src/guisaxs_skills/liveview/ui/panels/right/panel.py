@@ -318,11 +318,19 @@ class LiveviewRightPanel(QWidget):
         self._mono_wizard_widget.set_running(running)
         if self._mono_dialog is not None:
             self._mono_dialog.set_running(running)
+        try:
+            self._mono.set_running(running)
+        except Exception:
+            pass
 
     def set_polydisperse_running(self, running: bool) -> None:
         self._poly_window_widget.set_running(running)
         if self._poly_dialog is not None:
             self._poly_dialog.set_running(running)
+        try:
+            self._poly.set_running(running)
+        except Exception:
+            pass
 
     def ingest_skill_result(self, result: dict, *, skill_name: str = "") -> None:
         if not isinstance(result, dict):

@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 
 from autosaxs.core.gnom import distribution_arrays, parse_gnom_out
+from autosaxs.core.utils import write_data
 from autosaxs.core.viewer import write_iq_fit_comparison_png
 
 from ..deps import EventBus, EventType
@@ -26,7 +27,7 @@ def write_fit_vs_exp_png(
     best: Dict[str, Any],
     event_bus: Optional[EventBus],
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Write I(q) fit-vs-experiment PNG. Returns (path, error)."""
+    """Write I(q) fit-vs-experiment PNG (+ sibling ``.dat`` for report re-plot). Returns (path, error)."""
     fit_vs_exp_png_path: Optional[str] = None
     fit_vs_exp_png_error: Optional[str] = None
     try:
@@ -35,8 +36,11 @@ def write_fit_vs_exp_png(
         if iq_table is None:
             fit_vs_exp_png_error = "could not parse I(q) table from .out"
         else:
+            import pandas as pd
+
             q, I_exp, sigma_arr, I_fit = iq_table
             fit_vs_exp_png_path = os.path.join(output_dir, f"{base}_fits.png")
+            fit_vs_exp_dat_path = os.path.join(output_dir, f"{base}_fits.dat")
             te = best.get("total_estimate")
             rg_nm_v = best.get("rg_nm")
             if te is not None and rg_nm_v is not None:
@@ -45,6 +49,23 @@ def write_fit_vs_exp_png(
                 title = f"DATGNOM fit: Rg={float(rg_nm_v):.4f} nm"
             else:
                 title = "DATGNOM fit"
+            write_data(
+                fit_vs_exp_dat_path,
+                pd.DataFrame(
+                    {
+                        "q": np.asarray(q, dtype=float),
+                        "I_exp": np.asarray(I_exp, dtype=float),
+                        "I_fit": np.asarray(I_fit, dtype=float),
+                    }
+                ),
+                metadata={
+                    "type": "multi_curve",
+                    "title": title,
+                    "xlabel": "q (nm^-1)",
+                    "ylabel": "I (a.u.)",
+                    "log_y": True,
+                },
+            )
             write_iq_fit_comparison_png(
                 fit_vs_exp_png_path,
                 q,
@@ -146,7 +167,32 @@ def write_pr_png(
         return best_pr_png_path, best_pr_png_error
     r, p, err = arrays
     png_path = os.path.splitext(out_path)[0] + ".png"
+    dat_path = os.path.splitext(out_path)[0] + ".dat"
     try:
+        import pandas as pd
+
+        rg_nm_v = best.get("rg_nm")
+        te = best.get("total_estimate")
+        title_parts = ["DATGNOM p(r)"]
+        if rg_nm_v is not None:
+            title_parts.append(f"Rg={float(rg_nm_v):.4f} nm")
+        if te is not None:
+            title_parts.append(f"TE={float(te):.3f}")
+        drg = pr_quality.get("delta_rg_pct")
+        if drg is not None and np.isfinite(float(drg)):
+            title_parts.append(f"ΔRg={float(drg):.1f}%")
+        title = ", ".join(title_parts)
+        write_data(
+            dat_path,
+            pd.DataFrame({"r": np.asarray(r, dtype=float), "p(r)": np.asarray(p, dtype=float)}),
+            metadata={
+                "type": "multi_curve",
+                "title": title,
+                "xlabel": "r (nm)",
+                "ylabel": "p(r)",
+                "legend": False,
+            },
+        )
         fig, ax = plt.subplots(figsize=(7, 4))
         close_labeled = False
         for cf_path in close_fit_out_paths or []:
@@ -178,17 +224,7 @@ def write_pr_png(
         ax.plot(r, p, "C0-", lw=2, zorder=3, label="best")
         ax.set_xlabel("r (nm)")
         ax.set_ylabel("p(r)")
-        rg_nm_v = best.get("rg_nm")
-        te = best.get("total_estimate")
-        title_parts = ["DATGNOM p(r)"]
-        if rg_nm_v is not None:
-            title_parts.append(f"Rg={float(rg_nm_v):.4f} nm")
-        if te is not None:
-            title_parts.append(f"TE={float(te):.3f}")
-        drg = pr_quality.get("delta_rg_pct")
-        if drg is not None and np.isfinite(float(drg)):
-            title_parts.append(f"ΔRg={float(drg):.1f}%")
-        ax.set_title(", ".join(title_parts))
+        ax.set_title(title)
         ax.grid(True, alpha=0.25)
         handles, _labels = ax.get_legend_handles_labels()
         if handles:

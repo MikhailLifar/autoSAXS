@@ -10,12 +10,15 @@ from autosaxs.cli.deferred_pip_upgrade import (  # noqa: F401
     launch_deferred_pip_upgrade as _launch_deferred_pip_upgrade,
 )
 from autosaxs.cli.package_update import (  # noqa: F401
+    AUTOSAXS_NIGHTBUILT_UPDATE_SPEC,
+    AUTOSAXS_STABLE_UPDATE_SPEC,
     AUTOSAXS_UPDATE_SPEC,
     environment_summary,
     installed_package_location,
     installed_package_version,
     is_editable_install,
     pip_upgrade_argv,
+    resolve_update_package_spec,
     run_pip_upgrade,
 )
 
@@ -34,6 +37,7 @@ def launch_deferred_pip_upgrade(
     parent_pid: int,
     force: bool = False,
     restart_argv: Optional[List[str]] = None,
+    package_spec: Optional[str] = None,
 ) -> Path:
     """Spawn the deferred pip updater; default restart argv is liveview relaunch."""
     if restart_argv is None:
@@ -42,4 +46,5 @@ def launch_deferred_pip_upgrade(
         parent_pid=parent_pid,
         force=force,
         restart_argv=restart_argv,
+        package_spec=package_spec,
     )

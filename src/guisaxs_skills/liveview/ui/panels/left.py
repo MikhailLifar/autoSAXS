@@ -25,6 +25,10 @@ from ...services.calibration.display import refined_yml_display_rows
 from ...session.state import LiveviewSessionState
 from ..attention import AttentionPulse
 from ..wizards.left import BufferWizardDialog, CalibrationWizardDialog
+from ..wizards.mask import MaskWizardDialog
+from ...services.calibration.mask_preview import render_mask_overlay_png
+from ...services.calibration.storage import calibration_subdir
+from ...session.persistence import save_liveview_session_settings
 
 
 def pick_calibration_curve_image_path(result: Dict[str, Any]) -> str:
@@ -62,11 +66,12 @@ class LiveviewLeftPanel(QWidget):
         self._state = state
         self._cal_wizard: CalibrationWizardDialog | None = None
         self._buf_wizard: BufferWizardDialog | None = None
+        self._mask_wizard: MaskWizardDialog | None = None
         self._middle = None
         self._right = None
 
         self._cal_group = QGroupBox("Calibration")
-        self._cal_open = QPushButton("Set calibration")
+        self._cal_open = QPushButton("Calibrate")
         self._cal_reset = QPushButton("Reset")
         self._cal_reset.setToolTip("Clear calibration (state A), turn analysis Off, and reset the calibration wizard form")
         self._cal_reset.clicked.connect(self.calibration_reset_requested.emit)
@@ -96,6 +101,24 @@ class LiveviewLeftPanel(QWidget):
         cal_lay.addWidget(self._cal_preview, 1)
         cal_lay.addWidget(self._cal_params_table, 0)
 
+        self._mask_group = QGroupBox("Mask")
+        self._mask_open = QPushButton("Set mask")
+        self._mask_reset = QPushButton("Reset")
+        self._mask_reset.setToolTip("Clear the session mask path (does not delete the file on disk)")
+        self._mask_reset.clicked.connect(self._on_mask_reset)
+        self._mask_hint = QLabel("—")
+        self._mask_hint.setWordWrap(True)
+        self._mask_preview = PreviewPanel()
+        self._mask_preview.setMinimumHeight(120)
+        self._mask_preview.set_image_click_handler(self._open_mask_wizard)
+        mask_lay = QVBoxLayout(self._mask_group)
+        mask_btns = QHBoxLayout()
+        mask_btns.addWidget(self._mask_open, 1)
+        mask_btns.addWidget(self._mask_reset, 0)
+        mask_lay.addLayout(mask_btns)
+        mask_lay.addWidget(self._mask_hint)
+        mask_lay.addWidget(self._mask_preview, 1)
+
         self._buf_group = QGroupBox("Buffer")
         self._buf_open = QPushButton("Set buffer")
         self._buf_reset = QPushButton("Reset")
@@ -116,14 +139,18 @@ class LiveviewLeftPanel(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._cal_group)
+        lay.addWidget(self._mask_group)
         lay.addWidget(self._buf_group)
         lay.addStretch(1)
 
         self._cal_open.clicked.connect(self._open_calibration_wizard)
+        self._mask_open.clicked.connect(self._open_mask_wizard)
         self._buf_open.clicked.connect(self._open_buffer_wizard)
 
         self._attention = AttentionPulse(self)
         self._refresh_buffer_preview_from_state()
+        self._update_mask_preview_file()
+        self._refresh_mask_preview_from_state()
         self.refresh_attention_coach()
 
     def set_coach_peers(self, *, middle, right) -> None:
@@ -144,8 +171,12 @@ class LiveviewLeftPanel(QWidget):
         middle = self._middle
 
         if not calibrated:
+            # Calibration wizard coaching is independent of the middle column
+            # (proxy / sample TIFFs may already be shown there).
             if cal is not None and cal.isVisible():
-                mask_wiz = cal.mask_wizard()
+                mask_wiz = self._mask_wizard if self._mask_wizard is not None and self._mask_wizard.isVisible() else None
+                if mask_wiz is None:
+                    mask_wiz = cal.mask_wizard()
                 if mask_wiz is not None and mask_wiz.isVisible():
                     if not mask_wiz.has_calibrant_image():
                         targets.append(mask_wiz.image_browse_button())
@@ -154,16 +185,26 @@ class LiveviewLeftPanel(QWidget):
                 elif not cal.has_calibrant_image():
                     targets.append(cal.drop_canvas())
                     targets.append(cal.drop_hint_canvas())
-                elif not cal.has_mask():
-                    targets.append(cal.mask_browse_button())
-                    targets.append(cal.create_mask_button())
+                    targets.append(cal.calibrant_browse_button())
+                    calib_line = cal.calibrant_path_field()
+                    if calib_line is not None:
+                        targets.append(calib_line)
                 elif not cal.run_coach_dismissed():
-                    targets.append(cal.run_button())
+                    if not cal.has_mask():
+                        # Suggest Run without mask (auto) together with View/Configure mask + PathField.
+                        targets.append(cal.run_button())
+                        targets.append(cal.create_mask_button())
+                        targets.append(cal.mask_browse_button())
+                        mask_line = cal.mask_path_field()
+                        if mask_line is not None:
+                            targets.append(mask_line)
+                    else:
+                        targets.append(cal.run_button())
             else:
                 targets.append(self._cal_open)
-        elif cal is not None and cal.isVisible() and cal.close_coach_armed():
-            targets.append(cal.close_button())
         elif not buffer_ready:
+            if cal is not None and cal.isVisible() and cal.close_coach_armed():
+                targets.append(cal.close_button())
             if buf is not None and buf.isVisible():
                 if not buf.has_buffer_path():
                     targets.append(buf.buffer_browse_button())
@@ -174,9 +215,9 @@ class LiveviewLeftPanel(QWidget):
                     targets.append(buf.apply_button())
             else:
                 targets.append(self._buf_open)
-        elif buf is not None and buf.isVisible() and buf.close_coach_armed():
-            targets.append(buf.close_button())
         else:
+            if buf is not None and buf.isVisible() and buf.close_coach_armed():
+                targets.append(buf.close_button())
             analysis_open = False
             if right is not None and hasattr(right, "analysis_windows_open"):
                 analysis_open = bool(right.analysis_windows_open())
@@ -218,6 +259,9 @@ class LiveviewLeftPanel(QWidget):
         if lip is not None and lip.is_file():
             h.last_integrated_dat_path = str(lip.resolve())
             h.one_d_profile_dir = str(lip.parent.resolve())
+        buf = self._state.buffer_dat_path
+        if buf is not None and buf.is_file():
+            h.buffer_dat_path = str(buf.resolve())
         return h
 
     def _open_calibration_wizard(self) -> None:
@@ -225,23 +269,210 @@ class LiveviewLeftPanel(QWidget):
             self._cal_wizard = CalibrationWizardDialog(watchdir=self._state.watchdir, parent=self)
             self._cal_wizard.reset_requested.connect(self.calibration_reset_requested.emit)
             self._cal_wizard.attention_context_changed.connect(self.refresh_calibration_coach)
+            self._cal_wizard.mask_path_edited.connect(self._on_cal_mask_path_edited)
+        # Sync session mask into the form if present.
+        if self._state.mask_path is not None and self._state.mask_path.is_file():
+            self._cal_wizard.set_mask_path(str(self._state.mask_path))
+        self._cal_wizard.maybe_apply_empty_calibrant_hint()
         self._cal_wizard.show()
         self._cal_wizard.raise_()
         self._cal_wizard.activateWindow()
         self.refresh_calibration_coach()
 
+    def on_tiff_revision_pending(self, _revision: object = None) -> None:
+        """Re-guess empty ``calibrant_image`` when a new TIFF appears in the watchdir."""
+        cal = self._cal_wizard
+        if cal is not None:
+            cal.maybe_apply_empty_calibrant_hint()
+        self.refresh_attention_coach()
+
+    def _open_mask_wizard(self) -> None:
+        calib_path = ""
+        mask_path = ""
+        if self._cal_wizard is not None:
+            calib_path = self._cal_wizard.calibrant_image_path()
+            mask_path = self._cal_wizard.mask_path_text()
+        if not mask_path and self._state.mask_path is not None and self._state.mask_path.is_file():
+            mask_path = str(self._state.mask_path)
+        if self._mask_wizard is None:
+            self._mask_wizard = MaskWizardDialog(
+                watchdir=self._state.watchdir,
+                default_image_path=calib_path,
+                default_mask_path=mask_path,
+                parent=self,
+            )
+            self._mask_wizard.attention_context_changed.connect(self.refresh_attention_coach)
+            self._mask_wizard.mask_committed.connect(self._on_mask_committed)
+        else:
+            self._mask_wizard.set_defaults(image_path=calib_path, mask_path=mask_path)
+        self._mask_wizard.show()
+        self._mask_wizard.raise_()
+        self._mask_wizard.activateWindow()
+        self.refresh_attention_coach()
+
+    def shared_mask_wizard(self) -> MaskWizardDialog | None:
+        return self._mask_wizard
+
+    def open_shared_mask_wizard(self) -> None:
+        self._open_mask_wizard()
+
+    def on_mask_wizard_image_changed(self, image_path: str) -> None:
+        """Keep calibration form image in sync when the shared mask wizard changes it."""
+        if self._cal_wizard is not None:
+            self._cal_wizard.set_calibrant_image_path(image_path)
+        if self._state.mask_path is not None and self._state.mask_path.is_file():
+            self._update_mask_preview_file()
+            self._refresh_mask_preview_from_state()
+
+    def _on_mask_committed(self, path: str) -> None:
+        chosen = (path or "").strip()
+        if not chosen:
+            return
+        p = Path(chosen).expanduser()
+        try:
+            p = p.resolve()
+        except OSError:
+            pass
+        if not p.is_file():
+            return
+        self._state.mask_path = p
+        if self._cal_wizard is not None:
+            self._cal_wizard.set_mask_path(str(p))
+        self._update_mask_preview_file()
+        self._refresh_mask_preview_from_state()
+        save_liveview_session_settings(self._state)
+        self.refresh_attention_coach()
+
+    def _on_cal_mask_path_edited(self, path: str) -> None:
+        chosen = (path or "").strip()
+        if not chosen:
+            self._state.mask_path = None
+            self._state.mask_preview_path = None
+            self._refresh_mask_preview_from_state()
+            save_liveview_session_settings(self._state)
+            self.refresh_attention_coach()
+            return
+        p = Path(chosen).expanduser()
+        try:
+            p = p.resolve() if p.is_absolute() else (self._state.watchdir / p).resolve()
+        except OSError:
+            return
+        if not p.is_file():
+            return
+        self._state.mask_path = p
+        self._update_mask_preview_file()
+        self._refresh_mask_preview_from_state()
+        save_liveview_session_settings(self._state)
+        self.refresh_attention_coach()
+
+    def _on_mask_reset(self) -> None:
+        self._state.mask_path = None
+        self._state.mask_preview_path = None
+        if self._cal_wizard is not None:
+            self._cal_wizard.set_mask_path("")
+        self._refresh_mask_preview_from_state()
+        save_liveview_session_settings(self._state)
+        self.refresh_attention_coach()
+
+    def _calibrant_path_for_mask_preview(self) -> str:
+        if self._cal_wizard is not None:
+            p = self._cal_wizard.calibrant_image_path()
+            if p and os.path.isfile(p):
+                return p
+        cal_dir = calibration_subdir(self._state.watchdir)
+        if cal_dir.is_dir():
+            for ext in ("*.tif", "*.tiff"):
+                matches = sorted(cal_dir.glob(ext))
+                if matches:
+                    return str(matches[0])
+        return ""
+
+    def _update_mask_preview_file(self) -> None:
+        mask = self._state.mask_path
+        if mask is None or not mask.is_file():
+            self._state.mask_preview_path = None
+            return
+        image = self._calibrant_path_for_mask_preview()
+        out = calibration_subdir(self._state.watchdir) / "mask_preview.png"
+        ok = render_mask_overlay_png(
+            image_path=image or "",
+            mask_path=str(mask),
+            out_path=str(out),
+        )
+        self._state.mask_preview_path = out if ok else None
+
+    def _refresh_mask_preview_from_state(self) -> None:
+        prev = self._state.mask_preview_path
+        mask = self._state.mask_path
+        if prev is not None and prev.is_file():
+            self._mask_hint.setVisible(False)
+            self._mask_preview.show_path(str(prev), path_label_visible=False)
+            self._mask_preview.set_image_click_handler(self._open_mask_wizard)
+            return
+        if mask is not None and mask.is_file():
+            self._mask_hint.setText(mask.name)
+            self._mask_hint.setVisible(True)
+            self._mask_preview.show_path("")
+            self._mask_preview.set_image_click_handler(self._open_mask_wizard)
+            return
+        self._mask_hint.setText("—")
+        self._mask_hint.setVisible(True)
+        self._mask_preview.show_path("")
+        self._mask_preview.set_image_click_handler(self._open_mask_wizard)
+
+    def sync_mask_preview_from_state(self) -> None:
+        self._update_mask_preview_file()
+        self._refresh_mask_preview_from_state()
+        self.refresh_attention_coach()
+
+    def shutdown_ui(self) -> None:
+        """Stop timers / coaching before the main window tears widgets down."""
+        self._attention.shutdown()
+        if self._buf_wizard is not None:
+            try:
+                self._buf_wizard.close()
+            except Exception:
+                pass
+        if self._cal_wizard is not None:
+            try:
+                self._cal_wizard.close()
+            except Exception:
+                pass
+        if self._mask_wizard is not None:
+            try:
+                self._mask_wizard.close()
+            except Exception:
+                pass
+
+    def _build_buffer_saved_state(self) -> Optional[Dict[str, Any]]:
+        """Form seed from persisted session buffer + subtract options (q window, etc.)."""
+        buf = self._state.buffer_dat_path
+        opts = self._state.subtract_options
+        if buf is None or not buf.is_file() or not isinstance(opts, dict):
+            return None
+        opt_state: Dict[str, Any] = {}
+        for key in ("q_min", "q_max", "method", "sample_form", "buffer_form", "point_match_factor", "scaling_factor"):
+            if key in opts and opts[key] is not None and str(opts[key]).strip() != "":
+                opt_state[key] = opts[key]
+        return {
+            "positional": [{}, {"text": str(buf.resolve()), "paths": [str(buf.resolve())]}],
+            "options": opt_state,
+        }
+
     def _open_buffer_wizard(self) -> None:
         hints = self._build_buffer_path_hints()
+        saved = self._build_buffer_saved_state()
         if self._buf_wizard is None:
             self._buf_wizard = BufferWizardDialog(
                 watchdir=self._state.watchdir,
                 hints=hints,
+                saved_state=saved,
                 parent=self,
             )
             self._buf_wizard.reset_requested.connect(self.buffer_reset_requested.emit)
             self._buf_wizard.attention_context_changed.connect(self.refresh_calibration_coach)
         else:
-            self._buf_wizard.rebuild(hints)
+            self._buf_wizard.rebuild(hints, saved_state=saved if not self._buf_wizard.has_buffer_path() else None)
         self._buf_wizard.show()
         self._buf_wizard.raise_()
         self._buf_wizard.activateWindow()
@@ -339,6 +570,14 @@ class LiveviewLeftPanel(QWidget):
                 raise ValueError(f"Buffer does not exist: {buffer_path}")
             if not buffer_path.is_file():
                 raise ValueError(f"Buffer is not a file: {buffer_path}")
+
+            # Auto pre-knee q-window from buffer when the user did not set one.
+            if opts.get("q_min") is None or opts.get("q_max") is None:
+                from autosaxs.core.subtract_scale import pre_knee_q_window_from_dat
+
+                q0, q1, _knee = pre_knee_q_window_from_dat(str(buffer_path))
+                opts["q_min"] = float(q0)
+                opts["q_max"] = float(q1)
 
             # Do not copy buffer.dat or write subtract.conf.
             # Keep the selected buffer and subtract parameters in session state only.

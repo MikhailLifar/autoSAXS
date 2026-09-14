@@ -9,20 +9,20 @@
 <p class="nav-top"><a href="main_window.html">← Main window</a> · Calibration</p>
 <h1>Calibration</h1>
 
-<p>The <b>Set calibration</b> wizard builds (or refreshes) the pyFAI integrator for the current working
-directory. You point it at a calibrant TIFF, a mask, and optional config; <b>Run</b> writes results under
+<p>The <b>Calibrate</b> wizard builds (or refreshes) the pyFAI integrator for the current working
+directory. You point it at a calibrant TIFF and optional mask; <b>Run</b> writes results under
 <code>WorkingDir/calibration/</code> (including <code>integrator/</code> and <code>refined.yml</code>).
 Until calibration succeeds, new TIFFs are integrated only in a coarse proxy mode.</p>
 
-<p>Mask editing is a separate window opened from this wizard — see <a href="mask.html">Mask</a>
-(<b>Create mask</b>, or left-click the calibrant image when one is loaded).</p>
+<p>Mask is <b>optional</b>: leave the mask path empty to use the automatic mask. Edit masks in the
+shared <a href="mask.html">Mask</a> wizard (<b>View/Configure mask</b> here, or left-column <b>Set mask</b>).</p>
 
 <p class="shot-wrap"><img class="shot" src="assets/cal_overview.png" alt="Calibration wizard overview"/></p>
 <h2>Layout</h2>
 <ul>
 <li><b>Left</b> — calibrant image viewer (drop a TIFF onto <b>Drop .tif</b>).</li>
 <li><b>Right</b> — skill form (<b>Inputs</b> / <b>Options</b>), including mask path and calibrant options;
-<b>Create mask</b> above the form.</li>
+<b>View/Configure mask</b> above the form.</li>
 <li><b>Bottom</b> — <b>Run</b> / status, <b>Reset</b>, <b>Close</b>.</li>
 </ul>
 
@@ -30,19 +30,19 @@ Until calibration succeeds, new TIFFs are integrated only in a coarse proxy mode
 
 <div class="recipe">
 <h3>To open the wizard</h3>
-<p>Main window left → <b>Set calibration</b>.</p>
+<p>Main window left → <b>Calibrate</b>.</p>
 </div>
 
 <div class="recipe">
 <h3>To create or edit a mask</h3>
-<p><b>Create mask</b> → Mask wizard opens → edit / <b>Save mask</b> → return here (mask path updates).
+<p><b>View/Configure mask</b> → Mask wizard opens → edit / <b>Save mask</b> → return here (mask path updates).
 Full steps: <a href="mask.html">Mask</a>.</p>
-<p class="shot-wrap"><img class="shot" src="assets/cal_create_mask.png" alt="Highlight Create mask"/></p>
+<p class="shot-wrap"><img class="shot" src="assets/cal_create_mask.png" alt="Highlight View/Configure mask"/></p>
 </div>
 
 <div class="recipe">
 <h3>To run calibration</h3>
-<p>Set <b>calibrant_image</b> (TIFF) → confirm <b>mask</b> path → clear or set <b>config_path</b> as needed →
+<p>Set <b>calibrant_image</b> (TIFF) → optionally set <b>mask</b> (or leave empty for auto-mask) →
 <b>Run</b> → wait until the wizard status is Idle → <b>Close</b>.</p>
 <p class="shot-wrap"><img class="shot" src="assets/cal_run.png" alt="Highlight Run"/></p>
 </div>

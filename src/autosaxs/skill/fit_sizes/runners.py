@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-from pathlib import Path
 from typing import List, Optional
+
+from autosaxs.core.atsas_gnom import run_gnom
 
 
 def _shape_to_system(shape: str) -> int:
@@ -39,47 +38,18 @@ def _run_gnom_once(
     """
     Returns (ok, returncode, stderr, out_text).
     """
-    if system == 2:
-        return (
-            False,
-            2,
-            "GNOM system=2 (user-supplied form factor) is not supported on the GNOM command line; use interactive GNOM/PRIMUS.",
-            "",
-        )
-    # Absolute paths: cwd is often an ensemble subdir, while the ATSAS .dat lives in the
-    # sample output dir — relative paths break under that cwd (same pattern as fit_distances).
-    atsas_dat_path_abs = str(Path(atsas_dat_path).expanduser().resolve())
-    out_path_abs = str(Path(out_path).expanduser().resolve())
-    output_dir_abs = str(Path(output_dir).expanduser().resolve())
-    os.makedirs(output_dir_abs, exist_ok=True)
-
-    cmd: List[str] = [
-        "gnom",
-        f"--system={int(system)}",
-        f"--rmax={float(rmax_nm):.6g}",
-        f"--force-zero-rmin={force_zero_rmin}",
-        f"--force-zero-rmax={force_zero_rmax}",
-    ]
-    if rmin_nm is not None:
-        cmd.append(f"--rmin={float(rmin_nm):.6g}")
-    if rad56_nm is not None:
-        cmd.append(f"--rad56={float(rad56_nm):.6g}")
-    if first is not None:
-        cmd.append(f"--first={int(first)}")
-    if last is not None:
-        cmd.append(f"--last={int(last)}")
-    if nr is not None:
-        cmd.append(f"--nr={int(nr)}")
-    if alpha is not None:
-        cmd.append(f"--alpha={float(alpha):.6g}")
-    cmd += ["-o", out_path_abs, atsas_dat_path_abs]
-    proc = subprocess.run(cmd, cwd=output_dir_abs, capture_output=True, text=True)
-    if proc.returncode != 0:
-        return False, int(proc.returncode), (proc.stderr or proc.stdout or "")[:2000], ""
-    if not os.path.isfile(out_path_abs):
-        return False, int(proc.returncode), "gnom reported success but output file was not created", ""
-    try:
-        out_text = Path(out_path_abs).read_text(errors="replace")
-    except OSError as e:
-        return False, int(proc.returncode), f"failed to read GNOM output: {e}", ""
-    return True, int(proc.returncode), (proc.stderr or "")[:2000], out_text
+    return run_gnom(
+        atsas_dat_path=atsas_dat_path,
+        output_dir=output_dir,
+        rmax_nm=rmax_nm,
+        out_path=out_path,
+        system=int(system),
+        rmin_nm=rmin_nm,
+        rad56_nm=rad56_nm,
+        first=first,
+        last=last,
+        alpha=alpha,
+        nr=nr,
+        force_zero_rmin=force_zero_rmin,
+        force_zero_rmax=force_zero_rmax,
+    )

@@ -51,37 +51,37 @@ See the docstring section **Returns** below.
 
 ## Autosaxs skill docstring
 
-SAXS / small-angle x-ray scattering: subtract a buffer curve from a sample 1D profile (background subtraction). Scaling uses either `point_match` (default)
-or legacy `match_tail`, optionally restricted to a q window (`q_min` / `q_max`).
+SAXS / small-angle x-ray scattering: subtract a buffer curve from a sample 1D profile (background subtraction).
+
+Default scaling is ``minimal_ratio`` in an auto pre-knee ``q`` band detected on the
+buffer alone. Legacy ``point_match`` / ``match_tail`` remain available via ``method``.
 
 ### Arguments
 
 - `sample_1d` (str): Sample path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
 - `buffer_1d` (str): Path to the buffer 1D `.dat` curve (must be an existing file).
 - `output_dir` (str, default `.`): Directory where subtraction outputs are written.
-- `config_path` (str | None, default `None`): Optional path to a YAML config file with a `subtract` section. When omitted, bundled defaults apply for method/forms; q-window keys come from CLI or user file only.
-- `method` (str | None, default `None`): `point_match` or `match_tail`. Defaults from bundled config when omitted.
-- `q_min` (float): Lower bound of matching q-range (nm⁻¹). Required. Recommended to choose in "hihg q region", where sample and buffer curve follwo Porod/linear/Porod+linear law.
-- `q_max` (float): Upper bound of matching q-range (nm⁻¹). Required. Recommended to choose in "hihg q region", just before the "knee" of SAXS profile.
-- `sample_form` / `buffer_form` (str | None): For `point_match` only — each is `linear`, `Porod`, or `Porod-plus-linear`.
-- `point_match_factor` (float | None, default `None`): For `point_match`, scale satisfies `point_match_factor * I_sample_fit(q_max) = scale * I_buffer_fit(q_max)`.
-- `scaling_factor` (float | None, default `None`): If provided, overrides automatic scaling and uses this factor directly (must be finite and > 0).
+- `config_path` (str | None, default `None`): Optional path to a YAML config file with a `subtract` section. When omitted, bundled defaults apply.
+- `method` (str | None, default `None`): `minimal_ratio` (default), `point_match`, or `match_tail`.
+- `q_min` / `q_max` (float | None): Matching q-window (nm⁻¹). Optional; when omitted, auto from buffer pre-knee detection.
+- `sample_form` / `buffer_form` (str | None): For `point_match` only — `linear`, `Porod`, or `Porod-plus-linear`.
+- `point_match_factor` (float | None): For `point_match` only.
+- `window_q_fraction` / `pre_knee_fraction` / `snr_min` / `approach_factor`: For `minimal_ratio` (and pre-knee auto band).
+- `scaling_factor` (float | None): Manual scale override (finite, > 0).
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
-The q window (`q_min`, `q_max`) is always required at the Python API and CLI. A user config file may supply values that override the arguments passed to `subtract()`.
-
 ### Notes
-Correctness criteria: buffer and sample visually matched at "tail region". Negative values in the subtracted curve are possible due to high variance at the "tail" region. But overall the curves look just match, especially after the "knee".
+Correctness criteria: buffer and sample visually matched at the high-q tail / pre-knee region.
+Negative values in the subtracted curve are possible due to high variance at the tail.
 
 ### Short parameter list
 
-- method: internal parameter, changing the default is not recommended, default: point-match
-- sample_form: default: Porod+linear
-- buffer_form: default: linear
-- point_match_factor: internal parameter, changing the default is not recommended, default: 0.995
-- q_min: Required, start of matching region
-- q_max: Required, end of matching region, matching point
-- scaling_factor: Manual scaling factor. When this set, it replaces auto-scale
+- method: default `minimal_ratio` (set `point_match` to restore the previous default)
+- q_min / q_max: optional; auto pre-knee band when omitted
+- window_q_fraction: default 0.05
+- pre_knee_fraction: default 0.35
+- snr_min: default 2.0
+- scaling_factor: Manual scaling factor; replaces auto-scale when set
 
 ### Returns
 
@@ -93,7 +93,8 @@ Correctness criteria: buffer and sample visually matched at "tail region". Negat
 - `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
 Subtraction quality (`correct` or `over-subtracted`) is written into the subtracted `.dat` metadata
 (``subtract.correctness``) and into per-sample report fragments (individual Markdown and summary YAML).
-The individual report embeds the subtracted curve from the `.dat` (not from `sub_plot_path`).
+The individual report shows subtraction quality, re-plots the log-scale difference
+curves from ``diff_log_*.dat``, then the subtracted curve (log I vs q) from the ``.dat``.
 
 ### Python usage
 
@@ -104,9 +105,6 @@ out = subtract(
     sample_1d="integration/int_sample_01.dat",
     buffer_1d="integration/int_buffer.dat",
     output_dir="subtracted",
-    method="point_match",
-    q_min=4.0,
-    q_max=6.0,
     use_cache=False,
 )
 
@@ -116,5 +114,7 @@ print(out["subtracted_1d"])
 ### CLI usage
 
 ```bash
-autosaxs subtract integration/int_sample_01.dat integration/int_buffer.dat       --output-dir subtracted --method point_match --q-min 4.0 --q-max 6.0
+autosaxs subtract integration/int_sample_01.dat integration/int_buffer.dat \
+  --output-dir subtracted
+# optional restore: --method point_match --q-min 4.0 --q-max 6.0
 ```

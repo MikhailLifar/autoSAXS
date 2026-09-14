@@ -8,7 +8,6 @@ from ...ui.run_controls import RunControls
 from ...ui.skill_form import SkillForm
 
 # Liveview defaults (skill applies these when omitted; form shows them explicitly).
-_CALIBRATE_MASK_MODE_DISPLAY = "f - from file"
 _CALIBRATE_CALIBRANT_DEFAULT = "AgBh"
 _CALIBRATE_WAVELENGTH_A_DEFAULT = "1.445"
 
@@ -35,12 +34,12 @@ def prepare_liveview_calibrate_form(form: SkillForm, *, outdir: str) -> None:
     """Hide non-interactive / rarely used options; set friendly labels and defaults."""
     force_fixed_output(form, outdir=outdir)
     _hide_option_by_name(form, "dist_guess")
+    _hide_option_by_name(form, "mask_mode")
 
-    _set_option_label(form, "mask_mode", "mask mode")
     _set_option_label(form, "calibrant", "calibrant")
     _set_option_label(form, "wavelength", "wavelength, A")
+    _set_option_label(form, "mask", "mask (optional)")
 
-    _set_line_default(form, "mask_mode", _CALIBRATE_MASK_MODE_DISPLAY)
     _set_line_default(form, "calibrant", _CALIBRATE_CALIBRANT_DEFAULT)
     _set_line_default(form, "wavelength", _CALIBRATE_WAVELENGTH_A_DEFAULT)
 
@@ -52,45 +51,21 @@ _SUBTRACT_HIDDEN_OPTIONS = frozenset(
         "buffer_form",
         "point_match_factor",
         "scaling_factor",
+        "window_q_fraction",
+        "pre_knee_fraction",
+        "snr_min",
+        "approach_factor",
     }
 )
 
 
 def prepare_liveview_subtract_form(form: SkillForm, *, outdir: str) -> None:
-    """Hide advanced subtract knobs; keep buffer path + q-match window visible."""
+    """Hide advanced subtract knobs; keep buffer path + editable q-match window visible."""
     force_fixed_output(form, outdir=outdir)
     for name in _SUBTRACT_HIDDEN_OPTIONS:
         _hide_option_by_name(form, name)
     _set_option_label(form, "q_min", "q min")
     _set_option_label(form, "q_max", "q max")
-
-
-def normalize_calibrate_mask_mode(raw: Optional[str]) -> Optional[str]:
-    """Map friendly form text like ``f - from file`` to a skill-accepted token."""
-    if raw is None:
-        return None
-    s = str(raw).strip()
-    if not s:
-        return None
-    key = s.split("-", 1)[0].strip().lower()
-    aliases = {
-        "f": "f",
-        "from_file": "f",
-        "a": "a",
-        "auto": "a",
-        "c": "c",
-        "combined": "c",
-    }
-    if key in aliases:
-        return aliases[key]
-    low = s.lower()
-    if "from_file" in low or low.startswith("f"):
-        return "f"
-    if "combined" in low or low.startswith("c"):
-        return "c"
-    if "auto" in low or low.startswith("a"):
-        return "a"
-    return s
 
 
 def _hide_option_by_name(form: SkillForm, name: str) -> None:

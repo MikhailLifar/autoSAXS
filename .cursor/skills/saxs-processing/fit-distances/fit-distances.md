@@ -60,7 +60,11 @@ SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance
 - `rg_nm` (float | None, default `None`): Expected Rg in nm, usually passed from Guinier analysis. If omitted, in-process Guinier analysis (`fit_guinier`) is run for an Rg span, then 1D Rg optimization in `[0, 1.5 × rg_max]` (30 s max) takes place.
 - `first` (int | None, default `None`): DATGNOM `--first` (1-based point index). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
 - `last` (int | None, default `None`): DATGNOM `--last`. If omitted, `--last` is not passed to DATGNOM.
-- `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`.
+- `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`. Unused when `dmax_nm` is set (GNOM refine).
+- `dmax_nm` (float | None, default `None`): When set, skip DATGNOM and the Dmax ensemble; run a single monodisperse GNOM (`--rmax`) refine with this Dmax (nm).
+- `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted, GNOM chooses automatically. Ignored when `dmax_nm` is unset.
+- `force_zero_rmin` (str | None, default `None`): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y` when refining.
+- `force_zero_rmax` (str | None, default `None`): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y` when refining.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
@@ -118,4 +122,5 @@ print(out["best_gnom_out_path"])
 ```bash
 autosaxs fit_distances subtracted/sub_sample_01.dat --output-dir distances/
 autosaxs fit_distances subtracted/sub_sample_01.dat --rg-nm 10.0 --first 10 --last 100 --smooth 2.0 -o distances/
+autosaxs fit_distances subtracted/sub_sample_01.dat --dmax-nm 8.5 --first 10 --alpha 0.5 -o distances/
 ```

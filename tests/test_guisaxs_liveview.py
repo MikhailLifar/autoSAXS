@@ -182,9 +182,7 @@ def _atomic_copy_into_watchdir(src: Path, watchdir: Path) -> Path:
     Rationale:
     - Creating a `.tif` temp file inside watchdir triggers watchdog `created()` and the app may briefly
       show Queue=2 (temp name + final name).
-    - Copying with `copy2()` preserves mtime and can be ignored by the watcher "new file" heuristic.
-    - A `.part` extension avoids enqueue on creation; the final rename to `.tif` triggers `moved()`,
-      which the watcher treats as a new arrival.
+    - A `.part` extension avoids enqueue on creation; the final rename to `.tif` triggers `moved()`.
     """
     watchdir.mkdir(parents=True, exist_ok=True)
     if not src.is_file():
@@ -470,10 +468,14 @@ def test_monodisperse_guinier_opts_fixed_interval_from_spinboxes(tmp_path: Path)
         guinier_interval_first=8,
         guinier_interval_last=32,
     )
+    assert [s.name for s in steps] == ["fit_guinier", "analyze_kratky", "fit_distances"]
     g_opts = steps[0].request.options
-    d_opts = steps[1].request.options
+    k_opts = steps[1].request.options
+    d_opts = steps[2].request.options
     assert g_opts["first"] == 8
     assert g_opts["last"] == 32
+    assert k_opts["rg_nm"] == "${fit_guinier.rg}"
+    assert k_opts["i0"] == "${fit_guinier.i0}"
     assert d_opts["rg_nm"] == "${fit_guinier.rg}"
     assert d_opts["first"] == "${fit_guinier.first_point_1based}"
     # Guinier last must not be forwarded to DATGNOM (window too narrow for p(r)).

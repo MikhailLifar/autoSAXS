@@ -18,6 +18,7 @@ from ..logic.smart_defaults import (
     anchor_for_model_mixture_config,
     browse_start_dir_for_resolved_paths,
     common_parent_dir_if_all_files,
+    find_calibrant_image_in_workdir,
     find_config_conf_near,
     find_integrator_dir_near,
     find_mask_near,
@@ -337,6 +338,11 @@ class SkillForm(QWidget):
                 found = find_integrator_dir_near(ad)
                 if found:
                     return str(found)
+            return None
+        if skill_name == "calibrate" and param_name == "calibrant_image":
+            found = find_calibrant_image_in_workdir(workdir)
+            if found is not None:
+                return str(found)
             return None
         if skill_name == "subtract" and param_name == "buffer_1d":
             sample_txt = resolved_prefix[0] if resolved_prefix else ""

@@ -92,6 +92,14 @@ def coerce_singleton_mask_expression(value: SingletonMaskPathExpressionArg) -> S
     return SingletonMaskPathExpression(str(value))
 
 
+def coerce_optional_singleton_mask_expression(
+    value: Optional[SingletonMaskPathExpressionArg],
+) -> Optional[SingletonMaskPathExpression]:
+    if value is None:
+        return None
+    return coerce_singleton_mask_expression(value)
+
+
 def coerce_optional_singleton_path_expression(
     value: Optional[SingletonPathExpressionArg],
 ) -> Optional[SingletonPathExpression]:

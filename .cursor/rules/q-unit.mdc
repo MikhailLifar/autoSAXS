@@ -1,0 +1,8 @@
+---
+description:
+alwaysApply: true
+---
+
+autosaxs skill outputs are always nanometers (`q` in nm^-1, lengths in nm).
+Be careful, since some ATSAS components (like DAMMIF) expect or output A^-1 or try to guess the units from the data.
+You should always check for unit coherence based on "`q` in nm^-1, lengths in nm" convention.

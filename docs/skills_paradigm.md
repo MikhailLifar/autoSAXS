@@ -150,9 +150,9 @@ def subtract(
     buffer_1d: str,
     output_dir: str = ".",
     *,
-    method: str = "point_match",
-    q_min: float,
-    q_max: float,
+    method: str = "minimal_ratio",
+    q_min: float | None = None,
+    q_max: float | None = None,
     use_cache: bool = False,
 ) -> dict[str, str]:
     ...
@@ -180,7 +180,7 @@ Skills MAY additionally use an internal helper that follows the “path dict” 
 Roles are stable and documented so that scripts (and AI) can wire skills. Examples:
 
 - **calibrate:** `calib_image`, `config`, optional `mask` → `integrator_dir`, `refined_path`.
-- **integrate:** `images` (2D), `integrator_dir` → `integrated_1d` (list).
+- **integrate:** `images` (2D), `integrator_dir`, optional `mask` override → `integrated_1d` (list).
 - **integrate_proxy:** `image` (file/dir/glob of `.tif`), `config`, optional center args `cy`, `cx` → `integrated_1d` (list for multi-input). If `cy` and `cx` are both `None`, center is estimated via `ring_analysis` and its debug plots are written to `output_dir`; if center estimation fails for a given image, that item yields no `.dat` for that image, but empty **input** expansions are still an error (see §4.1.1).
 - **subtract:** `sample_1d`, `buffer_1d` (paired or paired by convention) → `subtracted_1d`.
 - **plot_2d:** `image` (2D) → `plot_2d`.
@@ -247,10 +247,10 @@ Each skill is a single processing routine with the standard signature (§4.1), a
 | Skill | Purpose | Main inputs | Main outputs |
 |-------|---------|-------------|--------------|
 | **calibrate** | Calibrate detector geometry via ring analysis (Laplacian/GMM, DBSCAN, ``refine``). All calibration plots (ring pipeline, q/I curve, mask) under ``calibration_plots_dir``. | `calib_image`, `config` (with ``ring_analysis`` + ``detector_geometry``), optional `mask` | `integrator_dir`, `refined_path`, `calibration_plots_dir`, `calibration_curve_plot_path`, `calibration_mask_path` |
-| **integrate** | Integrate 2D SAXS images to 1D curves (q, I, σ) using a calibrated integrator. The main arg `images` is a single string: file / directory / glob. Directory expands to `*.tif` (non-recursive). Glob/dir expansion is sorted and empty expansion is an error. | `images` (file/dir/glob of 2D `.tif`), `integrator_dir` | `integrated_1d` (list of paths) |
+| **integrate** | Integrate 2D SAXS images to 1D curves (q, I, σ) using a calibrated integrator. The main arg `images` is a single string: file / directory / glob. Directory expands to `*.tif` (non-recursive). Glob/dir expansion is sorted and empty expansion is an error. Optional `mask` replaces the integrator's stored effective mask for this run only. | `images` (file/dir/glob of 2D `.tif`), `integrator_dir`, optional `mask` | `integrated_1d` (list of paths) |
 | **average** | Radiation-damage-aware averaging of per-frame 1D curves: compare each frame to the lexicographic reference (CorMap + reduced χ²), truncate at first χ² rejection, inverse-variance merge. Main arg `profiles` accepts file / directory / glob of `.dat` (sorted, non-recursive). Default `output_dir` is `./averaged`. | `profiles` (file/dir/glob of 1D `.dat`), optional `cormap_p_min`, `chi2_max`, `chi2_min` | `averaged_1d`, `frame_selection_csv` |
 | **integrate_proxy** | Integrate 2D `.tif` image input(s) to 1D curves without detector calibration. Public entry point is `integrate_proxy(image, output_dir=".", *, cy=..., cx=..., config=..., npt=..., use_cache=False)`. `image` accepts file / directory / glob; directory expands to `*.tif` (non-recursive). `cy` and `cx` must be both `None` or both floats. If both are `None`, center is estimated with radial-symmetry logic and a debug center plot is written to `output_dir`. | `image` (file/dir/glob of `.tif`), optional `mask`, optional `cy`, `cx` | `integrated_1d` (list of paths) |
-| **subtract** | Subtract buffer from sample 1D profile (`point_match` default or legacy `match_tail`). `q_min` and `q_max` are always required at the API/CLI (user config may override). Writes subtracted curve; quality (`correct` / `over-subtracted`) in `.dat` metadata and report fragments. | `sample_1d`, `buffer_1d` (paired or by convention), `q_min`, `q_max` | `subtracted_1d`, `diff_plot_path`, `diff_log_plot_path`, `sub_plot_path` |
+| **subtract** | Subtract buffer from sample 1D profile. Default `minimal_ratio` in an auto pre-knee q-band (buffer knee detection); `point_match` / `match_tail` remain available. Optional `q_min`/`q_max` override the auto band. Writes subtracted curve; quality (`correct` / `over-subtracted`) in `.dat` metadata and report fragments. | `sample_1d`, `buffer_1d` (paired or by convention); optional `q_min`, `q_max` | `subtracted_1d`, `diff_plot_path`, `diff_log_plot_path`, `sub_plot_path` |
 | **plot** | Generate standard plots for one or many 1D profiles: Guinier, Kratky, log–log; optionally write a Guinier-range .dat. Main arg `profile` accepts file / directory / glob; directory expands to `*.dat` (non-recursive); expansion is sorted; empty expansion is an error. | `profile` (file/dir/glob of 1D `.dat`), optional guinier region | per-input lists of: `guinier_plot_path`, `kratky_plot_path`, `loglog_plot_path`, optional `guinier_dat_path` |
 | **plot_2d** | Render one or many 2D SAXS TIFF images to PNG using logarithmic intensity (`log1p(I)`). Main arg `image` accepts file / directory / glob; directory expands to `*.tif` (non-recursive); expansion is sorted; empty expansion is an error. | `image` (file/dir/glob of `.tif`) | `plot_2d_png` (list of paths for multi-input) |
 | **guinier_analysis** | Run Guinier analysis on one or many 1D profiles (first5, first10, autorg, adaptive; chosen = adaptive). Writes results file and ATSAS-format .dat for downstream. Main arg `profile` accepts file / directory / glob; directory expands to `*.dat` (non-recursive); expansion is sorted; empty expansion is an error. | `profile` (file/dir/glob of 1D `.dat`) | per-input lists of: `results_path`, `atsas_dat_path`, `guinier_region_path` |

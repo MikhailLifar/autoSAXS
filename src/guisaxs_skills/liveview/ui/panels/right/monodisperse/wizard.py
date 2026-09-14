@@ -39,7 +39,7 @@ class MonodisperseWizardWidget(QWidget):
         guinier_box = _pane_group("Guinier", self.guinier_pane)
         guinier_box.setMinimumWidth(268)
         grid.addWidget(guinier_box, 0, 0, 2, 1)
-        grid.addWidget(_pane_group("GNOM", self.gnom_pane), 0, 1, 1, 1)
+        grid.addWidget(_pane_group("P(r)", self.gnom_pane), 0, 1, 1, 1)
         grid.addWidget(_pane_group("Shape", self.shape_pane), 1, 1, 1, 1)
         grid.setColumnStretch(0, 2)
         grid.setColumnStretch(1, 4)
@@ -75,7 +75,6 @@ class MonodisperseWizardWidget(QWidget):
         g_last = wp.get("guinier_last", wp.get("last"))
         if g_first and g_last:
             self.guinier_pane.set_range(int(g_first), int(g_last))
-        self.gnom_pane.set_params(wp)
         shapes = getattr(state, "model_bodies_shapes", None)
         if shapes:
             self.shape_pane.set_selected_shapes(list(shapes))

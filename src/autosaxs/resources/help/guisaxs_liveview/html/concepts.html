@@ -64,7 +64,7 @@ while still queued, the queue updates that slot instead of stacking duplicate wo
 <p>Think of a per-file pipeline whose length depends on what you have configured:</p>
 <ol>
 <li><b>Integrate</b> — always. Before calibration succeeds, this is a coarse <b>proxy</b> curve
-(pixel-like axis, under <code>averaged_proxy/</code>). After <b>Set calibration</b>, you get calibrated
+(pixel-like axis, under <code>averaged_proxy/</code>). After <b>Calibrate</b>, you get calibrated
 I(q) under <code>averaged/</code>.</li>
 <li><b>Subtract</b> — only if you applied <b>Set buffer</b> for the session. Then each sample gets a
 buffer-subtracted curve under <code>subtracted/</code>, and the middle column shows <b>S + buffer</b> /
@@ -126,7 +126,7 @@ tool output.</p>
 
 <h2>Pulsing next-step hints</h2>
 <p>A blue pulsing border on a control is not a separate mode — it is a soft hint for the next likely
-setup action (for example <b>Set calibration</b>, then later <b>Set buffer</b>, an empty <b>Drop .tif</b>
+setup action (for example <b>Calibrate</b>, then later <b>Set buffer</b>, an empty <b>Drop .tif</b>
 target, analysis icons, or <b>Resume auto-processing</b> when auto analysis is paused). You can ignore
 it and use the menus and buttons directly.</p>
 

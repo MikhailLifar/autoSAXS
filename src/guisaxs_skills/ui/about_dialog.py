@@ -21,8 +21,10 @@ class AboutDialog(QDialog):
             f"<p><b>autosaxs version:</b> {version}<br>"
             f"<b>Python:</b> {py_exe}<br>"
             f"<b>Install location:</b> {location}</p>"
-            "<p>Use <b>Update → Update to latest version…</b> to upgrade "
-            "<code>autosaxs[gui]</code> in this environment.</p>"
+            "<p>Use <b>Update</b> to upgrade <code>autosaxs[gui]</code> in this environment:<br>"
+            "stable (PyPI, same as <code>autosaxs update</code> / <code>autosaxs -U</code>), "
+            "or nightbuilt (GitHub, same as <code>autosaxs update --nightbuilt</code> / "
+            "<code>autosaxs -Unb</code>).</p>"
         )
         label = QLabel(text)
         label.setWordWrap(True)

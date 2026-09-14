@@ -27,6 +27,7 @@ class LiveviewSessionHandler:
             return
         state = self._c.state
         left.sync_buffer_preview_from_state()
+        left.sync_mask_preview_from_state()
         rp = state.calibration_refined_yml_path
         left.set_calibration_params_from_path(str(rp) if rp is not None and rp.is_file() else None)
         cpp = state.calibration_curve_plot_path
@@ -45,7 +46,12 @@ class LiveviewSessionHandler:
             left.set_calibration_preview_path("")
             left.set_calibration_params_from_path(None)
             left.sync_buffer_preview_from_state()
+            left.sync_mask_preview_from_state()
             left.reset_calibration_wizard_form()
+            # Re-apply session mask into the reset calibrate form (mask survives calib reset).
+            mp = self._c.state.mask_path
+            if mp is not None and mp.is_file() and left._cal_wizard is not None:
+                left._cal_wizard.set_mask_path(str(mp))
         if right is not None:
             right.force_analysis_disarmed()
             right.clear_output_previews()

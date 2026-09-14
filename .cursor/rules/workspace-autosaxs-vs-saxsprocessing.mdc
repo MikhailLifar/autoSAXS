@@ -1,0 +1,7 @@
+---
+description:
+alwaysApply: true
+---
+
+Put experiments under `saxsprocessing/` and assume `autosaxs` is installed in editable mode to the project env (no `sys.path` hacks into `src/`).
+

@@ -259,9 +259,13 @@ def write_success_artifacts(
 
     md_parts = [f"### GNOM size distribution (fit_sizes, shape={shape})\n"]
     if fit_vs_exp_png_path and os.path.isfile(fit_vs_exp_png_path):
-        md_parts.append(f"![Selected GNOM fit vs data]({os.path.basename(fit_vs_exp_png_path)})\n")
+        fit_dat = os.path.splitext(fit_vs_exp_png_path)[0] + ".dat"
+        md_parts.append(
+            f"![Selected GNOM fit vs data]({os.path.basename(fit_dat if os.path.isfile(fit_dat) else fit_vs_exp_png_path)})\n"
+        )
     if best_dr_png_path and os.path.isfile(best_dr_png_path):
-        md_parts.append(f"![D(R)]({os.path.basename(best_dr_png_path)})\n")
+        dr_dat = os.path.splitext(best_dr_png_path)[0] + ".dat"
+        md_parts.append(f"![D(R)]({os.path.basename(dr_dat if os.path.isfile(dr_dat) else best_dr_png_path)})\n")
     md_parts.append(_dr_quality_markdown(dr_quality))
     summary_refs = [
         {"role": "fit_sizes_handoff", "path": os.path.basename(handoff_path), "format": "text"},

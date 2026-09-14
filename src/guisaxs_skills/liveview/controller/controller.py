@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import QMessageBox, QWidget
 from ...logic.runner_qprocess import SkillRunner
 from ..pipeline import LiveviewJobExecutor, LiveviewQueueStatus
 from ..session import load_liveview_session_settings, save_liveview_session_settings
+from ..session.output_paths import tiff_output_root
 from ..session.state import LiveviewSessionState, LiveviewWatchMode
 from ..ui.panels import LiveviewLeftPanel, LiveviewMiddlePanel, LiveviewRightPanel
 
@@ -213,6 +214,29 @@ class LiveviewController(QObject):
         """Close without Apply: resume Auto only when no analysis windows are armed."""
         if not (self._state.monodisperse_armed or self._state.polydisperse_armed):
             self.processing_mode.resume()
+
+    def enqueue_report_for_current_sample(self) -> None:
+        """Queue ``report_individual`` for the history-current TIFF (Resume auto-processing)."""
+        if not self._state.analysis_enabled():
+            return
+        hist = list(self._executor.session_processed_tiffs)
+        if not hist:
+            return
+        idx = max(0, min(self.history._index, len(hist) - 1))
+        tiff_path = hist[idx]
+        stem = Path(tiff_path).stem
+        if not stem:
+            return
+        root = tiff_output_root(
+            watchdir=self._watchdir,
+            tiff_path=tiff_path,
+            mode=self._state.watch_mode,
+        )
+        self._executor.enqueue_report_individual_for_sample(
+            output_root=root,
+            basename=stem,
+            tiff_path=tiff_path,
+        )
 
     def middle_subtraction_context(self) -> dict:
         if self._middle is None:

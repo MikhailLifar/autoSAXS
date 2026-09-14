@@ -19,7 +19,7 @@ class AutosaxsHelpFormatter(argparse.RawDescriptionHelpFormatter):
             pfx = prefix if prefix else "usage: "
             return pfx + usage + "\n\n"
         pfx = prefix if prefix else "usage: "
-        return f"{pfx}autosaxs [-h] [-v] [-U [--force]] COMMAND ...\n\n"
+        return f"{pfx}autosaxs [-h] [-v] [-U|--update|-Unb] [--force] [--nightbuilt] COMMAND ...\n\n"
 
 def _autosaxs_version() -> str:
     try:
@@ -400,6 +400,24 @@ def _skill_to_agent_skill_md(*, name: str, fn: Callable[..., Any]) -> str:
     ).rstrip() + "\n"
 
 
+def _add_update_subparser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "update",
+        help="Upgrade autosaxs[gui] (PyPI stable by default; --nightbuilt for GitHub)",
+    )
+    p.set_defaults(_autosaxs_internal_cmd="update")
+    p.add_argument(
+        "--nightbuilt",
+        action="store_true",
+        help="Install from GitHub instead of PyPI.",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Reinstall with pip --force-reinstall (default: upgrade only).",
+    )
+
+
 def _add_doctor_subparser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "doctor",
@@ -701,12 +719,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         "-U",
         "--update",
         action="store_true",
-        help="Upgrade autosaxs[gui] to the latest version from git main.",
+        help="Upgrade autosaxs[gui] to the latest stable version from PyPI.",
+    )
+    parser.add_argument(
+        "-Unb",
+        action="store_true",
+        dest="update_nightbuilt",
+        help="Upgrade autosaxs[gui] from the GitHub nightbuilt (same as -U --nightbuilt).",
+    )
+    parser.add_argument(
+        "--nightbuilt",
+        action="store_true",
+        help="With -U/--update, install from GitHub instead of PyPI.",
     )
     parser.add_argument(
         "--force",
         action="store_true",
-        help="With -U/--update, reinstall with pip --force-reinstall (default: upgrade only).",
+        help="With -U/--update/-Unb (or update), reinstall with pip --force-reinstall.",
     )
     subparsers = parser.add_subparsers(
         dest="command",
@@ -716,6 +745,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         description="Run a skill or helper (autosaxs COMMAND --help for details).",
     )
 
+    _add_update_subparser(subparsers)
     _add_doctor_subparser(subparsers)
     _add_get_docs_subparser(subparsers)
     _add_get_skills_subparser(subparsers)
@@ -780,15 +810,26 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     args = parser.parse_args(argv)
 
-    if getattr(args, "update", False):
+    internal_cmd = getattr(args, "_autosaxs_internal_cmd", None)
+    want_update = bool(
+        getattr(args, "update", False)
+        or getattr(args, "update_nightbuilt", False)
+        or internal_cmd == "update"
+    )
+    if want_update:
         from .package_update import run_pip_upgrade
 
-        return run_pip_upgrade(force=bool(getattr(args, "force", False)))
+        nightbuilt = bool(
+            getattr(args, "update_nightbuilt", False) or getattr(args, "nightbuilt", False)
+        )
+        return run_pip_upgrade(
+            force=bool(getattr(args, "force", False)),
+            nightbuilt=nightbuilt,
+        )
 
     if not getattr(args, "command", None):
         parser.error("the following arguments are required: command")
 
-    internal_cmd = getattr(args, "_autosaxs_internal_cmd", None)
     if internal_cmd == "doctor":
         from .doctor import doctor
 

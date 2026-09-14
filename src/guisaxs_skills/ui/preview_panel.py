@@ -371,11 +371,18 @@ class PreviewPanel(QWidget):
         self._dat_curve_viewer: Optional["DatCurveViewerDialog"] = None
         self._preview_q_min: Any = None
         self._preview_q_max: Any = None
+        self._image_click_handler = None
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._label)
         lay.addWidget(self._image, 1)
+
+    def set_image_click_handler(self, fn) -> None:
+        """Optional override for left-click on the preview image (e.g. open a wizard)."""
+        self._image_click_handler = fn
+        if self._current_pixmap is not None:
+            self._image.set_on_click(fn if fn is not None else self._open_viewer)
 
     def show_path(
         self,
@@ -422,7 +429,8 @@ class PreviewPanel(QWidget):
             self._current_image_path = preview_path
             self._current_pixmap = pix
             self._rescale_preview()
-            self._image.set_on_click(self._open_viewer)
+            click = self._image_click_handler if self._image_click_handler is not None else self._open_viewer
+            self._image.set_on_click(click)
             if not path_label_visible:
                 self._image.setToolTip(full)
                 self.setToolTip(full)

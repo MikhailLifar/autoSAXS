@@ -107,6 +107,10 @@ class AttentionPulse(QObject):
         self._targets = []
         self._orig_style.clear()
 
+    def shutdown(self) -> None:
+        """Stop pulsing before Qt widget teardown (avoids timer→canvas use-after-free)."""
+        self.clear()
+
     def _color_css(self, alpha: float) -> str:
         a = max(0.0, min(1.0, float(alpha)))
         return (

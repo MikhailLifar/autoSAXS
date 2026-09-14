@@ -37,6 +37,7 @@ class LiveviewPolydisperseHandler:
         self.on_intervention()
 
     def on_resume_queue(self) -> None:
+        self._c.enqueue_report_for_current_sample()
         self._c.processing_mode.resume()
 
     def _profile_root_and_tiff(self) -> tuple[Optional[str], Optional[Path], str]:

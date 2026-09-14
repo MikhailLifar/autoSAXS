@@ -5,17 +5,28 @@ import sys
 from pathlib import Path
 from typing import List, Tuple
 
-# Upgrade target (git main until PyPI publish).
-AUTOSAXS_UPDATE_SPEC = (
-    "autosaxs[gui] @ git+https://github.com/MikhailLifar/autoSAXS.git@main"
+# PyPI release (stable) vs git tip (nightbuilt).
+# Default for ``autosaxs -U`` / ``autosaxs update`` is stable (PyPI).
+AUTOSAXS_STABLE_UPDATE_SPEC = "autosaxs[gui]"
+AUTOSAXS_NIGHTBUILT_UPDATE_SPEC = (
+    "autosaxs[gui] @ git+https://github.com/MikhailLifar/autoSAXS.git"
 )
+# Default upgrade target (stable / PyPI).
+AUTOSAXS_UPDATE_SPEC = AUTOSAXS_STABLE_UPDATE_SPEC
 
 
-def pip_upgrade_argv(*, force: bool = False) -> List[str]:
+def resolve_update_package_spec(*, nightbuilt: bool = False) -> str:
+    """Return the pip install target for a stable or nightbuilt upgrade."""
+    if nightbuilt:
+        return AUTOSAXS_NIGHTBUILT_UPDATE_SPEC
+    return AUTOSAXS_STABLE_UPDATE_SPEC
+
+
+def pip_upgrade_argv(*, force: bool = False, package_spec: str | None = None) -> List[str]:
     cmd = [sys.executable, "-m", "pip", "install", "--upgrade"]
     if force:
         cmd.append("--force-reinstall")
-    cmd.append(AUTOSAXS_UPDATE_SPEC)
+    cmd.append(package_spec or AUTOSAXS_UPDATE_SPEC)
     return cmd
 
 
@@ -85,7 +96,7 @@ def environment_summary() -> Tuple[str, str, str]:
     )
 
 
-def run_pip_upgrade(*, force: bool = False) -> int:
+def run_pip_upgrade(*, force: bool = False, package_spec: str | None = None, nightbuilt: bool = False) -> int:
     """Upgrade autosaxs[gui] in the current environment; stream pip output."""
     if is_editable_install():
         print(
@@ -93,7 +104,9 @@ def run_pip_upgrade(*, force: bool = False) -> int:
             "pip upgrade may not replace your working copy.",
             file=sys.stderr,
         )
-    cmd = pip_upgrade_argv(force=force)
+    if package_spec is None:
+        package_spec = resolve_update_package_spec(nightbuilt=nightbuilt)
+    cmd = pip_upgrade_argv(force=force, package_spec=package_spec)
     print("$ " + " ".join(cmd), flush=True)
     try:
         result = subprocess.run(cmd)

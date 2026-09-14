@@ -38,7 +38,8 @@ from .optimize import (
     _q_to_first_point_1based,
 )
 from .quality_io import _assess_and_write_pr_quality
-from .runners import _run_datgnom_once, _run_dmax_close_fit_ensemble
+from autosaxs.core.atsas_gnom import normalize_force_zero
+from .runners import _run_datgnom_once, _run_dmax_close_fit_ensemble, _run_gnom_pr_once
 
 def fit_distances(
     profile: DatPathExpressionArg,
@@ -49,6 +50,10 @@ def fit_distances(
     first: Optional[int] = None,
     last: Optional[int] = None,
     smooth: Optional[float] = None,
+    dmax_nm: Optional[float] = None,
+    alpha: Optional[float] = None,
+    force_zero_rmin: Optional[str] = None,
+    force_zero_rmax: Optional[str] = None,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     r"""
@@ -61,7 +66,11 @@ def fit_distances(
     - `rg_nm` (float | None, default `None`): Expected Rg in nm, usually passed from Guinier analysis. If omitted, in-process Guinier analysis (`fit_guinier`) is run for an Rg span, then 1D Rg optimization in `[0, 1.5 × rg_max]` (30 s max) takes place.
     - `first` (int | None, default `None`): DATGNOM `--first` (1-based point index). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
     - `last` (int | None, default `None`): DATGNOM `--last`. If omitted, `--last` is not passed to DATGNOM.
-    - `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`.
+    - `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`. Unused when `dmax_nm` is set (GNOM refine).
+    - `dmax_nm` (float | None, default `None`): When set, skip DATGNOM and the Dmax ensemble; run a single monodisperse GNOM (`--rmax`) refine with this Dmax (nm).
+    - `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted, GNOM chooses automatically. Ignored when `dmax_nm` is unset.
+    - `force_zero_rmin` (str | None, default `None`): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y` when refining.
+    - `force_zero_rmax` (str | None, default `None`): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y` when refining.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Returns
@@ -119,6 +128,7 @@ def fit_distances(
     ```bash
     autosaxs fit_distances subtracted/sub_sample_01.dat --output-dir distances/
     autosaxs fit_distances subtracted/sub_sample_01.dat --rg-nm 10.0 --first 10 --last 100 --smooth 2.0 -o distances/
+    autosaxs fit_distances subtracted/sub_sample_01.dat --dmax-nm 8.5 --first 10 --alpha 0.5 -o distances/
     ```
     """
     bus = EventBus()
@@ -136,6 +146,10 @@ def fit_distances(
         first=first,
         last=last,
         smooth=smooth,
+        dmax_nm=None if dmax_nm is None else float(dmax_nm),
+        alpha=None if alpha is None else float(alpha),
+        force_zero_rmin=force_zero_rmin,
+        force_zero_rmax=force_zero_rmax,
         event_bus=bus,
         use_cache=use_cache,
     )
@@ -146,7 +160,16 @@ def fit_distances(
 @run_with_cache(
     path_keys_for_hash=["profile"],
     kwargs_for_hash=None,
-    kwargs_for_hash_keys=["rg_nm", "first", "last", "smooth"],
+    kwargs_for_hash_keys=[
+        "rg_nm",
+        "first",
+        "last",
+        "smooth",
+        "dmax_nm",
+        "alpha",
+        "force_zero_rmin",
+        "force_zero_rmax",
+    ],
     include_config_in_hash=False,
 )
 def _fit_distances_paths(
@@ -156,6 +179,10 @@ def _fit_distances_paths(
     first: Optional[int] = None,
     last: Optional[int] = None,
     smooth: Optional[float] = None,
+    dmax_nm: Optional[float] = None,
+    alpha: Optional[float] = None,
+    force_zero_rmin: Optional[str] = None,
+    force_zero_rmax: Optional[str] = None,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
     use_cache: bool = False,
@@ -183,9 +210,13 @@ def _fit_distances_paths(
     user_first = first
     user_last = last
     user_smooth = smooth
+    user_dmax_nm = dmax_nm
+    user_alpha = alpha
+    fz_rmin = normalize_force_zero(force_zero_rmin, default="Y")
+    fz_rmax = normalize_force_zero(force_zero_rmax, default="Y")
 
     n_pts = int(len(q_nm))
-    need_guinier = (user_rg_nm is None) or (user_first is None)
+    need_guinier = (user_first is None) or (user_dmax_nm is None and user_rg_nm is None)
     guinier_info: Optional[Dict[str, Any]] = None
     if need_guinier:
         if event_bus:
@@ -207,7 +238,12 @@ def _fit_distances_paths(
         }
 
     rg_guinier_nm_val: Optional[float] = None
-    if guinier_info is not None and guinier_info.get("rg") is not None:
+    if user_rg_nm is not None:
+        try:
+            rg_guinier_nm_val = float(user_rg_nm)
+        except (TypeError, ValueError):
+            rg_guinier_nm_val = None
+    elif guinier_info is not None and guinier_info.get("rg") is not None:
         try:
             rg_guinier_nm_val = float(guinier_info["rg"])
         except (TypeError, ValueError):
@@ -233,6 +269,124 @@ def _fit_distances_paths(
                 f"fit_distances: require 1 <= first < last <= n_points ({n_pts}); "
                 f"got first={first_pt}, last={last_pt}",
             )
+
+    if user_dmax_nm is not None:
+        dmax_f = float(user_dmax_nm)
+        if not np.isfinite(dmax_f) or dmax_f <= 0:
+            raise ValueError(f"fit_distances: dmax_nm must be > 0; got {user_dmax_nm}")
+        rg_for_cand = float(rg_guinier_nm_val) if rg_guinier_nm_val is not None else float(dmax_f) / 3.0
+        last_msg = f" --last={last_pt}" if last_pt is not None else " (no --last)"
+        alpha_msg = f" --alpha={float(user_alpha):.6g}" if user_alpha is not None else " (auto alpha)"
+        if event_bus:
+            event_bus.publish(
+                EventType.MESSAGE,
+                {
+                    "text": (
+                        f"GNOM (fit_distances refine): --rmax={dmax_f:.4g} nm "
+                        f"--first={first_pt}{last_msg}{alpha_msg} "
+                        f"--force-zero-rmin={fz_rmin} --force-zero-rmax={fz_rmax}…"
+                    ),
+                },
+            )
+        out_path_final = os.path.join(output_dir, f"gnom_rmax_{dmax_f:.4f}.out")
+        ok, rc, stderr, out_text = _run_gnom_pr_once(
+            atsas_dat_path=atsas_dat_path,
+            output_dir=output_dir,
+            rmax_nm=dmax_f,
+            first=first_pt,
+            last=last_pt,
+            alpha=user_alpha,
+            force_zero_rmin=fz_rmin,
+            force_zero_rmax=fz_rmax,
+            out_path=out_path_final,
+        )
+        failures: List[Dict[str, Any]] = []
+        candidates: List[Dict[str, Any]] = []
+        if not ok:
+            failures.append(
+                {
+                    "dmax_nm": dmax_f,
+                    "first": first_pt,
+                    "last": last_pt,
+                    "alpha": user_alpha,
+                    "ok": False,
+                    "returncode": int(rc),
+                    "stderr": stderr,
+                }
+            )
+            return _finalize_fit_distances_failure(
+                output_dir=output_dir,
+                profile=profile,
+                base=base,
+                atsas_dat_path=atsas_dat_path,
+                failure_reason="gnom_refine_failed",
+                failures=failures,
+                candidates=candidates,
+                guinier_summary=guinier_summary,
+                event_bus=event_bus,
+                detail=stderr,
+                q_nm=q_nm,
+                first_pt=first_pt,
+                rg_guinier_nm=rg_guinier_nm_val,
+            )
+        best = _candidate_from_out_text(
+            out_text,
+            rg_nm=rg_for_cand,
+            first=first_pt,
+            last=last_pt,
+            smooth=None,
+            out_path=out_path_final,
+            rc=rc,
+            stderr=stderr,
+            intermediate=False,
+        )
+        if best.get("rmax_nm") is None:
+            best["rmax_nm"] = dmax_f
+        best["alpha"] = user_alpha
+        best["force_zero_rmin"] = fz_rmin
+        best["force_zero_rmax"] = fz_rmax
+        candidates.append(best)
+        ensemble_info: Dict[str, Any] = {
+            "ensemble_dir": "",
+            "ensemble_summary_path": "",
+            "close_fit_out_paths": [],
+            "force_zero_off_out_path": "",
+            "ensemble_rows": [],
+            "force_zero_off_parsed": None,
+        }
+        pr_quality = _assess_and_write_pr_quality(
+            output_dir=output_dir,
+            base=base,
+            out_text=out_text,
+            atsas_fit_ok=True,
+            rg_guinier_nm=rg_guinier_nm_val,
+            q_nm=q_nm,
+            first_pt=first_pt,
+            suspicious=bool(best.get("suspicious")),
+            event_bus=event_bus,
+            dmax_validation=None,
+        )
+        return write_success_artifacts(
+            profile=profile,
+            base=base,
+            output_dir=output_dir,
+            atsas_dat_path=atsas_dat_path,
+            best_gnom_out_path=out_path_final,
+            gnom_out_paths=[out_path_final],
+            out_text=out_text,
+            best=best,
+            candidates=candidates,
+            failures=failures,
+            guinier_summary=guinier_summary,
+            rg_trials=[],
+            pr_quality=pr_quality,
+            ensemble_info=ensemble_info,
+            user_rg_nm=user_rg_nm,
+            user_first=user_first,
+            user_last=user_last,
+            user_smooth=user_smooth,
+            event_bus=event_bus,
+        )
 
     gnom_out_paths: List[str] = []
     candidates: List[Dict[str, Any]] = []

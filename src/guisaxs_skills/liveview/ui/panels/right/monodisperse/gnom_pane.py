@@ -1,24 +1,28 @@
 from __future__ import annotations
 
-from PyQt5.QtCore import QTimer, pyqtSignal
+import html
+from typing import Any, Mapping
+
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QDoubleSpinBox,
-    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-from ......ui.style import apply_quality_hint_style
+from ......ui.style import COLOR_QUALITY_POOR
+from .format_display import format_gnom_passport_html
 from .plots import GnomFitPlot, PrPlot
 
 
 class GnomPane(QWidget):
-    params_changed = pyqtSignal()
+    """Minimized P(r) pane: embedded plots, passport, and Adjust (controls live in the wizard)."""
+
+    adjust_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -40,36 +44,20 @@ class GnomPane(QWidget):
         plots_row.addWidget(iq_box, 1)
         plots_row.addWidget(pr_box, 1)
 
-        self._rg = QDoubleSpinBox()
-        self._rg.setDecimals(4)
-        self._rg.setRange(0.0, 1e6)
-        self._rg.setSpecialValueText("(auto)")
-        self._rg.setValue(0.0)
-        self._first = QSpinBox()
-        self._first.setMinimum(1)
-        self._first.setMaximum(99999)
-        self._last = QSpinBox()
-        self._last.setMinimum(0)
-        self._last.setMaximum(99999)
-        self._last.setSpecialValueText("(none)")
-        self._smooth = QDoubleSpinBox()
-        self._smooth.setDecimals(2)
-        self._smooth.setRange(0.0, 100.0)
-        self._smooth.setValue(2.0)
-
         self._lbl_diagnostics = QLabel("—")
         self._lbl_diagnostics.setWordWrap(True)
-
-        form = QFormLayout()
-        form.addRow("Rg (nm)", self._rg)
-        form.addRow("first", self._first)
-        form.addRow("last", self._last)
-        form.addRow("smooth", self._smooth)
+        self._lbl_diagnostics.setTextFormat(Qt.RichText)
+        self._lbl_diagnostics.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self._btn_adjust = QPushButton("Adjust")
+        self._btn_adjust.clicked.connect(self.adjust_requested.emit)
 
         right = QVBoxLayout()
-        right.addLayout(form)
+        right.setSpacing(0)
+        right.addWidget(QLabel("Passport"), 0)
         right.addWidget(self._lbl_diagnostics, 1)
-        right.addStretch(1)
+        right.addSpacing(6)
+        right.addWidget(self._btn_adjust, 0)
+        right.addStretch(0)
 
         body = QHBoxLayout()
         body.setSpacing(10)
@@ -81,62 +69,41 @@ class GnomPane(QWidget):
         lay.setSpacing(6)
         lay.addLayout(body, 1)
 
-        self._debounce = QTimer(self)
-        self._debounce.setSingleShot(True)
-        self._debounce.setInterval(300)
-        self._debounce.timeout.connect(self.params_changed.emit)
-        for w in (self._rg, self._first, self._last, self._smooth):
-            w.valueChanged.connect(self._schedule_emit)
-
     def set_running(self, running: bool) -> None:
-        if running:
-            self._debounce.stop()
-        for w in (self._rg, self._first, self._last, self._smooth):
-            w.setEnabled(not running)
+        self._btn_adjust.setEnabled(not running)
 
-    def _schedule_emit(self, *_args) -> None:
-        self._debounce.start()
-
-    def gnom_params(self) -> dict:
-        rg = float(self._rg.value())
-        last = int(self._last.value())
-        out = {
-            "first": int(self._first.value()),
-            "smooth": float(self._smooth.value()),
-        }
-        if rg > 0.0:
-            out["rg_nm"] = rg
-        if last > 0:
-            out["last"] = last
-        return out
-
-    def set_params(self, params: dict) -> None:
-        if not isinstance(params, dict):
+    def set_diagnostics(
+        self,
+        *,
+        text: str = "",
+        poor: bool = False,
+        html_text: str = "",
+        quality: Mapping[str, Any] | None = None,
+        guinier_handoff: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Show passport. Prefer ``quality`` (per-row red) or ``html_text``; else plain ``text``."""
+        self._lbl_diagnostics.setStyleSheet("")
+        if quality is not None:
+            body = format_gnom_passport_html(
+                quality,
+                guinier_handoff=guinier_handoff,
+                poor_color=COLOR_QUALITY_POOR,
+            )
+            self._lbl_diagnostics.setTextFormat(Qt.RichText)
+            self._lbl_diagnostics.setText(body)
             return
-        # Programmatic updates must not emit params_changed (that pauses/cancels the
-        # live pipeline via intervention_requested — kills model_dam mid-auto-job).
-        self._debounce.stop()
-        widgets = (self._rg, self._first, self._last, self._smooth)
-        for w in widgets:
-            w.blockSignals(True)
-        try:
-            if params.get("rg_nm") is not None:
-                self._rg.setValue(float(params["rg_nm"]))
-            elif params.get("rg") is not None:
-                self._rg.setValue(float(params["rg"]))
-            if params.get("first") is not None:
-                self._first.setValue(int(params["first"]))
-            if params.get("last") is not None:
-                self._last.setValue(int(params["last"]))
-            if params.get("smooth") is not None:
-                self._smooth.setValue(float(params["smooth"]))
-        finally:
-            for w in widgets:
-                w.blockSignals(False)
-
-    def set_diagnostics(self, *, text: str = "", poor: bool = False) -> None:
-        self._lbl_diagnostics.setText(text or "—")
-        apply_quality_hint_style(self._lbl_diagnostics, poor=bool(poor) and bool(text))
+        if html_text:
+            self._lbl_diagnostics.setTextFormat(Qt.RichText)
+            self._lbl_diagnostics.setText(html_text)
+            return
+        msg = text or "—"
+        if poor and text:
+            esc = html.escape(text)
+            self._lbl_diagnostics.setTextFormat(Qt.RichText)
+            self._lbl_diagnostics.setText(f'<span style="color:{COLOR_QUALITY_POOR}">{esc}</span>')
+            return
+        self._lbl_diagnostics.setTextFormat(Qt.PlainText)
+        self._lbl_diagnostics.setText(msg)
 
     def show_gnom(self, profile_path: str, gnom_out_path: str) -> None:
         self._fit_plot.plot_from_dat_and_gnom_out(profile_path, gnom_out_path)

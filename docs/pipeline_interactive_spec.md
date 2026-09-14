@@ -135,7 +135,7 @@ The function assumes the pipeline is run in a context where calibration, integra
 - **Order of operations:**
   1. Directory and config: user provides directory; config file `config.conf` is loaded.
   2. If `calibration` in steps: wait for calibrant; if mask mode is from_file or combined, wait for mask; run `autocalib` → writes `integrator_params/`, `calibration.png`, `calibration_mask.png`, and updates config with `refined`.
-  3. If `integration` in steps and not `calibration`: wait until directory contains `integrator_params` with `ai_params.json`, `detector_params.json`, `mask.npy`; then load `IntegratorExtended` from disk.
+  3. If `integration` in steps and not `calibration`: wait until directory contains `integrator_params` with `ai_params.json`, `detector_params.json`, and `effective_mask.npy` (or legacy `mask.npy`); then load `IntegratorExtended` from disk.
   4. Main cycle:
      - If `integration` in steps: wait for buffer (if `subtraction` in steps) and sample 2D files; align sample↔buffer by name; integrate all buffer and sample images → 1D in `averaged/`; add paths to context.
      - If `subtraction` in steps and `integration` not in steps: wait for buffer and sample 1D in `averaged/`; align; set `buffer_paths_1d` and `sample_paths_1d` (and basename list from sample names).
@@ -216,7 +216,7 @@ No default values are defined in the controller for these; they must exist in co
 - **Results:**
   - `directory/calibration.png` — calibration plot.
   - `directory/calibration_mask.png` — mask visualization.
-  - `directory/integrator_params/` — `ai_params.json`, `detector_params.json`, and optionally `mask.npy`.
+  - `directory/integrator_params/` — `ai_params.json`, `detector_params.json`, and optionally `effective_mask.npy` (legacy: `mask.npy`).
   - Config updated with `refined` (and `context['refined']` set).
 - **Fast-forward:** If `fast_forward=True` and config has key `refined` and both `calibration.png` and `directory/integrator_params` exist, calibration is skipped and the integrator is loaded from disk; otherwise calibration runs (or returns `integrator: None, refined: None` if no calibrant path).
 - **Behavior:** Center refinement → ring identification → geometry refinement (processor’s `find_center`, `find_rings`, `refine`); mask applied per `mask_config` (auto / from file / combined); integrator saved and calibration/mask figures written.
@@ -286,7 +286,7 @@ No default values are defined in the controller for these; they must exist in co
 
 - **Before processing:** Images: patterns e.g. `*_calib.tif`; no explicit extension check. Mask: read and cast to bool; bad extension → `RuntimeError` in `read_mask`. 1D: must parse with `read_saxs`; invalid → from `read_data`.
 - **Before calibration:** Directory set and exist. No calibrant → `autocalib` returns `integrator: None, refined: None`. Config must have calibrant_name, center_refinement, detector_geometry, ring_search, r_beam_px, mask_config.
-- **Integration without calibration:** Needs `integrator_params/` with `ai_params.json`, `detector_params.json`, `mask.npy`. Missing → keep prompting; multiple `mask.*` → processor raises.
+- **Integration without calibration:** Needs `integrator_params/` with `ai_params.json`, `detector_params.json`, `effective_mask.npy` (or legacy `mask.npy`). Missing → keep prompting; multiple matching mask files for one basename → processor raises.
 
 - **Alignment (buffer–sample):** Overlapped or unpaired → messages and retry (sleep 10 s). On subtraction, alignment rechecked; if still invalid, `RuntimeError` with overlapped/not_paired.
 

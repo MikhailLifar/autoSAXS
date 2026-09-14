@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from autosaxs.core.atsas_gnom import run_gnom_pr
 from autosaxs.core.gnom import candidate_score, distribution_arrays, parse_gnom_out
 from autosaxs.core.gnom_quality import rg_from_pr
 
@@ -67,40 +68,22 @@ def _run_gnom_pr_once(
     first: Optional[int] = None,
     last: Optional[int] = None,
     alpha: Optional[float] = None,
+    force_zero_rmin: str = "Y",
     force_zero_rmax: str = "Y",
     out_path: str,
 ) -> tuple[bool, int, str, str]:
     """Run monodisperse GNOM (system=0). Returns (ok, returncode, stderr, out_text)."""
-    # Absolute paths: cwd is often an ensemble subdir, while the ATSAS .dat lives in the
-    # sample output dir — relative paths break under that cwd (same pattern as DATGNOM).
-    atsas_dat_path_abs = str(Path(atsas_dat_path).expanduser().resolve())
-    out_path_abs = str(Path(out_path).expanduser().resolve())
-    output_dir_abs = str(Path(output_dir).expanduser().resolve())
-    os.makedirs(output_dir_abs, exist_ok=True)
-
-    cmd: List[str] = [
-        "gnom",
-        "--system=0",
-        f"--rmax={float(rmax_nm):.6g}",
-        f"--force-zero-rmax={force_zero_rmax}",
-    ]
-    if first is not None:
-        cmd.append(f"--first={int(first)}")
-    if last is not None:
-        cmd.append(f"--last={int(last)}")
-    if alpha is not None and np.isfinite(float(alpha)) and float(alpha) > 0:
-        cmd.append(f"--alpha={float(alpha):.6g}")
-    cmd += ["-o", out_path_abs, atsas_dat_path_abs]
-    proc = subprocess.run(cmd, cwd=output_dir_abs, capture_output=True, text=True)
-    if proc.returncode != 0:
-        return False, int(proc.returncode), (proc.stderr or proc.stdout or "")[:2000], ""
-    if not os.path.isfile(out_path_abs):
-        return False, int(proc.returncode), "gnom reported success but output file was not created", ""
-    try:
-        out_text = Path(out_path_abs).read_text(errors="replace")
-    except OSError as e:
-        return False, int(proc.returncode), f"failed to read GNOM output: {e}", ""
-    return True, int(proc.returncode), (proc.stderr or "")[:2000], out_text
+    return run_gnom_pr(
+        atsas_dat_path=atsas_dat_path,
+        output_dir=output_dir,
+        rmax_nm=rmax_nm,
+        out_path=out_path,
+        first=first,
+        last=last,
+        alpha=alpha,
+        force_zero_rmin=force_zero_rmin,
+        force_zero_rmax=force_zero_rmax,
+    )
 
 
 def _run_dmax_close_fit_ensemble(

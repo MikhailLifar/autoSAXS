@@ -28,7 +28,7 @@ from .....services.artifacts import (
 )
 from .....services.dam_models import build_dam_model_catalog
 from .....services.denss_models import build_denss_model_catalog
-from .format_display import format_display_number, is_passport_quality_poor, scalar_value
+from .format_display import format_display_number, scalar_value
 from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
 
 
@@ -41,6 +41,7 @@ class MonodisperseArtifactPresenter:
         self._last_guinier_results: str = ""
         self._last_gnom_out: str = ""
         self._last_fit_distances_subdir: str = ""
+        self._last_gnom_result: dict = {}
 
     def set_context(
         self,
@@ -74,6 +75,7 @@ class MonodisperseArtifactPresenter:
         self._last_guinier_results = ""
         self._last_gnom_out = ""
         self._last_fit_distances_subdir = ""
+        self._last_gnom_result = {}
 
     def _artifact_bases(self) -> list[Path]:
         bases: list[Path] = []
@@ -192,84 +194,19 @@ class MonodisperseArtifactPresenter:
         except Exception:
             pass
 
-    def _format_gnom_diagnostics(self, result: dict) -> str:
-        from autosaxs.core.gnom_quality import PrQualityThresholds
-
-        lines: list[str] = []
-        te = scalar_value(result.get("total_estimate"))
-        if te is None and isinstance(result.get("fit_distances_log_path"), str):
+    def _ingest_gnom(self, result: dict) -> None:
+        result = merge_fit_distances_quality_fields(dict(result or {}), watchdir=self._state.watchdir)
+        self._last_gnom_result = dict(result)
+        # Enrich Total Estimate from log when skill return omits it.
+        if result.get("total_estimate") in (None, "") and isinstance(result.get("fit_distances_log_path"), str):
             try:
                 summ = yaml.safe_load(Path(result["fit_distances_log_path"]).read_text(encoding="utf-8"))
                 if isinstance(summ, dict):
                     sel = summ.get("selected")
                     if isinstance(sel, dict) and sel.get("total_estimate") is not None:
-                        te = sel["total_estimate"]
+                        result["total_estimate"] = sel["total_estimate"]
             except Exception:
                 pass
-        if te is not None:
-            lines.append(f"Total est. = {format_display_number(te)}")
-
-        s_min = scalar_value(result.get("shannon_s_min"))
-        s_class = scalar_value(result.get("shannon_class")) or "unknown"
-        s_status = scalar_value(result.get("overall_status")) or ""
-        if s_status in ("", None) and result.get("shannon_ok") is not None:
-            s_status = "ok" if scalar_value(result.get("shannon_ok")) else "fail"
-        q_min = scalar_value(result.get("q_min_fit_nm"))
-        dmax = scalar_value(result.get("dmax_nm"))
-        if s_min is not None:
-            if q_min is not None and dmax is not None:
-                lines.append(
-                    f"s_min = (q_min · Dmax) / π = {format_display_number(s_min)} "
-                    f"(class {s_class}, status {s_status or '—'})"
-                )
-            else:
-                lines.append(f"s_min = {format_display_number(s_min)} (class {s_class}, status {s_status or '—'})")
-
-        handoff = self.last_guinier_handoff
-        rg_g = scalar_value(result.get("rg_guinier_nm"))
-        if rg_g is None:
-            rg_g = handoff.get("rg")
-        i0_g = handoff.get("i0")
-        rg_parts: list[str] = []
-        if rg_g is not None and scalar_value(rg_g) not in ("", None):
-            rg_parts.append(f"Rg_guinier = {format_display_number(rg_g)}")
-        if i0_g is not None and scalar_value(i0_g) not in ("", None):
-            rg_parts.append(f"I(0)_guinier = {format_display_number(i0_g)}")
-        if rg_parts:
-            lines.append(", ".join(rg_parts))
-
-        pr_parts: list[str] = []
-        rg_pr = result.get("rg_pr_nm")
-        if rg_pr is not None and scalar_value(rg_pr) not in ("", None):
-            pr_parts.append(f"Rg_P(r) = {format_display_number(rg_pr)}")
-        i0_pr = result.get("i0_pr")
-        if i0_pr is not None and scalar_value(i0_pr) not in ("", None):
-            pr_parts.append(f"I0_P(r) = {format_display_number(i0_pr)}")
-        if pr_parts:
-            lines.append("; ".join(pr_parts))
-
-        drg = scalar_value(result.get("delta_rg_pct"))
-        if drg is not None and drg not in ("", None):
-            t = PrQualityThresholds()
-            try:
-                drg_f = float(drg)
-                if drg_f > t.delta_rg_pct_acceptable:
-                    drg_status = "failed"
-                elif drg_f > t.delta_rg_pct_max:
-                    drg_status = "marginal"
-                else:
-                    drg_status = "ok"
-            except (TypeError, ValueError):
-                drg_status = scalar_value(result.get("pr_quality_class")) or "—"
-            lines.append(f"ΔRg = {format_display_number(drg)}% (status {drg_status})")
-
-        if dmax is not None:
-            lines.append(f"Dmax = {format_display_number(dmax)}")
-
-        return "\n".join(lines)
-
-    def _ingest_gnom(self, result: dict) -> None:
-        result = merge_fit_distances_quality_fields(dict(result or {}), watchdir=self._state.watchdir)
         sub = norm_artifact_path(result.get("output_subdir"))
         if sub:
             self._last_fit_distances_subdir = self._resolve_result_path(sub) or sub
@@ -299,17 +236,69 @@ class MonodisperseArtifactPresenter:
             return
         prof = self._effective_profile_path()
         self._wizard.gnom_pane.show_gnom(prof, gnom_out)
-        if result.get("selected_first") is not None:
-            self._wizard.gnom_pane.set_params({"first": result["selected_first"]})
-        if result.get("selected_last") is not None:
-            self._wizard.gnom_pane.set_params({"last": result["selected_last"]})
-        diag = self._format_gnom_diagnostics(result)
-        poor = is_passport_quality_poor(
-            overall_status=str(scalar_value(result.get("overall_status")) or ""),
-            quality_class=str(scalar_value(result.get("pr_quality_class")) or ""),
+        self._wizard.gnom_pane.set_diagnostics(
+            quality=result,
+            guinier_handoff=self.last_guinier_handoff,
         )
-        self._wizard.gnom_pane.set_diagnostics(text=diag, poor=poor)
         self._wizard.shape_pane.set_rerun_enabled(self.can_rerun_shape())
+        self._update_gnom_params_from_result(result, gnom_out_path=gnom_out)
+
+    def _update_gnom_params_from_result(self, result: dict, *, gnom_out_path: str) -> None:
+        """Seed working GNOM params; refresh auto snapshot after DATGNOM (not refine) runs."""
+        from autosaxs.core.gnom import parse_gnom_out
+
+        snap: dict = {}
+        first = result.get("selected_first")
+        last = result.get("selected_last")
+        if first is not None:
+            try:
+                snap["first"] = int(scalar_value(first))
+            except (TypeError, ValueError):
+                pass
+        if last is not None:
+            try:
+                snap["last"] = int(scalar_value(last))
+            except (TypeError, ValueError):
+                pass
+        dmax = scalar_value(result.get("dmax_nm"))
+        if dmax is not None and dmax not in ("", None):
+            try:
+                snap["dmax_nm"] = float(dmax)
+            except (TypeError, ValueError):
+                pass
+        alpha = None
+        try:
+            parsed = parse_gnom_out(Path(gnom_out_path).read_text(errors="replace"))
+            alpha = parsed.get("current_alpha")
+            if snap.get("dmax_nm") is None and parsed.get("real_space_rmax") is not None:
+                snap["dmax_nm"] = float(parsed["real_space_rmax"])
+        except Exception:
+            parsed = {}
+        if alpha is not None:
+            try:
+                snap["alpha"] = float(alpha)
+            except (TypeError, ValueError):
+                pass
+        snap["force_zero_rmin"] = "Y"
+        snap["force_zero_rmax"] = "Y"
+        rg = scalar_value(result.get("rg_guinier_nm"))
+        if rg is not None and rg not in ("", None):
+            try:
+                snap["rg_nm"] = float(rg)
+            except (TypeError, ValueError):
+                pass
+
+        wp = dict(self._state.monodisperse_wizard_params or {})
+        for k, v in snap.items():
+            wp[k] = v
+        is_datgnom = "datgnom" in os.path.basename(gnom_out_path).lower()
+        if is_datgnom:
+            wp["gnom_auto"] = {
+                k: snap[k]
+                for k in ("first", "last", "dmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax", "rg_nm")
+                if k in snap
+            }
+        self._state.monodisperse_wizard_params = wp
 
     def _ingest_shape(self, result: dict, *, skill_name: str) -> None:
         sub = result.get("output_subdir")
@@ -561,6 +550,10 @@ class MonodisperseArtifactPresenter:
     @property
     def last_gnom_out(self) -> str:
         return self._last_gnom_out
+
+    @property
+    def last_gnom_result(self) -> dict:
+        return dict(self._last_gnom_result or {})
 
     def gnom_out_for_dammif(self) -> str:
         """Resolved DATGNOM .out path for manual DAMMIF (discovered under fit_distances/<stem>/)."""

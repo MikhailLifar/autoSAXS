@@ -51,6 +51,7 @@ from .polydisperse_pipeline import (
     job_includes_mixture,
 )
 from .queue import FIFOQueue, JobQueue, QueueItem, RevisionEnqueueResult
+from .report_pipeline import report_individual_step
 
 
 @dataclass(frozen=True)
@@ -243,6 +244,37 @@ class LiveviewJobExecutor(QObject):
             context={"manual": True, "skill_name": request.skill_name},
         )
         self.enqueue_job(job)
+
+    def enqueue_report_individual_for_sample(
+        self,
+        *,
+        output_root: Path,
+        basename: str,
+        tiff_path: str = "",
+        priority: int = 160,
+    ) -> None:
+        """Manual one-shot report for a sample (e.g. on Resume auto-processing)."""
+        if not self._state.analysis_enabled():
+            return
+        stem = (basename or "").strip()
+        if not stem:
+            return
+        root = output_root.expanduser().resolve()
+        step = report_individual_step(output_root=root, basename=stem)
+        self.enqueue_job(
+            Job(
+                id=f"manual:report_individual:{stem}:{time.time_ns()}",
+                priority=int(priority),
+                steps=[step],
+                context={
+                    "manual": True,
+                    "skill_name": "report_individual",
+                    "tiff_stem": stem,
+                    "output_root": str(root),
+                    "tiff_path": (tiff_path or "").strip(),
+                },
+            )
+        )
 
     def cancel_running(self, *, requeue: bool = False) -> None:
         self._requeue_cancelled_job = bool(requeue) and self._current_job is not None
@@ -508,6 +540,8 @@ class LiveviewJobExecutor(QObject):
         if not steps:
             return None
         stem = profile_sample_stem(prof)
+        if self._state.analysis_enabled():
+            steps.append(report_individual_step(output_root=root, basename=stem))
         return Job(
             id=f"mono_shape_followup:{stem}:{time.time_ns()}",
             priority=0,
@@ -565,6 +599,8 @@ class LiveviewJobExecutor(QObject):
         if not steps:
             return None
         stem = profile_sample_stem(prof)
+        if self._state.analysis_enabled():
+            steps.append(report_individual_step(output_root=root, basename=stem))
         return Job(
             id=f"poly_mixture_followup:{stem}:{time.time_ns()}",
             priority=0,
@@ -585,7 +621,7 @@ class LiveviewJobExecutor(QObject):
         try:
             req = resolve_request_placeholders(step.request, results_by_step=self._step_results)
         except PlaceholderError as e:
-            if step.name == "fit_distances" and "fit_guinier.rg" in str(e):
+            if step.name in ("fit_distances", "analyze_kratky") and "fit_guinier." in str(e):
                 guinier = self._step_results.get("fit_guinier")
                 if isinstance(guinier, dict):
                     guinier = self._enrich_fit_guinier_result(
@@ -1005,13 +1041,17 @@ class LiveviewJobExecutor(QObject):
             raise RuntimeError("Missing integrator_dir (not calibrated)")
         outdir = averaged_dir(root)
         outdir.mkdir(parents=True, exist_ok=True)
+        integrate_opts: dict = {"output_dir": str(outdir), "use_cache": False}
+        mask_p = self._state.mask_path
+        if mask_p is not None and mask_p.is_file():
+            integrate_opts["mask"] = str(mask_p.resolve())
         steps.append(
             JobStep(
                 name="integrate",
                 request=RunRequest(
                     skill_name="integrate",
                     positional=[tp, str(self._state.integrator_dir)],
-                    options={"output_dir": str(outdir), "use_cache": False},
+                    options=integrate_opts,
                 ),
             )
         )
@@ -1037,6 +1077,8 @@ class LiveviewJobExecutor(QObject):
             )
             profile = str(subtracted_dat_path(root=root, stem=stem).resolve())
             steps.extend(self._analysis_steps_for_profile(profile, output_root=root))
+            if self._state.analysis_enabled():
+                steps.append(report_individual_step(output_root=root, basename=stem))
             return Job(
                 id=f"tiff:{stem}:{time.time_ns()}",
                 priority=0,
@@ -1047,6 +1089,8 @@ class LiveviewJobExecutor(QObject):
         # State B/BD
         profile = integrated_dat
         steps.extend(self._analysis_steps_for_profile(profile, output_root=root))
+        if self._state.analysis_enabled():
+            steps.append(report_individual_step(output_root=root, basename=stem))
         return Job(
             id=f"tiff:{stem}:{time.time_ns()}",
             priority=0,

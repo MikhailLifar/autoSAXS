@@ -22,6 +22,8 @@ Then:
   - If the user wants to add none of them, do not run `git add`. 
   - Continue the workflow.
 
+From here, run all the commands within the workflow with unrestricted permissions (`all`) to avoid failures.
+
 Run tests (required):
 ```bash
 cd /home/mikl/KurchatovCoop/autosaxs
@@ -35,7 +37,12 @@ Then:
 cd /home/mikl/KurchatovCoop/autosaxs
 bash helpers/run_precommit_updates.sh [<new_version_if_provided_in_command_arguments>]
 ```
-- IF AND ONLY IF the pre-commit updates succeed (exit code 0), run git commit and git push (do NOT run git add here):
+- IF AND ONLY IF the pre-commit updates succeed (exit code 0), rebuild the standalone installer ZIPs (output under `dist/`, gitignored):
+```bash
+cd /home/mikl/KurchatovCoop/autosaxs
+bash scripts/pack_installers.sh
+```
+- IF AND ONLY IF packing succeeds (exit code 0), run git commit and git push (do NOT run git add here):
 ```bash
 cd /home/mikl/KurchatovCoop/autosaxs
 git commit -a -m "message from the command argument (use verbatim; do not transform or substitute)"

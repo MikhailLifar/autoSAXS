@@ -1,0 +1,6 @@
+---
+description:
+alwaysApply: true
+---
+
+Canonical tests live in `tests/` (and `guisaxs_skills/tests/` for GUI helpers).

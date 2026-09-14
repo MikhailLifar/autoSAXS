@@ -22,13 +22,14 @@ def calc_beam_abnormal_mask(
     iqr_tol: float = 1.5,
 ):
     """
-    Build a mask that combines the beam-stop region with statistical outlier
-    detection in log-intensity space using a local IQR test.
+    Build an automatic detector mask: beam-stop disk, all negative-intensity
+    pixels, and optionally statistical outliers in log-intensity (local IQR).
     """
     if window_size % 2 == 0:
         raise ValueError("window_size must be odd for symmetric neighborhood")
 
     data = np.asarray(data, dtype=float)
+    negative_mask = data < 0.0
 
     beam_mask = np.fromfunction(
         lambda i, j: np.linalg.norm(
@@ -38,25 +39,26 @@ def calc_beam_abnormal_mask(
         data.shape,
     )
 
-    if calc_abnormal_mask:
-        data = data - min(np.min(data), 0.0)
-        log_data = np.log1p(data)
+    mask = beam_mask | negative_mask
+    if not calc_abnormal_mask:
+        return mask
 
-        q1 = ndi.percentile_filter(
-            log_data, percentile=25, size=window_size, mode="reflect"
-        )
-        q3 = ndi.percentile_filter(
-            log_data, percentile=75, size=window_size, mode="reflect"
-        )
-        iqr = q3 - q1
+    data_shifted = data - min(np.min(data), 0.0)
+    log_data = np.log1p(data_shifted)
 
-        eps = 1e-12
-        lower = q1 - iqr_tol * iqr
-        upper = q3 + iqr_tol * iqr
-        abnormal_mask = (log_data < lower - eps) | (log_data > upper + eps)
-        return beam_mask | abnormal_mask
+    q1 = ndi.percentile_filter(
+        log_data, percentile=25, size=window_size, mode="reflect"
+    )
+    q3 = ndi.percentile_filter(
+        log_data, percentile=75, size=window_size, mode="reflect"
+    )
+    iqr = q3 - q1
 
-    return beam_mask
+    eps = 1e-12
+    lower = q1 - iqr_tol * iqr
+    upper = q3 + iqr_tol * iqr
+    abnormal_mask = (log_data < lower - eps) | (log_data > upper + eps)
+    return mask | abnormal_mask
 
 
 def get_r_beam_px(
@@ -166,52 +168,27 @@ def refine(
     poni1 = pixel_size[0] * center_y_px
     poni2 = pixel_size[1] * center_x_px
 
-    print("INFO: Starting mask calculation (before refinement)...")
-    mask = None
-    if mask_config is not None:
-        mode = mask_config["mode"]
-        print(f"INFO: Mask config mode: {mode}")
+    print("INFO: Starting effective mask calculation (before refinement)...")
+    # mask_config may carry provenance keys (mode / requested_mode); only pass
+    # parameters accepted by calc_beam_abnormal_mask.
+    _automask_keys = ("calc_abnormal_mask", "window_size", "iqr_tol")
+    automask_ops = {
+        k: v for k, v in (mask_config or {}).items() if k in _automask_keys
+    }
+    print("INFO: Calculating automatic mask (beam-stop + negative pixels + optional IQR)...")
+    automask = calc_beam_abnormal_mask(
+        calib_data, center_y_px, center_x_px, r_beam_px, **automask_ops
+    )
+    print("INFO: Automatic mask calculated")
 
-        automask = None
-        if mode in ["auto", "combined"]:
-            print("INFO: Calculating automatic mask...")
-            automask_ops = {k: v for k, v in mask_config.items() if k != "mode"}
-            automask = calc_beam_abnormal_mask(
-                calib_data, center_y_px, center_x_px, r_beam_px, **automask_ops
-            )
-            print("INFO: Automatic mask calculated")
+    if mask_path is not None:
+        print(f"INFO: Reading user mask from file (will OR with auto, not overwrite): {mask_path}")
+        file_mask = IntegratorExtended.read_mask(mask_path)
+        mask = file_mask | automask
+    else:
+        mask = automask
 
-        file_mask = None
-        if mode in ["from_file", "combined"]:
-            assert mask_path is not None
-            print(f"INFO: Reading mask from file: {mask_path}")
-            file_mask = IntegratorExtended.read_mask(mask_path)
-
-        center_only_mask = None
-        if mode == "from_file":
-            print("INFO: Adding center (beam-stop) mask for from_file mode (no IQR filtering)")
-            center_only_mask = calc_beam_abnormal_mask(
-                calib_data,
-                center_y_px,
-                center_x_px,
-                r_beam_px,
-                calc_abnormal_mask=False,
-            )
-
-        if mode == "auto":
-            mask = automask
-        elif mode == "from_file":
-            mask = file_mask | center_only_mask
-        elif mode == "combined":
-            assert file_mask is not None and automask is not None, (
-                "file_mask and automask must be not None"
-            )
-            mask = file_mask | automask
-
-        if mask is None:
-            raise RuntimeError(f"Cannot parse mask_config:\n{mask_config}")
-
-    print("INFO: Mask calculation complete")
+    print("INFO: Effective mask calculation complete")
 
     print("INFO: Creating GeometryRefinement object...")
     gr = GeometryRefinement(
@@ -256,6 +233,7 @@ def refine(
         ai_params={"wavelength": wavelength, **refined},
         detector_params={"detector_name": detector_name, "pixel_size": pixel_size},
         mask=mask,
+        auto_mask=automask,
     )
     print("INFO: IntegratorExtended object created")
 

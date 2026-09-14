@@ -15,14 +15,29 @@ class StabilityConfig:
 
 @dataclass(frozen=True)
 class FileStatSnapshot:
+    """On-disk identity for change detection.
+
+    ``dev``/``ino`` catch many replaces. ``ctime_ns`` catches delete+recreate even when
+    the filesystem reuses the inode and size/mtime are preserved (``copy2`` / F5 + ``utime``).
+    """
+
     size: int
     mtime_ns: int
+    dev: int = 0
+    ino: int = 0
+    ctime_ns: int = 0
 
 
 def _try_stat(path: str) -> Optional[FileStatSnapshot]:
     try:
         st = os.stat(path)
-        return FileStatSnapshot(size=int(st.st_size), mtime_ns=int(st.st_mtime_ns))
+        return FileStatSnapshot(
+            size=int(st.st_size),
+            mtime_ns=int(st.st_mtime_ns),
+            dev=int(getattr(st, "st_dev", 0) or 0),
+            ino=int(getattr(st, "st_ino", 0) or 0),
+            ctime_ns=int(getattr(st, "st_ctime_ns", 0) or 0),
+        )
     except Exception:
         return None
 
@@ -31,7 +46,7 @@ def wait_until_stable(path: str, *, cfg: StabilityConfig) -> bool:
     """
     Return True when file is considered stable, False on timeout.
 
-    Stability heuristic: size + mtime_ns unchanged for N consecutive polls.
+    Stability heuristic: full ``FileStatSnapshot`` unchanged for N consecutive polls.
     """
     deadline = time.monotonic() + max(0.0, float(cfg.timeout_s))
     unchanged = 0
@@ -46,7 +61,7 @@ def wait_until_stable(path: str, *, cfg: StabilityConfig) -> bool:
             unchanged = 0
             prev = None
             continue
-        if prev is not None and (cur.size == prev.size and cur.mtime_ns == prev.mtime_ns):
+        if prev is not None and cur == prev:
             unchanged += 1
             if unchanged >= int(cfg.required_unchanged_polls):
                 return True
@@ -81,7 +96,7 @@ class StabilityTracker:
             self._unchanged = 0
             self._prev = None
             return False
-        if self._prev is not None and (cur.size == self._prev.size and cur.mtime_ns == self._prev.mtime_ns):
+        if self._prev is not None and cur == self._prev:
             self._unchanged += 1
             if self._unchanged >= int(self._cfg.required_unchanged_polls):
                 return True

@@ -199,8 +199,20 @@ def rewrite_markdown_image_paths_relative_to(body: str, base_dir: str) -> str:
     return _MD_IMAGE.sub(repl, body)
 
 
-def _render_saxs_dat_curve_png(dat_path: str, out_png: str, *, log_y: bool = True) -> bool:
-    """Render one 1D SAXS ``.dat`` curve to a PNG (for individual report assembly)."""
+def _sibling_dat_path(path: str) -> Optional[str]:
+    """Same-stem ``.dat`` next to a plot PNG (preferred report source)."""
+    stem, _ext = os.path.splitext(path)
+    cand = stem + ".dat"
+    return cand if os.path.isfile(cand) else None
+
+
+def _render_xy_dat_for_report(dat_path: str, out_png: str) -> bool:
+    """
+    Re-plot tabular ``.dat`` (YAML+CSV) to a fresh PNG at report-assembly time.
+
+    Handles SAXS ``q``/``intensity``, multi-curve tables, and annotated types
+    (``guinier_fit``, ``kratky_dimensionless``). Prefer this over embedding skill PNGs.
+    """
     if not dat_path or not os.path.isfile(dat_path):
         return False
     try:
@@ -208,15 +220,114 @@ def _render_saxs_dat_curve_png(dat_path: str, out_png: str, *, log_y: bool = Tru
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        import numpy as np
 
-        q, I, _, _ = read_saxs(dat_path)
+        df, _cols, metadata = read_data(dat_path)
+        meta = metadata if isinstance(metadata, dict) else {}
+        typ = str(meta.get("type") or "").strip().lower()
+        cols = [str(c) for c in df.columns]
+        if len(cols) < 2:
+            return False
+
         fig, ax = plt.subplots(figsize=(8.0, 5.0))
-        ax.plot(q, I)
-        ax.set_xlabel("q (nm^-1)")
-        ax.set_ylabel("I (a.u.)")
-        ax.set_title(os.path.basename(dat_path))
-        if log_y:
-            ax.set_yscale("log")
+        title = str(meta.get("title") or os.path.basename(dat_path))
+
+        # Classic SAXS I(q) (integrate / subtract profiles).
+        if "q" in df.columns and "intensity" in df.columns:
+            q = np.asarray(df["q"], dtype=float)
+            I = np.asarray(df["intensity"], dtype=float)
+            ax.plot(q, I)
+            ax.set_xlabel(str(meta.get("xlabel") or "q (nm^-1)"))
+            ax.set_ylabel(str(meta.get("ylabel") or "I (a.u.)"))
+            ax.set_title(title)
+            if bool(meta.get("log_y", True)):
+                ax.set_yscale("log")
+        elif typ == "guinier_fit":
+            x = np.asarray(df[cols[0]], dtype=float)
+            y = np.asarray(df[cols[1]], dtype=float)
+            try:
+                q2_max = float(meta.get("q2_max", 4.0))
+            except (TypeError, ValueError):
+                q2_max = 4.0
+            if not np.isfinite(q2_max) or q2_max <= 0:
+                q2_max = 4.0
+            m = np.isfinite(x) & np.isfinite(y) & (x <= q2_max)
+            ax.scatter(x[m], y[m], s=20, label="data", color="#1f77b4")
+            rg = meta.get("rg_nm")
+            i0 = meta.get("i0")
+            q_min = meta.get("q_min")
+            q_max = meta.get("q_max")
+            if rg is not None and i0 is not None:
+                try:
+                    rg_f, i0_f = float(rg), float(i0)
+                    if rg_f > 0 and i0_f > 0 and q_min is not None and q_max is not None:
+                        q_lo, q_hi = float(q_min), float(q_max)
+                        q_hi = min(q_hi, float(np.sqrt(q2_max)))
+                        if q_hi > q_lo:
+                            q_line = np.linspace(q_lo, q_hi, 200)
+                            q2_line = q_line ** 2
+                            y_line = np.log(i0_f) - (rg_f ** 2 / 3.0) * q2_line
+                            ax.plot(
+                                q2_line,
+                                y_line,
+                                "r-",
+                                lw=2,
+                                label=f"Guinier fit (Rg={rg_f:.3g} nm)",
+                            )
+                except (TypeError, ValueError):
+                    pass
+            ax.set_xlabel(str(meta.get("xlabel") or cols[0]))
+            ax.set_ylabel(str(meta.get("ylabel") or cols[1]))
+            ax.set_title(title)
+            ax.set_xlim(0.0, q2_max)
+            ax.legend(loc="best")
+        elif typ == "kratky_dimensionless":
+            from autosaxs.core.kratky import SPHERE_X_MAX_REF, SPHERE_Y_MAX_REF
+
+            x = np.asarray(df[cols[0]], dtype=float)
+            y = np.asarray(df[cols[1]], dtype=float)
+            m = np.isfinite(x) & np.isfinite(y)
+            ax.plot(x[m], y[m], "o", ms=4, label="data", color="#1f77b4")
+            if np.any(m):
+                xref = np.linspace(max(0.1, float(np.nanmin(x[m]))), float(np.nanmax(x[m])), 200)
+                y_ref = (xref ** 2) * np.exp(-(xref ** 2) / 3.0)
+                ax.plot(xref, y_ref, "--", color="#888888", lw=1.5, label="globule ref (Guinier)")
+            ax.plot(
+                [SPHERE_X_MAX_REF],
+                [SPHERE_Y_MAX_REF],
+                "k*",
+                ms=10,
+                label=f"sphere ref ({SPHERE_X_MAX_REF:.3f}, {SPHERE_Y_MAX_REF:.3f})",
+            )
+            x_peak, y_peak = meta.get("x_max"), meta.get("y_max")
+            try:
+                if x_peak is not None and y_peak is not None:
+                    xp, yp = float(x_peak), float(y_peak)
+                    if np.isfinite(xp) and np.isfinite(yp):
+                        ax.plot([xp], [yp], "r*", ms=12, label=f"peak ({xp:.3f}, {yp:.3f})")
+            except (TypeError, ValueError):
+                pass
+            ax.set_xlabel(str(meta.get("xlabel") or cols[0]))
+            ax.set_ylabel(str(meta.get("ylabel") or cols[1]))
+            cls = meta.get("classification")
+            ax.set_title(f"{title} [{cls}]" if cls else title)
+            ax.legend(loc="best", fontsize=8)
+        else:
+            x = np.asarray(df[cols[0]], dtype=float)
+            for c in cols[1:]:
+                yy = np.asarray(df[c], dtype=float)
+                ax.plot(x, yy, label=str(c))
+            ax.set_xlabel(str(meta.get("xlabel") or cols[0]))
+            ax.set_ylabel(str(meta.get("ylabel") or (cols[1] if len(cols) == 2 else "value")))
+            ax.set_title(title)
+            if len(cols) > 2 or meta.get("legend", True):
+                ax.legend(loc="best")
+            if bool(meta.get("log_y", False)):
+                ax.set_yscale("log")
+            if bool(meta.get("log_x", False)):
+                ax.set_xscale("log")
+
+        ax.grid(True, alpha=0.3)
         fig.tight_layout()
         os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)
         fig.savefig(out_png, dpi=150, bbox_inches="tight")
@@ -232,8 +343,18 @@ def _render_saxs_dat_curve_png(dat_path: str, out_png: str, *, log_y: bool = Tru
         return False
 
 
+def _render_saxs_dat_curve_png(dat_path: str, out_png: str, *, log_y: bool = True) -> bool:
+    """Backward-compatible alias: re-plot ``.dat`` for individual report assembly."""
+    _ = log_y
+    return _render_xy_dat_for_report(dat_path, out_png)
+
+
 def embed_individual_report_images(body: str, frag_dir: str, md_dir: str, dedup: Dict[str, str]) -> str:
-    """Copy each referenced image next to the assembled ``.md`` and use basename-only ``![](_rptimg_….png)`` links (no ``..`` / directory paths in the Markdown)."""
+    """Materialize each ``![…](…)`` next to the assembled ``.md`` as basename-only ``_rptimg_….png``.
+
+    ``.dat`` links (and PNG links that have a same-stem sibling ``.dat``) are **re-plotted** at
+    assembly time. Bare raster images are copied (PDF embedding preserves aspect separately).
+    """
 
     md_dir = os.path.abspath(md_dir)
 
@@ -249,13 +370,22 @@ def embed_individual_report_images(body: str, frag_dir: str, md_dir: str, dedup:
             return m.group(0)
         if abs_path not in dedup:
             ext = os.path.splitext(abs_path)[1].lower()
+            source_dat: Optional[str] = None
             if ext == ".dat":
+                source_dat = abs_path
+            elif ext in (".png", ".jpg", ".jpeg"):
+                source_dat = _sibling_dat_path(abs_path)
+            if source_dat is not None:
                 out_name = f"_rptimg_{uuid.uuid4().hex[:14]}.png"
                 out_full = os.path.join(md_dir, out_name)
-                if not _render_saxs_dat_curve_png(abs_path, out_full, log_y=True):
-                    return m.group(0)
-                dedup[abs_path] = out_name
-            else:
+                if not _render_xy_dat_for_report(source_dat, out_full):
+                    if ext == ".dat":
+                        return m.group(0)
+                    # Fall through to copy the raster if re-plot failed.
+                    source_dat = None
+                else:
+                    dedup[abs_path] = out_name
+            if source_dat is None and abs_path not in dedup:
                 if ext not in (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"):
                     ext = ".png"
                 dedup[abs_path] = f"_rptimg_{uuid.uuid4().hex[:14]}{ext}"
@@ -282,8 +412,9 @@ def discover_individual_fragment_paths(pipeline_root: str, basename: str) -> Lis
 def assemble_individual_markdown(fragment_paths: List[str], *, assembly_md_dir: Optional[str] = None) -> str:
     """Sort by front matter ``order`` then ``skill_id``, concatenate fragment bodies only (no internal paths or sort metadata).
 
-    When ``assembly_md_dir`` is set, each ``![…](…)`` image is copied into that directory and referenced by **basename
-    only** (``_rptimg_….png``), so the Markdown avoids directory paths such as ``../plots/…``.
+    When ``assembly_md_dir`` is set, each ``![…](…)`` is materialized there as basename-only
+    ``_rptimg_….png``. Linked ``.dat`` files (and PNGs with a same-stem sibling ``.dat``) are
+    **re-plotted** at assembly time; remaining rasters are copied.
     """
     if not fragment_paths:
         return (

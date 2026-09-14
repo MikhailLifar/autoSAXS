@@ -7,7 +7,14 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from ...core.models import RunRequest
-from ..session.output_paths import dammif_dir, denss_dir, model_bodies_dir, fit_distances_dir, guinier_mono_dir
+from ..session.output_paths import (
+    dammif_dir,
+    denss_dir,
+    model_bodies_dir,
+    analyze_kratky_dir,
+    fit_distances_dir,
+    guinier_mono_dir,
+)
 from ..session.state import (
     DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES,
     LiveviewSessionState,
@@ -115,6 +122,7 @@ def fit_distances_opts(
     load_yaml: YamlOptionsLoader,
     guinier_handoff: Optional[dict] = None,
     use_guinier_placeholders: bool = False,
+    refine: bool = False,
 ) -> dict:
     outdir = fit_distances_dir(output_root)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -126,6 +134,10 @@ def fit_distances_opts(
         for key in ("rg_nm", "first", "last", "smooth"):
             if wp.get(key) is not None:
                 opts[key] = wp[key]
+        if refine:
+            for key in ("dmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax"):
+                if wp.get(key) is not None:
+                    opts[key] = wp[key]
     if isinstance(guinier_handoff, dict):
         if guinier_handoff.get("rg") is not None and opts.get("rg_nm") is None:
             opts["rg_nm"] = guinier_handoff["rg"]
@@ -139,10 +151,34 @@ def fit_distances_opts(
             opts.pop(key, None)
         opts["rg_nm"] = "${fit_guinier.rg}"
         opts["first"] = "${fit_guinier.first_point_1based}"
+    if not refine:
+        # Auto / Guinier-chain path must always use DATGNOM search, never pinned Dmax.
+        for key in ("dmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax"):
+            opts.pop(key, None)
     opts.pop("output_dir", None)
     opts.pop("use_cache", None)
     opts["output_dir"] = str(outdir.resolve())
     opts["use_cache"] = False
+    return opts
+
+
+def analyze_kratky_opts(
+    *,
+    output_root: Path,
+    profile_abs: str,
+    use_guinier_placeholders: bool = True,
+) -> dict:
+    """Options for silent analyze_kratky between Guinier and fit_distances."""
+    stem = profile_sample_stem(profile_abs)
+    out_sub = analyze_kratky_dir(output_root) / stem
+    out_sub.mkdir(parents=True, exist_ok=True)
+    opts: dict = {
+        "output_dir": str(out_sub.resolve()),
+        "use_cache": False,
+    }
+    if use_guinier_placeholders:
+        opts["rg_nm"] = "${fit_guinier.rg}"
+        opts["i0"] = "${fit_guinier.i0}"
     return opts
 
 
@@ -287,6 +323,21 @@ def build_monodisperse_steps(
                 request=RunRequest("fit_guinier", [prof], g_opts),
             )
         )
+        # Silent: no liveview UI, but included for reports / process_monodisperse parity.
+        steps.append(
+            JobStep(
+                name="analyze_kratky",
+                request=RunRequest(
+                    "analyze_kratky",
+                    [prof],
+                    analyze_kratky_opts(
+                        output_root=root,
+                        profile_abs=prof,
+                        use_guinier_placeholders=use_placeholders,
+                    ),
+                ),
+            )
+        )
         steps.append(JobStep(name="fit_distances", request=RunRequest("fit_distances", [prof], d_opts)))
 
     if parts == MonodispersePipelineParts.DISTANCES_ONLY:
@@ -296,6 +347,7 @@ def build_monodisperse_steps(
             load_yaml=load_yaml,
             guinier_handoff=guinier_handoff,
             use_guinier_placeholders=False,
+            refine=True,
         )
         steps.append(JobStep(name="fit_distances", request=RunRequest("fit_distances", [prof], d_opts)))
 

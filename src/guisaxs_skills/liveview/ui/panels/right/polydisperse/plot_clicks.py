@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QWidget
 
@@ -96,6 +96,11 @@ class PolydispersePlotClickRouter:
         self._dr_dlg: Optional[_PolyDrViewerDialog] = None
         self._mix_iq_dlg: Optional[_PolyMixtureIqViewerDialog] = None
         self._mix_dist_dlg: Optional[_PolyMixtureDistViewerDialog] = None
+        self._sizes_open: Optional[Callable[[], None]] = None
+
+    def set_sizes_open_handler(self, handler: Optional[Callable[[], None]]) -> None:
+        """When set, clicks on sizes I(q) / D(R) GNOM plots open the adjust wizard."""
+        self._sizes_open = handler
 
     def wire(self, plot) -> None:
         plot.mpl_connect("button_press_event", lambda ev, p=plot: self._on_click(ev, p))
@@ -131,6 +136,10 @@ class PolydispersePlotClickRouter:
 
     def open_path(self, path: str, *, viewer: Optional[str] = None) -> None:
         suf = Path(path).suffix.lower()
+        if viewer in ("gnom_iq", "gnom_dr") or (viewer is None and suf == ".out"):
+            if self._sizes_open is not None:
+                self._sizes_open()
+                return
         if viewer == "gnom_iq" or (viewer is None and suf == ".out"):
             if self._iq_dlg is None:
                 self._iq_dlg = _PolyIqViewerDialog(self._parent)

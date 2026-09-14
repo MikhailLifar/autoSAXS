@@ -49,7 +49,15 @@ def revision_changed(prev: Optional[FileStatSnapshot], cur: FileStatSnapshot) ->
 
 
 def is_newer_than(candidate: FileStatSnapshot, than: FileStatSnapshot) -> bool:
-    """True when ``candidate`` is a strictly newer on-disk version than ``than``."""
+    """True when ``candidate`` is a strictly newer on-disk version than ``than``.
+
+    Different file identity (``dev``/``ino``) or newer metadata ``ctime`` means the
+    candidate is the current on-disk object, even when size/mtime were preserved.
+    """
+    if (candidate.dev, candidate.ino) != (than.dev, than.ino):
+        return True
+    if candidate.ctime_ns != than.ctime_ns:
+        return candidate.ctime_ns > than.ctime_ns
     if candidate.mtime_ns != than.mtime_ns:
         return candidate.mtime_ns > than.mtime_ns
     return candidate.size > than.size

@@ -19,6 +19,10 @@ from ..logic.app_relaunch import launch_guisaxs_liveview
 from ..logic.path_display import contracted_path_label
 from ..ui.about_dialog import AboutDialog
 from ..ui.html_help_dialog import HtmlHelpDialog
+from ..logic.package_update import (
+    AUTOSAXS_NIGHTBUILT_UPDATE_SPEC,
+    AUTOSAXS_STABLE_UPDATE_SPEC,
+)
 from ..ui.update_dialog import request_app_update
 from .controller import LiveviewController
 from .session.state import LiveviewWatchMode
@@ -56,8 +60,8 @@ class LiveviewMainWindow(QMainWindow):
         layout = QVBoxLayout(container)
         layout.setContentsMargins(6, 6, 6, 6)
         wd_short, wd_full = contracted_path_label(watchdir)
-        self._watchdir_label = QLabel(wd_short)
-        self._watchdir_label.setToolTip(f"Working dir\n{wd_full}")
+        self._watchdir_label = QLabel(f"project dir: {wd_short}")
+        self._watchdir_label.setToolTip(f"project dir\n{wd_full}")
         layout.addWidget(self._watchdir_label)
         layout.addWidget(self._splitter, 1)
         self.setCentralWidget(container)
@@ -101,6 +105,10 @@ class LiveviewMainWindow(QMainWindow):
         self._enforce_column_width_ratio()
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        try:
+            self._left.shutdown_ui()
+        except Exception:
+            pass
         self._controller.shutdown()
         super().closeEvent(event)
 
@@ -132,9 +140,14 @@ class LiveviewMainWindow(QMainWindow):
         file_menu.addAction(act_exit)
 
         update_menu = mb.addMenu("Update")
-        act_update = QAction("Update to latest version…", self)
-        act_update.triggered.connect(self._on_update_requested)
-        update_menu.addAction(act_update)
+        act_update_stable = QAction("Update to the latest stable version", self)
+        act_update_stable.setToolTip("Same as: autosaxs update  (or autosaxs -U)")
+        act_update_stable.triggered.connect(self._on_update_stable_requested)
+        update_menu.addAction(act_update_stable)
+        act_update_night = QAction("Update to the latest nightbuilt version", self)
+        act_update_night.setToolTip("Same as: autosaxs update --nightbuilt  (or autosaxs -Unb)")
+        act_update_night.triggered.connect(self._on_update_nightbuilt_requested)
+        update_menu.addAction(act_update_night)
 
         help_menu = mb.addMenu("Help")
         act_help = QAction("guisaxs-liveview Help…", self)
@@ -174,7 +187,13 @@ class LiveviewMainWindow(QMainWindow):
     def _on_about_requested(self) -> None:
         AboutDialog(parent=self).exec_()
 
-    def _on_update_requested(self) -> None:
+    def _on_update_stable_requested(self) -> None:
+        self._request_update(package_spec=AUTOSAXS_STABLE_UPDATE_SPEC)
+
+    def _on_update_nightbuilt_requested(self) -> None:
+        self._request_update(package_spec=AUTOSAXS_NIGHTBUILT_UPDATE_SPEC)
+
+    def _request_update(self, *, package_spec: str) -> None:
         if self._controller.runner.is_running():
             QMessageBox.warning(
                 self,
@@ -182,7 +201,7 @@ class LiveviewMainWindow(QMainWindow):
                 "A skill is still running. Wait for it to finish, then try again.",
             )
             return
-        request_app_update(parent=self)
+        request_app_update(parent=self, package_spec=package_spec)
 
     def _set_watch_mode(self, new_mode: LiveviewWatchMode) -> None:
         if new_mode == LiveviewWatchMode.TREE:
@@ -254,6 +273,7 @@ class LiveviewMainWindow(QMainWindow):
         self._middle.image_presence_changed.connect(
             lambda *_args: self._left.refresh_attention_coach()
         )
+        self._controller.tiff_revision_pending.connect(self._left.on_tiff_revision_pending)
         self._right.analysis_arming_changed.connect(self._controller.on_analysis_arming_changed)
         self._right.analysis_arming_changed.connect(self._left.refresh_attention_coach)
         self._controller.processing_mode.mode_changed.connect(

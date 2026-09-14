@@ -108,6 +108,8 @@ def write_report_and_artifacts(
 
     fit_png = plot_paths.get("fit_png_path") or ""
     dr_png = plot_paths.get("dr_png_path") or ""
+    fit_dat = plot_paths.get("fit_dat_path") or ""
+    dr_dat = plot_paths.get("dr_dat_path") or ""
 
     md_parts: List[str] = [
         "### McSAS3 form-free D(R)\n",
@@ -119,10 +121,12 @@ def write_report_and_artifacts(
     peaks = result.get("peaks_nm") or []
     if peaks:
         md_parts.append("Peaks (nm): " + ", ".join(f"{p:.3g}" for p in peaks) + "\n")
-    if fit_png:
-        md_parts.append(f"![McSAS fit]({os.path.basename(fit_png)})\n")
-    if dr_png:
-        md_parts.append(f"![McSAS D(R)]({os.path.basename(dr_png)})\n")
+    fit_ref = fit_dat if fit_dat and os.path.isfile(fit_dat) else fit_png
+    dr_ref = dr_dat if dr_dat and os.path.isfile(dr_dat) else dr_png
+    if fit_ref:
+        md_parts.append(f"![McSAS fit]({os.path.basename(fit_ref)})\n")
+    if dr_ref:
+        md_parts.append(f"![McSAS D(R)]({os.path.basename(dr_ref)})\n")
 
     summary_refs = [
         {"role": "mcsas_dr_csv", "path": os.path.basename(dr_csv), "format": "csv"},
