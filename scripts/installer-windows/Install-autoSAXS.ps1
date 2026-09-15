@@ -4,8 +4,8 @@
   Lightweight WinForms installer for autoSAXS (no global Python required).
 
 .DESCRIPTION
-  Pages: (1) find conda  (2) options - Desktop shortcut  (3) install progress  (4) finish.
-  Installs via: conda create -n autosaxs + pip install "autosaxs[gui]" from PyPI.
+  Pages: (1) prerequisites  (2) options  (3) install progress  (4) finish.
+  Installs via: conda create -n autosaxs + pip install stable (PyPI) or nightbuilt (GitHub).
 #>
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -21,6 +21,8 @@ if (-not (Test-Path -LiteralPath $AssetsDir)) {
 $IconIco = Join-Path $AssetsDir "autosaxs_icon.ico"
 $DefaultEnvName = "autosaxs"
 $MinicondaUrl = "https://docs.anaconda.com/miniconda/miniconda-install/"
+$AtsasUrl = "https://www.embl-hamburg.de/biosaxs/download.html"
+$GitUrl = "https://git-scm.com/download/win"
 . (Join-Path $ScriptDir "Install-autoSAXS-lib.ps1")
 Initialize-InstallLib -AssetsDir $AssetsDir
 
@@ -203,20 +205,27 @@ function Show-InstallPollTick {
 
 # --- UI ---
 $UiFont = New-Object System.Drawing.Font("Segoe UI", 9)
-$UiFontBold = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-$UiFontTitle = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+$UiFontBold = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+$UiFontTitle = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
 $UiFontMono = New-Object System.Drawing.Font("Consolas", 9)
-$UiMargin = 24
-$UiContentWidth = 592
+$UiMargin = 20
+$UiContentWidth = 680
+$UiFormWidth = 720
+$UiFormHeight = 600
+$UiPanelHeight = 430
+$UiFooterTop = 536
+$UiBtnW = 112
+$UiBtnH = 32
+$UiBtnGap = 10
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Install autoSAXS"
-$form.ClientSize = New-Object System.Drawing.Size(640, 520)
+$form.ClientSize = New-Object System.Drawing.Size($UiFormWidth, $UiFormHeight)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
 $form.MinimizeBox = $false
-$form.BackColor = [System.Drawing.Color]::FromArgb(245, 245, 245)
+$form.BackColor = [System.Drawing.Color]::FromArgb(248, 249, 250)
 $form.Font = $UiFont
 if (Test-Path -LiteralPath $IconIco) {
     try { $form.Icon = New-Object System.Drawing.Icon($IconIco) } catch { }
@@ -225,6 +234,7 @@ if (Test-Path -LiteralPath $IconIco) {
 $script:CondaPath = Find-CondaExe
 $script:EnvName = $DefaultEnvName
 $script:CreateShortcut = $true
+$script:InstallSource = "stable"
 $script:InstallOk = $false
 $script:LiveviewExe = $null
 $script:Page = 1
@@ -243,53 +253,53 @@ $script:InstallCompletionHandled = $false
 
 $lblTitle = New-Object System.Windows.Forms.Label
 $lblTitle.Font = $UiFontTitle
-$lblTitle.Location = New-Object System.Drawing.Point($UiMargin, 16)
-$lblTitle.Size = New-Object System.Drawing.Size($UiContentWidth, 28)
-$lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(32, 32, 32)
+$lblTitle.Location = New-Object System.Drawing.Point($UiMargin, 14)
+$lblTitle.Size = New-Object System.Drawing.Size($UiContentWidth, 26)
+$lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(28, 28, 28)
 $form.Controls.Add($lblTitle)
 
 $lblSubtitle = New-Object System.Windows.Forms.Label
 $lblSubtitle.Font = $UiFont
-$lblSubtitle.Location = New-Object System.Drawing.Point($UiMargin, 44)
-$lblSubtitle.Size = New-Object System.Drawing.Size($UiContentWidth, 36)
-$lblSubtitle.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
+$lblSubtitle.Location = New-Object System.Drawing.Point($UiMargin, 40)
+$lblSubtitle.Size = New-Object System.Drawing.Size($UiContentWidth, 28)
+$lblSubtitle.ForeColor = [System.Drawing.Color]::FromArgb(90, 90, 90)
 $form.Controls.Add($lblSubtitle)
 
 $panel = New-Object System.Windows.Forms.Panel
-$panel.Location = New-Object System.Drawing.Point($UiMargin, 84)
-$panel.Size = New-Object System.Drawing.Size($UiContentWidth, 360)
+$panel.Location = New-Object System.Drawing.Point($UiMargin, 72)
+$panel.Size = New-Object System.Drawing.Size($UiContentWidth, $UiPanelHeight)
 $panel.BackColor = [System.Drawing.Color]::White
 $panel.BorderStyle = "FixedSingle"
 $panel.AutoScroll = $true
 $form.Controls.Add($panel)
 
 $footer = New-Object System.Windows.Forms.Panel
-$footer.Location = New-Object System.Drawing.Point(0, 456)
-$footer.Size = New-Object System.Drawing.Size(640, 56)
-$footer.BackColor = [System.Drawing.Color]::FromArgb(245, 245, 245)
+$footer.Location = New-Object System.Drawing.Point(0, $UiFooterTop)
+$footer.Size = New-Object System.Drawing.Size($UiFormWidth, 64)
+$footer.BackColor = [System.Drawing.Color]::FromArgb(248, 249, 250)
 $form.Controls.Add($footer)
-
-$btnBack = New-Object System.Windows.Forms.Button
-$btnBack.Text = "< Back"
-$btnBack.Size = New-Object System.Drawing.Size(96, 32)
-$btnBack.Location = New-Object System.Drawing.Point(328, 12)
-$btnBack.FlatStyle = "System"
-$footer.Controls.Add($btnBack)
-
-$btnNext = New-Object System.Windows.Forms.Button
-$btnNext.Text = "Next >"
-$btnNext.Size = New-Object System.Drawing.Size(96, 32)
-$btnNext.Location = New-Object System.Drawing.Point(432, 12)
-$btnNext.FlatStyle = "System"
-$footer.Controls.Add($btnNext)
 
 $btnCancel = New-Object System.Windows.Forms.Button
 $btnCancel.Text = "Cancel"
-$btnCancel.Size = New-Object System.Drawing.Size(96, 32)
-$btnCancel.Location = New-Object System.Drawing.Point(528, 12)
+$btnCancel.Size = New-Object System.Drawing.Size($UiBtnW, $UiBtnH)
+$btnCancel.Location = New-Object System.Drawing.Point(($UiFormWidth - $UiMargin - $UiBtnW), 16)
 $btnCancel.FlatStyle = "System"
 $btnCancel.Add_Click({ $form.Close() })
 $footer.Controls.Add($btnCancel)
+
+$btnNext = New-Object System.Windows.Forms.Button
+$btnNext.Text = "Next"
+$btnNext.Size = New-Object System.Drawing.Size($UiBtnW, $UiBtnH)
+$btnNext.Location = New-Object System.Drawing.Point(($btnCancel.Left - $UiBtnGap - $UiBtnW), 16)
+$btnNext.FlatStyle = "System"
+$footer.Controls.Add($btnNext)
+
+$btnBack = New-Object System.Windows.Forms.Button
+$btnBack.Text = "Back"
+$btnBack.Size = New-Object System.Drawing.Size($UiBtnW, $UiBtnH)
+$btnBack.Location = New-Object System.Drawing.Point(($btnNext.Left - $UiBtnGap - $UiBtnW), 16)
+$btnBack.FlatStyle = "System"
+$footer.Controls.Add($btnBack)
 
 function Clear-Panel {
     $panel.Controls.Clear()
@@ -337,6 +347,51 @@ function New-UiLabel {
     return $lbl
 }
 
+function Update-Page1PrereqLabels {
+    $condaOk = [bool]$script:CondaPath
+    $gitOk = Test-GitPresent
+    $atsasOk = Test-AtsasPresent
+
+    $lblConda = $script:UiRefs.PrereqConda
+    $lblGit = $script:UiRefs.PrereqGit
+    $lblAtsas = $script:UiRefs.PrereqAtsas
+    $colorOk = [System.Drawing.Color]::FromArgb(0, 110, 50)
+    $colorWarn = [System.Drawing.Color]::FromArgb(160, 90, 0)
+    $colorBad = [System.Drawing.Color]::FromArgb(160, 40, 40)
+
+    if ($lblConda) {
+        if ($condaOk) {
+            $lblConda.Text = "Miniconda / Anaconda: found`r`n$($script:CondaPath)"
+            $lblConda.ForeColor = $colorOk
+        }
+        else {
+            $lblConda.Text = "Miniconda / Anaconda: not found (required)`r`nInstall Miniconda, then click Retry search."
+            $lblConda.ForeColor = $colorBad
+        }
+    }
+    if ($lblGit) {
+        if ($gitOk) {
+            $lblGit.Text = "Git: found (needed for nightbuilt installs)"
+            $lblGit.ForeColor = $colorOk
+        }
+        else {
+            $lblGit.Text = "Git: not found (optional for stable; required for nightbuilt unless installed into the env)"
+            $lblGit.ForeColor = $colorWarn
+        }
+    }
+    if ($lblAtsas) {
+        if ($atsasOk) {
+            $lblAtsas.Text = "ATSAS: found (dammif on PATH)"
+            $lblAtsas.ForeColor = $colorOk
+        }
+        else {
+            $lblAtsas.Text = "ATSAS: not found (optional; needed later for DAMMIF / p(r) / similar tools)"
+            $lblAtsas.ForeColor = $colorWarn
+        }
+    }
+    $btnNext.Enabled = $condaOk
+}
+
 function Set-Page1CondaReady {
     param(
         [Parameter(Mandatory = $true)][string]$CondaExe
@@ -351,16 +406,11 @@ function Set-Page1CondaReady {
         return $false
     }
     $script:CondaPath = $CondaExe
-    $status = $script:UiRefs.StatusLabel
     $pathBox = $script:UiRefs.CondaPathBox
-    if ($status) {
-        $status.Text = "Ready to continue.`r`n`r`nconda:`r`n$CondaExe"
-        $status.ForeColor = [System.Drawing.Color]::FromArgb(0, 100, 0)
-    }
     if ($pathBox) {
         $pathBox.Text = (Split-Path (Split-Path $CondaExe -Parent) -Parent)
     }
-    $btnNext.Enabled = $true
+    Update-Page1PrereqLabels
     return $true
 }
 
@@ -368,46 +418,48 @@ function Show-Page1 {
     Clear-Panel
     $script:Page = 1
     $lblTitle.Text = "Install autoSAXS"
-    $lblSubtitle.Text = "Step 1 of 4 - Find Miniconda or Anaconda"
+    $lblSubtitle.Text = "Step 1 of 4 - Prerequisites (Miniconda required; Git and ATSAS optional)"
     $btnBack.Enabled = $false
-    $btnNext.Text = "Next >"
+    $btnNext.Text = "Next"
     $btnCancel.Enabled = $true
     $btnCancel.Visible = $true
+    $btnCancel.Text = "Cancel"
 
     $autoConda = Find-CondaExe
     if ($autoConda) {
         $script:CondaPath = $autoConda
     }
 
-    $pad = 16
+    $pad = 14
     $innerW = $UiContentWidth - (2 * $pad) - 4
+    $y = $pad
 
-    $gbStatus = New-UiGroupBox -Text "Status" -X $pad -Y $pad -Width $innerW -Height 108
-    $panel.Controls.Add($gbStatus)
+    $gbChecks = New-UiGroupBox -Text "Detected tools" -X $pad -Y $y -Width $innerW -Height 148
+    $panel.Controls.Add($gbChecks)
 
-    $statusText = if ($script:CondaPath) {
-        "Miniconda / Anaconda was found.`r`n`r`nconda:`r`n$($script:CondaPath)"
-    }
-    else {
-        "Miniconda was not found automatically.`r`nInstall it from the link below, then click Retry search."
-    }
-    $lblStatus = New-UiLabel -Text $statusText -X 12 -Y 24 -Width ($innerW - 24) -Height 72
-    if ($script:CondaPath) {
-        $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(0, 100, 0)
-    }
-    $gbStatus.Controls.Add($lblStatus)
-    $script:UiRefs.StatusLabel = $lblStatus
-    $btnNext.Enabled = [bool]$script:CondaPath
+    $lblConda = New-UiLabel -Text "" -X 12 -Y 22 -Width ($innerW - 24) -Height 40
+    $gbChecks.Controls.Add($lblConda)
+    $script:UiRefs.PrereqConda = $lblConda
 
-    $gbFolder = New-UiGroupBox -Text "Conda directory path" -X $pad -Y ($pad + 120) -Width $innerW -Height 112
+    $lblGit = New-UiLabel -Text "" -X 12 -Y 66 -Width ($innerW - 24) -Height 34
+    $gbChecks.Controls.Add($lblGit)
+    $script:UiRefs.PrereqGit = $lblGit
+
+    $lblAtsas = New-UiLabel -Text "" -X 12 -Y 104 -Width ($innerW - 24) -Height 34
+    $gbChecks.Controls.Add($lblAtsas)
+    $script:UiRefs.PrereqAtsas = $lblAtsas
+
+    $y = $y + 160
+    $gbFolder = New-UiGroupBox -Text "Conda directory" -X $pad -Y $y -Width $innerW -Height 108
     $panel.Controls.Add($gbFolder)
 
-    $lblFolder = New-UiLabel -Text "Top-level Miniconda / Anaconda folder:" -X 12 -Y 24 -Width ($innerW - 24) -Height 18
+    $lblFolder = New-UiLabel -Text "Top-level Miniconda / Anaconda folder:" -X 12 -Y 22 -Width ($innerW - 24) -Height 18
     $gbFolder.Controls.Add($lblFolder)
 
+    $browseW = 100
     $txtRoot = New-Object System.Windows.Forms.TextBox
-    $txtRoot.Location = New-Object System.Drawing.Point(12, 46)
-    $txtRoot.Size = New-Object System.Drawing.Size(($innerW - 124), 24)
+    $txtRoot.Location = New-Object System.Drawing.Point(12, 44)
+    $txtRoot.Size = New-Object System.Drawing.Size(($innerW - 24 - $browseW - 8), 24)
     if ($script:CondaPath) {
         $txtRoot.Text = (Split-Path (Split-Path $script:CondaPath -Parent) -Parent)
     }
@@ -416,8 +468,9 @@ function Show-Page1 {
 
     $btnBrowse = New-Object System.Windows.Forms.Button
     $btnBrowse.Text = "Browse..."
-    $btnBrowse.Location = New-Object System.Drawing.Point(($innerW - 104), 44)
-    $btnBrowse.Size = New-Object System.Drawing.Size(92, 28)
+    $btnBrowse.Location = New-Object System.Drawing.Point(($innerW - 12 - $browseW), 42)
+    $btnBrowse.Size = New-Object System.Drawing.Size($browseW, 28)
+    $btnBrowse.FlatStyle = "System"
     $btnBrowse.Add_Click({
             $pathBox = $script:UiRefs.CondaPathBox
             if (-not $pathBox) { return }
@@ -434,8 +487,9 @@ function Show-Page1 {
 
     $btnUseFolder = New-Object System.Windows.Forms.Button
     $btnUseFolder.Text = "Use this folder"
-    $btnUseFolder.Location = New-Object System.Drawing.Point(12, 76)
-    $btnUseFolder.Size = New-Object System.Drawing.Size(120, 28)
+    $btnUseFolder.Location = New-Object System.Drawing.Point(12, 74)
+    $btnUseFolder.Size = New-Object System.Drawing.Size(130, 28)
+    $btnUseFolder.FlatStyle = "System"
     $btnUseFolder.Add_Click({
             $pathBox = $script:UiRefs.CondaPathBox
             if (-not $pathBox) { return }
@@ -453,22 +507,57 @@ function Show-Page1 {
         })
     $gbFolder.Controls.Add($btnUseFolder)
 
-    $gbHelp = New-UiGroupBox -Text "Need Miniconda?" -X $pad -Y ($pad + 244) -Width $innerW -Height 72
-    $panel.Controls.Add($gbHelp)
+    $y = $y + 120
+    $gbLinks = New-UiGroupBox -Text "Downloads and re-check" -X $pad -Y $y -Width $innerW -Height 100
+    $panel.Controls.Add($gbLinks)
 
-    $btnDocs = New-Object System.Windows.Forms.Button
-    $btnDocs.Text = "Open download page"
-    $btnDocs.Location = New-Object System.Drawing.Point(12, 28)
-    $btnDocs.Size = New-Object System.Drawing.Size(150, 28)
-    $btnDocs.Add_Click({ Start-Process $MinicondaUrl })
-    $gbHelp.Controls.Add($btnDocs)
+    $linkBtnW = 150
+    $linkBtnH = 30
+    $linkY = 28
+    $linkX = 12
+
+    $btnMiniconda = New-Object System.Windows.Forms.Button
+    $btnMiniconda.Text = "Miniconda page"
+    $btnMiniconda.Location = New-Object System.Drawing.Point($linkX, $linkY)
+    $btnMiniconda.Size = New-Object System.Drawing.Size($linkBtnW, $linkBtnH)
+    $btnMiniconda.FlatStyle = "System"
+    $btnMiniconda.Add_Click({ Start-Process $MinicondaUrl })
+    $gbLinks.Controls.Add($btnMiniconda)
+    $linkX = $linkX + $linkBtnW + 8
+
+    $btnGit = New-Object System.Windows.Forms.Button
+    $btnGit.Text = "Git for Windows"
+    $btnGit.Location = New-Object System.Drawing.Point($linkX, $linkY)
+    $btnGit.Size = New-Object System.Drawing.Size($linkBtnW, $linkBtnH)
+    $btnGit.FlatStyle = "System"
+    $btnGit.Add_Click({ Start-Process $GitUrl })
+    $gbLinks.Controls.Add($btnGit)
+    $linkX = $linkX + $linkBtnW + 8
+
+    $btnAtsas = New-Object System.Windows.Forms.Button
+    $btnAtsas.Text = "ATSAS download"
+    $btnAtsas.Location = New-Object System.Drawing.Point($linkX, $linkY)
+    $btnAtsas.Size = New-Object System.Drawing.Size($linkBtnW, $linkBtnH)
+    $btnAtsas.FlatStyle = "System"
+    $btnAtsas.Add_Click({ Start-Process $AtsasUrl })
+    $gbLinks.Controls.Add($btnAtsas)
 
     $btnRetry = New-Object System.Windows.Forms.Button
     $btnRetry.Text = "Retry search"
-    $btnRetry.Location = New-Object System.Drawing.Point(172, 28)
-    $btnRetry.Size = New-Object System.Drawing.Size(110, 28)
-    $btnRetry.Add_Click({ Show-Page1 })
-    $gbHelp.Controls.Add($btnRetry)
+    $btnRetry.Location = New-Object System.Drawing.Point(12, 64)
+    $btnRetry.Size = New-Object System.Drawing.Size(130, $linkBtnH)
+    $btnRetry.FlatStyle = "System"
+    $btnRetry.Add_Click({
+            $script:CondaPath = Find-CondaExe
+            Show-Page1
+        })
+    $gbLinks.Controls.Add($btnRetry)
+
+    $lblHint = New-UiLabel -Text "Only Miniconda is required to continue. Git helps nightbuilt installs; ATSAS is optional." -X 150 -Y 68 -Width ($innerW - 170) -Height 24
+    $lblHint.ForeColor = [System.Drawing.Color]::Gray
+    $gbLinks.Controls.Add($lblHint)
+
+    Update-Page1PrereqLabels
 }
 
 function Show-Page2 {
@@ -480,33 +569,57 @@ function Show-Page2 {
     $btnNext.Text = "Install"
     $btnNext.Enabled = $true
     $btnCancel.Enabled = $true
+    $btnCancel.Text = "Cancel"
 
-    $pad = 16
+    $pad = 14
     $innerW = $UiContentWidth - (2 * $pad) - 4
 
-    $gbOptions = New-UiGroupBox -Text "Install options" -X $pad -Y $pad -Width $innerW -Height 168
+    $gbOptions = New-UiGroupBox -Text "Install options" -X $pad -Y $pad -Width $innerW -Height 280
     $panel.Controls.Add($gbOptions)
 
-    $lblIntro = New-UiLabel -Text "autoSAXS will be installed into a dedicated conda environment. You can change the name below." -X 12 -Y 24 -Width ($innerW - 24) -Height 36
+    $lblIntro = New-UiLabel -Text "Install into a dedicated conda environment. Change the name if you want." -X 12 -Y 24 -Width ($innerW - 24) -Height 28
     $gbOptions.Controls.Add($lblIntro)
 
-    $lblEnv = New-UiLabel -Text "Environment name:" -X 12 -Y 68 -Width 140 -Height 20
+    $lblEnv = New-UiLabel -Text "Environment name" -X 12 -Y 62 -Width 140 -Height 20 -Bold
     $gbOptions.Controls.Add($lblEnv)
 
     $txtEnv = New-Object System.Windows.Forms.TextBox
-    $txtEnv.Location = New-Object System.Drawing.Point(152, 66)
-    $txtEnv.Size = New-Object System.Drawing.Size(220, 24)
+    $txtEnv.Location = New-Object System.Drawing.Point(12, 86)
+    $txtEnv.Size = New-Object System.Drawing.Size(280, 24)
     $txtEnv.Text = $script:EnvName
     $gbOptions.Controls.Add($txtEnv)
     $script:UiRefs.EnvNameBox = $txtEnv
 
-    $lblEnvHint = New-UiLabel -Text "Default: autosaxs" -X 152 -Y 94 -Width 260 -Height 18
+    $lblEnvHint = New-UiLabel -Text "Default: autosaxs" -X 300 -Y 88 -Width 200 -Height 20
     $lblEnvHint.ForeColor = [System.Drawing.Color]::Gray
     $gbOptions.Controls.Add($lblEnvHint)
 
+    $lblSource = New-UiLabel -Text "Version to install" -X 12 -Y 126 -Width ($innerW - 24) -Height 20 -Bold
+    $gbOptions.Controls.Add($lblSource)
+
+    $rbStable = New-Object System.Windows.Forms.RadioButton
+    $rbStable.Text = "Latest stable (PyPI) - recommended"
+    $rbStable.Location = New-Object System.Drawing.Point(12, 152)
+    $rbStable.Size = New-Object System.Drawing.Size(($innerW - 24), 24)
+    $rbStable.Checked = ($script:InstallSource -ne "nightbuilt")
+    $gbOptions.Controls.Add($rbStable)
+    $script:UiRefs.SourceStable = $rbStable
+
+    $rbNight = New-Object System.Windows.Forms.RadioButton
+    $rbNight.Text = "Latest nightbuilt (GitHub)"
+    $rbNight.Location = New-Object System.Drawing.Point(12, 180)
+    $rbNight.Size = New-Object System.Drawing.Size(($innerW - 24), 24)
+    $rbNight.Checked = ($script:InstallSource -eq "nightbuilt")
+    $gbOptions.Controls.Add($rbNight)
+    $script:UiRefs.SourceNightbuilt = $rbNight
+
+    $lblSourceHint = New-UiLabel -Text "Nightbuilt pulls the newest code from GitHub (may be less stable; needs git)." -X 28 -Y 208 -Width ($innerW - 40) -Height 20
+    $lblSourceHint.ForeColor = [System.Drawing.Color]::Gray
+    $gbOptions.Controls.Add($lblSourceHint)
+
     $chk = New-Object System.Windows.Forms.CheckBox
     $chk.Text = "Create Desktop shortcut for GUISAXS-LiveView"
-    $chk.Location = New-Object System.Drawing.Point(12, 124)
+    $chk.Location = New-Object System.Drawing.Point(12, 238)
     $chk.Size = New-Object System.Drawing.Size(($innerW - 24), 24)
     $chk.Checked = $script:CreateShortcut
     $gbOptions.Controls.Add($chk)
@@ -521,7 +634,8 @@ function Show-Page3-And-Install {
     $btnBack.Enabled = $false
     $btnNext.Enabled = $false
     $btnCancel.Enabled = $false
-    $btnNext.Text = "Next >"
+    $btnNext.Text = "Next"
+    $btnCancel.Text = "Cancel"
 
     $pad = 12
     $innerW = $UiContentWidth - (2 * $pad) - 4
@@ -542,7 +656,7 @@ function Show-Page3-And-Install {
     $script:InstallLogBox.ScrollBars = "Vertical"
     $script:InstallLogBox.ReadOnly = $true
     $script:InstallLogBox.Location = New-Object System.Drawing.Point($pad, ($pad + 52))
-    $script:InstallLogBox.Size = New-Object System.Drawing.Size($innerW, 268)
+    $script:InstallLogBox.Size = New-Object System.Drawing.Size($innerW, 350)
     $script:InstallLogBox.Font = $UiFontMono
     $script:InstallLogBox.BackColor = [System.Drawing.Color]::FromArgb(252, 252, 252)
     $script:InstallLogBox.BorderStyle = "FixedSingle"
@@ -568,6 +682,7 @@ function Show-Page3-And-Install {
         "-CondaPath", $script:CondaPath,
         "-EnvName", $script:EnvName,
         "-CreateShortcut", $shortcutArg,
+        "-InstallSource", $script:InstallSource,
         "-LogFile", $script:InstallLogFile,
         "-ResultFile", $script:InstallResultFile,
         "-AssetsDir", $AssetsDir
@@ -651,12 +766,19 @@ function Show-Page4 {
 function Read-Page2Options {
     $envBox = $script:UiRefs.EnvNameBox
     $chk = $script:UiRefs.ShortcutCheck
+    $rbNight = $script:UiRefs.SourceNightbuilt
     if ($envBox) {
         $script:EnvName = [string]$envBox.Text
         if ($script:EnvName) { $script:EnvName = $script:EnvName.Trim() }
     }
     if ($chk) {
         $script:CreateShortcut = $chk.Checked
+    }
+    if ($rbNight -and $rbNight.Checked) {
+        $script:InstallSource = "nightbuilt"
+    }
+    else {
+        $script:InstallSource = "stable"
     }
 }
 
@@ -687,6 +809,15 @@ $btnNext.Add_Click({
                     "Warning"
                 ) | Out-Null
                 return
+            }
+            if ($script:InstallSource -eq "nightbuilt" -and -not (Test-GitPresent)) {
+                $answer = [System.Windows.Forms.MessageBox]::Show(
+                    "Git was not found on PATH.`r`n`r`nNightbuilt installs need git. The installer can try to install git into the conda environment automatically.`r`n`r`nContinue anyway?`r`n(Or install Git for Windows and click Retry search on step 1.)",
+                    "Install autoSAXS",
+                    "YesNo",
+                    "Warning"
+                )
+                if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { return }
             }
             Show-Page3-And-Install
         }

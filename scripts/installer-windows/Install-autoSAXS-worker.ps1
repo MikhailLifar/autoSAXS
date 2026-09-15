@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory = $true)][string]$CondaPath,
     [Parameter(Mandatory = $true)][string]$EnvName,
     [Parameter(Mandatory = $true)][string]$CreateShortcut,
+    [Parameter(Mandatory = $true)][string]$InstallSource,
     [Parameter(Mandatory = $true)][string]$LogFile,
     [Parameter(Mandatory = $true)][string]$ResultFile,
     [Parameter(Mandatory = $true)][string]$AssetsDir
@@ -32,6 +33,7 @@ try {
         CondaPath      = $CondaPath
         EnvName        = $EnvName
         CreateShortcut = ($CreateShortcut -eq 'true')
+        InstallSource  = $InstallSource
     }
     $result = Invoke-InstallWorkflow -State $state
     $payload = @{

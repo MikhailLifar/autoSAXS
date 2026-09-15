@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -42,7 +43,12 @@ def select_workdir(parent: Optional[QWidget], *, initial_directory: Optional[str
     if not os.path.isdir(path):
         QMessageBox.critical(parent, "Invalid directory", f"Not a directory:\n{path}")
         return None
-    if not os.access(path, os.W_OK):
+    # Real write probe — os.access(..., W_OK) is unreliable for dirs on Windows.
+    try:
+        fd, probe = tempfile.mkstemp(prefix=".autosaxs_write_", dir=path)
+        os.close(fd)
+        os.remove(probe)
+    except OSError:
         QMessageBox.critical(parent, "Not writable", f"Directory is not writable:\n{path}")
         return None
 

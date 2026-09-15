@@ -128,6 +128,7 @@ class LiveviewLeftPanel(QWidget):
         self._buf_hint.setWordWrap(True)
         self._buf_preview = PreviewPanel()
         self._buf_preview.setMinimumHeight(140)
+        self._buf_preview.set_image_click_handler(self._open_buffer_wizard)
         buf_lay = QVBoxLayout(self._buf_group)
         buf_btns = QHBoxLayout()
         buf_btns.addWidget(self._buf_open, 1)
@@ -535,6 +536,7 @@ class LiveviewLeftPanel(QWidget):
         else:
             self._buf_preview.show_path("")
             self._buf_hint.setVisible(True)
+        self._buf_preview.set_image_click_handler(self._open_buffer_wizard)
 
     def sync_buffer_preview_from_state(self) -> None:
         """Refresh buffer thumbnail from ``LiveviewSessionState`` (e.g. after watch-folder change)."""

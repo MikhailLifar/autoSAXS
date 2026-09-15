@@ -541,6 +541,7 @@ class BufferWizardDialog(QDialog):
         self._dat_viewer = None
         self._apply_coach_dismissed = False
         self._close_coach_armed = False
+        self._autofill_buffer_key = None
         self._btn_close = QPushButton("Close")
         self._btn_close.clicked.connect(self.close)
 
@@ -694,8 +695,8 @@ class BufferWizardDialog(QDialog):
         self.attention_context_changed.emit()
 
     def _on_buffer_path_changed(self, *_args) -> None:
-        # New buffer → suggest a fresh pre-knee window (user may still edit).
-        self._autofill_q_range_from_buffer(force=True)
+        # New / edited buffer path → always recompute the pre-knee window.
+        self._sync_q_range_to_buffer(force=True)
         self._refresh_buffer_plot()
 
     def _on_q_text_changed(self, _text: str = "") -> None:
@@ -714,7 +715,13 @@ class BufferWizardDialog(QDialog):
 
     def _buffer_path_text(self) -> str:
         f = self._buffer_field()
-        return f.text().strip() if f is not None else ""
+        if f is None:
+            return ""
+        # Prefer exact dropped/browsed path list over display text.
+        paths = [p.strip() for p in f.paths() if isinstance(p, str) and p.strip()]
+        if len(paths) == 1:
+            return paths[0]
+        return f.text().strip()
 
     def _resolved_buffer_path(self) -> Path | None:
         path = self._buffer_path_text()
@@ -723,7 +730,10 @@ class BufferWizardDialog(QDialog):
         resolved = Path(path).expanduser()
         if not resolved.is_absolute():
             resolved = (self._watchdir / resolved).resolve()
-        return resolved if resolved.is_file() else None
+        try:
+            return resolved if resolved.is_file() else None
+        except OSError:
+            return None
 
     def _q_range(self) -> tuple[object, object]:
         def _read(name: str):
@@ -740,24 +750,62 @@ class BufferWizardDialog(QDialog):
 
         return _read("q_min"), _read("q_max")
 
-    def _autofill_q_range_from_buffer(self, *, force: bool = False) -> None:
-        if not force and self.has_q_range():
-            return
-        resolved = self._resolved_buffer_path()
-        if resolved is None:
-            return
-        try:
-            from autosaxs.core.subtract_scale import pre_knee_q_window_from_dat
-
-            q0, q1, _knee = pre_knee_q_window_from_dat(str(resolved))
-        except Exception:
-            return
-        for name, value in (("q_min", float(q0)), ("q_max", float(q1))):
+    def _set_q_range_fields(self, q_min: float, q_max: float) -> None:
+        for name, value in (("q_min", float(q_min)), ("q_max", float(q_max))):
             w = self._form._opt_fields.get(name)  # type: ignore[attr-defined]
             if isinstance(w, QLineEdit):
                 w.blockSignals(True)
                 w.setText(f"{value:.6g}")
                 w.blockSignals(False)
+
+    def _sync_q_range_to_buffer(self, *, force: bool = False) -> None:
+        """Keep q_min/q_max aligned with the current buffer curve.
+
+        ``PathField.set_text`` does not emit ``path_changed``, so session/hint
+        fills must also go through this sync. Recalculate whenever the resolved
+        buffer identity changes, or when ``force`` is set (user edit/browse).
+        """
+        resolved = self._resolved_buffer_path()
+        key = str(resolved) if resolved is not None else ""
+        prev = getattr(self, "_autofill_buffer_key", None)
+
+        if not key:
+            self._autofill_buffer_key = ""
+            return
+
+        if not force:
+            if prev == key and self.has_q_range():
+                return
+            # First sync after session/saved seed: trust existing q for this buffer.
+            if prev is None and self.has_q_range():
+                self._autofill_buffer_key = key
+                return
+
+        try:
+            from autosaxs.core.subtract_scale import pre_knee_q_window_from_dat
+
+            q0, q1, _knee = pre_knee_q_window_from_dat(key)
+        except Exception:
+            return
+        self._set_q_range_fields(float(q0), float(q1))
+        self._autofill_buffer_key = key
+
+    def _autofill_q_range_from_buffer(self, *, force: bool = False) -> None:
+        # Back-compat alias used by init/rebuild call sites.
+        self._sync_q_range_to_buffer(force=force)
+
+    def _hints_with_form_buffer(self, hints: SessionPathHints) -> SessionPathHints:
+        """Prefer the form's buffer path so silent set_text coalesce won't clobber it."""
+        resolved = self._resolved_buffer_path()
+        if resolved is None:
+            return hints
+        try:
+            from dataclasses import replace
+
+            return replace(hints, buffer_dat_path=str(resolved))
+        except Exception:
+            hints.buffer_dat_path = str(resolved)
+            return hints
 
     def _refresh_buffer_plot(self) -> None:
         path = self._buffer_path_text()
@@ -771,6 +819,11 @@ class BufferWizardDialog(QDialog):
         if not resolved.is_file():
             self._plot.clear()
             return
+        # If the buffer identity changed without a path_changed signal, catch up.
+        key = str(resolved)
+        if key != getattr(self, "_autofill_buffer_key", None):
+            self._sync_q_range_to_buffer(force=True)
+            q_min, q_max = self._q_range()
         try:
             self._plot.plot_dat(str(resolved), q_min=q_min, q_max=q_max)
         except Exception:
@@ -814,6 +867,7 @@ class BufferWizardDialog(QDialog):
     def reset_form_to_empty(self, hints: SessionPathHints) -> None:
         if self._meta is None:
             return
+        self._autofill_buffer_key = None
         out = self._watchdir / "subtracted"
         out.mkdir(parents=True, exist_ok=True)
         self._form.set_skill(
@@ -827,7 +881,7 @@ class BufferWizardDialog(QDialog):
         _disable_subtract_sample_field(self._form, self._meta)
         self._wire_form_plot_updates()
         self._attach_options_help_button()
-        self._autofill_q_range_from_buffer(force=False)
+        self._sync_q_range_to_buffer(force=False)
         self._refresh_buffer_plot()
         self._apply_coach_dismissed = False
         self._close_coach_armed = False
@@ -838,6 +892,10 @@ class BufferWizardDialog(QDialog):
             return
         # Prefer an explicit seed (e.g. session restore); otherwise keep in-progress form edits.
         saved = saved_state if saved_state is not None else self._form.state()
+        # Align hint with the path we are about to restore so silent set_text coalesce
+        # cannot swap the buffer while leaving the previous q window.
+        if saved_state is None:
+            hints = self._hints_with_form_buffer(hints)
         out = self._watchdir / "subtracted"
         out.mkdir(parents=True, exist_ok=True)
         self._form.set_skill(
@@ -851,7 +909,8 @@ class BufferWizardDialog(QDialog):
         _disable_subtract_sample_field(self._form, self._meta)
         self._wire_form_plot_updates()
         self._attach_options_help_button()
-        self._autofill_q_range_from_buffer(force=False)
+        # Buffer may have been filled via silent set_text (hints); sync q to that identity.
+        self._sync_q_range_to_buffer(force=False)
         self._refresh_buffer_plot()
         self.attention_context_changed.emit()
 

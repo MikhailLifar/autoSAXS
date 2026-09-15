@@ -43,10 +43,12 @@ Unzip it anywhere convenient (for example your Desktop).
 
 Follow the windows:
 
-1. **Prerequisites** — the installer looks for Miniconda. If it is missing, open the Miniconda download page, install it, then click **Retry**.
-2. **Options** — leave **Create Desktop shortcut** checked (recommended).
+1. **Prerequisites** — the installer checks for Miniconda (required), Git (for nightbuilt), and ATSAS (optional), with download links. Only Miniconda is required to continue.
+2. **Options** — choose **Latest stable (PyPI)** (recommended) or **Latest nightbuilt (GitHub)**; leave **Create Desktop shortcut** checked (recommended).
 3. **Installing** — wait while packages download (needs internet; may take several minutes).
 4. **Finish** — you can open GUISAXS-LiveView from the installer, or close it.
+
+**Launch tip:** run GUISAXS-LiveView from a writable data folder (Desktop is fine). Anaconda Prompt often starts in a folder that is a poor default for LiveView.
 
 ### 4. Start autoSAXS every day
 
@@ -99,7 +101,8 @@ Recommended version for autoSAXS: **3.2.1**. After installing, you can check wit
 
 **Install is slow or fails**
 
-- Check your internet connection (packages come from conda-forge / PyPI).
+- Check your internet connection (packages come from conda / PyPI; nightbuilt also needs GitHub).
+- Stable installs need access to `pypi.org`; nightbuilt installs need `github.com`.
 - Run the installer again; an existing `autosaxs` environment will be upgraded in place.
 
 ---

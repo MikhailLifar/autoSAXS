@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install-autoSAXS.sh — beginner installer (Linux). No global Python required for the UI.
-# Uses zenity or kdialog. Installs via conda create + pip install "autosaxs[gui]".
+# Uses zenity or kdialog. Installs via conda create + pip install stable (PyPI) or nightbuilt (GitHub).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,8 +8,15 @@ ASSETS_DIR="${SCRIPT_DIR}/assets"
 ICON_PNG="${ASSETS_DIR}/autosaxs_icon.png"
 ENV_NAME="autosaxs"
 DEFAULT_ENV_NAME="autosaxs"
-PIP_SPEC="autosaxs[gui]"
+# Keep in sync with autosaxs.cli.package_update
+PIP_SPEC_STABLE="autosaxs[gui]"
+PIP_SPEC_NIGHTBUILT="autosaxs[gui] @ git+https://github.com/MikhailLifar/autoSAXS.git"
+PIP_SPEC="${PIP_SPEC_STABLE}"
+INSTALL_SOURCE="stable"
+INSTALL_SOURCE_LABEL="stable (PyPI)"
 MINICONDA_URL="https://docs.anaconda.com/miniconda/miniconda-install/"
+ATSAS_URL="https://www.embl-hamburg.de/biosaxs/download.html"
+GIT_URL="https://git-scm.com/download/linux"
 
 DIALOG=""
 if command -v zenity >/dev/null 2>&1; then
@@ -97,21 +104,50 @@ validate_conda() {
 }
 
 confirm_conda_choice() {
-  if [[ "$DIALOG" == zenity ]]; then
-    choice="$(zenity --list --title="Install autoSAXS" --width=520 --height=280 \
-      --text="Miniconda / Anaconda ready:
-
+  local git_status="not found"
+  local atsas_status="not found"
+  if command -v git >/dev/null 2>&1; then
+    git_status="found"
+  fi
+  if command -v dammif >/dev/null 2>&1; then
+    atsas_status="found (dammif on PATH)"
+  fi
+  local summary="Miniconda / Anaconda: ready
 ${CONDA}
+
+Git: ${git_status}
+  (needed for nightbuilt installs; installer can also install git into the env)
+
+ATSAS: ${atsas_status}
+  (optional; needed later for DAMMIF / p(r) / similar tools)
+
+Only Miniconda is required to continue."
+
+  if [[ "$DIALOG" == zenity ]]; then
+    choice="$(zenity --list --title="Install autoSAXS" --width=560 --height=360 \
+      --text="${summary}
 
 How do you want to continue?" \
       --column="Action" \
       "Continue to install options" \
-      "Choose a different install folder…" \
+      "Open Git download page" \
+      "Open ATSAS download page" \
+      "Choose a different conda folder…" \
       "Exit" \
       || true)"
     case "$choice" in
       "Continue to install options") return 0 ;;
-      "Choose a different install folder…")
+      "Open Git download page")
+        (xdg-open "$GIT_URL" >/dev/null 2>&1 || true)
+        confirm_conda_choice
+        return $?
+        ;;
+      "Open ATSAS download page")
+        (xdg-open "$ATSAS_URL" >/dev/null 2>&1 || true)
+        confirm_conda_choice
+        return $?
+        ;;
+      "Choose a different conda folder…")
         CONDA=""
         if prompt_manual_conda_dir; then
           confirm_conda_choice
@@ -123,15 +159,25 @@ How do you want to continue?" \
     esac
   else
     choice="$(kdialog --title "Install autoSAXS" --menu \
-      "Miniconda / Anaconda ready:
-
-${CONDA}" \
+      "${summary}" \
       continue "Continue to install options" \
-      manual "Choose a different install folder…" \
+      git "Open Git download page" \
+      atsas "Open ATSAS download page" \
+      manual "Choose a different conda folder…" \
       exit "Exit" \
       continue 2>/dev/null || true)"
     case "$choice" in
       continue) return 0 ;;
+      git)
+        xdg-open "$GIT_URL" >/dev/null 2>&1 || true
+        confirm_conda_choice
+        return $?
+        ;;
+      atsas)
+        xdg-open "$ATSAS_URL" >/dev/null 2>&1 || true
+        confirm_conda_choice
+        return $?
+        ;;
       manual)
         CONDA=""
         if prompt_manual_conda_dir; then
@@ -166,11 +212,30 @@ Choose the top-level folder that contains bin/conda (for example ${HOME}/minicon
 }
 
 handle_conda_missing_page() {
+  local git_status="not found"
+  local atsas_status="not found"
+  if command -v git >/dev/null 2>&1; then
+    git_status="found"
+  fi
+  if command -v dammif >/dev/null 2>&1; then
+    atsas_status="found"
+  fi
+  local summary="autoSAXS needs Miniconda (a free Python toolbox).
+It was not found automatically.
+
+Also checked:
+  Git: ${git_status}
+  ATSAS: ${atsas_status}
+
+Install Miniconda, enter your conda directory path, or click Retry."
+
   if [[ "$DIALOG" == zenity ]]; then
-    choice="$(zenity --list --title="Install autoSAXS" --width=520 --height=300 \
-      --text="autoSAXS needs Miniconda (a free Python toolbox).\nIt was not found automatically.\n\nInstall Miniconda, enter your conda directory path, or click Retry." \
+    choice="$(zenity --list --title="Install autoSAXS" --width=560 --height=360 \
+      --text="${summary}" \
       --column="Action" \
       "Open Miniconda download page" \
+      "Open Git download page" \
+      "Open ATSAS download page" \
       "Enter conda directory path…" \
       "Retry search" \
       "Exit" \
@@ -178,6 +243,12 @@ handle_conda_missing_page() {
     case "$choice" in
       "Open Miniconda download page")
         (xdg-open "$MINICONDA_URL" >/dev/null 2>&1 || true)
+        ;;
+      "Open Git download page")
+        (xdg-open "$GIT_URL" >/dev/null 2>&1 || true)
+        ;;
+      "Open ATSAS download page")
+        (xdg-open "$ATSAS_URL" >/dev/null 2>&1 || true)
         ;;
       "Enter conda directory path…")
         if prompt_manual_conda_dir; then
@@ -189,9 +260,11 @@ handle_conda_missing_page() {
     esac
   else
     choice="$(kdialog --title "Install autoSAXS" --menu \
-      "autoSAXS needs Miniconda (not found automatically)." \
+      "${summary}" \
       manual "Enter conda directory path…" \
       download "Open Miniconda download page" \
+      git "Open Git download page" \
+      atsas "Open ATSAS download page" \
       retry "Retry search" \
       exit "Exit" \
       manual 2>/dev/null || true)"
@@ -203,6 +276,12 @@ handle_conda_missing_page() {
         ;;
       download)
         xdg-open "$MINICONDA_URL" >/dev/null 2>&1 || true
+        ;;
+      git)
+        xdg-open "$GIT_URL" >/dev/null 2>&1 || true
+        ;;
+      atsas)
+        xdg-open "$ATSAS_URL" >/dev/null 2>&1 || true
         ;;
       retry) ;;
       *) exit 1 ;;
@@ -233,6 +312,60 @@ prompt_env_name() {
     fi
     error "Invalid environment name. Use letters, numbers, dots, hyphens, and underscores (for example: autosaxs)."
   done
+}
+
+prompt_install_source() {
+  local choice=""
+  if [[ "$DIALOG" == zenity ]]; then
+    choice="$(zenity --list --radiolist --title="Install autoSAXS" --width=520 --height=260 \
+      --text="Which autoSAXS version should be installed?" \
+      --column="Select" --column="Option" --column="Description" \
+      TRUE "stable" "Latest stable (PyPI) - recommended" \
+      FALSE "nightbuilt" "Latest nightbuilt (GitHub)" \
+      2>/dev/null || true)"
+  else
+    choice="$(kdialog --title "Install autoSAXS" --radiolist \
+      "Which autoSAXS version should be installed?" \
+      stable "Latest stable (PyPI) - recommended" on \
+      nightbuilt "Latest nightbuilt (GitHub)" off \
+      2>/dev/null || true)"
+  fi
+  [[ -z "$choice" ]] && exit 0
+  case "$choice" in
+    nightbuilt)
+      INSTALL_SOURCE="nightbuilt"
+      PIP_SPEC="${PIP_SPEC_NIGHTBUILT}"
+      INSTALL_SOURCE_LABEL="nightbuilt (GitHub)"
+      ;;
+    *)
+      INSTALL_SOURCE="stable"
+      PIP_SPEC="${PIP_SPEC_STABLE}"
+      INSTALL_SOURCE_LABEL="stable (PyPI)"
+      ;;
+  esac
+}
+
+ensure_git_for_nightbuilt() {
+  if [[ "$INSTALL_SOURCE" != "nightbuilt" ]]; then
+    return 0
+  fi
+  if command -v git >/dev/null 2>&1; then
+    return 0
+  fi
+  local prefix
+  prefix="$("${CONDA}" run -n "${ENV_NAME}" python -c 'import sys; print(sys.prefix)')"
+  if [[ -x "${prefix}/bin/git" ]]; then
+    return 0
+  fi
+  echo "Nightbuilt install needs git; installing git into '${ENV_NAME}'..."
+  if ! CONDA_ALWAYS_YES=true "${CONDA}" install -n "${ENV_NAME}" git -y; then
+    echo "ERROR: could not install git into conda environment '${ENV_NAME}' (required for nightbuilt)." >&2
+    return 1
+  fi
+  if [[ ! -x "${prefix}/bin/git" ]] && ! command -v git >/dev/null 2>&1; then
+    echo "ERROR: git is still missing after conda install git." >&2
+    return 1
+  fi
 }
 
 create_shortcut() {
@@ -284,8 +417,9 @@ while true; do
   fi
 done
 
-# --- Page 2: options (environment name + Desktop shortcut) ---
+# --- Page 2: options (environment name + version + Desktop shortcut) ---
 prompt_env_name
+prompt_install_source
 
 CREATE_SHORTCUT=1
 if question_yesno "Create a Desktop shortcut for GUISAXS-LiveView?\n\n(Recommended: Yes)"; then
@@ -294,7 +428,7 @@ else
   CREATE_SHORTCUT=0
 fi
 
-if ! question_yesno "Install autoSAXS into conda environment '${ENV_NAME}' now?\n\nThis downloads packages from the internet and may take several minutes."; then
+if ! question_yesno "Install autoSAXS (${INSTALL_SOURCE_LABEL}) into conda environment '${ENV_NAME}' now?\n\nThis downloads packages from the internet and may take several minutes."; then
   exit 0
 fi
 
@@ -305,6 +439,7 @@ STATUS=0
 
 run_install() {
   echo "Using conda: ${CONDA}"
+  echo "Install source: ${INSTALL_SOURCE_LABEL}"
   if ! "${CONDA}" env list | awk '{print $1}' | grep -qx "${ENV_NAME}"; then
     echo "Creating environment ${ENV_NAME} (python 3.12)..."
     set +e
@@ -323,6 +458,7 @@ run_install() {
   else
     echo "Environment ${ENV_NAME} already exists - upgrading package..."
   fi
+  ensure_git_for_nightbuilt
   echo "Installing ${PIP_SPEC}..."
   "${CONDA}" run -n "${ENV_NAME}" python -m pip install -U "${PIP_SPEC}"
   local prefix
@@ -340,31 +476,65 @@ run_install() {
   echo "Done."
 }
 
-if [[ "$DIALOG" == zenity ]]; then
-  # Run install in background; show pulsating progress until finished.
+show_install_log_live() {
+  # Run install in background; stream "$LOG" to a visible dialog.
+  : >"$LOG"
   (
     set +e
-    run_install >"$LOG" 2>&1
+    run_install >>"$LOG" 2>&1
     echo $? >"${LOG}.rc"
   ) &
-  BGPID=$!
-  (
-    while kill -0 "$BGPID" 2>/dev/null; do
-      echo "# Installing autoSAXS (please wait)…"
-      sleep 1
-    done
-  ) | zenity --progress --title="Install autoSAXS" --width=480 --pulsate --auto-close --no-cancel \
-    --text="Installing… (this may take several minutes)" || true
-  wait "$BGPID" || true
+  local bgpid=$!
+
+  if [[ "$DIALOG" == zenity ]]; then
+    (
+      while [[ ! -s "$LOG" ]] && kill -0 "$bgpid" 2>/dev/null; do
+        sleep 0.2
+      done
+      # --pid makes tail exit when the installer process ends.
+      if tail --help 2>&1 | grep -q -- '--pid'; then
+        tail -n +1 -f "$LOG" --pid="$bgpid" 2>/dev/null || true
+      else
+        while kill -0 "$bgpid" 2>/dev/null; do
+          sleep 0.5
+        done
+        cat "$LOG" 2>/dev/null || true
+      fi
+      echo ""
+      echo "---- finished — click Continue ----"
+    ) | zenity --text-info --title="Install autoSAXS - log" --width=760 --height=480 \
+      --auto-scroll --ok-label="Continue" 2>/dev/null || true
+    wait "$bgpid" || true
+  else
+    local dbus_ref=""
+    dbus_ref="$(kdialog --title "Install autoSAXS" --progressbar "Installing autoSAXS..." 0 2>/dev/null || true)"
+    if [[ -n "$dbus_ref" ]]; then
+      qdbus $dbus_ref showCancelButton false >/dev/null 2>&1 || true
+      while kill -0 "$bgpid" 2>/dev/null; do
+        local line=""
+        line="$(tail -n 1 "$LOG" 2>/dev/null || true)"
+        if [[ -n "$line" ]]; then
+          line="${line:0:100}"
+          qdbus $dbus_ref setLabelText "$line" >/dev/null 2>&1 || true
+        fi
+        sleep 0.8
+      done
+      wait "$bgpid" || true
+      qdbus $dbus_ref close >/dev/null 2>&1 || true
+    else
+      kdialog --title "Install autoSAXS" --passivepopup "Installing autoSAXS... please wait." 5 || true
+      wait "$bgpid" || true
+    fi
+    if [[ -s "$LOG" ]]; then
+      kdialog --title "Install autoSAXS - log" --textbox "$LOG" 760 480 2>/dev/null || true
+    fi
+  fi
+
   STATUS="$(cat "${LOG}.rc" 2>/dev/null || echo 1)"
   rm -f "${LOG}.rc"
-else
-  kdialog --title "Install autoSAXS" --passivepopup "Installing autoSAXS… please wait." 3 || true
-  set +e
-  run_install >"$LOG" 2>&1
-  STATUS=$?
-  set -e
-fi
+}
+
+show_install_log_live
 
 LIVEVIEW="$(grep '^LiveView: ' "$LOG" | tail -n1 | sed 's/^LiveView: //' || true)"
 

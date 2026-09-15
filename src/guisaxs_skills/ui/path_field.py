@@ -293,8 +293,13 @@ class PathField(QWidget):
                 path = selected[0] if selected else ""
         if path:
             self._dropped_paths = []
-            self._edit.setText(path)
+            self._edit.blockSignals(True)
+            try:
+                self._edit.setText(path)
+            finally:
+                self._edit.blockSignals(False)
             self._maybe_warn_ext_mismatch(force=True)
+            self.path_changed.emit()
 
     def _on_text_edited(self, _text: str) -> None:
         # If the user starts typing, treat it as manual entry and drop any stored multi-drop list.
@@ -371,8 +376,13 @@ class PathField(QWidget):
     def _sync_display_from_dropped(self) -> None:
         if not self._dropped_paths:
             return
-        if len(self._dropped_paths) == 1:
-            self._edit.setText(self._dropped_paths[0])
-            return
-        first = Path(self._dropped_paths[0]).name
-        self._edit.setText(f"{first} + {len(self._dropped_paths) - 1} more")
+        self._edit.blockSignals(True)
+        try:
+            if len(self._dropped_paths) == 1:
+                self._edit.setText(self._dropped_paths[0])
+            else:
+                first = Path(self._dropped_paths[0]).name
+                self._edit.setText(f"{first} + {len(self._dropped_paths) - 1} more")
+        finally:
+            self._edit.blockSignals(False)
+        self.path_changed.emit()

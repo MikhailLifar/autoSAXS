@@ -5,15 +5,50 @@ $ErrorActionPreference = "Stop"
 
 $script:LastCondaLogLines = @()
 $DefaultEnvName = "autosaxs"
-$PipSpec = "autosaxs[gui]"
+# Keep in sync with autosaxs.cli.package_update
+$PipSpecStable = "autosaxs[gui]"
+$PipSpecNightbuilt = "autosaxs[gui] @ git+https://github.com/MikhailLifar/autoSAXS.git"
 $script:InstallLogFile = $null
 $script:InstallIconIco = $null
+
+function Resolve-InstallPipSpec {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallSource
+    )
+    $src = $InstallSource.Trim().ToLowerInvariant()
+    if ($src -eq "nightbuilt") { return $PipSpecNightbuilt }
+    return $PipSpecStable
+}
+
+function Get-InstallSourceLabel {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallSource
+    )
+    $src = $InstallSource.Trim().ToLowerInvariant()
+    if ($src -eq "nightbuilt") { return "nightbuilt (GitHub)" }
+    return "stable (PyPI)"
+}
 
 function Initialize-InstallLib {
     param([string]$AssetsDir)
     if ($AssetsDir) {
         $script:InstallIconIco = Join-Path $AssetsDir "autosaxs_icon.ico"
     }
+}
+
+function Test-CommandOnPath {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+    return ($null -ne $cmd)
+}
+
+function Test-GitPresent {
+    return (Test-CommandOnPath -Name "git.exe") -or (Test-CommandOnPath -Name "git")
+}
+
+function Test-AtsasPresent {
+    # Same signal as autosaxs doctor / probe_atsas: dammif on PATH.
+    return (Test-CommandOnPath -Name "dammif.exe") -or (Test-CommandOnPath -Name "dammif")
 }
 
 function Write-InstallLogLine {
@@ -205,11 +240,12 @@ function Get-CondaFailureMessage {
         [int]$ExitCode = 1
     )
     $tail = ($script:LastCondaLogLines | Select-Object -Last 24) -join "`r`n"
-    if ($tail -match 'CondaHTTPError|CONNECTION FAILED|ConnectionError|Failed to connect|Network is unreachable') {
+    if ($tail -match 'NameResolutionError|getaddrinfo failed|Could not resolve|CondaHTTPError|CONNECTION FAILED|ConnectionError|Failed to connect|Network is unreachable') {
         return @(
-            "$Step failed (exit $ExitCode): could not download packages with conda."
+            "$Step failed (exit $ExitCode): could not reach the package download server (DNS/network)."
             ""
-            "Check your internet connection, proxy, or firewall, then run the installer again."
+            "Check your internet connection, VPN, proxy, or firewall."
+            "Stable installs need pypi.org; nightbuilt installs also need github.com."
             ""
             $tail
         ) -join "`r`n"
@@ -232,12 +268,14 @@ function Get-CondaFailureMessage {
 
 function Format-CondaArguments {
     param([Parameter(Mandatory = $true)][string[]]$ArgumentList)
+    # Windows CreateProcess / ProcessStartInfo quoting (not cmd.exe).
     return (($ArgumentList | ForEach-Object {
-            if ($_ -match '[\s"]') {
-                '"' + ($_.Replace('"', '\"')) + '"'
+            $a = [string]$_
+            if ($a -match '[ \t"]') {
+                '"' + ($a.Replace('"', '""')) + '"'
             }
             else {
-                $_
+                $a
             }
         }) -join ' ')
 }
@@ -271,38 +309,83 @@ function Add-InstallProcessLine {
     Write-InstallLogLine -Line $formatted
 }
 
+function Ensure-InstallProcessUtil {
+    if ("Autosaxs.Install.ProcessUtil" -as [type]) { return }
+    Add-Type -TypeDefinition @"
+using System;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Threading;
+
+namespace Autosaxs.Install {
+    public static class ProcessUtil {
+        public static readonly ConcurrentQueue<string> Lines = new ConcurrentQueue<string>();
+
+        public static void Reset() {
+            string ignored;
+            while (Lines.TryDequeue(out ignored)) { }
+        }
+
+        public static void OnData(object sender, DataReceivedEventArgs e) {
+            if (e.Data != null) {
+                Lines.Enqueue(e.Data);
+            }
+        }
+
+        public static Process Start(ProcessStartInfo psi) {
+            Reset();
+            psi.UseShellExecute = false;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            psi.CreateNoWindow = true;
+            Process p = new Process();
+            p.StartInfo = psi;
+            p.OutputDataReceived += OnData;
+            p.ErrorDataReceived += OnData;
+            p.Start();
+            p.BeginOutputReadLine();
+            p.BeginErrorReadLine();
+            return p;
+        }
+    }
+}
+"@
+}
+
+function Drain-InstallProcessLines {
+    $line = $null
+    while ([Autosaxs.Install.ProcessUtil]::Lines.TryDequeue([ref]$line)) {
+        Add-InstallProcessLine -Line $line
+    }
+}
+
 function Invoke-StreamProcess {
     param(
         [Parameter(Mandatory = $true)][System.Diagnostics.ProcessStartInfo]$StartInfo
     )
     $script:StreamProcessLines = New-Object System.Collections.Generic.List[string]
+    Ensure-InstallProcessUtil
 
-    # Read stdout/stderr synchronously on the main thread. PowerShell 5.1 event
-    # handlers for BeginOutputReadLine run without a runspace and crash the worker.
-    $exe = $StartInfo.FileName
-    $args = $StartInfo.Arguments
-    $cmdLine = if ($args) { "`"$exe`" $args" } else { "`"$exe`"" }
-
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "cmd.exe"
-    $psi.Arguments = "/d /c $cmdLine 2>&1"
-    if ($StartInfo.WorkingDirectory) {
-        $psi.WorkingDirectory = $StartInfo.WorkingDirectory
+    # Run the executable directly (no cmd.exe). cmd /c quote parsing breaks
+    # pip specs that contain spaces, e.g. nightbuilt "autosaxs[gui] @ git+...".
+    $p = [Autosaxs.Install.ProcessUtil]::Start($StartInfo)
+    try {
+        while (-not $p.HasExited) {
+            Drain-InstallProcessLines
+            Start-Sleep -Milliseconds 100
+            $p.Refresh()
+        }
+        [void]$p.WaitForExit()
+        Start-Sleep -Milliseconds 150
+        Drain-InstallProcessLines
+        $script:LastCondaLogLines = $script:StreamProcessLines.ToArray()
+        return $p.ExitCode
     }
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $false
-    $psi.CreateNoWindow = $true
-
-    $p = New-Object System.Diagnostics.Process
-    $p.StartInfo = $psi
-    [void]$p.Start()
-    while ($null -ne ($line = $p.StandardOutput.ReadLine())) {
-        Add-InstallProcessLine -Line $line
+    finally {
+        if ($null -ne $p) {
+            try { $p.Dispose() } catch { }
+        }
     }
-    [void]$p.WaitForExit()
-    $script:LastCondaLogLines = $script:StreamProcessLines.ToArray()
-    return $p.ExitCode
 }
 
 function Invoke-EnvPython {
@@ -472,6 +555,31 @@ function Test-EnvExists {
     return $false
 }
 
+function Ensure-GitForNightbuilt {
+    param(
+        [Parameter(Mandatory = $true)][string]$CondaExe,
+        [Parameter(Mandatory = $true)][string]$EnvName,
+        [Parameter(Mandatory = $true)][string]$EnvPrefix
+    )
+    $gitExe = Join-Path $EnvPrefix "Library\bin\git.exe"
+    if (Test-Path -LiteralPath $gitExe) { return }
+    $gitCmd = Get-Command git.exe -ErrorAction SilentlyContinue
+    if ($gitCmd) { return }
+
+    Write-InstallStatus -Text "Installing git into the conda environment (needed for nightbuilt)..."
+    Write-InstallLogLine -Line "Nightbuilt install needs git; installing git into '$EnvName'..."
+    $code = Invoke-Conda -CondaExe $CondaExe -ArgumentList @("install", "-n", $EnvName, "git", "-y")
+    if ($code -ne 0) {
+        throw (Get-CondaFailureMessage -Step "conda install git" -ExitCode $code)
+    }
+    if (-not (Test-Path -LiteralPath $gitExe)) {
+        $gitCmd = Get-Command git.exe -ErrorAction SilentlyContinue
+        if (-not $gitCmd) {
+            throw "git is required for nightbuilt installs but was not found after conda install git."
+        }
+    }
+}
+
 function Invoke-InstallWorkflow {
     param(
         [Parameter(Mandatory = $true)][hashtable]$State
@@ -479,9 +587,18 @@ function Invoke-InstallWorkflow {
     $condaPath = [string]$State.CondaPath
     $envName = [string]$State.EnvName
     $createShortcut = [bool]$State.CreateShortcut
+    $installSource = if ($State.ContainsKey("InstallSource") -and $State.InstallSource) {
+        [string]$State.InstallSource
+    }
+    else {
+        "stable"
+    }
+    $pipSpec = Resolve-InstallPipSpec -InstallSource $installSource
+    $sourceLabel = Get-InstallSourceLabel -InstallSource $installSource
 
     if (-not $condaPath) { throw "conda not found" }
     Write-InstallLogLine -Line "Using conda: $condaPath"
+    Write-InstallLogLine -Line "Install source: $sourceLabel"
 
     $exists = Test-EnvExists -CondaExe $condaPath -EnvName $envName
     $prefix = Get-EnvPrefixCandidate -CondaExe $condaPath -EnvName $envName
@@ -509,15 +626,20 @@ function Invoke-InstallWorkflow {
         Write-InstallLogLine -Line "Environment '$envName' already exists - upgrading package..."
     }
 
-    Write-InstallStatus -Text "Installing autosaxs from PyPI (may take 5-15 minutes)..."
     $prefix = Get-EnvPrefixPath -CondaExe $condaPath -EnvName $envName
     $envPython = Get-EnvPythonExe -EnvPrefix $prefix
-    Write-InstallLogLine -Line "Installing $PipSpec into $prefix ..."
+
+    if ($installSource.Trim().ToLowerInvariant() -eq "nightbuilt") {
+        Ensure-GitForNightbuilt -CondaExe $condaPath -EnvName $envName -EnvPrefix $prefix
+    }
+
+    Write-InstallStatus -Text ("Installing autosaxs ($sourceLabel); may take 5-15 minutes...")
+    Write-InstallLogLine -Line "Installing $pipSpec into $prefix ..."
     Write-InstallLogLine -Line "Using $envPython"
     Write-InstallLogLine -Line "pip output will appear below as packages are resolved and downloaded..."
     $code = Invoke-EnvPython -PythonExe $envPython -ArgumentList @(
         "-u", "-m", "pip", "install", "-U",
-        $PipSpec
+        $pipSpec
     )
     if ($code -ne 0) { throw (Get-CondaFailureMessage -Step "pip install" -ExitCode $code) }
 
