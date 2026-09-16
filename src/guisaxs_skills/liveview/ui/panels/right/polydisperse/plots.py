@@ -10,6 +10,9 @@ from PyQt5.QtCore import Qt
 
 from autosaxs.core.gnom import distribution_arrays, parse_gnom_out
 
+from ..distribution_ylim import clamp_distribution_ylim
+from ..gnom_overlays import resolve_force_zero_off_path, same_gnom_path
+
 
 class _BaseMplPlot(FigureCanvas):
     def __init__(self, *, figsize=(3.2, 2.4)) -> None:
@@ -96,9 +99,9 @@ class DrPlot(_BaseMplPlot):
 
         - ``close_fits``: faint Rmax±10% ensemble overlays (auto pane default).
         - ``force_zero_off``: thin black force-zero-off overlay from ``ensemble/``.
-        - ``overlay_gnom_out``: optional second ``.out`` (e.g. auto best) drawn faintly
-          under the primary curve; its sibling ``ensemble/`` supplies force-zero-off when
-          the primary path has none (adjust-wizard preview temp outs).
+        - ``overlay_gnom_out``: optional second ``.out`` (e.g. disk best) drawn faintly
+          under the primary curve; its sibling ``ensemble/`` supplies force-zero-off /
+          close-fits when the primary path has none (adjust-wizard preview temp outs).
         """
         if not gnom_out_path or not os.path.isfile(gnom_out_path):
             self._show_status("No GNOM .out")
@@ -125,6 +128,8 @@ class DrPlot(_BaseMplPlot):
 
         primary_dir = os.path.dirname(os.path.abspath(gnom_out_path))
         overlay_path = (overlay_gnom_out or "").strip()
+        if overlay_path and same_gnom_path(overlay_path, gnom_out_path):
+            overlay_path = ""
         ens_dirs: list[str] = []
         if close_fits or force_zero_off:
             ens_dirs.append(os.path.join(primary_dir, "ensemble"))
@@ -139,7 +144,7 @@ class DrPlot(_BaseMplPlot):
                 ov_arr = None
             if ov_arr is not None:
                 rr, pp, _ee = ov_arr
-                self._ax.plot(rr, pp, color="C1", lw=1.0, alpha=0.55, zorder=1, label="auto best")
+                self._ax.plot(rr, pp, color="C1", lw=1.0, alpha=0.55, zorder=1, label="best (disk)")
 
         if close_fits:
             for ens_dir in ens_dirs:
@@ -163,24 +168,21 @@ class DrPlot(_BaseMplPlot):
                     close_labeled = True
 
         if force_zero_off:
-            fz_labeled = False
             for ens_dir in ens_dirs:
-                if not os.path.isdir(ens_dir):
+                fz_path = resolve_force_zero_off_path(ens_dir)
+                if not fz_path or same_gnom_path(fz_path, gnom_out_path):
                     continue
-                for name in sorted(os.listdir(ens_dir)):
-                    if not name.endswith("_force_zero_off.out"):
-                        continue
-                    fz_path = os.path.join(ens_dir, name)
-                    try:
-                        fz_arr = distribution_arrays(parse_gnom_out(fz_path).get("distribution"))
-                    except Exception:
-                        continue
-                    if fz_arr is None:
-                        continue
-                    rr, pp, _ee = fz_arr
-                    label = "force-zero-off" if not fz_labeled else None
-                    self._ax.plot(rr, pp, color="k", lw=0.8, alpha=1.0, zorder=1, label=label)
-                    fz_labeled = True
+                if overlay_path and same_gnom_path(fz_path, overlay_path):
+                    continue
+                try:
+                    fz_arr = distribution_arrays(parse_gnom_out(fz_path).get("distribution"))
+                except Exception:
+                    continue
+                if fz_arr is None:
+                    continue
+                rr, pp, _ee = fz_arr
+                self._ax.plot(rr, pp, color="k", lw=0.8, alpha=1.0, zorder=1, label="force-zero-off")
+                break
 
         if err is not None:
             e = np.asarray(err, dtype=float)
@@ -205,6 +207,7 @@ class DrPlot(_BaseMplPlot):
         if handles:
             self._ax.legend(fontsize=7, loc="best")
         self._fig.tight_layout()
+        clamp_distribution_ylim(self._ax)
         self.draw_idle()
         self.setCursor(Qt.PointingHandCursor)
 
@@ -283,10 +286,10 @@ class MixtureDistPlot(_BaseMplPlot):
         self._ax.plot(R_nm[m], total[m], "C0-", lw=1.4, label=label or None)
         self._ax.set_xlabel("R (nm)")
         self._ax.set_ylabel("P(R)")
-        self._ax.set_ylim(0, None)
         if label:
             self._ax.legend(fontsize=7)
         self._ax.grid(True, alpha=0.2)
         self._fig.tight_layout()
+        clamp_distribution_ylim(self._ax)
         self.draw_idle()
         self.setCursor(Qt.PointingHandCursor)

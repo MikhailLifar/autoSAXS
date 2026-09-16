@@ -64,6 +64,9 @@ def parse_guinier_results_txt(results_path: Optional[str]) -> Dict[str, Any]:
         return {}
 
     for line in lines:
+        if section is None and line.startswith("Input file:"):
+            out["input_file"] = line.split(":", 1)[1].strip()
+            continue
         if "Chosen Guinier result" in line:
             section = "chosen"
             continue

@@ -11,7 +11,7 @@ from PyQt5.QtCore import QObject, QTimer
 
 from .poll_watcher import POLL_TRIGGERED_STABILITY
 from .stability import FileStatSnapshot, _try_stat
-from .tiff_revision import TiffRevision, TiffRevisionSource, is_tiff_path
+from .sample_revision import SampleRevision, SampleRevisionSource, is_tiff_path
 
 TREE_STABILITY = POLL_TRIGGERED_STABILITY
 
@@ -313,7 +313,7 @@ class TreeDirObserver(QObject):
         *,
         watchdir: Path,
         cfg: Optional[TreeObserverConfig] = None,
-        on_revision: Callable[[TiffRevision], None],
+        on_revision: Callable[[SampleRevision], None],
     ) -> None:
         super().__init__()
         self._cfg = cfg or TreeObserverConfig()
@@ -327,7 +327,7 @@ class TreeDirObserver(QObject):
             cache=self._cache,
             cache_dir_name=self._cfg.cache_dir_name,
         )
-        self._pending: Dict[str, TiffRevision] = {}
+        self._pending: Dict[str, SampleRevision] = {}
         self._slow_timer = QTimer(self)
         self._slow_timer.setInterval(self._slow_interval_ms(scan_duration_s=0.0))
         self._slow_timer.timeout.connect(self._on_slow_timer)
@@ -403,11 +403,11 @@ class TreeDirObserver(QObject):
             snap = self._cache.files.get(p)
             if snap is None:
                 continue
-            self._pending[p] = TiffRevision(
+            self._pending[p] = SampleRevision(
                 path=p,
                 stat=snap,
                 detected_at=now,
-                source=TiffRevisionSource.TREE,
+                source=SampleRevisionSource.TREE,
             )
 
     def _on_slow_timer(self) -> None:

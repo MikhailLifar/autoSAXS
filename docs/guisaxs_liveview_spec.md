@@ -1,20 +1,10 @@
 # guisaxs-liveview — Technical Specification
 
-This document specifies a new desktop GUI application (“guisaxs-liveview”) for **live, queued processing** of incoming SAXS `.tif` images in a watched directory. It is written to be precise enough to implement **while reusing `src/guisaxs_skills/` widgets and conventions as much as possible**.
+Product and behavior contract for **guisaxs-liveview** (implementation: `guisaxs_skills.liveview`).  
+**Architecture SSOT:** [`liveview_session_sample_plan.md`](liveview_session_sample_plan.md) (Session, SampleStore, `plan_for`, middle sync).  
+**Package map:** [`../AGENTS.md`](../AGENTS.md). End-user help: `autosaxs/resources/help/guisaxs_liveview/`.
 
----
-
-## Table of contents (non-optional reading)
-
-- **1. Purpose and non-goals**
-- **2. Non-negotiable constraints**
-- **3. User workflow (session narrative)**
-- **4. Processing state machine (A/B/C plus analysis mode)**
-- **5. Directory watching + queueing (stability, ordering, backpressure)**
-- **6. UI layout (three columns) and required widgets**
-- **7. Output directories and naming (autosaxs conventions)**
-- **8. Right column: analysis modes and skill contracts**
-- **9. Edge cases and invariants**
+Code is authoritative when this document and the tree disagree; update this file to match code.
 
 ---
 
@@ -22,422 +12,191 @@ This document specifies a new desktop GUI application (“guisaxs-liveview”) f
 
 ### 1.1 Purpose
 
-**One-sentence summary:** **guisaxs-liveview** is a single-window desktop GUI that watches a directory for **new stable `.tif` files**, processes them **sequentially** via `autosaxs` skills, and continuously updates live plots (2D + 1D) and optional **right-column analysis** outputs according to a user-selected analysis mode (monodisperse analysis, polydisperse analysis, or off).
+**guisaxs-liveview** is a single-window desktop GUI that watches a **working directory**, boards samples as **2D frames** and/or **1D curves**, processes them **sequentially** via `autosaxs` skills, and updates live plots plus optional monodisperse / polydisperse analysis.
 
-**Main user goal:** Start a session in a **watch directory** (the process working directory), then iteratively configure processing during the session (calibration → buffer) while the app keeps up with incoming data using a **FIFO queue** and never freezes.
+### 1.2 Non-goals
 
-### 1.2 Non-goals (explicit)
-
-- The app is **not** a general-purpose “skill console” (that is `guisaxs-skills`).
-- The app is **not** responsible for implementing scientific logic in-process; it must be a thin orchestration/UI layer on top of skills.
-- The app does **not** attempt to parallelize processing of images; correctness and determinism are prioritized over throughput.
+- Not a general skill console (`guisaxs-skills`).
+- Not an in-process science library: orchestration + UI over skills (CLI subprocess), except GNOM adjust preview (see §8).
+- No parallel per-sample processing; FIFO correctness over throughput.
 
 ---
 
 ## 2. Non-negotiable constraints
 
-### 2.1 Reuse `guisaxs_skills` by maximum extent possible (hard requirement)
+### 2.1 Shared GUI stack
 
-The implementation MUST reuse the existing `src/guisaxs_skills/` building blocks wherever feasible, including (non-exhaustive):
+Liveview lives in `guisaxs_skills.liveview` and reuses `guisaxs_skills` style, path fields, and `SkillRunner` (`logic/runner_qprocess.py`). Entry: `guisaxs-liveview` → `guisaxs_skills.liveview.app.run_liveview_app()`.
 
-- `ui/path_field.py` for directory selection and file path inputs (DnD + browse + manual entry).
-- `ui/curve_plot.py`, `ui/preview_panel.py`, and any existing viewer components for `.png`/curve previews.
-- `ui/style.py` for styling and consistent look.
-- `logic/runner_qprocess.py` (or the same approach) for running autosaxs skills in isolated processes.
-- The existing **calibrate skill panel** patterns from `guisaxs_skills` (parameters form + Run + outputs preview).
+### 2.2 Skills-only compute
 
-**Interpretation:** guisaxs-liveview should be implemented as a **separate GUI entry point** inside the **same `guisaxs_skills` package**, sharing widgets, styles, and runner logic instead of duplicating them.
+No direct `autosaxs.processor` / pyFAI / subtract math in the UI thread. Skills via CLI with **`use_cache=False` / `--no-cache`**.
 
-### 2.2 Skills-only compute backend (hard requirement)
+Typical skills: `integrate_proxy`, `calibrate`, `integrate`, `subtract`, `fit_guinier`, `fit_distances`, `fit_sizes`, `model_bodies`, `model_dam`, `model_density`, `model_mixture`, report helpers as wired.
 
-The GUI MUST NOT call `autosaxs.processor`, pyFAI, or subtraction/integration routines directly. All processing must be performed by invoking public `autosaxs` skills (typically via CLI) in isolated processes:
+### 2.3 Responsiveness and ordering
 
-- `integrate_proxy`
-- `calibrate`
-- `integrate`
-- `subtract`
-- **Analysis skills (right column; subset may run per file depending on selected mode, see §8):** `fit_guinier`, `fit_distances`, `model_dam`, `model_bodies`, `fit_sizes`, `model_mixture`
-
-Preview-only reading of existing `.dat`/`.png` files for display is allowed.
-
-### 2.3 Caching disabled for all skill runs (hard requirement)
-
-All autosaxs skills invoked by this app MUST be run with caching **disabled**:
-
-- Python API form: pass `use_cache=False`
-- CLI form: pass `--no-cache`
-
-This applies to every run of: `integrate_proxy`, `calibrate`, `integrate`, `subtract`, and every analysis skill listed in §2.2 (`fit_distances`, `model_dam`, `model_bodies`, `fit_sizes`, `model_mixture`).
-
-### 2.4 Isolation + responsiveness (hard requirement)
-
-- The UI thread MUST remain responsive during processing.
-- Processing MUST occur outside the UI thread.
-- A single sequential worker MUST be used for the incoming-image queue (FIFO).
-
-### 2.5 Deterministic ordering (hard requirement)
-
-- Incoming `.tif` files MUST be processed in **FIFO order by detection time**.
-- A file is eligible only after it is **stable** (see §5.2).
+- UI thread stays responsive; one sequential queue worker.
+- Eligible files are processed in FIFO order by detection time after **stability** (`FileStatSnapshot` unchanged across checks).
 
 ---
 
-## 3. User workflow (session narrative)
+## 3. Architecture (summary)
 
-### 3.1 Start session
+Three owners — details in [`liveview_session_sample_plan.md`](liveview_session_sample_plan.md):
 
-1. On launch, the watch directory is the process **current working directory**, provided it exists and is writable. There is **no** directory picker at startup. If the cwd is missing or not writable, the app MUST exit without opening a window.
-2. The app starts watching that directory for new `.tif` files.
-3. Only **new** files are processed (files already present at watcher start are ignored).
-4. If `<watchdir>/.guisaxs_liveview/session.yaml` exists, the app MUST restore persisted session fields from disk (calibration artifacts, buffer/subtract options, watch mode) — the same cold-start restore used on every process start.
+| Owner | Role |
+|-------|------|
+| **Session** (`LiveviewSessionState`) | `intake_mode`, `auto_processing`, calibrated?, `buffer_ready()`, analysis arming, watch mode, persistence |
+| **SampleStore** | Ordered history of `Sample` (path + boarding + stem + revision) |
+| **`plan_for`** | Sole builder of per-sample job steps |
 
-### 3.2 Switching watch directory during a session (required)
-
-The main window MUST include a menu action **“Open working directory…”**:
-
-- **Selection**: reuse the same directory selection dialog/logic as `guisaxs_skills` working-directory selection (Qt directory picker with non-native dialog, detail view sizing, and validation that the directory exists and is writable).
-- **Semantics (hard requirement)**: changing the watch directory MUST be equivalent to **quit + cold-start on the new directory**. The running process MUST NOT mutate its in-memory session to the new folder in place.
-- When a new watch directory is accepted (and differs from the current one), the app MUST:
-  - refuse if a skill subprocess is still running (same idle gate as Update)
-  - persist the **current** session to the **old** watch directory’s `.guisaxs_liveview/session.yaml`
-  - spawn a new `guisaxs-liveview` process with working directory set to the newly selected path (same restart argv family as post-update relaunch)
-  - quit the current process only after the spawn succeeds
-  - leave all further setup to the new process’s cold start (§3.1), including loading that directory’s `session.yaml` when present and applying the “only process new files” rule relative to the new watcher start time
-
-### 3.3 Live processing evolves during the session
-
-- At cold start with no persisted session, the processing pipeline is minimal (State A). With a restored `session.yaml`, the session MAY open already in State B or C.
-- User may run calibration (transition to State B).
-- User may set a buffer `.dat` (transition to State C).
-
-The pipeline changes apply to **subsequent files** (no mandatory reprocessing of backlog; see §9 for optional future behavior).
+Middle column: **`sync_middle_view`** / `history.sync_middle` only.
 
 ---
 
-## 4. Processing state machine (A/B/C plus analysis mode)
+## 4. Session narrative
 
-### 4.1 Definitions
+### 4.1 Start
 
-- **Watch dir:** the directory being monitored; all outputs are written under it.
-- **Incoming image:** a `.tif` that was detected as new and became stable.
-- **Per-file pipeline:** the exact sequence of skill invocations performed for one incoming image.
-- **Middle column view:** always reflects the **latest fully processed** incoming image (not “currently processing”).
-- **Analysis mode:** user choice in the right column, implemented as a **drop-down list**. The **first option is always `Off`** (default): no analysis skills run after integration/subtraction. Any other option selects a concrete analysis pipeline and UI (see §6.4 and §8).
+1. Watch directory = process cwd (must exist and be writable); else exit without a window.
+2. Load `<watchdir>/.guisaxs_liveview/session.yaml` when present (intake, calib, buffer/subtract options, watch mode, …).
+3. Start watchers for the restored **intake mode**. Files already present are baselined as **known** (not auto-queued). Revisions or new paths enqueue after stability.
 
-### 4.2 State A — Default (no calibration, no buffer)
+### 4.2 Change watch directory
 
-**Pipeline (per incoming image):**
+**File → Open working directory…**: refuse if a skill is running; persist current session; spawn a new liveview process on the new cwd; quit. Equivalent to quit + cold start (same family as post-update relaunch).
 
-- Run `integrate_proxy` on the `.tif`.
-- Save `.dat` outputs under `averaged_proxy/` in the watch directory (see §7).
+### 4.3 Intake mode (boarding)
 
-**Middle column display (required):**
+Right-column **Intake**: **2D** / **1D** / **Sub** (`LiveviewIntakeMode`). Persisted. Controls watchers and middle layout.
 
-- 2D image view for the incoming `.tif`.
-- 1D curve integrated in **pixel space** (proxy integration) as the main curve plot.
+| Intake | Boards | Pipeline (via `plan_for`) |
+|--------|--------|---------------------------|
+| **2D** | `.tif`/`.tiff` (+ root `.dat` may auto-switch) | proxy or integrate → optional subtract → analysis? |
+| **1D** | `.dat` (watchdir root + `averaged/`; reject proxy) | optional subtract → analysis? |
+| **Sub** | `.dat` under `subtracted/` (or classified sub) | analysis on path |
 
-**Right column analysis (required behavior):**
+Drops may auto-switch intake (Option A): `.dat` in 2D → classify to 1D/Sub; `.tif` in 1D/Sub → 2D. If already in 1D or Sub, dropping `.dat` does **not** auto-switch 1D↔Sub (manual toggle wins). History **Process** reuses that sample’s boarding from SampleStore.
 
-- Analysis skills are **never run** in State A regardless of the drop-down selection.
-- The user MUST be allowed to **choose any analysis mode (including non-`Off`) before calibration**; the choice is **remembered** and applies automatically to **subsequent** files once State **B** or **C** is active (no need to re-select after calibrating).
-- While still in State A, the UI SHOULD show a clear note that analysis runs only after calibration (e.g. “Analysis runs after calibration”), without blocking or clearing the user’s mode choice.
+### 4.4 Calibration and buffer (session facts)
 
-### 4.3 State B — Calibrated (calibration set, no buffer)
+- Successful **calibrate** → session calibrated (`integrator_dir`, …). Uncalibrated 2D jobs use `integrate_proxy`.
+- **Set buffer** + subtract options → `buffer_ready()`. Then 2D/1D plans include subtract; middle uses dual S+buffer / Sub (2D hides lone integrated 1D).
+- Changes apply to **subsequent** auto jobs (no mandatory backlog reprocess).
 
-**Entry condition:** calibration run succeeded and produced a valid integrator directory usable by `integrate`.
+### 4.5 Auto vs Manual
 
-**Pipeline (per incoming image):**
-
-- Run `integrate` (using the calibrated integrator directory from the successful `calibrate` run).
-- Save `.dat` outputs under `averaged/` in the watch directory.
-- If analysis mode is **not** `Off`, append the skill sequence for that mode (§8) on the **latest integrated q-space curve** for this file.
-
-**Middle column display (required):**
-
-- 2D image view for the incoming `.tif`.
-- 1D curve in **q-space** \((q\ \mathrm{nm}^{-1})\) as the main curve plot.
-
-**Right column analysis (required behavior):**
-
-- If analysis mode is `Off` (State **B**): show the mode selector and an idle / no-analysis state; do not run analysis skills.
-- If analysis mode is not `Off` (State **BD**): run the selected mode’s skills on the integrated curve (§8) and update the right column with that mode’s plots and viewers (fit comparison and mode-specific outputs).
-
-### 4.4 State C — Calibrated + buffer set
-
-**Entry condition:** State B plus a buffer `.dat` file has been selected by the user.
-
-**Pipeline (per incoming image):**
-
-- Run `integrate` to produce the sample curve in q-space (saved under `averaged/`).
-- Run `subtract` using:
-  - sample = the newly integrated curve
-  - buffer = the selected buffer curve
-- Save subtracted outputs under `subtracted/` in the watch directory.
-- If analysis mode is **not** `Off`, append the skill sequence for that mode (§8) on the **latest subtracted curve** for this file.
-
-**Middle column display (required):**
-
-- 2D image view for the incoming `.tif`.
-- No integrated q-space curve plot as in State B.
-- Two graphs at the **bottom** of the middle column instead:
-  1. **Left bottom:** sample curve + **scaled buffer curve used for subtraction**, plotted as **log \(I\) vs \(q\)**.
-  2. **Right bottom:** subtracted curve, plotted as **log \(I\) vs \(q\)**.
-
-**Right column analysis (required behavior):**
-
-- If analysis mode is `Off` (State **C**): same as State **B** with `Off` — no analysis skills; idle state.
-- If analysis mode is not `Off` (State **CD**): run the selected mode’s skills on the **subtracted** curve (§8) and update the right column accordingly.
-
-### 4.5 Analysis mode vs calibrated states (BD / CD)
-
-In calibrated states, whether analysis runs is determined **only** by the drop-down:
-
-- **`Off`:** no analysis skills after `integrate` (State **B**) or after `integrate` + `subtract` (State **C**).
-- **Not `Off`:** analysis runs according to §8 on the same 1D input as above (**BD:** integrated q-space curve; **CD:** subtracted curve).
-
-**Invariant:** Analysis skills are never run in State A.
-
-**Default:** On every cold start (including after **change watch directory** §3.2), analysis windows MUST start **disarmed** (`Off`). Persisted calibration/buffer from the watchdir’s `session.yaml` MAY restore States **B** / **C**; analysis arming is not restored from that file.
+Session owns `auto_processing` (default Auto). **Stop** / interventions set Manual; **Resume** restores Auto. Manual holds **auto** queue advance; manual jobs still run.
 
 ---
 
-## 5. Directory watching + queueing (stability, ordering, backpressure)
+## 5. Watching and queue
 
 ### 5.1 Watch rules
 
-- Watch only for files with extension `.tif` (case-insensitive).
-- Process only **new** files detected after the watcher is started.
+- **2D:** TIFF watch (flat top-level or tree recursive) + optional root `.dat` aux watch.
+- **1D / Sub:** `.dat` under watchdir with path filters (`averaged/` or `subtracted/` as appropriate; not `averaged_proxy/`).
+- Stability before enqueue; FIFO; single worker; large queues allowed.
+- Per-path revision: same path with new `FileStatSnapshot` re-queues.
 
-### 5.2 Stability rule (hard requirement)
+### 5.2 Failure policy
 
-Before enqueueing or processing, the app MUST ensure the `.tif` file is **fully written**. The stability heuristic MUST be explicitly implemented, e.g.:
+Skip failed sample, log, continue queue.
 
-- consider a file stable if its **size and mtime** remain unchanged across \(N\) consecutive checks (e.g. 2–3 checks) with a small delay (e.g. 200–500 ms).
+### 5.3 UI queue status
 
-If the file never becomes stable within a configured timeout, it is skipped with an error message and the queue continues.
-
-### 5.3 Queue semantics (hard requirement)
-
-- Use a FIFO queue ordered by **detection time**.
-- Use a single worker that processes items strictly sequentially.
-- The queue may grow large (e.g. 1000 items). This must not crash the app.
-
-### 5.4 UI status requirements for queue
-
-The UI MUST show (a small button at the bottom of the middle column, opening a live wizard):
-
-- current queue size
-- currently processing filename
-- last processed filename
-- average processing time (best-effort) and/or estimated time remaining (optional but recommended)
-
-### 5.5 Failure policy
-
-- If processing of a file fails: **skip it**, record/log the error, and continue to the next file.
-- Failures are expected to be rare; nevertheless the UI must make failures discoverable (log panel + a short status banner/toast).
+Middle status: Idle / Queue · N, current path, progress affordance as implemented.
 
 ---
 
-## 6. UI layout (three columns) and required widgets
+## 6. UI layout
 
-### 6.1 Single-window layout
+Three columns (horizontal splitter):
 
-Use a three-column main window (a horizontal splitter) consistent with `guisaxs_skills` UI:
+### 6.1 Left — setup
 
-- **Left:** parameters
-- **Middle:** live view
-- **Right:** analysis (mode selector + mode-specific plots/viewers)
+- Calibration wizard (mask optional; shared Mask wizard; mask survives calib reset).
+- Mask panel.
+- Buffer / subtract config.
+- Groups unused for current intake are hidden; coaching pulses relevant controls.
 
-### 6.2 Left column — parameters (required sections)
+### 6.2 Middle — live stage
 
-#### 6.2.1 Watch directory
+- History nav (`<` / `>` / Process) when session history non-empty.
+- **2D** image when intake is 2D.
+- Curve panels per [`liveview_session_sample_plan.md`](liveview_session_sample_plan.md) layout table.
+- Drop target for TIFF/`.dat`.
+- Queue status.
 
-- At launch, the watch directory is the process cwd (see §3.1); there is no startup picker.
-- **File → Open working directory…** uses the `guisaxs_skills` working-directory picker to choose a new folder, then performs quit + cold-start relaunch (§3.2).
-- Show the current watch directory as a **read-only, selectable text** label in the main window header area (matching the `Workdir: ...` label pattern in `guisaxs_skills`).
-- Start/Stop watching controls (or Watch toggle), plus current status indicator.
+Content + layout: `history.sync_middle` only.
 
-#### 6.2.2 Calibration panel (top)
+### 6.3 Right — intake, analysis, log
 
-- Must reuse the existing “calibrate skill panel” patterns from `guisaxs_skills`.
-- User sets parameters for `calibrate` (matching the existing calibrate panel in `src/guisaxs_skills/`).
-- **Mask path is optional** (empty ⇒ skill auto-mask). Do **not** expose `mask_mode` in the liveview form.
-- **View/Configure mask** and click-on-calibrant open the shared Mask wizard (same instance as the left Mask panel).
-- Coach (calibrant present, no mask): pulse **Run + View/Configure mask + mask PathField** together.
-- On “Run”:
-  - invoke `calibrate` (isolated process)
-  - on success: transition to State B
-  - show a **small preview** of the calibrated curve output within the panel
-  - clicking the preview opens the standard `.png` viewer from `guisaxs_skills`
- - Calibration results MUST be written under a dedicated `calibration/` subdirectory in the watch directory (see §7.1).
+- Intake toggles.
+- Monodisperse / polydisperse analysis openers (separate windows).
+- Live log.
 
-#### 6.2.3 Mask panel (between Calibration and Buffer)
-
-- Left-column **Mask** group: **Set mask**, **Reset**, hint, embedded preview.
-- Opens the shared `MaskWizardDialog` (also launched from Calibration).
-- Session state owns `mask_path` (and optional `mask_preview_path`); mask survives calibration reset.
-- Preview click opens the wizard. Reset clears the session path only (does not delete the file).
-
-#### 6.2.4 Buffer panel (bottom)
-
-- Must reuse the existing `subtract` skill panel patterns from `guisaxs_skills`:
-  - a file picker for a buffer `.dat`
-  - subtract parameters fields (matching the `subtract` skill panel)
-  - optional advanced section (if the existing panel has one)
-- After buffer selection:
-  - show a small preview (curve) within the panel
-  - clicking opens the standard viewer
-  - transition to State C (if calibration is already successful)
-
-**Constraint:** If the buffer is selected before calibration, the UI may store it but State C activation still requires calibration; subtraction is not run until calibrated integration is available.
-
-**Persistence requirement:** the chosen buffer `.dat` and the subtraction parameter config (YAML `.conf`) MUST be written to `subtracted/` in the watch directory (see §7.1).
-
-### 6.3 Middle column — live view
-
-The middle column is the “live dashboard” that updates after each fully processed file:
-
-- 2D image view (latest processed `.tif`)
-- In State B: 1D main curve plot 
-- In State C: Two bottom plots as specified in §4.4
-- A queue view thin button
-- A log/status area is allowed, but the middle column must prioritize live visuals.
-
-### 6.4 Right column — analysis view
-
-The right column is driven by an **analysis mode** drop-down (**`Off` first**, default **`Off`**). Each option defines which skills run (when calibration allows; §4) and which widgets are shown. The column SHOULD reuse `guisaxs_skills`-style parameter panels and plots where equivalents already exist.
-
-**Drop-down options (fixed order, exact user-visible labels):**
-
-1. **`Off`** — no analysis skills; idle / placeholder when uncalibrated; when calibrated, no post-integration analysis.
-2. **`Monodisperse analysis`** — launches a **separate wizard window** (3-pane: Guinier → GNOM → optional shape); auto pipeline runs `fit_guinier` then `fit_distances`; shape (`model_bodies` / `model_dam`) on demand only via **Re-run shape** (default shape mode **None**).
-3. **`Polydisperse analysis`** — launches a **separate analysis window** (3-pane: Guinier → fit_sizes / D(R) → optional model_mixture); auto pipeline runs `fit_guinier` then `fit_sizes` (spheres, `first` default 1); mixture on demand when enabled (default **None**). Guinier is display-only and **not** handed off to fit_sizes.
-
-**Common requirements:**
-
-- **Monodisperse wizard:** separate large dialog (not embedded in the right column); plots from structured files (`.dat`, GNOM `.out`, `.fir`, `.cif`) only; wizard control changes **suspend** the TIFF queue until **Resume auto-processing** (enabled when idle).
-- **Latest analysis status** (Idle/Running/Failed) for the active mode.
-- **Changing the selected mode** affects **only subsequent** incoming files after the change (§9.1); the UI MAY update immediately to the new layout, but MUST NOT re-run skills for already processed files.
+Analysis windows start **disarmed** on cold start; arming while open enables analysis steps in `plan_for` for subsequent samples. Closing the window disarms.
 
 ---
 
-## 7. Output directories and naming (autosaxs conventions)
+## 7. Outputs and naming
 
-### 7.1 Output directories (hard requirement)
+Under the sample output root (watchdir flat, or beside TIFF in tree mode), use existing autosaxs / `session/output_paths.py` conventions:
 
-Under the watch directory, the app MUST create (if missing):
+- `calibration/`, `averaged_proxy/`, `averaged/`, `subtracted/`
+- Analysis dirs: `guinier/`, `fit_distances/`, `fit_sizes/`, `model_*`, …
+- Run logs under conventions shared with skills GUI
 
-- `calibration/` — outputs from calibration runs (integrator dir, refined config, calibration plots)
-- `averaged_proxy/` — outputs from State A
-- `averaged/` — integrated q-space outputs from State B/C
-- `subtracted/` — outputs from State C
-- `guinier/` — per-sample Guinier fits (`guinier/<stem>/`; watchdir-level `guinier/guinier.conf` for wizard interval)
-- `fit_distances/` — per-sample GNOM / \(p(r)\) outputs (`fit_distances/<stem>/`)
-- `model_bodies/` — BODIES shape fits (`model_bodies/<stem>/`; optional when monodisperse shape mode is BODIES)
-- `dammif/` — DAMMIF shape fits (`dammif/<stem>/`; optional when monodisperse shape mode is DAMMIF)
-- `runs/` — per-run logs/stdout/stderr/result dicts for traceability, consistent with `guisaxs_skills` conventions
-
-**Additional persistence requirement (hard):**
-
-- `subtracted/` MUST also contain:
-  - the selected buffer `.dat` (copied or referenced per autosaxs conventions)
-  - the subtraction parameters config file in YAML format (extension `.conf`)
-
-### 7.2 Naming policy (hard requirement)
-
-File naming MUST follow the standard autosaxs conventions already used elsewhere in this repository (see `src/guisaxs_skills/` practices). The liveview app must **not** invent a new naming scheme.
-
-The spec intentionally does not restate exact filename templates here; the implementation must centralize naming using the same helper(s)/conventions as `guisaxs_skills` (and/or autosaxs utilities) so outputs are consistent across tools.
+Do not invent a parallel naming scheme.
 
 ---
 
-## 8. Right column: analysis modes and skill contracts
+## 8. Analysis modes and skill contracts
 
-### 8.1 When to run (input curve)
+### 8.1 When analysis runs
 
-For **every** analysis mode except **`Off`**, the **same input rules** apply:
+Only if session analysis is armed **and** boarding/session allow a profile (`plan_for`). Never analysis-only path changes the meaning of Auto/Manual.
 
-- State A: **never** run analysis skills.
-- State **BD** (calibrated, no buffer, mode ≠ `Off`): run on the **latest integrated q-space** `.dat` for the current file.
-- State **CD** (calibrated + buffer, mode ≠ `Off`): run on the **latest subtracted** `.dat` for the current file.
+Profile input: integrated q-space, subtracted, or boarded curve path per plan table.
 
-No mode in this spec uses a different input source than the above.
+### 8.2 Black-box + GNOM exceptions
 
-### 8.2 Black-box rule
+Skills are black boxes. **Exceptions:** monodisperse P(r) and polydisperse D(R) adjust wizards may call `autosaxs.core.atsas_gnom` in-process for preview; persistence via `SkillRunner` (`fit_distances` / `fit_sizes`).
 
-The GUI MUST treat each skill as a **black box**: display artifacts, logs, and plots produced by the skill (and standard autosaxs run metadata). It MUST NOT reimplement scientific logic in-process.
+### 8.3 Mode sequences (as implemented)
 
-**Exception — monodisperse P(r) / GNOM adjust wizard:** For interactive refine only, the dedicated GNOM wizard MAY call the shared ATSAS GNOM primitive in `autosaxs.core.atsas_gnom` in-process to update P(r) / I(q) plots and a lightweight quality passport while the user edits parameters. Persistence and the embedded P(r) pane remain driven by an ordinary manual `fit_distances` skill run (GNOM-only branch when `dmax_nm` is set) via `SkillRunner`. Auto TIFF processing still uses the full DATGNOM + ensemble path.
+| Mode | Auto chain | Manual extras |
+|------|------------|---------------|
+| Off / disarmed | (none beyond integrate/subtract) | — |
+| Monodisperse | `fit_guinier` → `fit_distances` | shape: BODIES / DAMMIF / DENSS via Re-run shape |
+| Polydisperse | `fit_guinier` → `fit_sizes` | optional `model_mixture` |
 
-**Exception — polydisperse D(R) / GNOM adjust wizard:** For interactive refine only, the dedicated D(R) adjust wizard MAY call `autosaxs.core.atsas_gnom.run_gnom` in-process with `--system=1` (spheres) to update D(R) / I(q) plots and a lightweight quality passport while the user edits parameters. Persistence and the embedded GNOM D(R) pane remain driven by an ordinary manual `fit_sizes` skill run (single GNOM when `rmax_nm` is set; no Rmax search / ensemble) via `SkillRunner`. Auto TIFF processing still uses full Rmax optimization + ensemble.
+Wizard control changes that suspend the queue call `session.set_auto_processing(False)` (via processing-mode bridge). Resume required for auto advance.
 
-Cross-pane parameter handoff in the monodisperse wizard (Guinier interval → GNOM, GNOM → shape) is **orchestration**: the GUI reads YAML/metadata from prior skill outputs and passes explicit options into subsequent skill invocations. All fits still run via skills; the wizard does not perform Guinier/GNOM/BODIES/DAMMIF math in-process, except for the P(r) / D(R) adjust exceptions above.
+P(r) / D(R) plot y-limits stay within **[-5, 20]** (may be tighter to data).
 
-### 8.3 Per-mode skill sequence and UI mapping
+### 8.4 Inline analysis
 
-| Drop-down label | Skill(s) (in order) | Right-column content (minimum) |
-|-----------------|---------------------|--------------------------------|
-| `Off` | *(none)* | Mode selector + idle / placeholder |
-| `Monodisperse analysis` | `fit_guinier` → `fit_distances` (auto); optional `model_bodies` / `model_dam` (manual) | Separate wizard window: Guinier, P(r) (plots + passport + Adjust), shape (None/BODIES/DAMMIF/DENSS) |
-| `Polydisperse analysis` | `fit_guinier` → `fit_sizes` (auto); optional `model_mixture` (when enabled) | Separate analysis window: Guinier (independent), GNOM D(R) (plots + passport + Adjust), optional mixture |
-
-**Monodisperse shape chaining:** When the user selects **BODIES** or **DAMMIF** and presses **Re-run shape**, `model_dam` MUST consume the **GNOM result** from the latest `fit_distances` run (`best_gnom_out_path`). `model_bodies` uses the profile curve plus Guinier/GNOM handoff parameters. Shape skills do **not** run automatically in the TIFF pipeline (default shape mode is **None**).
-
-**Polydisperse chaining:** Guinier pane edits re-run **only** `fit_guinier` (no handoff into `fit_sizes`). `fit_sizes` always uses `shape=spheres` and an explicit `first` (default **1**). The GNOM D(R) pane is minimized (plots + passport + **Adjust**); parameter edits live in the dedicated D(R) adjust wizard. Auto TIFF jobs must **not** pin `rmax_nm` / `alpha` / force-zero in `fit_sizes.conf` (those refine keys live in `polydisperse_window_params` and are merged only for manual `SIZES_ONLY` refine). When mixture mode is **Mixture**, auto TIFF jobs append `model_mixture`; enabling mixture mid-run may enqueue a mixture-only follow-up after a successful `fit_sizes`. Mixture `r_max` / `poly_max` start unset (skill-derived) and the pane controls update from the resolved values after a run. Window panes use **data-driven matplotlib viewers** (`.dat`, GNOM `.out`, `dr_csv`, MIXTURE `.fit` / CSV) — not PNG thumbnails.
-
-**Monodisperse queue suspension:** Any wizard control change (Guinier interval, P(r)/GNOM adjust parameters, shape mode, body checklist) MUST **pause** the FIFO queue, **cancel** the running skill (requeue current job), and allow unlimited re-processing of the **current curve** via manual jobs. Opening the P(r) Adjust wizard alone does not pause; the first control change inside it does. Incoming TIFFs remain queued but are not processed until the user presses **Resume auto-processing** (enabled only when no skill is running). This mirrors subtraction-wizard intervention semantics but stays embedded (explicit resume required).
-
-**Polydisperse queue suspension:** Guinier interval edits, D(R) adjust parameter changes, and mixture parameter edits MUST **pause** the FIFO queue (same resume semantics as monodisperse). Opening the D(R) Adjust wizard alone does not pause; the first control change inside it does.
-
-### 8.4 Performance and queueing
-
-Analysis skills may be slower than integration/subtraction. The implementation MUST choose one of:
-
-- **Option 1 (simple, recommended):** run the selected mode’s skill sequence **inline** as part of the **per-file sequential** pipeline, so the queue worker does not start the next incoming image until the current file’s analysis (if any) has finished.
-- **Option 2 (advanced):** maintain a separate sequential analysis queue that always processes the **latest available** curve (dropping intermediate analysis tasks) while integration/subtraction continues.
-
-**This spec requires Option 1** for all modes for determinism. Users who need faster queue throughput SHOULD set analysis mode to **`Off`**. Option 2 remains a future option if performance requirements change.
-
-### 8.5 Failure policy within a mode
-
-For multi-step monodisperse auto-processing (`fit_guinier` → `fit_distances`), failure of an earlier step implies later steps are not run for that file. Shape fits are manual and do not block the auto queue. Global per-file failure handling remains §5.5 (skip file, log, continue queue).
-
-### 8.6 `model_bodies` — body-model subset (skill contract)
-
-The `model_bodies` skill MUST accept an optional argument specifying which ATSAS **body** models to fit:
-
-- **Default:** `None` (or equivalent) means **all** supported models (the full canonical set used by the skill).
-- **Non-default:** a **subset** of model names (any non-empty subset of that canonical set). The monodisperse wizard **BODIES** shape pane MUST expose this as user-configurable parameters and pass them into the skill invocation.
-
-Canonical names are defined in code (`BODIES_SHAPES_LIST` in `src/autosaxs/skill/model_bodies.py`); the UI SHOULD list the same names for multi-select.
-
-### 8.7 Interactive 3D viewer (implementation requirement)
-
-The monodisperse wizard **shape** pane (BODIES / DAMMIF) requires an **interactive 3D** view: the user can **rotate** the model and view it from **different angles**. The **same** 3D viewer component MUST be reused for **both** DAMMIF (`.cif`) and BODIES (analytical isosurface) so behavior and maintenance stay consistent. It MUST be distinct from existing **2D** curve / image viewers in `guisaxs_skills` (those remain valid for \(I(q)\), \(p(r)\), etc.). Wizard plots are rendered from structured artifacts (`.dat`, GNOM `.out`, `.fir`) only — not from skill-emitted PNG thumbnails.
+Analysis steps run **inline** in the same FIFO job as integrate/subtract (determinism). Use Off/disarm for faster throughput.
 
 ---
 
-## 9. Edge cases and invariants
+## 9. Edge cases
 
-### 9.1 No reprocessing by default
+- Calib / buffer / intake / analysis arming changes affect **future** auto jobs by default.
+- Burst: queue may grow large; UI stays responsive.
+- Overwrites follow skill naming; UI shows latest artifacts for the current history sample.
+- Restart: known baseline again; prior disk files not auto-queued until revised or dropped/Process.
 
-Changing **calibration**, **buffer**, or **analysis mode** (drop-down) during a session affects only **future** incoming files. The app does not automatically reprocess previously processed files or the current queue backlog.
+---
 
-(A future enhancement may add explicit “Reprocess backlog from X” controls; not required.)
+## 10. Related docs
 
-### 9.2 Burst handling
-
-If 1000 files arrive in 10 seconds and each requires ~1 second processing:
-
-- the queue size may peak near 1000
-- the app must continue processing sequentially until the queue empties
-- UI must remain responsive and show queue progress
-
-### 9.3 Duplicate/overwrite considerations
-
-If autosaxs skills overwrite outputs for identical stems, the liveview app must not attempt to invent its own anti-overwrite logic. It should rely on autosaxs caching/behavior and ensure the UI always points to the latest produced artifacts.
-
-### 9.4 Crash safety
-
-If the app is closed mid-queue, no special recovery is required; on restart, previously existing `.tif` files are ignored because only “new files after watcher start” are processed.
-
+| Doc | Role |
+|-----|------|
+| `liveview_session_sample_plan.md` | Architecture owners |
+| `skills_paradigm.md` | Skills contract for the package |
+| `guisaxs_skills_spec.md` | Skill-console product requirements |
+| Help HTML under `resources/help/guisaxs_liveview/` | End-user concepts (intake, queue, revisions) |

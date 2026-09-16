@@ -31,7 +31,7 @@ from ..deps import (
     write_saxs_atsas_format,
 )
 from .artifacts import _finalize_fit_sizes_failure, write_success_artifacts
-from .ensemble import run_rmax_ensemble
+from .ensemble import GNOM_BEST_OUT, cleanup_legacy_best_outs, clear_ensemble_dir, run_rmax_ensemble
 from .optimize import (
     _candidate_from_gnom_out,
     _guinier_from_profile,
@@ -61,6 +61,7 @@ def fit_sizes(
     nr: Optional[int] = None,
     force_zero_rmin: Optional[str] = None,
     force_zero_rmax: Optional[str] = None,
+    minimal: bool = False,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     r"""
@@ -73,7 +74,7 @@ def fit_sizes(
     - `shape` (str, default `spheres`): Polydisperse system model. Options: `spheres` (GNOM `--system=1` volume distribution for solid spheres), `rods` (GNOM `--system=5` length distribution for long cylinders, requires `rad56_nm` cylinder radius, deprecated), `ellipsoids` (accepted for API compatibility but **not supported by GNOM command-line** (GNOM system 2 is interactive-only), the skill will raise a clear error if selected).
     - `rg_nm` (float | None): Optional metadata only (not passed to GNOM); recorded in outputs if set.
     - `rmin_nm` (float | None): GNOM `--rmin` (nm). If omitted, not passed to GNOM.
-    - `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, optimized in `[ε, 3 × rg_max]` from in-process `fit_guinier` (30 s max). When set, skip Rmax search and the Rmax±10% ensemble (single GNOM refine).
+    - `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, optimized in `[ε, 3 × rg_max]` from in-process `fit_guinier` (30 s max). When set, skip Rmax search but still write the Rmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
     - `rad56_nm` (float | None): GNOM `--rad56` for `shape=rods` (nm cylinder radius), deprecated. Ignored for spheres.
     - `first` (int | None): GNOM `--first` (1-based). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
     - `last` (int | None): GNOM `--last`. If omitted, not passed to GNOM.
@@ -81,6 +82,7 @@ def fit_sizes(
     - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
     - `force_zero_rmin` (str | None): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
     - `force_zero_rmax` (str | None): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y`.
+    - `minimal` (bool, default `False`): When `True` with `rmax_nm` set, write only the single refine `.out` and remove any previous `ensemble/` (no close-fits / force-zero-off probe).
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Short parameter list
@@ -182,6 +184,7 @@ def fit_sizes(
         nr=nr,
         force_zero_rmin=force_zero_rmin,
         force_zero_rmax=force_zero_rmax,
+        minimal=bool(minimal),
         event_bus=bus,
         use_cache=use_cache,
     )
@@ -207,6 +210,7 @@ def fit_sizes(
         "nr",
         "force_zero_rmin",
         "force_zero_rmax",
+        "minimal",
     ],
     include_config_in_hash=False,
 )
@@ -224,6 +228,7 @@ def _fit_sizes_paths(
     nr: Optional[int] = None,
     force_zero_rmin: Optional[str] = None,
     force_zero_rmax: Optional[str] = None,
+    minimal: bool = False,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
     use_cache: bool = False,
@@ -399,7 +404,7 @@ def _fit_sizes_paths(
             },
         )
 
-    best_gnom_out_path = os.path.join(output_dir, f"gnom_system_{system}_rmax_{best_rmax_nm:.4f}.out")
+    best_gnom_out_path = os.path.join(output_dir, GNOM_BEST_OUT)
     ok, rc, stderr, out_text_final = _run_gnom_once(
         atsas_dat_path=atsas_dat_path,
         output_dir=output_dir,
@@ -415,6 +420,7 @@ def _fit_sizes_paths(
         force_zero_rmin=fz_rmin,
         force_zero_rmax=fz_rmax,
     )
+    cleanup_legacy_best_outs(output_dir, keep=best_gnom_out_path)
     if not ok:
         failures.append(
             {
@@ -491,8 +497,8 @@ def _fit_sizes_paths(
         "close_fit_out_paths": [],
         "force_zero_off_out_path": "",
     }
-    # Pinned rmax (interactive refine): single GNOM only — no Rmax±10% ensemble.
-    if (not refine) and np.isfinite(float(best_rmax_nm)) and float(best_rmax_nm) > 0:
+    # Close-fits ensemble (+ force-zero-off when rmax boundary was on), unless minimal.
+    if (not bool(minimal)) and np.isfinite(float(best_rmax_nm)) and float(best_rmax_nm) > 0:
         if event_bus:
             event_bus.publish(
                 EventType.MESSAGE,
@@ -512,7 +518,10 @@ def _fit_sizes_paths(
             nr=nr,
             best_parsed=best_parsed,
             event_bus=event_bus,
+            run_force_zero_off=(fz_rmax == "Y"),
         )
+    elif bool(minimal):
+        clear_ensemble_dir(output_dir)
 
     dr_quality = apply_sizes_extended_quality(
         dr_quality,

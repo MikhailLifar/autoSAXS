@@ -21,7 +21,7 @@ from ...services.calibration.storage import calibration_subdir, ensure_tiff_in_c
 from ....core.models import RunRequest
 from ....logic.session_state import SessionPathHints
 from ....logic.skill_catalog import discover_skills
-from ....logic.smart_defaults import find_calibrant_image_in_workdir
+from ....logic.smart_defaults import find_calibrant_image_in_workdir, find_latest_dat_in_workdir
 from ....ui.path_field import PathField
 from ....ui.skill_form import SkillForm
 from ..skill_form_utils import (
@@ -631,6 +631,26 @@ class BufferWizardDialog(QDialog):
 
     def has_buffer_path(self) -> bool:
         return bool(self._buffer_path_text())
+
+    def maybe_apply_empty_buffer_hint(self) -> bool:
+        """
+        If ``buffer_1d`` is empty, fill with the newest ``*.dat`` under the watchdir
+        (same spirit as calibrant TIFF guessing for calibration).
+        """
+        if self.has_buffer_path():
+            return False
+        found = find_latest_dat_in_workdir(self._watchdir)
+        if found is None:
+            return False
+        f = self._buffer_field()
+        if f is None:
+            return False
+        f.set_text(str(found))
+        f.set_browse_start_dir(str(found.parent))
+        self._sync_q_range_to_buffer(force=True)
+        self._refresh_buffer_plot()
+        self.attention_context_changed.emit()
+        return True
 
     def has_q_range(self) -> bool:
         q_min, q_max = self._q_range()

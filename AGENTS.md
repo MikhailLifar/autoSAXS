@@ -42,7 +42,7 @@ flowchart TB
     CLI["autosaxs CLI\nautosaxs/cli/cli.py"]
     SkillsGUI["guisaxs-skills\nPyQt5"]
     Liveview["guisaxs-liveview\nwatch-folder"]
-    Pipeline["pipeline/\nController + EventBus"]
+    LegacyPipe["pipeline/\nlegacy Controller"]
   end
 
   subgraph core_pkg [autosaxs package]
@@ -59,18 +59,18 @@ flowchart TB
   CLI --> Skill
   SkillsGUI -->|"subprocess:\npython -m autosaxs.cli.cli"| CLI
   Liveview --> SkillsGUI
-  Pipeline --> Skill
+  LegacyPipe --> Skill
   Skill --> Core
   Skill --> Wrap
   Skill --> PyFAI
   Skill --> ATSAS
 ```
 
-**Paradigm:** processing = **skills** (pure functions returning output path dicts). Pipelines are composed outside the package (scripts, liveview executor, legacy `Controller`). Spec: `docs/skills_paradigm.md`.
+**Paradigm:** processing = **skills** (pure functions returning output path dicts). Pipelines are composed outside the package (scripts, liveview `plan_for` + executor, legacy `Controller`). Spec: `docs/skills_paradigm.md`.
 
 **GUI rule:** PyQt apps **do not** call skill functions in-process for execution. They introspect `autosaxs.skill` for metadata, then run `python -m autosaxs.cli.cli <skill> ...` via `guisaxs_skills/logic/runner_qprocess.py` (`SkillRunner`).
 
-**Exception:** the liveview monodisperse **P(r) / GNOM adjust** wizard and polydisperse **D(R) / GNOM adjust** wizard may call `autosaxs.core.atsas_gnom` in-process for interactive plot/passport preview. Disk persistence still goes through `SkillRunner` → `fit_distances` (GNOM-only when `dmax_nm` is set) or `fit_sizes` (single GNOM when `rmax_nm` is set).
+**Exception:** the liveview monodisperse **P(r) / GNOM adjust** wizard and polydisperse **D(R) / GNOM adjust** wizard may call `autosaxs.core.atsas_gnom` in-process for interactive plot/passport preview. Disk persistence still goes through `SkillRunner` → `fit_distances` / `fit_sizes`. Parameterized refine (`dmax_nm` / `rmax_nm`) rewrites stable best outs (`datgnom_best.out` / `gnom_best.out`) plus the close-fits ensemble and force-zero-off probe unless `minimal=True`.
 
 ---
 
@@ -104,8 +104,8 @@ autosaxs/
 | plot_2d | `skill/plot_2d.py` | 2D detector PNGs |
 | fit_guinier | `skill/fit_guinier/` | Adaptive Guinier region |
 | analyze_kratky | `skill/analyze_kratky.py` | Dimensionless Kratky conformation analysis |
-| fit_distances | `skill/fit_distances.py` | DATGNOM monodisperse p(r); GNOM refine when `dmax_nm` set |
-| fit_sizes | `skill/fit_sizes.py` | GNOM polydisperse D(R) |
+| fit_distances | `skill/fit_distances/` | DATGNOM monodisperse p(r); GNOM refine+ensemble when `dmax_nm` set (`minimal` skips ensemble) |
+| fit_sizes | `skill/fit_sizes/` | GNOM polydisperse D(R); refine+ensemble when `rmax_nm` set (`minimal` skips ensemble) |
 | model_mixture | `skill/model_mixture/` | ATSAS MIXTURE (`fit_mixture` deprecated alias) |
 | model_bodies | `skill/model_bodies.py` | ATSAS BODIES (`fit_bodies` deprecated alias) |
 | model_dam | `skill/model_dam.py` | DAMMIF ab initio (+ DAMAVER when n_runs>1) |
@@ -146,7 +146,7 @@ autosaxs/
 | `gui_interface.py` | CustomTkinter dialogs ↔ EventBus |
 | `api.py` | `fast_first_processing` script API |
 
-Spec: `docs/pipeline_interactive_spec.md`. New work should prefer skills + scripts, not extending Controller unless explicitly needed.
+**Legacy.** Prefer skills + scripts or liveview `plan_for`. Lab entry may still call `Controller` from `saxsprocessing/pipeline.py`. No separate interactive-pipeline product spec — see `docs/skills_paradigm.md` for the skills contract.
 
 ### `autosaxs/resources/`
 
@@ -172,14 +172,14 @@ guisaxs_skills/
 ├── ui/                     # main_window, skill_form, style, path_field, previews
 └── liveview/               # watch-folder app (also used by guisaxs-liveview)
     ├── app.py, window.py   # entry + main window shell
-    ├── controller/         # LiveviewController + handlers (history, ingest, session)
-    ├── pipeline/           # LiveviewJobExecutor, jobs, queue
-    ├── ingest/             # TIFF watchers, stability, tiff_revision
-    ├── session/            # state, persistence, output_paths, workdir
-    ├── services/           # pure logic (artifacts, calibration, history, skills)
+    ├── controller/         # LiveviewController + handlers (history, ingest, session, …)
+    ├── pipeline/           # plan_for, LiveviewJobExecutor, jobs, queue
+    ├── ingest/             # watchers, stability, sample_revision, curve_classify
+    ├── session/            # state, sample, sample_store, persistence, output_paths, workdir
+    ├── services/           # artifacts, calibration, history (sync_middle_view), skills
     └── ui/
         ├── panels/         # left, middle, right/
-        ├── wizards/        # calibration, buffer, mask, fit, subtraction
+        ├── wizards/        # calibration, buffer, mask, fit, subtraction, GNOM adjust
         └── widgets/        # plots, viewer_3d
 ```
 
@@ -194,12 +194,16 @@ guisaxs_skills/
 | `logic/runner_qprocess.py` | `SkillRunner` — subprocess CLI, streams logs |
 | `logic/app_relaunch.py` | Detached liveview process relaunch (watchdir change, post-update) |
 | `logic/autosaxs_cli.py` | Blocking `get-default-config` helper |
-| `liveview/pipeline/executor.py` | **Active** liveview orchestrator (`LiveviewJobExecutor`) |
-| `liveview/session/state.py` | Session states A → B → BD → C → CD |
-| `liveview/ingest/watcher.py` | FLAT mode: watchdog TIFF detection (known path→stat baseline; no mtime-vs-start gate) |
+| `liveview/pipeline/plan.py` | `plan_for(session, sample)` — sole pipeline decision owner |
+| `liveview/pipeline/executor.py` | Queue worker; consumes `plan_for` + session `auto_processing` |
+| `liveview/session/state.py` | Session facts (intake, `auto_processing`, calib, buffer, analysis) |
+| `liveview/session/sample.py` / `sample_store.py` | `Sample` identity + history/boarding store |
+| `liveview/services/history/middle_from_stem.py` | `sync_middle_view` — middle layout + content |
+| `liveview/ingest/sample_revision.py` | On-disk sample revision (frame or `.dat`) |
+| `liveview/ingest/watcher.py` | FLAT mode: watchdog + known-path baseline |
 | `liveview/ingest/dir_tree_observer.py` | TREE mode: hierarchical mtime/ctime/ino scan + prune |
 
-**Liveview note:** orchestration in `liveview/controller/` (`LiveviewController` + handlers); skill execution via `liveview/pipeline/`; package `__init__.py` files re-export common symbols for shorter imports. TIFF change identity is `FileStatSnapshot` (size, mtime, ctime, dev, ino) in `liveview/ingest/stability.py`.
+**Liveview:** three owners — Session, SampleStore, `plan_for` — plus middle sync. See `docs/liveview_session_sample_plan.md` and `docs/guisaxs_liveview_spec.md`. Sample change identity is `FileStatSnapshot` in `liveview/ingest/stability.py`.
 
 ### `guisaxs_liveview/`
 
@@ -222,7 +226,8 @@ Help assets live in `autosaxs/resources/help/guisaxs_liveview/`.
 | Report assembly | `autosaxs/core/report_fragments.py`, `skill/report_*.py` |
 | GUI skill metadata | `guisaxs_skills/logic/skill_catalog.py` |
 | GUI subprocess runner | `guisaxs_skills/logic/runner_qprocess.py` |
-| Liveview job building | `guisaxs_skills/liveview/pipeline/` (`executor.py`, `jobs.py`) |
+| Liveview job building | `guisaxs_skills/liveview/pipeline/plan.py`, `executor.py` |
+| Liveview middle column | `liveview/services/history/middle_from_stem.py` (`sync_middle_view`) |
 | PyQt colors/theme | `guisaxs_skills/ui/style.py` |
 | Bundled defaults export | `autosaxs get-default-config -o <dir>` |
 | Skill docstrings → Cursor skills | `autosaxs get-skills -o <dir>` |
@@ -283,10 +288,12 @@ Run all (CI order): `helpers/run_tests.sh`.
 | `INSTALL.md` | Beginner install (Linux/Windows, Miniconda, ATSAS optional) |
 | `README.md` | Short PyPI / GitHub landing page (generated) |
 | `autosaxs-docs/skills_reference.md` | Detailed per-skill reference (generated) |
-| `docs/skills_paradigm.md` | Skills architecture spec |
-| `docs/guisaxs_skills_spec.md` | Skills GUI spec |
-| `docs/guisaxs_liveview_spec.md` | Liveview spec |
-| `docs/pipeline_interactive_spec.md` | Legacy pipeline / EventBus |
+| `docs/skills_paradigm.md` | Skills architecture (primary package contract) |
+| `docs/liveview_session_sample_plan.md` | Liveview three owners + middle sync |
+| `docs/guisaxs_liveview_spec.md` | Liveview product / behavior |
+| `docs/guisaxs_skills_spec.md` | Skills GUI product requirements |
+
+Code under `src/` is SSOT when a doc drifts; update the doc.
 
 ### Cursor project files
 
@@ -316,7 +323,8 @@ Headless GUI tests: `xvfb-run -a python -m pytest tests/test_guisaxs_liveview.py
 ## Known gaps / stale references
 
 - README / CLI help may still say `python -m autosaxs.cli` in places; entry module is `python -m autosaxs.cli.cli`.
+- `autosaxs/pipeline/` (legacy Controller) remains for lab scripts; do not extend it for new product features.
 
 ---
 
-*Last structured pass: 2026-07-22. Update this file when you touch architecture or discover a better "start here" path.*
+*Last structured pass: 2026-09-16. Update this file when you touch architecture or discover a better "start here" path.*

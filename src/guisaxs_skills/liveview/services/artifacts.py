@@ -144,6 +144,8 @@ _FIT_DISTANCES_QUALITY_KEYS = (
     "rg_guinier_nm",
     "q_min_fit_nm",
     "total_estimate",
+    "chi2",
+    "chi2_class",
     "delta_rg_pct",
     "shannon_s_min",
     "shannon_class",
@@ -220,7 +222,13 @@ def discover_gnom_out_path(
     stem = _profile_sample_stem(profile_abs)
     fd = fit_distances_dir(output_root) / stem
     if fd.is_dir():
-        for patt in ("datgnom_rg_*.out", "*_gnom.out", "*.out"):
+        for patt in (
+            "datgnom_best.out",
+            "gnom_best.out",
+            "datgnom_rg_*.out",
+            "*_gnom.out",
+            "*.out",
+        ):
             candidates.extend(sorted(fd.glob(patt), key=lambda p: p.stat().st_mtime, reverse=True))
 
     for cand in candidates:
@@ -292,6 +300,8 @@ _FIT_SIZES_QUALITY_KEYS = (
     "dmax_nm",
     "q_min_fit_nm",
     "total_estimate",
+    "chi2",
+    "chi2_class",
     "shannon_s_min",
     "shannon_class",
     "shannon_ok",

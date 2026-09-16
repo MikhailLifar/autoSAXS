@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,26 +12,25 @@ from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 from ...core.models import RunRequest
 from ...logic.runner_qprocess import RunOutcome, SkillRunner
 from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
-from ..ingest.stability import StabilityConfig, StabilityTracker
-from ..ingest.tiff_revision import (
-    TiffRevision,
-    TiffRevisionSource,
+from ..ingest.stability import FileStatSnapshot, StabilityConfig, StabilityTracker
+from ..ingest.sample_revision import (
+    SampleRevision,
+    SampleRevisionSource,
+    is_dat_path,
     is_newer_than,
     is_tiff_path,
     make_revision,
-    normalize_tiff_path,
+    normalize_sample_path,
 )
 from ..session.output_paths import (
-    averaged_dir,
-    averaged_proxy_dir,
-    integrated_dat_path,
     subtracted_dat_path,
     subtracted_dir,
-    tiff_output_root,
 )
+from ..session.sample import Sample
+from ..session.sample_store import SampleStore
 from ..session.state import (
+    LiveviewIntakeMode,
     LiveviewSessionState,
-    LiveviewState,
     LiveviewWatchMode,
     MonodisperseShapeMode,
     PolydisperseMixtureMode,
@@ -45,6 +45,7 @@ from .monodisperse_pipeline import (
     job_includes_shape,
     profile_sample_stem,
 )
+from .plan import plan_for
 from .polydisperse_pipeline import (
     PolydispersePipelineParts,
     build_polydisperse_steps,
@@ -66,35 +67,43 @@ class LiveviewQueueStatus:
 class LiveviewJobExecutor(QObject):
     """
     Single orchestrator for liveview:
-    - tracks incoming TIFFs until stable
-    - converts them into Jobs based on current LiveviewSessionState
+    - tracks incoming samples until stable
+    - builds Jobs via ``plan_for(session, sample)``
     - executes Jobs step-by-step using SkillRunner
     """
 
     queue_status = pyqtSignal(object)  # LiveviewQueueStatus
     latest_artifacts = pyqtSignal(object)  # dict
     error = pyqtSignal(str)
-    session_file_completed = pyqtSignal(str)  # tiff path
-    tiff_revision_pending = pyqtSignal(object)  # TiffRevision — queued or stabilizing
+    session_file_completed = pyqtSignal(str)  # sample path
+    job_started = pyqtSignal(str)  # sample path (TIFF or .dat) when a pipeline job begins
+    sample_revision_pending = pyqtSignal(object)  # SampleRevision — queued or stabilizing
     skill_started = pyqtSignal(str)
     skill_finished = pyqtSignal(object)  # RunOutcome
 
-    def __init__(self, *, state: LiveviewSessionState, runner: SkillRunner) -> None:
+    def __init__(
+        self,
+        *,
+        state: LiveviewSessionState,
+        sample_store: SampleStore,
+        runner: SkillRunner,
+    ) -> None:
         super().__init__()
         self._state = state
+        self._samples = sample_store
         self._runner = runner
 
         self._tick_timer = QTimer(self)
         self._tick_timer.setInterval(100)
         self._tick_timer.timeout.connect(self._tick)
 
-        self._paused: bool = False
-        self._pause_sources: set[str] = set()
-
         self._incoming = FIFOQueue()
+        self._incoming_lock = threading.Lock()
         self._stability_cfg = StabilityConfig()
         self._current_incoming: Optional[QueueItem] = None
         self._current_stability: Optional[StabilityTracker] = None
+        # Dedupe inotify+poll (and drop+watch) for the same path+stat; manual re-Process bypasses.
+        self._last_accepted_stat: Dict[str, FileStatSnapshot] = {}
 
         self._jobs = JobQueue()
         self._current_job: Optional[Job] = None
@@ -106,7 +115,7 @@ class LiveviewJobExecutor(QObject):
         self._durations: List[float] = []
         self._job_started_at: float = 0.0
 
-        self._session_tiff_history: List[str] = []
+        self._owned_output_paths: set[str] = set()
 
         self._runner.finished.connect(self._on_skill_finished)
         self._requeue_cancelled_job: bool = False
@@ -115,6 +124,37 @@ class LiveviewJobExecutor(QObject):
         # Nested Qt event loops must not let _tick restart the same job step.
         self._handling_skill_outcome: bool = False
 
+    def register_owned_output(self, path: str) -> None:
+        key = normalize_sample_path(path)
+        if key:
+            self._owned_output_paths.add(key)
+
+    def is_owned_output(self, path: str) -> bool:
+        return normalize_sample_path(path) in self._owned_output_paths
+
+    def _register_job_outputs(self, job: Job) -> None:
+        """Mark skill destinations so watchers do not re-ingest pipeline products."""
+        for step in job.steps:
+            opts = step.request.options or {}
+            out_dir = opts.get("output_dir")
+            if not isinstance(out_dir, str) or not out_dir.strip():
+                continue
+            name = step.name
+            stem = str(job.context.get("sample_stem") or job.context.get("tiff_stem") or "").strip()
+            root = Path(out_dir.strip())
+            if name in ("integrate", "integrate_proxy") and stem:
+                self.register_owned_output(str((root / f"int_{stem}.dat").resolve()))
+            elif name == "subtract" and stem:
+                self.register_owned_output(str((root / f"sub_{stem}.dat").resolve()))
+                self.register_owned_output(str((root / f"diff_log_{stem}.dat").resolve()))
+            # Also own the whole output dir files that match when we know profile path
+        profile = str(job.context.get("profile_path") or "").strip()
+        if profile:
+            self.register_owned_output(profile)
+        sub_out = str(job.context.get("subtracted_path") or "").strip()
+        if sub_out:
+            self.register_owned_output(sub_out)
+
     def start(self) -> None:
         if self._tick_timer.isActive():
             return
@@ -122,8 +162,6 @@ class LiveviewJobExecutor(QObject):
 
     def stop(self) -> None:
         self._tick_timer.stop()
-        self._paused = False
-        self._pause_sources.clear()
         self._current_incoming = None
         self._current_stability = None
         self._current_job = None
@@ -131,33 +169,14 @@ class LiveviewJobExecutor(QObject):
         self._pending_step_name = None
         self._step_results.clear()
 
-    def pause(self, *, source: str = "default") -> None:
-        self._pause_sources.add(str(source))
-        self._paused = bool(self._pause_sources)
-
-    def resume(self, *, source: Optional[str] = None) -> None:
-        if source is None:
-            self._pause_sources.clear()
-        else:
-            self._pause_sources.discard(str(source))
-        self._paused = bool(self._pause_sources)
-
     def cancel_current(self) -> None:
         # Cancellation policy: by default we requeue the current job so users don't lose the file.
         # Call sites that don't want this can toggle `_requeue_cancelled_job` before cancelling.
         self.cancel_running(requeue=True)
 
-    @property
-    def paused(self) -> bool:
-        return bool(self._paused)
-
-    @property
-    def session_processed_tiffs(self) -> tuple[str, ...]:
-        return tuple(self._session_tiff_history)
-
     def is_idle(self) -> bool:
-        """True when not paused and no skill, job, or incoming TIFF work is active."""
-        if self._paused:
+        """True when auto-processing and no skill, job, or incoming sample work is active."""
+        if not self._state.is_auto_processing():
             return False
         if self._runner.is_running():
             return False
@@ -175,20 +194,28 @@ class LiveviewJobExecutor(QObject):
 
     @property
     def queue_suspended(self) -> bool:
-        return bool(self._paused)
+        return not self._state.is_auto_processing()
+
+    def sync_auto_processing_from_session(self) -> None:
+        """API hook; queue suspension follows ``session.auto_processing``."""
+        return
 
     def enqueue_revision(
         self,
-        revision: TiffRevision,
+        revision: SampleRevision,
         *,
         stability_cfg: Optional[StabilityConfig] = None,
     ) -> None:
         """Accept an observed TIFF revision into the incoming pipeline."""
         item = QueueItem.from_revision(revision, stability_cfg=stability_cfg)
-        accepted = self._accept_incoming_revision(item)
+        with self._incoming_lock:
+            accepted = self._accept_incoming_revision(
+                item,
+                source=revision.source,
+            )
         if accepted:
             self._jobs.drop_jobs_for_tiff_path(revision.path)
-            self.tiff_revision_pending.emit(revision)
+            self.sample_revision_pending.emit(revision)
 
     def enqueue_tiff(
         self,
@@ -198,24 +225,35 @@ class LiveviewJobExecutor(QObject):
         stability_cfg: Optional[StabilityConfig] = None,
         stat: Optional[object] = None,
     ) -> None:
-        from .stability import FileStatSnapshot
-
         snap = stat if isinstance(stat, FileStatSnapshot) else None
         rev = make_revision(
             path=path,
             detected_at=detected_at_monotonic,
-            source=TiffRevisionSource.MANUAL,
+            source=SampleRevisionSource.MANUAL,
             stat=snap,
         )
         if rev is None:
             return
         self.enqueue_revision(rev, stability_cfg=stability_cfg)
 
-    def _accept_incoming_revision(self, item: QueueItem) -> bool:
+    def _accept_incoming_revision(
+        self,
+        item: QueueItem,
+        *,
+        source: SampleRevisionSource = SampleRevisionSource.INOTIFY,
+    ) -> bool:
         """Queue or upgrade a revision; return True when the pending work item changed."""
+        key = normalize_sample_path(item.path)
+        # Non-manual: ignore identical re-notifications (inotify + poll, or drop + watch).
+        if source != SampleRevisionSource.MANUAL:
+            prev = self._last_accepted_stat.get(key)
+            if prev is not None and prev == item.observed_stat:
+                return False
+
         cur = self._current_incoming
-        if cur is not None and normalize_tiff_path(cur.path) == normalize_tiff_path(item.path):
+        if cur is not None and normalize_sample_path(cur.path) == key:
             if cur.observed_stat == item.observed_stat:
+                self._last_accepted_stat[key] = item.observed_stat
                 return False
             if not is_newer_than(item.observed_stat, cur.observed_stat):
                 return False
@@ -227,10 +265,16 @@ class LiveviewJobExecutor(QObject):
                 stability_cfg=cfg,
             )
             self._current_stability = StabilityTracker(path=item.path, cfg=cfg)
+            self._last_accepted_stat[key] = item.observed_stat
             return True
 
         result = self._incoming.put_revision(item)
-        return result in (RevisionEnqueueResult.ADDED, RevisionEnqueueResult.REPLACED)
+        if result in (RevisionEnqueueResult.ADDED, RevisionEnqueueResult.REPLACED):
+            self._last_accepted_stat[key] = item.observed_stat
+            return True
+        if result == RevisionEnqueueResult.UNCHANGED:
+            self._last_accepted_stat[key] = item.observed_stat
+        return False
 
     def enqueue_job(self, job: Job) -> None:
         self._jobs.put(job)
@@ -269,9 +313,9 @@ class LiveviewJobExecutor(QObject):
                 context={
                     "manual": True,
                     "skill_name": "report_individual",
-                    "tiff_stem": stem,
+                    "sample_stem": stem,
                     "output_root": str(root),
-                    "tiff_path": (tiff_path or "").strip(),
+                    "source_path": (tiff_path or "").strip(),
                 },
             )
         )
@@ -334,22 +378,33 @@ class LiveviewJobExecutor(QObject):
             id=f"rerun_sub:{stem}:{time.time_ns()}",
             priority=int(priority),
             steps=steps,
-            context={"manual": True, "tiff_stem": stem, "profile_path": profile},
+            context={"manual": True, "sample_stem": stem, "profile_path": profile},
         )
 
-    def _append_session_tiff(self, path: str) -> None:
+    def _append_session_sample(self, path: str, *, boarding: LiveviewIntakeMode) -> None:
         try:
-            key = str(Path(path).resolve())
-        except Exception:
-            key = (path or "").strip()
-        if not key:
-            return
-        try:
-            if key in self._session_tiff_history:
-                self._session_tiff_history.remove(key)
-            self._session_tiff_history.append(key)
+            sample = Sample.from_path(path, boarding=boarding)
         except Exception:
             return
+        try:
+            self._samples.append_history(sample)
+        except Exception:
+            return
+
+    def _append_session_tiff(self, path: str, *, boarding: Optional[LiveviewIntakeMode] = None) -> None:
+        mode = boarding if boarding is not None else self._state.intake_mode
+        self._append_session_sample(path, boarding=mode)
+
+    def _boarding_from_job_context(self, job: Job) -> LiveviewIntakeMode:
+        raw = str(job.context.get("boarding") or "").strip()
+        if raw:
+            try:
+                return LiveviewIntakeMode(raw)
+            except ValueError:
+                pass
+        source = str(job.context.get("source_path") or job.context.get("tiff_path") or "").strip()
+        remembered = self._samples.boarding_for(source) if source else None
+        return remembered if remembered is not None else self._state.intake_mode
 
     def _emit_status(self) -> None:
         avg = (sum(self._durations) / len(self._durations)) if self._durations else 0.0
@@ -360,7 +415,11 @@ class LiveviewJobExecutor(QObject):
         elif self._current_incoming is not None:
             cur_path = self._current_incoming.path
         elif self._current_job is not None:
-            cur_path = str(self._current_job.context.get("tiff_path") or "")
+            cur_path = str(
+                self._current_job.context.get("source_path")
+                or self._current_job.context.get("tiff_path")
+                or ""
+            )
         rem = qn + (1 if (self._runner.is_running() or self._current_job is not None or self._current_incoming is not None) else 0)
         self.queue_status.emit(
             LiveviewQueueStatus(
@@ -387,24 +446,26 @@ class LiveviewJobExecutor(QObject):
         if self._handling_skill_outcome:
             return
 
+        auto = self._state.is_auto_processing()
+
         # If a job is active and no step is pending, advance.
         if self._current_job is not None:
             if self._job_step_idx >= len(self._current_job.steps):
                 self._finish_job(ok=True)
                 return
-            # When auto-processing is suspended, only manual jobs may advance.
-            if not self._paused or is_manual_job(self._current_job):
+            # When auto-processing is off, only manual jobs may advance.
+            if auto or is_manual_job(self._current_job):
                 self._start_next_job_step()
             return
 
-        if self._paused:
-            # Suspended: run queued manual jobs only; hold TIFF intake and auto jobs.
+        if not auto:
+            # Manual mode: run queued manual jobs only; hold incoming and auto jobs.
             nxt = self._jobs.get_nowait_manual()
             if nxt is not None:
                 self._start_job(nxt)
             return
 
-        # No current job: promote stable incoming TIFFs into jobs.
+        # No current job: promote stable incoming samples into jobs.
         self._advance_incoming_until_job_ready()
 
         # Start next job if available.
@@ -416,7 +477,8 @@ class LiveviewJobExecutor(QObject):
     def _advance_incoming_until_job_ready(self) -> None:
         # If already tracking a file, keep polling stability.
         if self._current_incoming is None:
-            item = self._incoming.get_nowait()
+            with self._incoming_lock:
+                item = self._incoming.get_nowait()
             if item is None:
                 return
             self._current_incoming = item
@@ -435,18 +497,21 @@ class LiveviewJobExecutor(QObject):
         if stable is False:
             return
 
-        # Stable -> build and enqueue processing job if this is a TIFF; else ignore.
-        tiff = self._current_incoming.path
+        # Stable -> Sample + plan_for -> enqueue job.
+        sample_path = self._current_incoming.path
         self._current_incoming = None
         self._current_stability = None
-        if not self._is_tiff_path(tiff):
-            return
+        boarding = self._samples.boarding_for(sample_path) or self._state.intake_mode
         try:
-            job = self._build_process_tiff_job(tiff_path=tiff)
+            sample = Sample.from_path(sample_path, boarding=boarding)
+            self._samples.remember(sample)
+            plan = plan_for(self._state, sample, load_yaml=self._load_yaml_options)
+            job = plan.to_job()
         except Exception as e:
-            self.error.emit(f"Cannot build job for TIFF: {tiff}\n{e}")
+            self.error.emit(f"Cannot build job for sample: {sample_path}\n{e}")
             return
-        self._jobs.drop_jobs_for_tiff_path(tiff)
+        self._register_job_outputs(job)
+        self._jobs.drop_jobs_for_tiff_path(sample_path)
         self._jobs.put(job)
 
     @property
@@ -462,12 +527,65 @@ class LiveviewJobExecutor(QObject):
                 return None
         return None
 
+    @property
+    def current_job_sample_path(self) -> str:
+        """TIFF or boarded ``.dat`` path for the active job (empty if idle)."""
+        job = self._current_job
+        if job is None:
+            return ""
+        raw = str(job.context.get("source_path") or job.context.get("tiff_path") or "").strip()
+        if not raw:
+            return ""
+        try:
+            return str(Path(raw).expanduser().resolve())
+        except OSError:
+            return raw
+
     def _start_job(self, job: Job) -> None:
         self._current_job = job
         self._job_step_idx = 0
         self._pending_step_name = None
         self._step_results = {}
         self._job_started_at = time.monotonic()
+        self._sync_last_paths_from_job_context(job)
+        sample = self.current_job_sample_path
+        if sample:
+            self.job_started.emit(sample)
+
+    def _sync_last_paths_from_job_context(self, job: Job) -> None:
+        """Curve boarding never emits integrate/subtract artifacts — seed last_* from context."""
+        boarding = str(job.context.get("boarding") or "").strip()
+        source = str(job.context.get("source_path") or job.context.get("tiff_path") or "").strip()
+        profile = str(job.context.get("profile_path") or "").strip()
+        subtracted = str(job.context.get("subtracted_path") or "").strip()
+
+        def _set_if_file(attr: str, raw: str) -> None:
+            if not raw:
+                return
+            try:
+                p = Path(raw).expanduser().resolve()
+            except OSError:
+                return
+            if p.is_file():
+                setattr(self._state, attr, p)
+
+        if boarding == LiveviewIntakeMode.CURVE_1D.value:
+            _set_if_file("last_integrated_dat_path", source)
+            # Profile may already be the subtracted path when buffer is configured.
+            if subtracted:
+                _set_if_file("last_subtracted_dat_path", subtracted)
+            elif profile and profile != source and Path(profile).name.lower().startswith("sub_"):
+                _set_if_file("last_subtracted_dat_path", profile)
+        elif boarding == LiveviewIntakeMode.CURVE_SUB.value:
+            _set_if_file("last_subtracted_dat_path", source or profile)
+        elif boarding == LiveviewIntakeMode.FRAME_2D.value and profile:
+            # Keep last_* in sync when a TIFF job already knows its profile path.
+            if "subtracted" in str(Path(profile).parent).lower() or Path(profile).name.lower().startswith(
+                "sub_"
+            ):
+                _set_if_file("last_subtracted_dat_path", profile)
+            else:
+                _set_if_file("last_integrated_dat_path", profile)
 
     def _finish_job(self, *, ok: bool) -> None:
         job = self._current_job
@@ -478,11 +596,17 @@ class LiveviewJobExecutor(QObject):
             self._durations.append(dt)
             if len(self._durations) > 50:
                 self._durations = self._durations[-50:]
-        tiff_path = str(job.context.get("tiff_path") or "").strip()
-        if ok and tiff_path and self._is_tiff_path(tiff_path):
-            self._append_session_tiff(tiff_path)
-            self.session_file_completed.emit(tiff_path)
-            self._last_processed = tiff_path
+        source_path = str(job.context.get("source_path") or job.context.get("tiff_path") or "").strip()
+        if ok and source_path and (self._is_tiff_path(source_path) or is_dat_path(source_path)):
+            boarding = self._boarding_from_job_context(job)
+            if not is_manual_job(job):
+                self._append_session_sample(source_path, boarding=boarding)
+                self.session_file_completed.emit(source_path)
+                self._last_processed = source_path
+            elif job.context.get("append_history"):
+                self._append_session_sample(source_path, boarding=boarding)
+                self.session_file_completed.emit(source_path)
+                self._last_processed = source_path
         followup = self._shape_followup_job_if_needed(job=job, ok=ok)
         if followup is None:
             followup = self._mixture_followup_job_if_needed(job=job, ok=ok)
@@ -550,9 +674,12 @@ class LiveviewJobExecutor(QObject):
                 "monodisperse": True,
                 "shape_followup": True,
                 "profile_path": str(Path(prof).expanduser().resolve()),
-                "tiff_stem": stem,
+                "sample_stem": stem,
                 "output_root": str(root),
-                "tiff_path": str(job.context.get("tiff_path") or "").strip(),
+                "source_path": str(
+                    job.context.get("source_path") or job.context.get("tiff_path") or ""
+                ).strip(),
+                "boarding": str(job.context.get("boarding") or "").strip(),
             },
         )
 
@@ -609,9 +736,12 @@ class LiveviewJobExecutor(QObject):
                 "polydisperse": True,
                 "mixture_followup": True,
                 "profile_path": str(Path(prof).expanduser().resolve()),
-                "tiff_stem": stem,
+                "sample_stem": stem,
                 "output_root": str(root),
-                "tiff_path": str(job.context.get("tiff_path") or "").strip(),
+                "source_path": str(
+                    job.context.get("source_path") or job.context.get("tiff_path") or ""
+                ).strip(),
+                "boarding": str(job.context.get("boarding") or "").strip(),
             },
         )
 
@@ -810,7 +940,7 @@ class LiveviewJobExecutor(QObject):
                 "manual": True,
                 "polydisperse": True,
                 "profile_path": prof,
-                "tiff_stem": stem,
+                "sample_stem": stem,
                 "output_root": str(root),
             },
         )
@@ -834,7 +964,7 @@ class LiveviewJobExecutor(QObject):
                 "manual": True,
                 "monodisperse": True,
                 "profile_path": prof,
-                "tiff_stem": stem,
+                "sample_stem": stem,
                 "output_root": str(root),
             },
         )
@@ -1000,103 +1130,6 @@ class LiveviewJobExecutor(QObject):
         if sp.parent.name in ("averaged", "averaged_proxy"):
             return sp.parent.parent
         return sp.parent
-
-    def _build_process_tiff_job(self, *, tiff_path: str) -> Job:
-        """
-        Build a Job for a stable incoming TIFF based on current session state.
-
-        Uses deterministic output paths based on TIFF stem (watchdir conventions).
-        """
-        tp = (tiff_path or "").strip()
-        stem = Path(tp).stem
-        wd = self._state.watchdir
-        root = tiff_output_root(watchdir=wd, tiff_path=tp, mode=self._state.watch_mode)
-
-        st = self._state.current_state()
-        steps: List[JobStep] = []
-
-        # Always disable caching for live runs.
-        if st == LiveviewState.A:
-            outdir = averaged_proxy_dir(root)
-            outdir.mkdir(parents=True, exist_ok=True)
-            steps.append(
-                JobStep(
-                    name="integrate_proxy",
-                    request=RunRequest(
-                        skill_name="integrate_proxy",
-                        positional=[tp],
-                        options={"output_dir": str(outdir), "use_cache": False},
-                    ),
-                )
-            )
-            return Job(
-                id=f"tiff:{stem}:{time.time_ns()}",
-                priority=0,
-                steps=steps,
-                context={"tiff_path": tp, "tiff_stem": stem, "output_root": str(root.resolve())},
-            )
-
-        # Calibrated paths (B/BD/C/CD)
-        if self._state.integrator_dir is None:
-            raise RuntimeError("Missing integrator_dir (not calibrated)")
-        outdir = averaged_dir(root)
-        outdir.mkdir(parents=True, exist_ok=True)
-        integrate_opts: dict = {"output_dir": str(outdir), "use_cache": False}
-        mask_p = self._state.mask_path
-        if mask_p is not None and mask_p.is_file():
-            integrate_opts["mask"] = str(mask_p.resolve())
-        steps.append(
-            JobStep(
-                name="integrate",
-                request=RunRequest(
-                    skill_name="integrate",
-                    positional=[tp, str(self._state.integrator_dir)],
-                    options=integrate_opts,
-                ),
-            )
-        )
-
-        integrated_dat = str(integrated_dat_path(root=root, stem=stem, integrator_ready=True).resolve())
-
-        if st in (LiveviewState.C, LiveviewState.CD):
-            if self._state.buffer_dat_path is None or self._state.subtract_options is None:
-                raise RuntimeError("State C requires buffer_dat_path and subtract_options")
-            subdir = subtracted_dir(root)
-            subdir.mkdir(parents=True, exist_ok=True)
-            opts = {"output_dir": str(subdir), "use_cache": False}
-            opts.update(dict(self._state.subtract_options or {}))
-            steps.append(
-                JobStep(
-                    name="subtract",
-                    request=RunRequest(
-                        skill_name="subtract",
-                        positional=[integrated_dat, str(self._state.buffer_dat_path)],
-                        options=opts,
-                    ),
-                )
-            )
-            profile = str(subtracted_dat_path(root=root, stem=stem).resolve())
-            steps.extend(self._analysis_steps_for_profile(profile, output_root=root))
-            if self._state.analysis_enabled():
-                steps.append(report_individual_step(output_root=root, basename=stem))
-            return Job(
-                id=f"tiff:{stem}:{time.time_ns()}",
-                priority=0,
-                steps=steps,
-                context={"tiff_path": tp, "tiff_stem": stem, "output_root": str(root.resolve())},
-            )
-
-        # State B/BD
-        profile = integrated_dat
-        steps.extend(self._analysis_steps_for_profile(profile, output_root=root))
-        if self._state.analysis_enabled():
-            steps.append(report_individual_step(output_root=root, basename=stem))
-        return Job(
-            id=f"tiff:{stem}:{time.time_ns()}",
-            priority=0,
-            steps=steps,
-            context={"tiff_path": tp, "tiff_stem": stem, "output_root": str(root.resolve())},
-        )
 
     def _analysis_steps_for_profile(
         self,

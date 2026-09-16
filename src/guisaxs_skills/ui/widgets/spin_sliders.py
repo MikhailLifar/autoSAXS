@@ -7,23 +7,32 @@ import math
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QDoubleSpinBox, QHBoxLayout, QSlider, QWidget
 
+_SLIDER_TICKS = 10_000
+
 
 class LengthNmSpinSlider(QWidget):
-    """Length (nm) spinbox with arrows + horizontal slider (0.01 nm ticks)."""
+    """
+    Length (nm) spinbox with arrows + horizontal slider.
+
+    The spin range stays wide so arrows / typed values can exceed the slider span.
+    The slider maps ``[slider_min_nm, slider_max_nm]`` (default 0 … 1000 nm).
+    """
 
     valueChanged = pyqtSignal(float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._block = False
+        self._slider_min_nm = 0.0
+        self._slider_max_nm = 1000.0
         self._spin = QDoubleSpinBox()
         self._spin.setDecimals(4)
-        self._spin.setRange(0.01, 1e6)
+        self._spin.setRange(0.0, 1e6)
         self._spin.setValue(1.0)
         self._slider = QSlider(Qt.Horizontal)
-        self._slider.setMinimum(1)  # 0.01 nm
-        self._slider.setMaximum(100_000)  # 1000 nm at 0.01
-        self._slider.setValue(100)
+        self._slider.setMinimum(0)
+        self._slider.setMaximum(_SLIDER_TICKS)
+        self._slider.setValue(0)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
@@ -31,6 +40,7 @@ class LengthNmSpinSlider(QWidget):
         lay.addWidget(self._spin, 0)
         self._spin.valueChanged.connect(self._on_spin)
         self._slider.valueChanged.connect(self._on_slider)
+        self._sync_slider_from_spin()
 
     def spin(self) -> QDoubleSpinBox:
         return self._spin
@@ -46,6 +56,16 @@ class LengthNmSpinSlider(QWidget):
         finally:
             self._block = False
 
+    def set_slider_span(self, *, min_nm: float = 0.0, max_nm: float) -> None:
+        """Set slider domain only; spin can still go beyond via arrows / typing."""
+        lo = max(0.0, float(min_nm))
+        hi = float(max_nm)
+        if not math.isfinite(hi) or hi <= lo:
+            hi = lo + 1.0
+        self._slider_min_nm = lo
+        self._slider_max_nm = hi
+        self._sync_slider_from_spin()
+
     def blockSignals(self, block: bool) -> None:  # noqa: N802
         self._spin.blockSignals(block)
         self._slider.blockSignals(block)
@@ -55,11 +75,21 @@ class LengthNmSpinSlider(QWidget):
         self._slider.setEnabled(enabled)
         super().setEnabled(enabled)
 
+    def _value_to_ticks(self, value: float) -> int:
+        span = self._slider_max_nm - self._slider_min_nm
+        if span <= 0:
+            return 0
+        frac = (float(value) - self._slider_min_nm) / span
+        return max(0, min(_SLIDER_TICKS, int(round(frac * _SLIDER_TICKS))))
+
+    def _ticks_to_value(self, ticks: int) -> float:
+        span = self._slider_max_nm - self._slider_min_nm
+        frac = float(ticks) / float(_SLIDER_TICKS)
+        return self._slider_min_nm + frac * span
+
     def _sync_slider_from_spin(self) -> None:
-        ticks = int(round(float(self._spin.value()) * 100.0))
-        ticks = max(self._slider.minimum(), min(self._slider.maximum(), ticks))
         self._slider.blockSignals(True)
-        self._slider.setValue(ticks)
+        self._slider.setValue(self._value_to_ticks(float(self._spin.value())))
         self._slider.blockSignals(False)
 
     def _on_spin(self, *_a) -> None:
@@ -77,7 +107,7 @@ class LengthNmSpinSlider(QWidget):
             return
         self._block = True
         try:
-            self._spin.setValue(float(ticks) / 100.0)
+            self._spin.setValue(self._ticks_to_value(int(ticks)))
         finally:
             self._block = False
         self.valueChanged.emit(self.value())

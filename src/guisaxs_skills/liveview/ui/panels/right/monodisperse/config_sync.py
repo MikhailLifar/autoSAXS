@@ -24,10 +24,6 @@ class MonodisperseConfigSync:
     def __init__(self, *, state: LiveviewSessionState, wizard: Any) -> None:
         self._state = state
         self._wizard = wizard
-        self._gnom_adjust: Any = None
-
-    def set_gnom_adjust_wizard(self, dlg: Any) -> None:
-        self._gnom_adjust = dlg
 
     def sync_params_to_state(self) -> None:
         wp = dict(self._state.monodisperse_wizard_params or {})
@@ -38,7 +34,7 @@ class MonodisperseConfigSync:
         else:
             wp["guinier_first"] = g_first
             wp["guinier_last"] = g_last
-        # Working GNOM refine params come from the adjust wizard when open.
+        # Committed GNOM refine params (Confirm) already live in monodisperse_wizard_params.
         gnom = self._gnom_params_from_ui()
         if gnom:
             for k in ("first", "last", "dmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax", "rg_nm"):
@@ -60,12 +56,7 @@ class MonodisperseConfigSync:
         self.persist_confs()
 
     def _gnom_params_from_ui(self) -> dict:
-        dlg = self._gnom_adjust
-        if dlg is not None and hasattr(dlg, "gnom_params"):
-            try:
-                return dict(dlg.gnom_params())
-            except Exception:
-                pass
+        # Only committed (Confirm) values live in session state — never pull live dirty UI.
         wp = self._state.monodisperse_wizard_params or {}
         return {k: wp[k] for k in _GNOM_CONF_KEYS if wp.get(k) is not None}
 
@@ -89,12 +80,14 @@ class MonodisperseConfigSync:
             gopts["first"] = int(g_first)
             gopts["last"] = int(g_last)
         dopts = self._gnom_params_from_ui()
+        refine_opts = dict(dopts)
         # Auto conf must not pin Dmax (that would force GNOM refine on every TIFF).
-        # Refine keys live in monodisperse_wizard_params and are merged only for manual DISTANCES_ONLY jobs.
+        # Full refine params (incl. force_zero) are written to fit_distances_refine.conf.
         for k in ("dmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax"):
             dopts.pop(k, None)
         # Drop smooth from persisted conf unless explicitly set for rare DATGNOM re-auto use.
         dopts.pop("smooth", None)
+        refine_path = fit_distances_dir(wd) / "fit_distances_refine.conf"
         try:
             gpath.write_text(yaml.safe_dump(gopts, sort_keys=True), encoding="utf-8")
             self._state.fit_guinier_mono_conf_path = gpath
@@ -103,6 +96,11 @@ class MonodisperseConfigSync:
         try:
             dpath.write_text(yaml.safe_dump(dopts, sort_keys=True), encoding="utf-8")
             self._state.fit_distances_conf_path = dpath
+        except OSError:
+            pass
+        try:
+            if refine_opts:
+                refine_path.write_text(yaml.safe_dump(refine_opts, sort_keys=True), encoding="utf-8")
         except OSError:
             pass
 

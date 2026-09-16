@@ -1,7 +1,7 @@
 # EventBus and event types for Controller–Interface I/O.
 # Single channel: Controller publishes requests; Interface implementation
 # (cli_interface or gui_interface) publishes responses.
-# See docs/pipeline_interactive_spec.md §3.1.
+# Legacy interactive pipeline (`autosaxs.pipeline`); skills paradigm: docs/skills_paradigm.md.
 
 from enum import Enum
 from typing import Any, Callable, Dict, List

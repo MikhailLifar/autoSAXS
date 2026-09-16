@@ -27,19 +27,40 @@ the app watches and, in the usual flat layout, where pipeline outputs are writte
 restarts on the new directory, and any saved session there is reloaded. You cannot switch while a
 skill is still running.</p>
 
-<h2>How frames enter the app</h2>
-<p>New detector images are <code>.tif</code> / <code>.tiff</code> files that appear <b>after</b> the app
-has started. Typical paths:</p>
+<h2>Intake mode (2D / 1D / Sub)</h2>
+<p>The right column <b>Intake</b> toggles choose where new samples <b>board</b> the pipeline:</p>
 <ul>
-<li>Drag-and-drop onto the middle <b>2D</b> panel (<b>Drop .tif</b>) — files outside the working
-directory are <b>copied</b> into it, then queued.</li>
-<li>Copy or save TIFFs into the watch folder from the beamline software or a script.</li>
+<li><b>2D</b> — detector frames (<code>.tif</code> / <code>.tiff</code>); full path integrate → optional subtract → analysis.</li>
+<li><b>1D</b> — calibrated integrated curves (<code>.dat</code> under <code>averaged/</code>); skip integrate; optional subtract → analysis.
+Until a buffer is set the middle column shows a single 1D canvas; with buffer configured it shows the
+integrated curve plus <b>S + buffer</b> / <b>Sub</b> below. Proxy curves (<code>averaged_proxy/</code> or
+<code>type: integrated_proxy_1d</code>) are rejected.</li>
+<li><b>Sub</b> — subtracted curves (<code>.dat</code> under <code>subtracted/</code>); analysis only; a single Sub canvas.</li>
 </ul>
-<p>TIFFs already sitting in the folder at launch are <b>not</b> auto-queued. To process them, drop them
-again, overwrite them, or use history <b>Process</b> after they have been seen once in this session.</p>
+<p>The active mode is persisted in <code>session.yaml</code>. Mixed sessions are allowed: history is keyed by
+<b>exact path</b>; <b>Process</b> re-runs from that entry’s boarding rung (not the current toggle).</p>
+<p>Watchers only accept the current mode’s inputs and never change the toggle. A <b>drop</b> may
+auto-switch: <code>.dat</code> while in 2D → switch to 1D or Sub from classification; <code>.tif</code> while in
+1D/Sub → switch to 2D. If you are already in 1D or Sub and drop a <code>.dat</code>, the <b>manual toggle
+wins</b> (no 1D↔Sub auto-switch). Pipeline products written by the app are not treated as new intake.</p>
+
+<h2>How samples enter the app</h2>
+<p>Files that appear <b>after</b> the app has started (or are dropped) are queued. Typical paths:</p>
+<ul>
+<li>Drag-and-drop onto the middle stage (<b>Drop .tif or .dat with SAXS data</b>) — files outside the
+working directory are <b>copied</b> in (TIFFs to the watch root; curves into <code>averaged/</code> or
+<code>subtracted/</code> according to boarding), then queued.</li>
+<li>Copy or save matching files into the watched location from beamline software or a script
+(2D: TIFF hot folder; 1D: <code>averaged/</code>; Sub: <code>subtracted/</code>).</li>
+</ul>
+<p>Files already sitting in the folder at launch (or when switching intake) are <b>not</b> auto-queued.
+To process them, drop them again, overwrite them, or use history <b>Process</b> after they have been
+seen once in this session.</p>
+<p>Curve classification (for auto-switch out of 2D): prefer autosaxs metadata (<code>autoSAXS: true</code> and
+<code>type: int</code> / <code>type: sub</code>); otherwise basename prefix <code>sub</code> → Sub, else → 1D.</p>
 
 <h2>Flat vs tree layout</h2>
-<p>Under <b>File → Advanced…</b> you choose how discovery and outputs are organized
+<p>Under <b>File → Advanced…</b> you choose how TIFF discovery and TIFF outputs are organized
 (only when the queue is idle):</p>
 <ul>
 <li><b>Flat directory</b> (default) — watches only the <b>top-level</b> working directory (not nested
@@ -48,33 +69,36 @@ that same root. Suits a single beamline hot folder.</li>
 <li><b>Tree directory</b> — discovers TIFFs recursively; each TIFF’s outputs sit beside it in its
 own folder tree. Suits experiments already organized in nested directories.</li>
 </ul>
+<p>Curve drops always land under <code>&lt;watchdir&gt;/averaged/</code> or <code>&lt;watchdir&gt;/subtracted/</code>
+regardless of flat/tree TIFF mode.</p>
 
 <h2>The task queue</h2>
-<p>Everything the app does to a TIFF (integrate, subtract, analysis steps) goes through a single
+<p>Everything the app does to a sample (integrate, subtract, analysis steps) goes through a single
 sequential <b>queue</b>. The middle status line shows:</p>
 <ul>
 <li><b>Idle</b> — nothing waiting or running.</li>
 <li><b>Queue · N</b> — work remaining (incoming files + pending / current jobs), with the current
 file path when busy.</li>
 </ul>
-<p>Jobs for different files are handled one after another (FIFO). If the same TIFF path is revised
+<p>Jobs for different files are handled one after another (FIFO). If the same path is revised
 while still queued, the queue updates that slot instead of stacking duplicate work.</p>
 
-<h2>What each TIFF goes through</h2>
-<p>Think of a per-file pipeline whose length depends on what you have configured:</p>
+<h2>What each sample goes through</h2>
+<p>Think of a per-file pipeline whose length depends on <b>boarding</b> and what you have configured:</p>
 <ol>
-<li><b>Integrate</b> — always. Before calibration succeeds, this is a coarse <b>proxy</b> curve
+<li><b>Integrate</b> — for 2D boarding only. Before calibration succeeds, this is a coarse <b>proxy</b> curve
 (pixel-like axis, under <code>averaged_proxy/</code>). After <b>Calibrate</b>, you get calibrated
 I(q) under <code>averaged/</code>.</li>
-<li><b>Subtract</b> — only if you applied <b>Set buffer</b> for the session. Then each sample gets a
+<li><b>Subtract</b> — for 2D/1D when you applied <b>Set buffer</b> for the session. Then each sample gets a
 buffer-subtracted curve under <code>subtracted/</code>, and the middle column shows <b>S + buffer</b> /
-<b>Sub</b> instead of a single <b>1D</b> plot.</li>
+<b>Sub</b> instead of a single <b>1D</b> plot. Sub boarding skips this step.</li>
 <li><b>Analyze</b> — only while an analysis window is open (see next section).</li>
 </ol>
-<p>Calibration and buffer are <b>session setup</b>, not per-file wizards you repeat for every frame.</p>
+<p>Calibration and buffer are <b>session setup</b> for 2D (and buffer for 1D); left-column controls that
+are unused in the current intake are hidden.</p>
 
 <h2>Auto processing vs manual control</h2>
-<p>By default the app is in <b>auto</b> mode: when a TIFF reaches the front of the queue, the current
+<p>By default the app is in <b>auto</b> mode: when a sample reaches the front of the queue, the current
 pipeline runs without further clicks.</p>
 <p><b>Arming analysis.</b> Opening the monodisperse or polydisperse window from the right-column icons
 <b>arms</b> that analysis chain for new files while the window stays open. Closing the window disarms
@@ -86,21 +110,23 @@ each keeps its own chain and output tree
 <b>Resume auto-processing</b> suspend or restore automatic TIFF analysis (you can still run manual /
 wizard actions). Editing Guinier / GNOM parameters or applying a new subtraction scale also moves you
 into a more manual posture until you resume.</p>
-<p><b>Manual re-run of a file.</b> History <b>Process</b> re-enqueues the selected TIFF through the same
-live pipeline as a new upload — useful after changing calibration, buffer, or analysis settings.</p>
+<p><b>Manual re-run of a file.</b> History <b>Process</b> re-enqueues the selected sample through the same
+live pipeline from its <b>boarding rung</b> — useful after changing calibration, buffer, or analysis settings.</p>
 
 <h2>Session history</h2>
-<p>After at least one TIFF finishes in this run, the middle column shows <b>&lt;</b> / <b>&gt;</b> and
+<p>After at least one sample finishes in this run, the middle column shows <b>&lt;</b> / <b>&gt;</b> and
 <b>Process</b>. Stepping history reloads that file’s plots from disk for review; it does <b>not</b>
 re-run skills by itself (missing artifacts leave plots empty). While you are looking at an older entry,
-the live “tail” of new files does not force the view forward until you step to the latest again.</p>
+the live “tail” of new files does not force the view forward until you step to the latest again.
+History keys are exact paths (TIFF or <code>.dat</code>).</p>
 
-<h2>TIFF revision (same name, new content)</h2>
-<p>Beamlines often overwrite <code>sample.tif</code> in place. Liveview treats a replaced (or
-overwrite-detected) TIFF as a <b>revision</b> of that path: queued work for it is superseded, and the
-pipeline runs again on the new bytes. In flat mode a poll watcher also helps catch NFS-style overwrites
-of existing names. <b>Process</b> on history is the explicit version of the same idea. After a successful
-re-run, that path is treated as the latest session entry.</p>
+<h2>File revision (same name, new content)</h2>
+<p>Beamlines often overwrite <code>sample.tif</code> in place (and the same idea applies to watched
+<code>.dat</code> files). Liveview treats a replaced (or overwrite-detected) path as a <b>revision</b>:
+queued work for it is superseded, and the pipeline runs again on the new bytes. In flat 2D mode a poll
+watcher also helps catch NFS-style overwrites of existing names. <b>Process</b> on history is the
+explicit version of the same idea. After a successful re-run, that path is treated as the latest
+session entry.</p>
 
 <h2>Where results live</h2>
 <p>Under the output root (working directory in flat mode; next to the TIFF in tree mode):</p>
@@ -126,9 +152,10 @@ tool output.</p>
 
 <h2>Pulsing next-step hints</h2>
 <p>A blue pulsing border on a control is not a separate mode — it is a soft hint for the next likely
-setup action (for example <b>Calibrate</b>, then later <b>Set buffer</b>, an empty <b>Drop .tif</b>
-target, analysis icons, or <b>Resume auto-processing</b> when auto analysis is paused). You can ignore
-it and use the menus and buttons directly.</p>
+setup action (for example <b>Calibrate</b>, then later <b>Set buffer</b>, an empty drop target,
+analysis icons, or <b>Resume auto-processing</b> when auto analysis is paused). Unused left-column
+groups are hidden in 1D/Sub intake so coaching skips them. You can ignore the pulse and use the
+menus and buttons directly.</p>
 
 <p class="nav-top"><a href="main_window.html">Main window (recipes) →</a> ·
 <a href="algorithms/index.html">Algorithms →</a> ·

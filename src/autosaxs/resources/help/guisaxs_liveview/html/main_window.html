@@ -10,16 +10,18 @@
 <h1>Main window</h1>
 
 <p><b>guisaxs-liveview</b> is a three-column desktop app that watches a working directory for new
-<code>.tif</code> / <code>.tiff</code> detector frames, queues them, and runs them through calibration,
-integration, optional buffer subtraction, and optional analysis. The middle column is the live stage
-(queue, 2D drop target, 1D / subtraction plots, session history). The left column holds setup wizards
-(calibration and buffer). The right column opens analysis windows and shows the live log.</p>
+samples (detector frames and/or 1D curves), queues them, and runs them from their <b>intake</b>
+boarding (2D / 1D / Sub) through optional integration, buffer subtraction, and analysis.
+The middle column is the live stage (queue, drop target, 1D / subtraction plots, session history).
+The left column holds setup wizards (calibration / mask / buffer — visibility depends on intake).
+The right column selects intake, opens analysis windows, and shows the live log.</p>
 
-<p>For how the pieces fit together (working directory, queue, auto vs manual, TIFF revision), see
+<p>For how the pieces fit together (working directory, intake, queue, auto vs manual, revisions), see
 <a href="concepts.html">Concepts</a>.</p>
 
-<p>Typical session workflow:</p>
+<p>Typical 2D session workflow:</p>
 <ol>
+<li><b>Intake → 2D</b> (right column).</li>
 <li><b>Calibrate</b> (once per geometry) — see <a href="calibration.html">Calibration</a>.</li>
 <li>Optionally <b>integrate a buffer TIFF</b>, then <b>set buffer</b> (subtraction settings for the session).</li>
 <li><b>Integrate</b> sample TIFFs (automatic as they arrive, or via <b>Process</b> on history).</li>
@@ -29,16 +31,21 @@ Subtraction wizard if needed.</li>
 <a href="analysis_polydisperse.html">Polydisperse</a> analysis so new files run those chains while the
 window stays open.</li>
 </ol>
+<p>For curve-only work: set <b>Intake → 1D</b> or <b>Sub</b>, drop <code>.dat</code> files (copied into
+<code>averaged/</code> or <code>subtracted/</code>), then arm analysis as usual.</p>
 
 <p class="shot-wrap"><img class="shot" src="assets/main_overview.png" alt="Main window overview"/></p>
 <h2>Layout</h2>
 <ul>
 <li><b>Menu</b> — File (working directory, Advanced flat/tree, Exit), Update, Help.</li>
 <li><b>project dir line</b> — <code>project dir: …</code> (contracted path; tooltip shows the full path).</li>
-<li><b>Left</b> — <b>Calibrate</b> / <b>Reset</b>; <b>Set mask</b> / <b>Reset</b>; <b>Set buffer</b> / <b>Reset</b>; previews.</li>
-<li><b>Middle</b> — queue status, <b>2D</b> (<b>Drop .tif</b>), <b>1D</b> or <b>S + buffer</b> / <b>Sub</b>,
+<li><b>Left</b> — <b>Calibrate</b> / <b>Reset</b>; <b>Set mask</b> / <b>Reset</b>; <b>Set buffer</b> / <b>Reset</b>; previews
+(groups hidden when unused for the current intake).</li>
+<li><b>Middle</b> — queue status, <b>2D</b> (when intake is 2D) with
+<b>Drop .tif or .dat with SAXS data</b>, <b>1D</b> or <b>S + buffer</b> / <b>Sub</b>,
 history <b>&lt;</b> <b>&gt;</b> <b>Process</b>.</li>
-<li><b>Right</b> — Analysis icons (monodisperse / polydisperse), <b>Logs</b> (<b>Full</b> / <b>App</b>).</li>
+<li><b>Right</b> — <b>Intake</b> toggles (2D / 1D / Sub); Analysis icons (monodisperse / polydisperse);
+<b>Logs</b> (<b>Full</b> / <b>App</b>).</li>
 </ul>
 
 <h2>Recipes</h2>
@@ -52,10 +59,10 @@ history <b>&lt;</b> <b>&gt;</b> <b>Process</b>.</li>
 </div>
 
 <div class="recipe">
-<h3>To feed images</h3>
-<p>Drop <code>.tif</code> / <code>.tiff</code> onto the middle <b>2D</b> panel (<b>Drop .tif</b>), or copy files
-into the working directory after the app has started. See also
-<a href="concepts.html">Concepts</a> (feeding / queue / revision).</p>
+<h3>To feed images or curves</h3>
+<p>Choose <b>Intake</b> (right), then drop <code>.tif</code> / <code>.tiff</code> / <code>.dat</code> onto the middle stage
+(<b>Drop .tif or .dat with SAXS data</b>), or copy files into the watched location after the app has
+started. See also <a href="concepts.html">Concepts</a> (intake / feeding / queue / revision).</p>
 <p class="shot-wrap"><img class="shot" src="assets/main_drop_tif.png" alt="Highlight Drop .tif"/></p>
 </div>
 

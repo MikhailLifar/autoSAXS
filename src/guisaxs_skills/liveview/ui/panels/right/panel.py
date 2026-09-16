@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
+    QButtonGroup,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -15,7 +16,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....pipeline.monodisperse_pipeline import FIT_GUINIER_MONO_STEP, FIT_GUINIER_POLY_STEP
-from ....session.state import LiveviewSessionState
+from ....session.state import LiveviewIntakeMode, LiveviewSessionState
 from ...icons import monodisperse_analysis_icon, polydisperse_analysis_icon
 from ...log_panel import LiveviewLogPanel
 from .config_restore import RightPanelConfigRestore
@@ -37,6 +38,7 @@ _POLY_SKILLS = frozenset({"fit_guinier", "fit_sizes", "model_mixture"})
 class LiveviewRightPanel(QWidget):
     analysis_arming_changed = pyqtSignal()
     modeling_enabled_changed = pyqtSignal(bool)
+    intake_mode_selected = pyqtSignal(object)  # LiveviewIntakeMode
     monodisperse_wizard_open_requested = pyqtSignal()
     monodisperse_intervention = pyqtSignal()
     monodisperse_shape_config = pyqtSignal()
@@ -60,6 +62,7 @@ class LiveviewRightPanel(QWidget):
         self._meta_fit, self._meta_sizes, self._meta_mixture = discover_fit_skill_meta()
         self._config = RightPanelConfigRestore(state=state)
         self._log = LiveviewLogPanel(parent=self)
+        self._syncing_intake = False
 
         self._mono_wizard_widget = MonodisperseWizardWidget()
         self._mono_dialog: Optional[MonodisperseWizardDialog] = None
@@ -80,7 +83,7 @@ class LiveviewRightPanel(QWidget):
         self._btn_mono.setAutoRaise(True)
         self._btn_mono.setToolTip(
             "Monodisperse analysis (Guinier → GNOM → shape).\n"
-            "Opens the window and arms that chain for new TIFFs while open."
+            "Opens the window and arms that chain for new samples while open."
         )
         self._btn_mono.clicked.connect(self._on_mono_button)
 
@@ -91,7 +94,7 @@ class LiveviewRightPanel(QWidget):
         self._btn_poly.setAutoRaise(True)
         self._btn_poly.setToolTip(
             "Polydisperse analysis (Guinier → D(R) → optional mixture).\n"
-            "Opens the window and arms that chain for new TIFFs while open."
+            "Opens the window and arms that chain for new samples while open."
         )
         self._btn_poly.clicked.connect(self._on_poly_button)
 
@@ -99,15 +102,59 @@ class LiveviewRightPanel(QWidget):
             btn.setFixedSize(72, 72)
             btn.setIconSize(btn.size() * 0.88)
 
+        self._btn_intake_2d = QToolButton()
+        self._btn_intake_2d.setText("2D")
+        self._btn_intake_2d.setCheckable(True)
+        self._btn_intake_2d.setObjectName("intake2dBtn")
+        self._btn_intake_2d.setToolTip("Board at detector frames (.tif)")
+        self._btn_intake_1d = QToolButton()
+        self._btn_intake_1d.setText("1D")
+        self._btn_intake_1d.setCheckable(True)
+        self._btn_intake_1d.setObjectName("intake1dBtn")
+        self._btn_intake_1d.setToolTip("Board at integrated curves (.dat in averaged/)")
+        self._btn_intake_sub = QToolButton()
+        self._btn_intake_sub.setText("Sub")
+        self._btn_intake_sub.setCheckable(True)
+        self._btn_intake_sub.setObjectName("intakeSubBtn")
+        self._btn_intake_sub.setToolTip("Board at subtracted curves (.dat in subtracted/)")
+        self._intake_group = QButtonGroup(self)
+        self._intake_group.setExclusive(True)
+        self._intake_group.addButton(self._btn_intake_2d)
+        self._intake_group.addButton(self._btn_intake_1d)
+        self._intake_group.addButton(self._btn_intake_sub)
+        self._intake_wrap = QWidget()
+        intake_row = QHBoxLayout(self._intake_wrap)
+        intake_row.setContentsMargins(0, 0, 0, 0)
+        intake_row.setSpacing(4)
+        intake_row.addWidget(self._btn_intake_2d)
+        intake_row.addWidget(self._btn_intake_1d)
+        intake_row.addWidget(self._btn_intake_sub)
+        intake_row.addStretch(1)
+        # Three distinct checked colors: 2D teal, 1D amber, Sub blue-violet.
+        self._intake_wrap.setStyleSheet(
+            "QToolButton { padding: 4px 12px; border: 1px solid #4a5560; background: #2a323a; color: #dce3ea; }"
+            "QToolButton#intake2dBtn:checked { background: #5ec8a0; border-color: #5ec8a0; color: #102018; font-weight: 600; }"
+            "QToolButton#intake1dBtn:checked { background: #e8a838; border-color: #e8a838; color: #1a1408; font-weight: 600; }"
+            "QToolButton#intakeSubBtn:checked { background: #7b6cff; border-color: #7b6cff; color: #0f0c1a; font-weight: 600; }"
+        )
+        self._btn_intake_2d.clicked.connect(lambda: self._emit_intake(LiveviewIntakeMode.FRAME_2D))
+        self._btn_intake_1d.clicked.connect(lambda: self._emit_intake(LiveviewIntakeMode.CURVE_1D))
+        self._btn_intake_sub.clicked.connect(lambda: self._emit_intake(LiveviewIntakeMode.CURVE_SUB))
+
         tools = QWidget()
         tools_lay = QVBoxLayout(tools)
         tools_lay.setContentsMargins(4, 4, 4, 4)
+        intake_title = QLabel("Intake")
+        intake_title.setStyleSheet("font-weight: 600;")
         title = QLabel("Analysis")
         title.setStyleSheet("font-weight: 600;")
         row = QHBoxLayout()
         row.addWidget(self._btn_mono)
         row.addWidget(self._btn_poly)
         row.addStretch(1)
+        tools_lay.addWidget(intake_title)
+        tools_lay.addWidget(self._intake_wrap)
+        tools_lay.addSpacing(8)
         tools_lay.addWidget(title)
         tools_lay.addLayout(row)
         tools_lay.addStretch(1)
@@ -118,7 +165,7 @@ class LiveviewRightPanel(QWidget):
         split.addWidget(self._log)
         split.setStretchFactor(0, 1)
         split.setStretchFactor(1, 4)
-        split.setSizes([120, 480])
+        split.setSizes([160, 440])
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -128,7 +175,25 @@ class LiveviewRightPanel(QWidget):
         if self._meta_fit is None:
             self._btn_mono.setEnabled(False)
             self._btn_poly.setEnabled(False)
+        self.sync_intake_toggles(state.intake_mode)
         self.sync_modeling_ui_to_session_state()
+
+    def _emit_intake(self, mode: LiveviewIntakeMode) -> None:
+        if self._syncing_intake:
+            return
+        self.intake_mode_selected.emit(mode)
+
+    def sync_intake_toggles(self, mode: LiveviewIntakeMode) -> None:
+        self._syncing_intake = True
+        try:
+            if mode == LiveviewIntakeMode.CURVE_1D:
+                self._btn_intake_1d.setChecked(True)
+            elif mode == LiveviewIntakeMode.CURVE_SUB:
+                self._btn_intake_sub.setChecked(True)
+            else:
+                self._btn_intake_2d.setChecked(True)
+        finally:
+            self._syncing_intake = False
 
     @property
     def log_panel(self) -> LiveviewLogPanel:
@@ -380,11 +445,11 @@ class LiveviewRightPanel(QWidget):
         stem: str,
         tiff_path: str = "",
     ) -> None:
-        from ....session.output_paths import tiff_output_root
+        from ....session.output_paths import analysis_output_root
 
-        root = tiff_output_root(
+        root = analysis_output_root(
             watchdir=self._state.watchdir,
-            tiff_path=tiff_path,
+            sample_path=tiff_path,
             mode=self._state.watch_mode,
         )
         self._mono.set_context(
@@ -407,11 +472,11 @@ class LiveviewRightPanel(QWidget):
         stem: str,
         tiff_path: str = "",
     ) -> None:
-        from ....session.output_paths import tiff_output_root
+        from ....session.output_paths import analysis_output_root
 
-        root = tiff_output_root(
+        root = analysis_output_root(
             watchdir=self._state.watchdir,
-            tiff_path=tiff_path,
+            sample_path=tiff_path,
             mode=self._state.watch_mode,
         )
         self._poly.set_context(

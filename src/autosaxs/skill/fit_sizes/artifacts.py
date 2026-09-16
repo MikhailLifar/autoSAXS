@@ -313,5 +313,6 @@ def write_success_artifacts(
         "ensemble_summary_path": ensemble_summary_path,
         "close_fit_out_paths": close_fit_out_paths,
         "force_zero_off_out_path": force_zero_off_out_path,
+        "refined": "true" if user_rmax_nm is not None else "false",
         **_serialize_dr_quality_for_return(dr_quality),
     }

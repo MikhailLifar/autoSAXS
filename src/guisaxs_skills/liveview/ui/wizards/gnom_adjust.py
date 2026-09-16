@@ -34,9 +34,9 @@ from ....ui.style import COLOR_QUALITY_POOR
 from ....ui.widgets.spin_sliders import AlphaSpinSlider, LengthNmSpinSlider
 from ..panels.right.monodisperse.format_display import format_gnom_passport_html
 from ..panels.right.monodisperse.plots import GnomFitPlot, PrPlot
+from .adjust_confirm import AdjustConfirmController
 
 _PREVIEW_DEBOUNCE_MS = 100
-_COMMIT_DEBOUNCE_MS = 3000
 
 
 class GnomAdjustWizardDialog(QDialog):
@@ -81,6 +81,7 @@ class GnomAdjustWizardDialog(QDialog):
         self._guinier_handoff: Dict[str, Any] = {}
         self._auto_snapshot: Dict[str, Any] = {}
         self._auto_gnom_out: str = ""
+        self._disk_best_gnom_out: str = ""
         self._preview_tmp: Optional[str] = None
         self._pause_emitted = False
         self._block_params = False
@@ -121,6 +122,16 @@ class GnomAdjustWizardDialog(QDialog):
         self._pdmax.setChecked(True)
         self._btn_restore = QPushButton("Restore auto")
         self._btn_restore.clicked.connect(self._on_restore_auto)
+        self._confirm = AdjustConfirmController(
+            self,
+            get_current_params=self.gnom_params,
+            on_confirm=self._on_confirm,
+            warning_title="Unconfirmed P(r) changes",
+            warning_text=(
+                "You have unconfirmed GNOM parameter changes. "
+                "Close without writing them to disk / re-running fit_distances?"
+            ),
+        )
         self._lbl_passport_title = QLabel("Passport")
         self._lbl_passport_title.setContentsMargins(0, 0, 0, 0)
         self._lbl_passport = QLabel("—")
@@ -147,6 +158,7 @@ class GnomAdjustWizardDialog(QDialog):
         right.addWidget(self._p0)
         right.addWidget(self._pdmax)
         right.addWidget(self._btn_restore)
+        right.addWidget(self._confirm.button)
         right.addLayout(passport_col, 1)
 
         body = QHBoxLayout()
@@ -159,45 +171,40 @@ class GnomAdjustWizardDialog(QDialog):
         lay.addWidget(
             QLabel(
                 "Adjust GNOM parameters for the current curve. "
-                "Plots and passport update live; changes pause auto-processing and re-run fit_distances."
+                "Plots and passport update live; press Confirm to write parameters and re-run fit_distances."
             )
         )
         lay.addLayout(body, 1)
 
-        # Live GNOM preview while dragging; skill commit waits for idle.
+        # Live GNOM preview while dragging; disk commit only on Confirm.
         self._preview_debounce = QTimer(self)
         self._preview_debounce.setSingleShot(True)
         self._preview_debounce.setInterval(_PREVIEW_DEBOUNCE_MS)
         self._preview_debounce.timeout.connect(self._run_preview)
-        self._commit_debounce = QTimer(self)
-        self._commit_debounce.setSingleShot(True)
-        self._commit_debounce.setInterval(_COMMIT_DEBOUNCE_MS)
-        self._commit_debounce.timeout.connect(self._on_commit)
-        self._first.valueChanged.connect(self._schedule_emit)
-        self._last.valueChanged.connect(self._schedule_emit)
-        self._dmax.valueChanged.connect(self._schedule_emit)
-        self._alpha.valueChanged.connect(self._schedule_emit)
-        self._p0.toggled.connect(self._schedule_emit)
-        self._pdmax.toggled.connect(self._schedule_emit)
+        self._first.valueChanged.connect(self._schedule_preview)
+        self._last.valueChanged.connect(self._schedule_preview)
+        self._dmax.valueChanged.connect(self._schedule_preview)
+        self._alpha.valueChanged.connect(self._schedule_preview)
+        self._p0.toggled.connect(self._schedule_preview)
+        self._pdmax.toggled.connect(self._schedule_preview)
 
     def set_running(self, running: bool) -> None:
         if running:
             self._preview_debounce.stop()
-            self._commit_debounce.stop()
         enabled = not running
         for w in (self._first, self._last, self._dmax, self._alpha, self._p0, self._pdmax, self._btn_restore):
             w.setEnabled(enabled)
+        self._confirm.set_controls_enabled(enabled)
 
     def _plot_pr_adjust(self, path: str) -> None:
-        overlay = self._auto_gnom_out if self._auto_gnom_out and os.path.isfile(self._auto_gnom_out) else None
-        # Avoid double-drawing when primary is the auto best itself.
-        if overlay and os.path.abspath(overlay) == os.path.abspath(path):
-            overlay = None
+        disk_best = self._disk_best_gnom_out if self._disk_best_gnom_out and os.path.isfile(self._disk_best_gnom_out) else None
+        if disk_best and os.path.abspath(disk_best) == os.path.abspath(path):
+            disk_best = None
         self._pr_plot.plot_from_gnom_out(
             path,
-            close_fits=False,
+            close_fits=True,
             force_zero_off=True,
-            overlay_gnom_out=overlay,
+            overlay_gnom_out=disk_best,
         )
 
     def set_context(
@@ -217,12 +224,14 @@ class GnomAdjustWizardDialog(QDialog):
         self._guinier_handoff = dict(guinier_handoff or {})
         self._auto_snapshot = dict(auto_snapshot or {})
         self._auto_gnom_out = str(gnom_out_path or "").strip()
+        self._disk_best_gnom_out = self._auto_gnom_out
         self._atsas_dat_path = ""
         self._q_nm = None
         self._pause_emitted = False
         params = dict(working_params or {})
         if not params and self._auto_snapshot:
             params = dict(self._auto_snapshot)
+        self._apply_dmax_slider_span()
         self.set_params(params, emit=False)
         if (not params.get("dmax_nm")) and gnom_out_path and os.path.isfile(gnom_out_path):
             try:
@@ -240,6 +249,7 @@ class GnomAdjustWizardDialog(QDialog):
                     self.set_params(merged, emit=False)
             except Exception:
                 pass
+        self._apply_dmax_slider_span()
         if gnom_out_path and os.path.isfile(gnom_out_path):
             self._fit_plot.plot_from_gnom_out(gnom_out_path)
             self._plot_pr_adjust(gnom_out_path)
@@ -250,12 +260,31 @@ class GnomAdjustWizardDialog(QDialog):
             self._lbl_passport.setTextFormat(Qt.PlainText)
             self._lbl_passport.setText(passport_text)
             self._lbl_passport.setStyleSheet("")
+        self._confirm.set_committed(self.gnom_params())
+
+    def _apply_dmax_slider_span(self) -> None:
+        """Slider domain 0 … 4× best-auto Dmax (fallback: current Dmax); spin can exceed."""
+        auto_dmax = None
+        for src in (
+            (self._auto_snapshot or {}).get("dmax_nm"),
+            float(self._dmax.value()) if float(self._dmax.value()) > 0 else None,
+        ):
+            try:
+                v = float(src) if src is not None else None
+            except (TypeError, ValueError):
+                v = None
+            if v is not None and v > 0:
+                auto_dmax = v
+                break
+        if auto_dmax is None:
+            self._dmax.set_slider_span(min_nm=0.0, max_nm=1000.0)
+            return
+        self._dmax.set_slider_span(min_nm=0.0, max_nm=4.0 * auto_dmax)
 
     def set_params(self, params: Mapping[str, Any], *, emit: bool = False) -> None:
         if not isinstance(params, dict) and not isinstance(params, Mapping):
             return
         self._preview_debounce.stop()
-        self._commit_debounce.stop()
         self._block_params = True
         widgets = (self._first, self._last, self._dmax, self._alpha, self._p0, self._pdmax)
         for w in widgets:
@@ -286,7 +315,7 @@ class GnomAdjustWizardDialog(QDialog):
                 w.blockSignals(False)
             self._block_params = False
         if emit:
-            self._schedule_emit()
+            self._schedule_preview()
 
     def gnom_params(self) -> dict:
         out: dict = {
@@ -330,7 +359,8 @@ class GnomAdjustWizardDialog(QDialog):
 
     def show_from_gnom_out(self, gnom_out_path: str) -> None:
         if gnom_out_path and os.path.isfile(gnom_out_path):
-            # Persist path may become the new auto reference after refine.
+            self._disk_best_gnom_out = gnom_out_path
+            # Persist path may become the new auto reference after DATGNOM auto.
             if "datgnom" in os.path.basename(gnom_out_path).lower():
                 self._auto_gnom_out = gnom_out_path
             self._fit_plot.plot_from_gnom_out(gnom_out_path)
@@ -342,16 +372,16 @@ class GnomAdjustWizardDialog(QDialog):
         self.set_params(self._auto_snapshot, emit=True)
         self.restore_auto_requested.emit()
 
-    def _schedule_emit(self, *_args) -> None:
+    def _schedule_preview(self, *_args) -> None:
         if self._block_params:
             return
         if not self._pause_emitted:
             self._pause_emitted = True
             self.editing_started.emit()
+        self._confirm.refresh()
         self._preview_debounce.start()
-        self._commit_debounce.start()
 
-    def _on_commit(self) -> None:
+    def _on_confirm(self) -> None:
         self.params_changed.emit()
 
     def _ensure_atsas_dat(self) -> bool:
@@ -433,6 +463,19 @@ class GnomAdjustWizardDialog(QDialog):
             )
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if not self._confirm.confirm_close_if_dirty():
+            event.ignore()
+            return
+        self._cleanup_preview_tmp()
+        super().closeEvent(event)
+
+    def reject(self) -> None:  # type: ignore[override]
+        if not self._confirm.confirm_close_if_dirty():
+            return
+        self._cleanup_preview_tmp()
+        super().reject()
+
+    def _cleanup_preview_tmp(self) -> None:
         if self._preview_tmp:
             for p in (self._preview_tmp, self._preview_tmp + ".out"):
                 try:
@@ -441,4 +484,3 @@ class GnomAdjustWizardDialog(QDialog):
                 except OSError:
                     pass
             self._preview_tmp = None
-        super().closeEvent(event)

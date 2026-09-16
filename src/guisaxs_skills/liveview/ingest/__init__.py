@@ -1,7 +1,7 @@
 from .dir_tree_observer import TREE_STABILITY, TreeDirObserver, TreeObserverConfig
 from .poll_watcher import POLL_TRIGGERED_STABILITY, ProcessedTiffPoller, PollWatcherConfig
 from .stability import FileStatSnapshot, StabilityConfig, StabilityTracker
-from .tiff_revision import TiffRevision, TiffRevisionSource, is_tiff_path, make_revision, normalize_tiff_path
+from .sample_revision import SampleRevision, SampleRevisionSource, is_tiff_path, make_revision, normalize_sample_path
 from .watcher import DirectoryWatcher, WatcherConfig
 
 __all__ = [
@@ -13,12 +13,12 @@ __all__ = [
     "StabilityConfig",
     "StabilityTracker",
     "TREE_STABILITY",
-    "TiffRevision",
-    "TiffRevisionSource",
+    "SampleRevision",
+    "SampleRevisionSource",
     "TreeDirObserver",
     "TreeObserverConfig",
     "WatcherConfig",
     "is_tiff_path",
     "make_revision",
-    "normalize_tiff_path",
+    "normalize_sample_path",
 ]

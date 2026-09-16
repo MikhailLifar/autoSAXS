@@ -39,7 +39,15 @@ from .optimize import (
 )
 from .quality_io import _assess_and_write_pr_quality
 from autosaxs.core.atsas_gnom import normalize_force_zero
-from .runners import _run_datgnom_once, _run_dmax_close_fit_ensemble, _run_gnom_pr_once
+from .runners import (
+    DATGNOM_BEST_OUT,
+    GNOM_BEST_OUT,
+    _run_datgnom_once,
+    _run_dmax_close_fit_ensemble,
+    _run_gnom_pr_once,
+    cleanup_legacy_best_outs,
+    clear_ensemble_dir,
+)
 
 def fit_distances(
     profile: DatPathExpressionArg,
@@ -54,6 +62,7 @@ def fit_distances(
     alpha: Optional[float] = None,
     force_zero_rmin: Optional[str] = None,
     force_zero_rmax: Optional[str] = None,
+    minimal: bool = False,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     r"""
@@ -67,10 +76,11 @@ def fit_distances(
     - `first` (int | None, default `None`): DATGNOM `--first` (1-based point index). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
     - `last` (int | None, default `None`): DATGNOM `--last`. If omitted, `--last` is not passed to DATGNOM.
     - `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`. Unused when `dmax_nm` is set (GNOM refine).
-    - `dmax_nm` (float | None, default `None`): When set, skip DATGNOM and the Dmax ensemble; run a single monodisperse GNOM (`--rmax`) refine with this Dmax (nm).
+    - `dmax_nm` (float | None, default `None`): When set, skip DATGNOM search and run monodisperse GNOM (`--rmax`) with this Dmax (nm). Still writes the Dmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
     - `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted, GNOM chooses automatically. Ignored when `dmax_nm` is unset.
     - `force_zero_rmin` (str | None, default `None`): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y` when refining.
     - `force_zero_rmax` (str | None, default `None`): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y` when refining.
+    - `minimal` (bool, default `False`): When `True` with `dmax_nm` set, write only the single refine `.out` and remove any previous `ensemble/` (no close-fits / force-zero-off probe).
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Returns
@@ -150,6 +160,7 @@ def fit_distances(
         alpha=None if alpha is None else float(alpha),
         force_zero_rmin=force_zero_rmin,
         force_zero_rmax=force_zero_rmax,
+        minimal=bool(minimal),
         event_bus=bus,
         use_cache=use_cache,
     )
@@ -169,6 +180,7 @@ def fit_distances(
         "alpha",
         "force_zero_rmin",
         "force_zero_rmax",
+        "minimal",
     ],
     include_config_in_hash=False,
 )
@@ -183,6 +195,7 @@ def _fit_distances_paths(
     alpha: Optional[float] = None,
     force_zero_rmin: Optional[str] = None,
     force_zero_rmax: Optional[str] = None,
+    minimal: bool = False,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
     use_cache: bool = False,
@@ -288,7 +301,7 @@ def _fit_distances_paths(
                     ),
                 },
             )
-        out_path_final = os.path.join(output_dir, f"gnom_rmax_{dmax_f:.4f}.out")
+        out_path_final = os.path.join(output_dir, GNOM_BEST_OUT)
         ok, rc, stderr, out_text = _run_gnom_pr_once(
             atsas_dat_path=atsas_dat_path,
             output_dir=output_dir,
@@ -300,6 +313,7 @@ def _fit_distances_paths(
             force_zero_rmax=fz_rmax,
             out_path=out_path_final,
         )
+        cleanup_legacy_best_outs(output_dir, keep=out_path_final)
         failures: List[Dict[str, Any]] = []
         candidates: List[Dict[str, Any]] = []
         if not ok:
@@ -354,6 +368,34 @@ def _fit_distances_paths(
             "ensemble_rows": [],
             "force_zero_off_parsed": None,
         }
+        dmax_validation: Optional[Dict[str, Any]] = None
+        if not bool(minimal):
+            if event_bus:
+                event_bus.publish(
+                    EventType.MESSAGE,
+                    {"text": f"GNOM (fit_distances refine): Dmax ensemble around {dmax_f:.4g} nm…"},
+                )
+            ensemble_info = _run_dmax_close_fit_ensemble(
+                atsas_dat_path=atsas_dat_path,
+                sample_output_dir=output_dir,
+                dmax_nm=dmax_f,
+                first=first_pt,
+                last=last_pt,
+                alpha=user_alpha,
+                event_bus=event_bus,
+                run_force_zero_off=(fz_rmax == "Y"),
+            )
+            dmax_validation = analyze_dmax_validation(
+                best_parsed=parse_gnom_out(out_text),
+                ensemble_rows=[
+                    r for r in ensemble_info.get("ensemble_rows") or [] if r.get("role") == "close_fit"
+                ],
+                force_zero_off_parsed=ensemble_info.get("force_zero_off_parsed"),
+                dmax_ref_nm=float(dmax_f),
+            )
+            ensemble_info["dmax_validation"] = dmax_validation
+        else:
+            clear_ensemble_dir(output_dir)
         pr_quality = _assess_and_write_pr_quality(
             output_dir=output_dir,
             base=base,
@@ -364,7 +406,7 @@ def _fit_distances_paths(
             first_pt=first_pt,
             suspicious=bool(best.get("suspicious")),
             event_bus=event_bus,
-            dmax_validation=None,
+            dmax_validation=dmax_validation,
         )
         return write_success_artifacts(
             profile=profile,
@@ -386,6 +428,7 @@ def _fit_distances_paths(
             user_last=user_last,
             user_smooth=user_smooth,
             event_bus=event_bus,
+            refined=True,
         )
 
     gnom_out_paths: List[str] = []
@@ -458,7 +501,7 @@ def _fit_distances_paths(
             },
         )
 
-    out_path_final = os.path.join(output_dir, f"datgnom_rg_{float(rg_nm):.4f}.out")
+    out_path_final = os.path.join(output_dir, DATGNOM_BEST_OUT)
     ok, rc, stderr, out_text = _run_datgnom_once(
         atsas_dat_path=atsas_dat_path,
         output_dir=output_dir,
@@ -468,6 +511,7 @@ def _fit_distances_paths(
         smooth=smooth_val,
         out_path=out_path_final,
     )
+    cleanup_legacy_best_outs(output_dir, keep=out_path_final)
     if not ok:
         if eval_tmp_path:
             try:
@@ -600,5 +644,6 @@ def _fit_distances_paths(
         user_last=user_last,
         user_smooth=user_smooth,
         event_bus=event_bus,
+        refined=False,
     )
 

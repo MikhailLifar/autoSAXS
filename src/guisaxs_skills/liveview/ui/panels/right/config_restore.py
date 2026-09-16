@@ -104,6 +104,13 @@ class RightPanelConfigRestore:
 
     def restore_fit_distances(self) -> None:
         if self._state.fit_distances_conf_path is not None:
+            # Still merge refine conf if present (force_zero / dmax / alpha).
+            refine = self._state.watchdir / "fit_distances" / "fit_distances_refine.conf"
+            if refine.is_file():
+                self._merge_monodisperse_conf(
+                    refine,
+                    keys=("rg_nm", "first", "last", "smooth", "dmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax"),
+                )
             return
         wd = self._state.watchdir
         for conf in (wd / "fit_distances" / "fit_distances.conf", wd / "runs" / "fit_distances.conf"):
@@ -111,6 +118,12 @@ class RightPanelConfigRestore:
                 self._state.fit_distances_conf_path = conf
                 self._merge_monodisperse_conf(conf, keys=("rg_nm", "first", "last", "smooth"))
                 break
+        refine = wd / "fit_distances" / "fit_distances_refine.conf"
+        if refine.is_file():
+            self._merge_monodisperse_conf(
+                refine,
+                keys=("rg_nm", "first", "last", "smooth", "dmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax"),
+            )
 
     def _merge_monodisperse_conf(
         self,
@@ -142,6 +155,9 @@ class RightPanelConfigRestore:
         spath = self._state.fit_sizes_conf_path
         if spath is not None and spath.is_file():
             self._merge_polydisperse_sizes_conf(spath)
+        refine = wd / "fit_sizes" / "fit_sizes_refine.conf"
+        if refine.is_file():
+            self._merge_polydisperse_sizes_refine_conf(refine)
 
     def _merge_polydisperse_sizes_conf(self, path: Path) -> None:
         try:
@@ -156,7 +172,21 @@ class RightPanelConfigRestore:
                 wp[key] = data[key]
         if wp.get("first") is None:
             wp["first"] = 1
-        # Do not restore rmax/alpha/force_zero into window params — those are refine-only.
+        self._state.polydisperse_window_params = wp
+
+    def _merge_polydisperse_sizes_refine_conf(self, path: Path) -> None:
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, TypeError, yaml.YAMLError):
+            return
+        if not isinstance(data, dict):
+            return
+        wp = dict(self._state.polydisperse_window_params or {})
+        for key in ("first", "last", "rmin_nm", "rmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax"):
+            if data.get(key) is not None:
+                wp[key] = data[key]
+        if wp.get("first") is None:
+            wp["first"] = 1
         self._state.polydisperse_window_params = wp
 
     def restore_bodies(self) -> None:

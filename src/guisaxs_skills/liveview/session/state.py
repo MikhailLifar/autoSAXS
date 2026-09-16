@@ -9,19 +9,19 @@ from typing import Any, Dict, List, Optional
 DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES: List[str] = ["ellipsoid"]
 
 
-class LiveviewState(str, Enum):
-    A = "A"
-    B = "B"
-    BD = "BD"
-    C = "C"
-    CD = "CD"
-
-
 class LiveviewWatchMode(str, Enum):
-    """Filesystem watch layout: flat (top-level) vs recursive tree."""
+    """Filesystem watch layout: flat (top-level) vs recursive tree (frames)."""
 
     FLAT = "flat"
     TREE = "tree"
+
+
+class LiveviewIntakeMode(str, Enum):
+    """Where new samples board the live pipeline (also Sample.boarding)."""
+
+    FRAME_2D = "frame_2d"
+    CURVE_1D = "curve_1d"
+    CURVE_SUB = "curve_sub"
 
 
 class MonodisperseShapeMode(str, Enum):
@@ -38,49 +38,38 @@ class PolydisperseMixtureMode(str, Enum):
 
 @dataclass
 class LiveviewSessionState:
+    """Session facts owner: intake, auto_processing, calib, buffer, analysis."""
+
     watchdir: Path
     watch_mode: LiveviewWatchMode = LiveviewWatchMode.TREE
+    intake_mode: LiveviewIntakeMode = LiveviewIntakeMode.FRAME_2D
+    # Auto/Manual gate: True = auto queue may advance; False = manual jobs only.
+    auto_processing: bool = True
 
-    # Calibration artifacts
     integrator_dir: Optional[Path] = None
-    # Last calibration curve PNG (for left-panel preview; persisted with session file).
     calibration_curve_plot_path: Optional[Path] = None
-    # Refined geometry YAML (``refined.yml`` from calibrate); used for parameter table.
     calibration_refined_yml_path: Optional[Path] = None
-    # Last integrated 1D curve from the live pipeline (for analysis wizard hints).
     last_integrated_dat_path: Optional[Path] = None
-    # Last subtracted 1D curve (state CD: preferred default profile for wizards).
     last_subtracted_dat_path: Optional[Path] = None
 
-    # Last user mask path (detector property; kept across calibration reset).
     mask_path: Optional[Path] = None
-    # Optional PNG preview of image+mask overlay for the left Mask panel.
     mask_preview_path: Optional[Path] = None
 
-    # Buffer + subtraction config
     buffer_dat_path: Optional[Path] = None
-    # Subtract options as a dict (method, q_min/q_max, forms, etc.); also persisted under watchdir.
     subtract_options: Optional[Dict[str, Any]] = None
 
-    # Analysis arming: True while the corresponding analysis window is open.
     monodisperse_armed: bool = False
     polydisperse_armed: bool = False
     fit_guinier_mono_conf_path: Optional[Path] = None
     fit_guinier_poly_conf_path: Optional[Path] = None
     fit_distances_conf_path: Optional[Path] = None
     fit_sizes_conf_path: Optional[Path] = None
-    # Optional ``mixture/liveview_mixture.yml`` from wizard Apply (persistence only).
     model_mixture_config_path: Optional[Path] = None
-    # CLI options for ``model_mixture`` (q range, MIXTURE params). None → bundled defaults, full q.
     model_mixture_options: Optional[Dict[str, Any]] = None
-    # Written by the primitives wizard to model_bodies/model_bodies.conf (shape subset).
     model_bodies_conf_path: Optional[Path] = None
-    # Subset of BODIES model names; None or [] means pipeline uses DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES.
     model_bodies_shapes: Optional[List[str]] = None
     monodisperse_shape_mode: MonodisperseShapeMode = MonodisperseShapeMode.NONE
-    # Independent DAMMIF replicas for model_dam (default 1 = single reconstruction).
     model_dam_n_runs: int = 1
-    # DENSS / model_density protocol: pilot | average | refined (default pilot).
     model_density_mode: str = "pilot"
     model_density_denss_mode: str = "fast"
     model_density_n_maps: int = 20
@@ -88,21 +77,23 @@ class LiveviewSessionState:
     polydisperse_mixture_mode: PolydisperseMixtureMode = PolydisperseMixtureMode.NONE
     polydisperse_window_params: Optional[Dict[str, Any]] = None
 
+    def is_calibrated(self) -> bool:
+        return self.integrator_dir is not None
+
+    def buffer_ready(self) -> bool:
+        return self.buffer_dat_path is not None and self.subtract_options is not None
+
     def analysis_enabled(self) -> bool:
         return bool(self.monodisperse_armed or self.polydisperse_armed)
 
-    def current_state(self) -> LiveviewState:
-        calibrated = self.integrator_dir is not None
-        subtraction = self.buffer_dat_path is not None and self.subtract_options is not None
-        ae = self.analysis_enabled()
-        if not calibrated:
-            return LiveviewState.A
-        if subtraction:
-            return LiveviewState.CD if ae else LiveviewState.C
-        return LiveviewState.BD if ae else LiveviewState.B
+    def is_auto_processing(self) -> bool:
+        return bool(self.auto_processing)
 
-    def reset_calibration_to_state_a(self) -> None:
-        """Clear calibration (and buffer); session becomes state A; disarm analysis windows."""
+    def set_auto_processing(self, enabled: bool) -> None:
+        self.auto_processing = bool(enabled)
+
+    def reset_calibration(self) -> None:
+        """Clear calibration and buffer; disarm analysis."""
         self.integrator_dir = None
         self.calibration_curve_plot_path = None
         self.calibration_refined_yml_path = None
@@ -110,6 +101,16 @@ class LiveviewSessionState:
         self.subtract_options = None
         self.last_integrated_dat_path = None
         self.last_subtracted_dat_path = None
+        self._disarm_analysis()
+
+    def reset_buffer(self) -> None:
+        """Clear buffer/subtract; disarm analysis; keep calibration."""
+        self.buffer_dat_path = None
+        self.subtract_options = None
+        self.last_subtracted_dat_path = None
+        self._disarm_analysis()
+
+    def _disarm_analysis(self) -> None:
         self.monodisperse_armed = False
         self.polydisperse_armed = False
         self.model_bodies_shapes = None
@@ -126,30 +127,14 @@ class LiveviewSessionState:
         self.polydisperse_window_params = None
         self.model_mixture_options = None
 
-    def reset_buffer_to_state_b(self) -> None:
-        """Clear buffer/subtract settings; disarm analysis; remain calibrated (state B if integrator is set)."""
-        self.buffer_dat_path = None
-        self.subtract_options = None
-        self.last_subtracted_dat_path = None
-        self.monodisperse_armed = False
-        self.polydisperse_armed = False
-        self.model_bodies_shapes = None
-        self.model_bodies_conf_path = None
-        self.fit_guinier_mono_conf_path = None
-        self.fit_guinier_poly_conf_path = None
-        self.monodisperse_shape_mode = MonodisperseShapeMode.NONE
-        self.model_dam_n_runs = 1
-        self.model_density_mode = "pilot"
-        self.model_density_denss_mode = "fast"
-        self.model_density_n_maps = 20
-        self.monodisperse_wizard_params = None
-        self.polydisperse_mixture_mode = PolydisperseMixtureMode.NONE
-        self.polydisperse_window_params = None
-
-    def default_fit_distances_profile_path(self) -> Optional[Path]:
-        """State B/BD: last integrated .dat. State C/CD: last subtracted .dat (else last integrated)."""
-        st = self.current_state()
-        if st in (LiveviewState.C, LiveviewState.CD):
+    def preferred_profile_path(
+        self,
+        *,
+        boarding: Optional[LiveviewIntakeMode] = None,
+    ) -> Optional[Path]:
+        """Preferred analysis profile from last_* hints and boarding/buffer."""
+        prefer_sub = boarding == LiveviewIntakeMode.CURVE_SUB or self.buffer_ready()
+        if prefer_sub:
             ls = self.last_subtracted_dat_path
             if ls is not None and ls.is_file():
                 return ls
@@ -157,8 +142,10 @@ class LiveviewSessionState:
             if li is not None and li.is_file():
                 return li
             return None
-        if st in (LiveviewState.B, LiveviewState.BD):
-            li = self.last_integrated_dat_path
-            if li is not None and li.is_file():
-                return li
+        li = self.last_integrated_dat_path
+        if li is not None and li.is_file():
+            return li
+        ls = self.last_subtracted_dat_path
+        if ls is not None and ls.is_file():
+            return ls
         return None

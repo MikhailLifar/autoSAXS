@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Optional
 from PyQt5.QtWidgets import QMessageBox
 
 from ..pipeline.polydisperse_pipeline import PolydispersePipelineParts, build_polydisperse_steps
-from ..session.output_paths import tiff_output_root
+from ..ingest.sample_revision import is_dat_path
+from ..session.output_paths import analysis_output_root
 from ..session.state import PolydisperseMixtureMode
 from ...logic.runner_qprocess import RunOutcome
 
@@ -40,29 +41,54 @@ class LiveviewPolydisperseHandler:
         self._c.enqueue_report_for_current_sample()
         self._c.processing_mode.resume()
 
-    def _profile_root_and_tiff(self) -> tuple[Optional[str], Optional[Path], str]:
-        prof = self._c.state.default_fit_distances_profile_path()
-        if prof is None or not prof.is_file():
-            return None, None, ""
-        hist = list(self._c.executor.session_processed_tiffs)
-        tiff_path = ""
-        if hist:
-            idx = max(0, min(self._c.history._index, len(hist) - 1))
-            tiff_path = hist[idx]
-        root = tiff_output_root(
-            watchdir=self._c.state.watchdir,
-            tiff_path=tiff_path,
-            mode=self._c.state.watch_mode,
-        )
+    def _current_sample_path(self) -> str:
+        cur = self._c.samples.current()
+        return cur.path if cur is not None else ""
+
+    def _resolve_profile_path(self) -> Optional[str]:
         right = self._c.right
         if right is not None:
+            cand = (right.polydisperse_coordinator.profile_path or "").strip()
+            if cand and os.path.isfile(cand):
+                return str(Path(cand).expanduser().resolve())
+
+        sample = self._current_sample_path()
+        if sample and is_dat_path(sample) and os.path.isfile(sample):
+            return str(Path(sample).expanduser().resolve())
+
+        boarding = self._c.samples.boarding_for(sample) if sample else None
+        p = self._c.state.preferred_profile_path(boarding=boarding)
+        if p is not None and p.is_file():
+            return str(p.resolve())
+        return None
+
+    def _profile_root_and_tiff(self) -> tuple[Optional[str], Optional[Path], str]:
+        sample_path = self._current_sample_path()
+        prof = self._resolve_profile_path()
+        if not prof:
+            return None, None, sample_path
+
+        right = self._c.right
+        root: Optional[Path] = None
+        if right is not None and right.polydisperse_coordinator.output_root is not None:
+            root = right.polydisperse_coordinator.output_root
+        if root is None:
+            boarding = self._c.samples.boarding_for(sample_path or prof)
+            root = analysis_output_root(
+                watchdir=self._c.state.watchdir,
+                sample_path=sample_path or prof,
+                mode=self._c.state.watch_mode,
+                boarding=boarding,
+            )
+        tiff_path = sample_path if sample_path and not is_dat_path(sample_path) else ""
+        if right is not None:
             right.polydisperse_coordinator.set_context(
-                profile_path=str(prof.resolve()),
+                profile_path=prof,
                 output_root=root,
-                tiff_path=tiff_path,
+                tiff_path=tiff_path or sample_path,
                 watch_mode=self._c.state.watch_mode,
             )
-        return str(prof.resolve()), root, tiff_path
+        return prof, root, tiff_path or sample_path
 
     def _profile_and_root(self) -> tuple[Optional[str], Optional[Path]]:
         prof, root, _tp = self._profile_root_and_tiff()
@@ -177,10 +203,11 @@ class LiveviewPolydisperseHandler:
             return
         _, root, tiff_path = self._profile_root_and_tiff()
         if root is None:
-            root = tiff_output_root(
+            root = analysis_output_root(
                 watchdir=self._c.state.watchdir,
-                tiff_path=tiff_path,
+                sample_path=tiff_path or path,
                 mode=self._c.state.watch_mode,
+                boarding=self._c.samples.boarding_for(tiff_path or path),
             )
         right.polydisperse_coordinator.set_context(
             profile_path=path,
@@ -205,18 +232,19 @@ class LiveviewPolydisperseHandler:
                 pass
         _, root, tiff_path = self._profile_root_and_tiff()
         if root is None:
-            root = tiff_output_root(
+            root = analysis_output_root(
                 watchdir=self._c.state.watchdir,
-                tiff_path=tiff_path,
+                sample_path=tiff_path or prof,
                 mode=self._c.state.watch_mode,
+                boarding=self._c.samples.boarding_for(tiff_path or prof),
             )
         job = self._c.executor.current_job_output_root
         if job is not None:
             root = job
         if not prof:
-            p = self._c.state.default_fit_distances_profile_path()
-            if p is not None and p.is_file():
-                prof = str(p.resolve())
+            resolved = self._resolve_profile_path()
+            if resolved:
+                prof = resolved
         if prof:
             right.polydisperse_coordinator.set_context(
                 profile_path=prof,

@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ...pipeline import LiveviewQueueStatus
+from ...session.state import LiveviewIntakeMode
 from ....logic.path_display import contracted_path_label
 from ..widgets.plots import (
     DatCurveViewerDialog,
@@ -30,7 +31,7 @@ from ..widgets.plots import (
 
 
 class LiveviewMiddlePanel(QWidget):
-    tiff_files_dropped = pyqtSignal(object)  # list[str]
+    tiff_files_dropped = pyqtSignal(object)  # list[str] — TIFF and/or .dat paths
     history_step = pyqtSignal(int)  # -1 = older, +1 = newer
     process_history_file_requested = pyqtSignal()
     subtraction_wizard_requested = pyqtSignal()
@@ -38,6 +39,7 @@ class LiveviewMiddlePanel(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        self._intake_mode = LiveviewIntakeMode.FRAME_2D
         self._current_image_path = ""
         self._current_curve_path = ""
         self._current_subtracted_path = ""
@@ -45,6 +47,7 @@ class LiveviewMiddlePanel(QWidget):
         self._compare_buffer_path = ""
         self._sub_subtract_opts: Dict[str, Any] = {}
         self._manual_preview_scale: Optional[float] = None
+        self.setAcceptDrops(True)
 
         self._nav_frame = QWidget()
         nav_lay = QHBoxLayout(self._nav_frame)
@@ -82,13 +85,14 @@ class LiveviewMiddlePanel(QWidget):
         il = QVBoxLayout(self._group_img)
         il.addWidget(self._img_host)
 
-        # States A / B / BD: single 1D curve (proxy or integrated q-space).
+        # States A / B / BD / curve intake: primary 1D (or Sub) curve.
         self._group_main = QGroupBox("1D")
         self._main_plot = LogCurvePlot()
+        self._main_plot.files_dropped.connect(self.tiff_files_dropped.emit)
         gl = QVBoxLayout(self._group_main)
         gl.addWidget(self._main_plot)
 
-        # States C / CD: two bottom plots per spec §4.4 (no single integrated plot).
+        # Dual compare / subtracted (2D state C/CD; 1D when buffer is set).
         self._group_sub = QWidget()
         sub_outer = QVBoxLayout(self._group_sub)
         sub_outer.setContentsMargins(0, 0, 0, 0)
@@ -141,12 +145,84 @@ class LiveviewMiddlePanel(QWidget):
         self._image_2d_preview_dialog: Image2DViewerDialog | None = None
         self._curve_preview_dialog: DatCurveViewerDialog | None = None
         self._curve_x_label = "q (nm$^{-1}$)"
+        self._buffer_ready = False
+        self._middle_sync_sig: tuple | None = None
+
+    def apply_intake_layout(
+        self,
+        mode: LiveviewIntakeMode,
+        *,
+        buffer_ready: bool = False,
+    ) -> bool:
+        """Sole owner of middle widget visibility. Returns True if layout changed."""
+        buffer_ready = bool(buffer_ready)
+        if mode == LiveviewIntakeMode.FRAME_2D:
+            want_img, want_main, want_sub, title = (
+                True,
+                not buffer_ready,
+                buffer_ready,
+                "1D",
+            )
+            drop_hint = False
+        elif mode == LiveviewIntakeMode.CURVE_SUB:
+            want_img, want_main, want_sub, title = False, True, False, "Sub"
+            drop_hint = True
+        else:
+            # CURVE_1D
+            want_img, want_main, want_sub, title = False, True, buffer_ready, "1D"
+            drop_hint = True
+
+        changed = (
+            self._intake_mode != mode
+            or self._buffer_ready != buffer_ready
+            or self._group_img.isVisible() != want_img
+            or self._group_main.isVisible() != want_main
+            or self._group_sub.isVisible() != want_sub
+            or self._group_main.title() != title
+        )
+        self._intake_mode = mode
+        self._buffer_ready = buffer_ready
+        if not changed:
+            return False
+
+        self._group_img.setVisible(want_img)
+        self._main_plot.set_drop_hint_enabled(drop_hint)
+        self._group_main.setTitle(title)
+        self._group_main.setVisible(want_main)
+        self._group_sub.setVisible(want_sub)
+        self._middle_sync_sig = None  # layout change invalidates paint skip
+        return True
+    def curve_drop_host(self) -> QWidget:
+        return self._group_main
 
     def drop_canvas_host(self) -> QWidget:
         return self._img_host
 
-    def drop_hint_canvas(self) -> DropTiffImageCanvas:
-        return self._img
+    def drop_hint_canvas(self):
+        if self._intake_mode == LiveviewIntakeMode.FRAME_2D:
+            return self._img
+        return self._main_plot
+
+    def dragEnterEvent(self, event) -> None:  # type: ignore[override]
+        # Panel-level drops for curve modes (2D canvas also accepts drops).
+        from ..widgets.plots import collect_saxs_drop_paths
+
+        if collect_saxs_drop_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:  # type: ignore[override]
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event) -> None:  # type: ignore[override]
+        from ..widgets.plots import collect_saxs_drop_paths
+
+        paths = collect_saxs_drop_paths(event.mimeData())
+        if paths:
+            self.tiff_files_dropped.emit(paths)
+        event.setDropAction(Qt.CopyAction)
+        event.accept()
 
     def has_image(self) -> bool:
         return bool((self._current_image_path or "").strip())
@@ -226,13 +302,14 @@ class LiveviewMiddlePanel(QWidget):
             return
         self._open_subtracted_viewer()
 
-    def _set_single_curve_mode(self, visible: bool) -> None:
-        self._group_main.setVisible(visible)
-        self._group_sub.setVisible(not visible)
-
     def show_curve(self, path: str, *, x_label: str = "q (nm$^{-1}$)") -> None:
-        self._set_single_curve_mode(True)
-        self._current_curve_path = path or ""
+        """Paint main curve canvas only (visibility owned by ``apply_intake_layout``)."""
+        path = path or ""
+        if path == self._current_curve_path and x_label == self._curve_x_label:
+            return
+        self._current_curve_path = path
+        if self._intake_mode == LiveviewIntakeMode.CURVE_SUB:
+            self._current_subtracted_path = path
         self._curve_x_label = x_label
         self._main_plot.set_x_label(x_label)
         if not path:
@@ -240,9 +317,7 @@ class LiveviewMiddlePanel(QWidget):
             return
         self._main_plot.plot_dat(path)
 
-    def show_subtraction_placeholder(self) -> None:
-        """States C/CD: use two-panel bottom layout with no curves yet (hides single integrated plot)."""
-        self._set_single_curve_mode(False)
+    def clear_dual_plots(self) -> None:
         self._compare_sample_path = ""
         self._compare_buffer_path = ""
         self._current_subtracted_path = ""
@@ -250,6 +325,12 @@ class LiveviewMiddlePanel(QWidget):
         self._manual_preview_scale = None
         self._compare_plot.clear()
         self._subtracted_plot.clear()
+
+    def show_subtraction_placeholder(self) -> None:
+        """Empty dual plots; layout unchanged."""
+        self.clear_dual_plots()
+        if self._intake_mode == LiveviewIntakeMode.CURVE_SUB and not self._current_curve_path:
+            self._main_plot.clear()
 
     def show_subtraction_views(
         self,
@@ -259,29 +340,58 @@ class LiveviewMiddlePanel(QWidget):
         subtracted_dat: str,
         subtract_options: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """State C / CD: two bottom plots; hide single integrated q plot."""
-        self._set_single_curve_mode(False)
-        self._compare_sample_path = sample_dat.strip()
-        self._compare_buffer_path = buffer_dat.strip()
-        self._current_subtracted_path = subtracted_dat.strip()
-        self._sub_subtract_opts = dict(subtract_options or {})
+        """Paint dual (and Sub-intake main) only — no visibility changes."""
+        sample_dat = sample_dat.strip()
+        buffer_dat = buffer_dat.strip()
+        subtracted_dat = subtracted_dat.strip()
+        opts = dict(subtract_options or {})
+        same = (
+            sample_dat == self._compare_sample_path
+            and buffer_dat == self._compare_buffer_path
+            and subtracted_dat == self._current_subtracted_path
+            and opts == self._sub_subtract_opts
+            and self._manual_preview_scale is None
+        )
+        if same:
+            return
+
+        self._compare_sample_path = sample_dat
+        self._compare_buffer_path = buffer_dat
+        self._current_subtracted_path = subtracted_dat
+        self._sub_subtract_opts = opts
         self._manual_preview_scale = None
+
+        if self._intake_mode == LiveviewIntakeMode.CURVE_SUB:
+            self._current_curve_path = subtracted_dat
+            self._curve_x_label = "q (nm$^{-1}$)"
+            self._main_plot.set_x_label("q (nm$^{-1}$)")
+            if subtracted_dat:
+                self._main_plot.plot_dat(subtracted_dat, label="subtracted")
+            else:
+                self._main_plot.clear()
+            return
+
+        if self._intake_mode == LiveviewIntakeMode.CURVE_1D and sample_dat:
+            self._current_curve_path = sample_dat
+            self._curve_x_label = "q (nm$^{-1}$)"
+            self._main_plot.set_x_label("q (nm$^{-1}$)")
+            self._main_plot.plot_dat(sample_dat)
+
         self._compare_plot.set_x_label("q (nm$^{-1}$)")
         self._subtracted_plot.set_x_label("q (nm$^{-1}$)")
-        if self._compare_sample_path and self._compare_buffer_path:
+        if sample_dat and buffer_dat:
             self._compare_plot.plot_sample_and_scaled_buffer(
-                self._compare_sample_path,
-                self._compare_buffer_path,
-                subtracted_path=self._current_subtracted_path,
+                sample_dat,
+                buffer_dat,
+                subtracted_path=subtracted_dat,
                 subtract_options=self._sub_subtract_opts,
             )
         else:
             self._compare_plot.clear()
-        if self._current_subtracted_path:
-            self._subtracted_plot.plot_dat(self._current_subtracted_path, label="subtracted")
+        if subtracted_dat:
+            self._subtracted_plot.plot_dat(subtracted_dat, label="subtracted")
         else:
             self._subtracted_plot.clear()
-
     def current_subtraction_context(self) -> Dict[str, Any]:
         """Paths + subtract options for the currently displayed file (state C/CD)."""
         return {
@@ -304,8 +414,11 @@ class LiveviewMiddlePanel(QWidget):
         self._subtracted_plot.plot_subtracted_preview_manual(sp, bp, scaling_factor=self._manual_preview_scale)
 
     def show_image(self, path: str) -> None:
+        path = path or ""
+        if path == self._current_image_path:
+            return
         had = self.has_image()
-        self._current_image_path = path or ""
+        self._current_image_path = path
         if not path:
             self._img.clear()
         else:

@@ -10,7 +10,6 @@ from ..services.skills import normalize_fit_request, profile_path_exists
 from ...logic.runner_qprocess import RunOutcome
 from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
 from ...core.paths import latest_stderr_path
-from ..session.state import LiveviewState
 from ..ui.panels.left import pick_calibration_curve_image_path
 
 if TYPE_CHECKING:
@@ -35,11 +34,11 @@ class LiveviewSessionHandler:
             left.set_calibration_preview_path(str(cpp))
         else:
             left.set_calibration_preview_path("")
-        if state.current_state() in (LiveviewState.C, LiveviewState.CD):
-            middle.show_subtraction_placeholder()
+        if state.buffer_ready():
+            self._c.history.sync_middle(force=True)
 
     def reset_calibration(self) -> None:
-        self._c.state.reset_calibration_to_state_a()
+        self._c.state.reset_calibration()
         self._c.persist_session_settings()
         left, right = self._c.left, self._c.right
         if left is not None:
@@ -60,7 +59,7 @@ class LiveviewSessionHandler:
         self._c.history.refresh_right_outputs()
 
     def reset_buffer(self) -> None:
-        self._c.state.reset_buffer_to_state_b()
+        self._c.state.reset_buffer()
         self._c.persist_session_settings()
         left, right = self._c.left, self._c.right
         if left is not None:
@@ -77,22 +76,21 @@ class LiveviewSessionHandler:
         self._c.persist_session_settings()
         if self._c.right is not None:
             self._c.right.sync_modeling_ui_to_session_state()
-        middle = self._c.middle
-        if middle is not None and self._c.state.current_state() in (LiveviewState.C, LiveviewState.CD):
-            middle.show_subtraction_placeholder()
+        self._refresh_intake_layout()
+
+    def _refresh_intake_layout(self) -> None:
+        self._c.history.sync_middle(force=False)
+        left = self._c.left
+        if left is not None:
+            left.refresh_attention_coach()
 
     def _refresh_middle_for_state(self) -> None:
-        middle = self._c.middle
-        if middle is None:
-            return
-        st = self._c.state.current_state()
-        if st in (LiveviewState.C, LiveviewState.CD):
-            middle.show_subtraction_placeholder()
-        else:
-            middle.show_curve("", x_label="px" if st == LiveviewState.A else "q (nm$^{-1}$)")
-        middle.show_image("")
+        """Reset middle after calib/buffer wipe; then sync empty or current sample."""
         self._c.history.clear_2d_cache()
-
+        if self._c.samples:
+            self._c.history.sync_middle(force=True)
+        else:
+            self._c.history.sync_middle(sample=None, force=True)
 
 class LiveviewSkillRunsHandler:
     def __init__(self, controller: LiveviewController) -> None:
@@ -216,44 +214,44 @@ class LiveviewSkillOutcomesHandler:
             self._c.state.integrator_dir = Path(integ_dir)
 
         try:
-            st = self._c.state.current_state()
             if self._c.history.middle_updates_follow_pipeline():
-                self._update_middle_plots(middle, result, st)
-            if self._c.history.middle_updates_follow_pipeline():
+                # One owner for middle content: sample path → disk (TIFF or boarded .dat).
+                sample = self._c.executor.current_job_sample_path
+                if not sample:
+                    cur = self._c.samples.current()
+                    if cur is not None:
+                        sample = cur.path
+                if sample:
+                    self._c.history.refresh_middle_for_sample(sample)
+                else:
+                    self._update_middle_plots_from_artifacts(middle, result)
                 right.ingest_skill_result(result, skill_name=str(result.get("skill_name") or ""))
             self._c.monodisperse.update_profile_from_artifacts(result)
             self._c.polydisperse.update_profile_from_artifacts(result)
         finally:
             right.sync_modeling_ui_to_session_state()
 
-    def _update_middle_plots(self, middle, result: dict, st: LiveviewState) -> None:
+    def _update_middle_plots_from_artifacts(self, middle, result: dict) -> None:
+        """Fallback when no sample path is known (e.g. calibration-only skill)."""
         opts = self._c.history.subtract_options()
-        if st in (LiveviewState.C, LiveviewState.CD):
-            sub = result.get("subtracted_1d")
-            sub_path = sub.strip() if isinstance(sub, str) else ""
-            if sub_path and os.path.isfile(sub_path):
-                samp = self._c.state.last_integrated_dat_path
-                buf = self._c.state.buffer_dat_path
-                middle.show_subtraction_views(
-                    sample_dat=str(samp) if samp is not None and samp.is_file() else "",
-                    buffer_dat=str(buf) if buf is not None and buf.is_file() else "",
-                    subtracted_dat=sub_path,
-                    subtract_options=opts,
-                )
-            else:
-                integ = result.get("integrated_1d")
-                has_integ = (isinstance(integ, str) and integ.strip()) or (
-                    isinstance(integ, list) and integ and isinstance(integ[-1], str) and integ[-1].strip()
-                )
-                if has_integ:
-                    middle.show_subtraction_placeholder()
-        else:
-            integ = result.get("integrated_1d")
-            xlab = "px" if st == LiveviewState.A else "q (nm$^{-1}$)"
-            if isinstance(integ, list) and integ and isinstance(integ[-1], str):
-                middle.show_curve(integ[-1], x_label=xlab)
-            elif isinstance(integ, str) and integ:
-                middle.show_curve(integ, x_label=xlab)
+        sub = result.get("subtracted_1d")
+        sub_path = sub.strip() if isinstance(sub, str) else ""
+        if self._c.state.buffer_ready() and sub_path and os.path.isfile(sub_path):
+            samp = self._c.state.last_integrated_dat_path
+            buf = self._c.state.buffer_dat_path
+            middle.show_subtraction_views(
+                sample_dat=str(samp) if samp is not None and samp.is_file() else "",
+                buffer_dat=str(buf) if buf is not None and buf.is_file() else "",
+                subtracted_dat=sub_path,
+                subtract_options=opts,
+            )
+            return
+        integ = result.get("integrated_1d")
+        xlab = "px" if not self._c.state.is_calibrated() else "q (nm$^{-1}$)"
+        if isinstance(integ, list) and integ and isinstance(integ[-1], str):
+            middle.show_curve(integ[-1], x_label=xlab)
+        elif isinstance(integ, str) and integ:
+            middle.show_curve(integ, x_label=xlab)
 
     def _handle_failure(self, outcome: RunOutcome) -> None:
         if outcome.request is None or outcome.success:

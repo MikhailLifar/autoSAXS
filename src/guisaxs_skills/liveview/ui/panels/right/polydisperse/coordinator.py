@@ -69,7 +69,6 @@ class PolydisperseCoordinator(QObject):
         if self._sizes_adjust is None:
             parent = self._window.window() if self._window is not None else None
             self._sizes_adjust = SizesAdjustWizardDialog(parent)
-            self._config.set_sizes_adjust_wizard(self._sizes_adjust)
             self._sizes_adjust.editing_started.connect(self.intervention_requested.emit)
             self._sizes_adjust.params_changed.connect(self._on_sizes_adjust_params_changed)
         prof = self._presenter.profile_path

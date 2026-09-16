@@ -314,6 +314,7 @@ def subtract_buffer(
         I_sub,
         sigma_sub,
         metadata={
+            "autoSAXS": True,
             "type": "sub",
             "sample_path": src_path,
             "buffer_path": buffer_path,

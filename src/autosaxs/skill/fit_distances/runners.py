@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import csv
+import glob
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -17,9 +19,46 @@ from autosaxs.core.gnom_quality import rg_from_pr
 from ..deps import EventBus, EventType
 
 _CLOSE_FIT_RMAX_FACTORS = (0.90, 0.95, 1.00, 1.05, 1.10)
-
-
 _FORCE_ZERO_OFF_RMAX_FACTOR = 1.5
+
+# Stable artifact names (no Rg/Dmax in the filename — re-runs overwrite).
+DATGNOM_BEST_OUT = "datgnom_best.out"
+GNOM_BEST_OUT = "gnom_best.out"
+FORCE_ZERO_OFF_OUT = "gnom_force_zero_off.out"
+
+
+def close_fit_out_name(rmax_factor: float) -> str:
+    return f"gnom_fac_{float(rmax_factor):.2f}.out"
+
+
+def _prepare_ensemble_dirs(sample_output_dir: str) -> tuple[str, str]:
+    """Wipe and recreate ``ensemble/`` + ``close_fits/`` so re-runs never accumulate outs."""
+    ensemble_dir = os.path.join(sample_output_dir, "ensemble")
+    if os.path.isdir(ensemble_dir):
+        shutil.rmtree(ensemble_dir, ignore_errors=True)
+    close_fits_dir = os.path.join(ensemble_dir, "close_fits")
+    os.makedirs(close_fits_dir, exist_ok=True)
+    return ensemble_dir, close_fits_dir
+
+
+def clear_ensemble_dir(sample_output_dir: str) -> None:
+    """Remove ``ensemble/`` without regenerating (used by ``minimal`` refine)."""
+    ensemble_dir = os.path.join(sample_output_dir, "ensemble")
+    if os.path.isdir(ensemble_dir):
+        shutil.rmtree(ensemble_dir, ignore_errors=True)
+
+
+def cleanup_legacy_best_outs(output_dir: str, *, keep: str) -> None:
+    """Remove older Rg/Dmax-stamped best ``.out`` files that would accumulate across runs."""
+    keep_abs = os.path.abspath(keep)
+    for pat in ("datgnom_rg_*.out", "gnom_rmax_*.out"):
+        for p in glob.glob(os.path.join(output_dir, pat)):
+            if os.path.abspath(p) == keep_abs:
+                continue
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
 
 def _run_datgnom_once(
@@ -95,18 +134,17 @@ def _run_dmax_close_fit_ensemble(
     last: Optional[int],
     alpha: Optional[float],
     event_bus: Optional[EventBus],
+    run_force_zero_off: bool = True,
 ) -> Dict[str, Any]:
     """
-    Persist a Dmax±10% close-fits ensemble and a force-zero-off validation .out.
+    Persist a Dmax±10% close-fits ensemble and optionally a force-zero-off validation .out.
 
     Close fits use ``--force-zero-rmax=Y`` at nearby Dmax values.
     The force-zero-off pathology probe uses an *extended* rmax (1.5× Dmax) with
     ``--force-zero-rmax=N`` (aggregation / repulsion check past the putative size).
     Alpha is left automatic for GNOM (DATGNOM Current ALPHA is not reused).
     """
-    ensemble_dir = os.path.join(sample_output_dir, "ensemble")
-    close_fits_dir = os.path.join(ensemble_dir, "close_fits")
-    os.makedirs(close_fits_dir, exist_ok=True)
+    ensemble_dir, close_fits_dir = _prepare_ensemble_dirs(sample_output_dir)
     # Intentionally ignore DATGNOM alpha for GNOM CLI probes (mismatched scale).
     _ = alpha
 
@@ -115,7 +153,7 @@ def _run_dmax_close_fit_ensemble(
 
     for fac in _CLOSE_FIT_RMAX_FACTORS:
         rmax = float(dmax_nm) * float(fac)
-        out_name = f"gnom_rmax_{rmax:.4f}.out"
+        out_name = close_fit_out_name(fac)
         out_path = os.path.join(close_fits_dir, out_name)
         ok, rc, stderr, out_text = _run_gnom_pr_once(
             atsas_dat_path=atsas_dat_path,
@@ -171,68 +209,66 @@ def _run_dmax_close_fit_ensemble(
 
     force_zero_off_out_path = ""
     force_zero_off_parsed: Optional[Dict[str, Any]] = None
-    rmax_ext = float(dmax_nm) * float(_FORCE_ZERO_OFF_RMAX_FACTOR)
-    fz_out = os.path.join(
-        ensemble_dir,
-        f"gnom_rmax_{rmax_ext:.4f}_force_zero_off.out",
-    )
-    ok_fz, rc_fz, stderr_fz, out_text_fz = _run_gnom_pr_once(
-        atsas_dat_path=atsas_dat_path,
-        output_dir=ensemble_dir,
-        rmax_nm=rmax_ext,
-        first=first,
-        last=last,
-        alpha=None,
-        force_zero_rmax="N",
-        out_path=fz_out,
-    )
-    fz_row: Dict[str, Any] = {
-        "role": "force_zero_off",
-        "rmax_factor": float(_FORCE_ZERO_OFF_RMAX_FACTOR),
-        "rmax_nm": rmax_ext,
-        "force_zero_rmax": "N",
-        "ok": bool(ok_fz),
-        "returncode": int(rc_fz),
-        "stderr": stderr_fz,
-        "out_path": fz_out if ok_fz else "",
-        "total_estimate": None,
-        "neg_frac": None,
-        "rg_pr_nm": None,
-        "score": None,
-        "dmax_ref_nm": float(dmax_nm),
-    }
-    if ok_fz:
-        force_zero_off_out_path = fz_out
-        force_zero_off_parsed = parse_gnom_out(out_text_fz)
-        arrays = distribution_arrays(force_zero_off_parsed.get("distribution"))
-        neg_frac = None
-        rg_pr = force_zero_off_parsed.get("real_space_rg")
-        if arrays is not None:
-            _r, p, _err = arrays
-            p = np.asarray(p, dtype=float)
-            if p.size and np.any(np.isfinite(p)):
-                neg_frac = float(np.mean(p < 0.0))
-            rg_int = rg_from_pr(np.asarray(_r, dtype=float), p)
-            if rg_int is not None:
-                rg_pr = rg_int
-        te = force_zero_off_parsed.get("total_estimate")
-        fz_row["total_estimate"] = te
-        fz_row["neg_frac"] = neg_frac
-        fz_row["rg_pr_nm"] = rg_pr
-        fz_row["score"] = candidate_score({"total_estimate": te, "neg_frac": neg_frac})
-        fz_row["suspicious"] = bool(force_zero_off_parsed.get("suspicious"))
-    rows.append(fz_row)
-    if event_bus:
-        status = "ok" if ok_fz else f"failed rc={rc_fz}"
-        event_bus.publish(
-            EventType.MESSAGE,
-            {
-                "text": (
-                    f"DATGNOM (fit_distances): force-zero-off probe at "
-                    f"{_FORCE_ZERO_OFF_RMAX_FACTOR:.2f}×Dmax={rmax_ext:.4g} nm ({status})"
-                ),
-            },
+    if run_force_zero_off:
+        rmax_ext = float(dmax_nm) * float(_FORCE_ZERO_OFF_RMAX_FACTOR)
+        fz_out = os.path.join(ensemble_dir, FORCE_ZERO_OFF_OUT)
+        ok_fz, rc_fz, stderr_fz, out_text_fz = _run_gnom_pr_once(
+            atsas_dat_path=atsas_dat_path,
+            output_dir=ensemble_dir,
+            rmax_nm=rmax_ext,
+            first=first,
+            last=last,
+            alpha=None,
+            force_zero_rmax="N",
+            out_path=fz_out,
         )
+        fz_row: Dict[str, Any] = {
+            "role": "force_zero_off",
+            "rmax_factor": float(_FORCE_ZERO_OFF_RMAX_FACTOR),
+            "rmax_nm": rmax_ext,
+            "force_zero_rmax": "N",
+            "ok": bool(ok_fz),
+            "returncode": int(rc_fz),
+            "stderr": stderr_fz,
+            "out_path": fz_out if ok_fz else "",
+            "total_estimate": None,
+            "neg_frac": None,
+            "rg_pr_nm": None,
+            "score": None,
+            "dmax_ref_nm": float(dmax_nm),
+        }
+        if ok_fz:
+            force_zero_off_out_path = fz_out
+            force_zero_off_parsed = parse_gnom_out(out_text_fz)
+            arrays = distribution_arrays(force_zero_off_parsed.get("distribution"))
+            neg_frac = None
+            rg_pr = force_zero_off_parsed.get("real_space_rg")
+            if arrays is not None:
+                _r, p, _err = arrays
+                p = np.asarray(p, dtype=float)
+                if p.size and np.any(np.isfinite(p)):
+                    neg_frac = float(np.mean(p < 0.0))
+                rg_int = rg_from_pr(np.asarray(_r, dtype=float), p)
+                if rg_int is not None:
+                    rg_pr = rg_int
+            te = force_zero_off_parsed.get("total_estimate")
+            fz_row["total_estimate"] = te
+            fz_row["neg_frac"] = neg_frac
+            fz_row["rg_pr_nm"] = rg_pr
+            fz_row["score"] = candidate_score({"total_estimate": te, "neg_frac": neg_frac})
+            fz_row["suspicious"] = bool(force_zero_off_parsed.get("suspicious"))
+        rows.append(fz_row)
+        if event_bus:
+            status = "ok" if ok_fz else f"failed rc={rc_fz}"
+            event_bus.publish(
+                EventType.MESSAGE,
+                {
+                    "text": (
+                        f"DATGNOM (fit_distances): force-zero-off probe at "
+                        f"{_FORCE_ZERO_OFF_RMAX_FACTOR:.2f}×Dmax={rmax_ext:.4g} nm ({status})"
+                    ),
+                },
+            )
 
     summary_path = os.path.join(ensemble_dir, "ensemble_summary.csv")
     with open(summary_path, "w", newline="") as fp:

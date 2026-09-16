@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 
 from autosaxs.core.integrator import IntegratorExtended
 from autosaxs.core.utils import write_saxs
@@ -19,6 +20,37 @@ from .deps import (
     run_with_cache,
     _strip_sub_int_prefix,
 )
+
+
+def _read_integrator_calibrant_path(integrator_dir: str) -> str:
+    """Return calibrant image path from integrator/provenance.yml, or empty string."""
+    prov_path = os.path.join(integrator_dir, "provenance.yml")
+    if not os.path.isfile(prov_path):
+        return ""
+    try:
+        with open(prov_path, "r") as f:
+            data = yaml.safe_load(f) or {}
+        if not isinstance(data, dict):
+            return ""
+        raw = data.get("calibrant_image") or data.get("calibrant_path") or ""
+        return str(raw) if raw else ""
+    except Exception:
+        return ""
+
+
+def integrate_curve_metadata(
+    *,
+    integrator_dir: str,
+    mask_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Canonical autosaxs metadata for a calibrated integrated 1D curve."""
+    return {
+        "autoSAXS": True,
+        "type": "int",
+        "calibrant_path": _read_integrator_calibrant_path(integrator_dir),
+        "integrator_dir_path": os.path.abspath(integrator_dir),
+        "mask_path": os.path.abspath(mask_path) if mask_path else "",
+    }
 
 
 def integrate_2d_to_1d(integrator, saxs_2d, npt=1000, destpath=None, metadata=None):
@@ -190,6 +222,10 @@ def _integrate_paths(
     if mask_override:
         integrator.apply_user_mask_override(mask_override)
     os.makedirs(output_dir, exist_ok=True)
+    curve_meta = integrate_curve_metadata(
+        integrator_dir=str(integrator_dir),
+        mask_path=str(mask_override) if mask_override else None,
+    )
     integrated: List[str] = []
     validation_pngs: List[str] = []
     for idx, im_path in enumerate(images):
@@ -198,7 +234,9 @@ def _integrate_paths(
         data = read_from_tiff(im_path)
         base = os.path.splitext(os.path.basename(im_path))[0]
         dest = os.path.join(output_dir, f"int_{base}.dat")
-        _q, _I, _sigma = integrate_2d_to_1d(integrator, data, npt=npt, destpath=dest)
+        _q, _I, _sigma = integrate_2d_to_1d(
+            integrator, data, npt=npt, destpath=dest, metadata=curve_meta
+        )
         integrated.append(dest)
         if validation_png:
             validation_path = os.path.join(output_dir, f"validation_{base}.png")

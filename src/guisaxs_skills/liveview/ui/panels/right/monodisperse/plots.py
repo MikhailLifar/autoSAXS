@@ -11,6 +11,9 @@ from PyQt5.QtCore import Qt
 
 from autosaxs.core.gnom import distribution_arrays, parse_gnom_out
 
+from ..distribution_ylim import clamp_distribution_ylim
+from ..gnom_overlays import resolve_force_zero_off_path, same_gnom_path
+
 
 class _BaseMplPlot(FigureCanvas):
     def __init__(self, *, figsize=(3.2, 2.4)) -> None:
@@ -48,24 +51,38 @@ class GuinierCurvePlot(_BaseMplPlot):
         super().__init__(figsize=figsize)
 
     def plot_from_profile_and_results(self, profile_path: str, results_txt_path: str) -> None:
-        if not profile_path or not os.path.isfile(profile_path):
-            self._show_status("No profile")
-            return
         if not results_txt_path or not os.path.isfile(results_txt_path):
             self._show_status("No Guinier results")
             return
         try:
             from autosaxs.core.guinier import parse_guinier_results_txt
-            from autosaxs.core.utils import load_saxs_1d_any, ensure_q_nm
 
-            q, I, sigma = load_saxs_1d_any(profile_path)
-            q, I, sigma = ensure_q_nm(q, I, sigma)
             data = parse_guinier_results_txt(results_txt_path)
         except Exception:
             self._show_status("Guinier plot error")
             return
         if not isinstance(data, dict) or not data:
             self._show_status("Invalid Guinier results")
+            return
+        # Prefer the profile that was actually fit (avoids I0 mismatch vs preferred_profile).
+        fit_prof = str(data.get("input_file") or "").strip()
+        if fit_prof:
+            if not os.path.isabs(fit_prof):
+                fit_prof = os.path.normpath(
+                    os.path.join(os.path.dirname(os.path.abspath(results_txt_path)), fit_prof)
+                )
+            if os.path.isfile(fit_prof):
+                profile_path = fit_prof
+        if not profile_path or not os.path.isfile(profile_path):
+            self._show_status("No profile")
+            return
+        try:
+            from autosaxs.core.utils import load_saxs_1d_any, ensure_q_nm
+
+            q, I, _sigma = load_saxs_1d_any(profile_path)
+            q, I, _sigma = ensure_q_nm(q, I, _sigma)
+        except Exception:
+            self._show_status("Guinier plot error")
             return
         self.plot_from_profile_and_data(profile_path, data, q=q, I=I)
 
@@ -103,63 +120,78 @@ class GuinierCurvePlot(_BaseMplPlot):
         if rg is None or i0 is None:
             self._show_status("Incomplete Guinier fit")
             return
-        q = np.asarray(q, dtype=float)
-        I = np.asarray(I, dtype=float)
-        lp = data.get("last_point_1based")
-        if lp is None:
-            fp, lp = None, None
-            try:
-                from autosaxs.skill.fit_guinier.guinier import guinier_point_range_1based
-
-                fp, lp = guinier_point_range_1based(data)
-            except Exception:
-                pass
-        if lp is not None:
-            try:
-                end_excl = min(len(q), int(lp) + 5)
-                q = q[:end_excl]
-                I = I[:end_excl]
-            except (TypeError, ValueError):
-                pass
-        m = np.isfinite(q) & np.isfinite(I) & (I > 0)
-        if not m.any():
-            self._show_status("Empty profile")
-            return
-        q = q[m]
-        I = I[m]
-        if q_min is None or q_max is None:
+        q_full = np.asarray(q, dtype=float)
+        I_full = np.asarray(I, dtype=float)
+        # Derive q band from 1-based indices on the *unfiltered* curve when needed.
+        if (q_min is None or q_max is None) and q_full.size:
             fp = data.get("first_point_1based")
             lp = data.get("last_point_1based")
+            if fp is None or lp is None:
+                try:
+                    from autosaxs.skill.fit_guinier.guinier import guinier_point_range_1based
+
+                    fp, lp = guinier_point_range_1based(data)
+                except Exception:
+                    fp, lp = None, None
             if fp is not None and lp is not None:
                 try:
                     i1 = max(0, int(fp) - 1)
-                    i2 = min(len(q) - 1, int(lp) - 1)
+                    i2 = min(len(q_full) - 1, int(lp) - 1)
                     if i2 >= i1:
-                        q_min = float(q[i1])
-                        q_max = float(q[i2])
+                        q_min = float(q_full[i1])
+                        q_max = float(q_full[i2])
                 except (TypeError, ValueError):
                     pass
+        # Display window: a few points past the Guinier last index (optional).
+        lp_disp = data.get("last_point_1based")
+        if lp_disp is None:
+            try:
+                from autosaxs.skill.fit_guinier.guinier import guinier_point_range_1based
+
+                _fp, lp_disp = guinier_point_range_1based(data)
+            except Exception:
+                lp_disp = None
+        if lp_disp is not None:
+            try:
+                end_excl = min(len(q_full), int(lp_disp) + 5)
+                q_full = q_full[:end_excl]
+                I_full = I_full[:end_excl]
+            except (TypeError, ValueError):
+                pass
+        m = np.isfinite(q_full) & np.isfinite(I_full) & (I_full > 0)
+        if not m.any():
+            self._show_status("Empty profile")
+            return
+        q = q_full[m]
+        I = I_full[m]
         if q_min is not None and q_max is not None:
             band = (q >= float(q_min)) & (q <= float(q_max))
         else:
             band = np.ones_like(q, dtype=bool)
         x = q ** 2
         y = np.log(I)
-        y_fit = np.log(float(i0)) - (float(rg) ** 2 / 3.0) * x
-        # Embedded Guinier preview is not a click-to-enlarge viewer.
+        # Continuous fit line on the Guinier q-window (same as PLTViewer.view_guinier_fit).
+        if q_min is not None and q_max is not None and float(q_max) > float(q_min):
+            q_line = np.linspace(float(q_min), float(q_max), 200)
+        elif band.any():
+            q_line = q[band]
+        else:
+            q_line = q
+        y_fit_line = np.log(float(i0)) - (float(rg) ** 2 / 3.0) * (q_line ** 2)
         self._click_path = None
         self._click_viewer = None
         self._ax.clear()
         self._ax.scatter(x[~band], y[~band], s=8, alpha=0.35, c="0.6", label="out")
         self._ax.scatter(x[band], y[band], s=10, alpha=0.9, c="C0", label="fit region")
-        self._ax.plot(x[band], y_fit[band], "r-", lw=1.5, label="Guinier")
+        if q_line.size:
+            self._ax.plot(q_line ** 2, y_fit_line, "r-", lw=1.5, label="Guinier")
         self._ax.set_xlabel("q² (nm⁻²)")
         self._ax.set_ylabel("ln I")
         x_hi = float(np.nanmax(x)) if x.size else 1.0
         self._ax.set_xlim(0.0, x_hi * 1.05 if x_hi > 0 else 1.0)
         y_parts = [y]
-        if band.any():
-            y_parts.append(y_fit[band])
+        if q_line.size:
+            y_parts.append(y_fit_line)
         y_all = np.concatenate(y_parts)
         y_all = y_all[np.isfinite(y_all)]
         if y_all.size:
@@ -228,9 +260,9 @@ class PrPlot(_BaseMplPlot):
 
         - ``close_fits``: faint Dmax±10% ensemble overlays (auto pane default).
         - ``force_zero_off``: thin black force-zero-off overlay from ``ensemble/``.
-        - ``overlay_gnom_out``: optional second ``.out`` (e.g. auto best) drawn faintly
-          under the primary curve; its sibling ``ensemble/`` supplies force-zero-off when
-          the primary path has none (adjust-wizard preview temp outs).
+        - ``overlay_gnom_out``: optional second ``.out`` (e.g. disk best) drawn faintly
+          under the primary curve; its sibling ``ensemble/`` supplies force-zero-off /
+          close-fits when the primary path has none (adjust-wizard preview temp outs).
         """
         if not gnom_out_path or not os.path.isfile(gnom_out_path):
             self._show_status("No GNOM .out")
@@ -257,6 +289,8 @@ class PrPlot(_BaseMplPlot):
 
         primary_dir = os.path.dirname(os.path.abspath(gnom_out_path))
         overlay_path = (overlay_gnom_out or "").strip()
+        if overlay_path and same_gnom_path(overlay_path, gnom_out_path):
+            overlay_path = ""
         ens_dirs: list[str] = []
         if close_fits or force_zero_off:
             ens_dirs.append(os.path.join(primary_dir, "ensemble"))
@@ -271,7 +305,7 @@ class PrPlot(_BaseMplPlot):
                 ov_arr = None
             if ov_arr is not None:
                 rr, pp, _ee = ov_arr
-                self._ax.plot(rr, pp, color="C1", lw=1.0, alpha=0.55, zorder=1, label="auto best")
+                self._ax.plot(rr, pp, color="C1", lw=1.0, alpha=0.55, zorder=1, label="best (disk)")
 
         if close_fits:
             for ens_dir in ens_dirs:
@@ -295,24 +329,24 @@ class PrPlot(_BaseMplPlot):
                     close_labeled = True
 
         if force_zero_off:
-            fz_labeled = False
+            fz_drawn = False
             for ens_dir in ens_dirs:
-                if not os.path.isdir(ens_dir):
+                fz_path = resolve_force_zero_off_path(ens_dir)
+                if not fz_path or same_gnom_path(fz_path, gnom_out_path):
                     continue
-                for name in sorted(os.listdir(ens_dir)):
-                    if not name.endswith("_force_zero_off.out"):
-                        continue
-                    fz_path = os.path.join(ens_dir, name)
-                    try:
-                        fz_arr = distribution_arrays(parse_gnom_out(fz_path).get("distribution"))
-                    except Exception:
-                        continue
-                    if fz_arr is None:
-                        continue
-                    rr, pp, _ee = fz_arr
-                    label = "force-zero-off" if not fz_labeled else None
-                    self._ax.plot(rr, pp, color="k", lw=0.8, alpha=1.0, zorder=1, label=label)
-                    fz_labeled = True
+                if overlay_path and same_gnom_path(fz_path, overlay_path):
+                    continue
+                try:
+                    fz_arr = distribution_arrays(parse_gnom_out(fz_path).get("distribution"))
+                except Exception:
+                    continue
+                if fz_arr is None:
+                    continue
+                rr, pp, _ee = fz_arr
+                label = "force-zero-off" if not fz_drawn else None
+                self._ax.plot(rr, pp, color="k", lw=0.8, alpha=1.0, zorder=1, label=label)
+                fz_drawn = True
+                break  # one overlay only
 
         if err is not None:
             e = np.asarray(err, dtype=float)
@@ -337,6 +371,7 @@ class PrPlot(_BaseMplPlot):
         if handles:
             self._ax.legend(fontsize=7, loc="best")
         self._fig.tight_layout()
+        clamp_distribution_ylim(self._ax)
         self.draw_idle()
         self.setCursor(Qt.PointingHandCursor)
 

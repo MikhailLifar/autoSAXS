@@ -239,6 +239,45 @@ def find_calibrant_image_in_workdir(workdir: Path) -> Optional[Path]:
     return max(candidates, key=_mtime).resolve()
 
 
+def find_latest_dat_in_workdir(workdir: Path) -> Optional[Path]:
+    """
+    Newest ``*.dat`` under ``workdir`` (and one level of subdirs), by mtime.
+
+    Skips ``averaged_proxy`` trees (proxy-axis curves are not valid buffer sources).
+    """
+    try:
+        root = workdir.expanduser().resolve()
+    except OSError:
+        return None
+    if not root.is_dir():
+        return None
+
+    search_dirs: List[Path] = [root]
+    try:
+        for child in root.iterdir():
+            if child.is_dir() and child.name.lower() != "averaged_proxy":
+                search_dirs.append(child)
+    except OSError:
+        pass
+
+    candidates: List[Path] = []
+    for directory in search_dirs:
+        try:
+            candidates.extend(p for p in directory.glob("*.dat") if p.is_file())
+        except OSError:
+            continue
+    if not candidates:
+        return None
+
+    def _mtime(p: Path) -> float:
+        try:
+            return float(p.stat().st_mtime)
+        except OSError:
+            return 0.0
+
+    return max(candidates, key=_mtime).resolve()
+
+
 def browse_start_dir_for_resolved_paths(paths: List[str], workdir: Path) -> Optional[str]:
     """
     Directory for QFileDialog: parent of the first existing file, or the path itself if it is an existing directory.
@@ -489,7 +528,13 @@ def session_hint_for_positional_path(
         buf = _file_hint_if_exists(getattr(hints, "buffer_dat_path", None), workdir)
         if buf:
             return buf
-        return _file_hint_if_exists(hints.last_integrated_dat_path, workdir)
+        li = _file_hint_if_exists(hints.last_integrated_dat_path, workdir)
+        if li:
+            return li
+        found = find_latest_dat_in_workdir(workdir)
+        if found is not None:
+            return str(found)
+        return None
     if skill_name in ANALYSIS_SKILLS_WITH_PROFILE and param_name == "profile":
         pf = _file_hint_if_exists(hints.preferred_profile_dat_path, workdir)
         if pf:

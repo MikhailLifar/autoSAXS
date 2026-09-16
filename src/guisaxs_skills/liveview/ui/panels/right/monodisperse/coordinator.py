@@ -72,7 +72,6 @@ class MonodisperseCoordinator(QObject):
         if self._gnom_adjust is None:
             parent = self._wizard.window() if self._wizard is not None else None
             self._gnom_adjust = GnomAdjustWizardDialog(parent)
-            self._config.set_gnom_adjust_wizard(self._gnom_adjust)
             self._gnom_adjust.editing_started.connect(self.intervention_requested.emit)
             self._gnom_adjust.params_changed.connect(self._on_gnom_adjust_params_changed)
         prof = self._presenter.profile_path

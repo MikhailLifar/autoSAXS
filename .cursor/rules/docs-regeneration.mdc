@@ -1,0 +1,10 @@
+---
+description:
+alwaysApply: true
+---
+
+Skill entry points docstrings are SSOT for skill documentation.
+If you update these docstrings, there is no need to do identical updates in autosaxs-docs/skills_reference.md or "saxs-processing" skill documentation.
+You should just regenerate them using autoSAXS commands:
+$autosaxs get-docs -o <destination>  # regenerates README.md and  autosaxs-docs/skills_reference.md
+$autosaxs get-skills -o <destination>  # regenerates "saxs-processing" skill

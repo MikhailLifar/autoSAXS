@@ -1,12 +1,16 @@
 # modify-in-spec
 
-For now DO NOT TOUCH A SIGNLE LINE OF CODE.
+For now DO NOT TOUCH A SINGLE LINE OF CODE.
 Instead go to `docs/`, choose there an appropriate spec file and modify the spec according to my query.
-There are two apps in my project:
-- SAXS processing pipeline. Lab entry point is `saxsprocessing/pipeline.py` (assumes installed `autosaxs`). The location of spec is `docs/pipeline_interactive_spec.md`.
-- SAXS processing GUI (guisaxs-skills / guisaxs-liveview). Entry points are the installed console scripts. Specs live under `docs/`.
 
-There is also a spec on skill-oriented paradigm, on which `autosaxs` package, underlying both apps, is built. The location of spec is `docs/skills_paradigm.md`.
+Specs (code under `src/` is SSOT when docs drift — keep them aligned):
+
+- **Skills paradigm** (package contract): `docs/skills_paradigm.md`
+- **Liveview architecture** (Session / SampleStore / plan_for): `docs/liveview_session_sample_plan.md`
+- **Liveview product / UX**: `docs/guisaxs_liveview_spec.md`
+- **Skills GUI product / UX**: `docs/guisaxs_skills_spec.md`
+
+Agent navigation: `AGENTS.md`. Lab scripts may call the legacy Controller via `saxsprocessing/pipeline.py`; that path has **no** separate product spec — prefer skills for new work.
 
 Examine the spec carefully and modify all the sections related to my request.
 IF SOMETHING IS UNCLEAR OR AMBIGUOUS IN MY INSTRUCTIONS, QUERY ME FOR CLARIFICATION after you finished to modify the Spec.

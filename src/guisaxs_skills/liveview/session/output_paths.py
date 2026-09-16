@@ -15,6 +15,30 @@ def tiff_output_root(*, watchdir: Path, tiff_path: str, mode: LiveviewWatchMode)
     return wd
 
 
+def analysis_output_root(
+    *,
+    watchdir: Path,
+    sample_path: str,
+    mode: LiveviewWatchMode,
+    boarding: LiveviewIntakeMode | None = None,
+) -> Path:
+    """
+    Output root for analysis re-runs.
+
+    Curve boarding (and any ``*.dat`` sample) always uses the watchdir root —
+    never the parent of ``averaged/`` / ``subtracted/`` under TREE mode.
+    """
+    from .state import LiveviewIntakeMode
+
+    wd = watchdir.expanduser().resolve()
+    sp = (sample_path or "").strip()
+    if boarding in (LiveviewIntakeMode.CURVE_1D, LiveviewIntakeMode.CURVE_SUB) or sp.lower().endswith(
+        ".dat"
+    ):
+        return wd
+    return tiff_output_root(watchdir=watchdir, tiff_path=sp, mode=mode)
+
+
 def averaged_proxy_dir(root: Path) -> Path:
     return root / "averaged_proxy"
 

@@ -26,6 +26,7 @@ from typing import Any, Optional
 
 import pytest
 from guisaxs_skills.liveview.pipeline import Job, JobStep, LiveviewJobExecutor
+from guisaxs_skills.liveview.session.sample_store import SampleStore
 from guisaxs_skills.core.models import RunRequest
 from guisaxs_skills.liveview.session import LiveviewSessionState
 
@@ -310,7 +311,7 @@ def test_executor_requeues_cancelled_job_before_normal_jobs(tmp_path: Path):
 
     runner = _DummyRunner()
     state = LiveviewSessionState(watchdir=tmp_path)
-    ex = LiveviewJobExecutor(state=state, runner=runner)  # type: ignore[arg-type]
+    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=runner)  # type: ignore[arg-type]
 
     current = Job(
         id="cur",
@@ -370,7 +371,7 @@ def test_executor_paused_starts_manual_jobs_only(tmp_path: Path):
 
     runner = _DummyRunner()
     state = LiveviewSessionState(watchdir=tmp_path)
-    ex = LiveviewJobExecutor(state=state, runner=runner)  # type: ignore[arg-type]
+    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=runner)  # type: ignore[arg-type]
 
     auto = Job(
         id="auto",
@@ -386,7 +387,7 @@ def test_executor_paused_starts_manual_jobs_only(tmp_path: Path):
     )
     ex._jobs.put(auto)  # noqa: SLF001
     ex._jobs.put(manual)  # noqa: SLF001
-    ex.pause()
+    state.set_auto_processing(False)
 
     ex._tick()  # noqa: SLF001
     ex._tick()  # noqa: SLF001
@@ -418,8 +419,8 @@ def test_executor_paused_advances_manual_multi_step_job(tmp_path: Path):
 
     runner = _DummyRunner()
     state = LiveviewSessionState(watchdir=tmp_path)
-    ex = LiveviewJobExecutor(state=state, runner=runner)  # type: ignore[arg-type]
-    ex.pause()
+    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=runner)  # type: ignore[arg-type]
+    state.set_auto_processing(False)
 
     manual = Job(
         id="chain",
@@ -459,7 +460,7 @@ def test_monodisperse_guinier_opts_fixed_interval_from_spinboxes(tmp_path: Path)
     prof.write_text("# q I\n", encoding="utf-8")
     state = LiveviewSessionState(watchdir=tmp_path)
     state.monodisperse_wizard_params = {"first": 1, "last": 1}
-    ex = LiveviewJobExecutor(state=state, runner=_DummyRunner())  # type: ignore[arg-type]
+    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=_DummyRunner())  # type: ignore[arg-type]
 
     steps = ex.monodisperse_steps_guinier_and_distances(
         str(prof),
@@ -505,7 +506,7 @@ def test_analysis_steps_both_armed_separate_guinier(tmp_path: Path):
     state = LiveviewSessionState(watchdir=tmp_path)
     state.monodisperse_armed = True
     state.polydisperse_armed = True
-    ex = LiveviewJobExecutor(state=state, runner=_DummyRunner())  # type: ignore[arg-type]
+    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=_DummyRunner())  # type: ignore[arg-type]
     steps = ex._analysis_steps_for_profile(str(prof), output_root=tmp_path)  # noqa: SLF001
     names = [s.name for s in steps]
     assert FIT_GUINIER_MONO_STEP in names
@@ -540,7 +541,7 @@ def test_polydisperse_steps_full_defaults(tmp_path: Path):
     prof = tmp_path / "sub_sample.dat"
     prof.write_text("# q I\n", encoding="utf-8")
     state = LiveviewSessionState(watchdir=tmp_path)
-    ex = LiveviewJobExecutor(state=state, runner=_DummyRunner())  # type: ignore[arg-type]
+    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=_DummyRunner())  # type: ignore[arg-type]
 
     steps = build_polydisperse_steps(
         str(prof),
@@ -606,7 +607,7 @@ def test_polydisperse_guinier_only_no_sizes_first_handoff(tmp_path: Path):
     prof.write_text("# q I\n", encoding="utf-8")
     state = LiveviewSessionState(watchdir=tmp_path)
     state.polydisperse_window_params = {"guinier_first": 5, "guinier_last": 20, "first": 1}
-    ex = LiveviewJobExecutor(state=state, runner=_DummyRunner())  # type: ignore[arg-type]
+    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=_DummyRunner())  # type: ignore[arg-type]
 
     steps = build_polydisperse_steps(
         str(prof),
@@ -651,7 +652,7 @@ def test_monodisperse_step_shape_dammif_uses_concrete_gnom_path(tmp_path: Path):
     gnom.write_bytes(gnom_src.read_bytes())
 
     state = LiveviewSessionState(watchdir=tmp_path)
-    ex = LiveviewJobExecutor(state=state, runner=_DummyRunner())  # type: ignore[arg-type]
+    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=_DummyRunner())  # type: ignore[arg-type]
 
     step = ex.monodisperse_step_shape(
         str(prof),

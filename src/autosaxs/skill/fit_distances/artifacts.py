@@ -235,6 +235,7 @@ def write_success_artifacts(
     user_last: Optional[int],
     user_smooth: Optional[float],
     event_bus: Optional[EventBus],
+    refined: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """Persist success artifacts and return the skill result dict."""
     best_link_path = os.path.join(output_dir, f"{base}_gnom.out")
@@ -382,5 +383,6 @@ def write_success_artifacts(
         "ensemble_summary_path": ensemble_info.get("ensemble_summary_path") or "",
         "close_fit_out_paths": list(ensemble_info.get("close_fit_out_paths") or []),
         "force_zero_off_out_path": ensemble_info.get("force_zero_off_out_path") or "",
+        "refined": "true" if refined else "false",
         **_serialize_quality_for_return(pr_quality),
     }

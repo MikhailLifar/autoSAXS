@@ -8,7 +8,13 @@ from typing import Callable, Dict, Optional
 from PyQt5.QtCore import QObject, QTimer
 
 from .stability import FileStatSnapshot, StabilityConfig, _try_stat
-from .tiff_revision import TiffRevision, TiffRevisionSource, is_tiff_path, normalize_tiff_path
+from .sample_revision import (
+    SampleRevision,
+    SampleRevisionSource,
+    is_sample_dat_path,
+    is_tiff_path,
+    normalize_sample_path,
+)
 
 
 # Tuned for NFS atomic overwrite (e.g. Lima temp.tif): fast detect, short settle.
@@ -33,7 +39,7 @@ class ProcessedTiffPollEngine:
     def __init__(
         self,
         *,
-        on_revision: Callable[[TiffRevision], None],
+        on_revision: Callable[[SampleRevision], None],
     ) -> None:
         self._on_revision = on_revision
         self._idle_check: Callable[[], bool] = lambda: True
@@ -47,10 +53,20 @@ class ProcessedTiffPollEngine:
 
     def track_processed_path(self, path: str) -> None:
         """Remember ``path`` and record its current stat as the poll baseline."""
-        if not path or not is_tiff_path(path):
+        if not path or not (is_tiff_path(path) or is_sample_dat_path(path)):
             return
-        key = normalize_tiff_path(path)
+        key = normalize_sample_path(path)
         snap = _try_stat(key)
+        if snap is not None:
+            self._tracked[key] = snap
+
+    def note_path_stat(self, path: str, snap: Optional[FileStatSnapshot] = None) -> None:
+        """Align poll baseline so an already-handled revision is not re-fired."""
+        if not path or not (is_tiff_path(path) or is_sample_dat_path(path)):
+            return
+        key = normalize_sample_path(path)
+        if snap is None:
+            snap = _try_stat(key)
         if snap is not None:
             self._tracked[key] = snap
 
@@ -64,11 +80,11 @@ class ProcessedTiffPollEngine:
                 continue
             self._tracked[path] = cur
             self._on_revision(
-                TiffRevision(
+                SampleRevision(
                     path=path,
                     stat=cur,
                     detected_at=now,
-                    source=TiffRevisionSource.POLL,
+                    source=SampleRevisionSource.POLL,
                 )
             )
 
@@ -85,7 +101,7 @@ class ProcessedTiffPoller(QObject):
         self,
         *,
         cfg: Optional[PollWatcherConfig] = None,
-        on_revision: Callable[[TiffRevision], None],
+        on_revision: Callable[[SampleRevision], None],
     ) -> None:
         super().__init__()
         self._cfg = cfg or PollWatcherConfig()
@@ -109,6 +125,9 @@ class ProcessedTiffPoller(QObject):
 
     def track_processed_path(self, path: str) -> None:
         self._engine.track_processed_path(path)
+
+    def note_path_stat(self, path: str, snap=None) -> None:
+        self._engine.note_path_stat(path, snap)
 
     def poll_once(self) -> None:
         self._engine.poll_once()

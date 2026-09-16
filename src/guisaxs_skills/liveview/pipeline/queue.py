@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Deque, List, Optional, Tuple
 
 from ..ingest.stability import FileStatSnapshot, StabilityConfig
-from ..ingest.tiff_revision import TiffRevision, is_newer_than, normalize_tiff_path
+from ..ingest.sample_revision import SampleRevision, is_newer_than, normalize_sample_path
 from .jobs import Job, is_manual_job
 
 
@@ -29,7 +29,7 @@ class QueueItem:
     stability_cfg: Optional[StabilityConfig] = field(default=None)
 
     @staticmethod
-    def from_revision(rev: TiffRevision, *, stability_cfg: Optional[StabilityConfig] = None) -> QueueItem:
+    def from_revision(rev: SampleRevision, *, stability_cfg: Optional[StabilityConfig] = None) -> QueueItem:
         return QueueItem(
             path=rev.path,
             detected_at_monotonic=float(rev.detected_at),
@@ -47,7 +47,7 @@ class FIFOQueue:
 
     @staticmethod
     def _norm_key(path: str) -> str:
-        return normalize_tiff_path(path)
+        return normalize_sample_path(path)
 
     def contains_path(self, path: str) -> bool:
         k = self._norm_key(path)
@@ -118,15 +118,15 @@ class JobQueue:
 
     def drop_jobs_for_tiff_path(self, path: str) -> int:
         """Remove not-yet-started jobs targeting ``path`` (superseded by a newer revision)."""
-        k = normalize_tiff_path(path)
+        k = normalize_sample_path(path)
         if not self._heap:
             return 0
         kept: List[Tuple[int, int, Job]] = []
         dropped = 0
         for entry in self._heap:
             job = entry[2]
-            tp = str(job.context.get("tiff_path") or "").strip()
-            if tp and normalize_tiff_path(tp) == k:
+            tp = str(job.context.get("tiff_path") or job.context.get("source_path") or "").strip()
+            if tp and normalize_sample_path(tp) == k:
                 dropped += 1
                 continue
             kept.append(entry)

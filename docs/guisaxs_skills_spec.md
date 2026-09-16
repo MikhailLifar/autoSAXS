@@ -1,6 +1,11 @@
 # guisaxs-skills — Technical Specification
 
-This document specifies a new desktop GUI application (“guisaxs-skills”) that is a **strict interface to `autosaxs` skills**. It is written to be precise enough to implement without re-introducing workflow logic that bypasses skills.
+Product requirements for the **guisaxs-skills** skill console (PyQt5).  
+**Package layout and module map:** [`../AGENTS.md`](../AGENTS.md) (code is SSOT).  
+**Skills contract:** [`skills_paradigm.md`](skills_paradigm.md).  
+**Liveview** (separate app): [`guisaxs_liveview_spec.md`](guisaxs_liveview_spec.md), [`liveview_session_sample_plan.md`](liveview_session_sample_plan.md).
+
+This document describes intended UX and constraints. When it conflicts with `src/guisaxs_skills/`, update this file.
 
 ---
 
@@ -35,9 +40,10 @@ This document specifies a new desktop GUI application (“guisaxs-skills”) tha
 ### 2.1 Skills-only API (hard requirement)
 
 - The GUI **MUST NOT** call `autosaxs.processor` / pyFAI integration / subtraction routines directly.
-- The only allowed compute operations are **invocations of public skill entry points** from `autosaxs/skill.py`:
-  - `calibrate`, `integrate`, `integrate_proxy`, `subtract`, `plot`, `guinier_analysis`,
-    `model_mixture`, `model_bodies`, `model_dam` (and any future public skill).
+- The only allowed compute operations are **invocations of public skill entry points** from `autosaxs.skill` (see `list_skills()`), including e.g.:
+  - `calibrate`, `integrate`, `integrate_proxy`, `average`, `subtract`, `plot`, `plot_2d`,
+    `fit_guinier`, `fit_distances`, `fit_sizes`, `model_mixture`, `model_bodies`, `model_dam`,
+    `model_density`, `report_individual`, `report_summary` (and any future public skill).
 - Any legacy “convenience” functionality that reproduces part of a skill inside the GUI is forbidden.
 
 ### 2.2 Isolation (hard requirement)
@@ -342,7 +348,7 @@ This section defines what the middle column’s **per-skill data panel** must sh
 - Gallery of produced plot images (thumbnails) with click-to-preview
 - For batch: list of input → plot outputs
 
-### 9.6 `guinier_analysis`
+### 9.6 `fit_guinier`
 
 **Inputs:** one or many 1D curves.  
 **Middle shows (after run):**
@@ -383,7 +389,7 @@ For all skills, the layout is consistent:
 
 Skill-specific layout notes:
 - **2D-first skills** (`calibrate`, `integrate`, `integrate_proxy`): per-skill data panel prioritizes 2D preview + a single representative 1D plot.
-- **1D-only skills** (`subtract`, `guinier_analysis`, most fits): per-skill data panel prioritizes curve overlays and summary tables.
+- **1D-only skills** (`subtract`, `fit_guinier`, most fits): per-skill data panel prioritizes curve overlays and summary tables.
 
 ---
 

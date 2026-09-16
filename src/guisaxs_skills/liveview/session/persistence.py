@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from .state import LiveviewSessionState, LiveviewWatchMode
+from .state import LiveviewIntakeMode, LiveviewSessionState, LiveviewWatchMode
 
 SESSION_DIR = ".guisaxs_liveview"
 SESSION_FILE = "session.yaml"
@@ -57,6 +57,8 @@ def save_liveview_session_settings(state: LiveviewSessionState) -> None:
         data: Dict[str, Any] = {
             "version": 1,
             "watch_mode": state.watch_mode.value,
+            "intake_mode": state.intake_mode.value,
+            "auto_processing": bool(state.auto_processing),
             "integrator_dir": _as_rel_if_under(wd, state.integrator_dir),
             "buffer_dat_path": _as_rel_if_under(wd, state.buffer_dat_path),
             "subtract_options": state.subtract_options,
@@ -98,6 +100,16 @@ def load_liveview_session_settings(state: LiveviewSessionState) -> bool:
         state.watch_mode = LiveviewWatchMode.FLAT
     else:
         state.watch_mode = LiveviewWatchMode.TREE
+
+    im = raw.get("intake_mode")
+    try:
+        if isinstance(im, str) and im.strip():
+            state.intake_mode = LiveviewIntakeMode(im.strip())
+    except ValueError:
+        state.intake_mode = LiveviewIntakeMode.FRAME_2D
+
+    if "auto_processing" in raw:
+        state.auto_processing = bool(raw.get("auto_processing"))
 
     integ = _resolve_saved_path(wd, raw.get("integrator_dir") if raw.get("integrator_dir") else None)
     if integ is not None and integ.is_dir():

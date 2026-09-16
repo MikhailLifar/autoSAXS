@@ -266,6 +266,7 @@ class LiveviewMainWindow(QMainWindow):
         self._right.polydisperse_mixture_rerun.connect(self._controller.on_polydisperse_mixture_rerun)
         self._right.polydisperse_resume_queue.connect(self._controller.on_polydisperse_resume_queue)
         self._right.polydisperse_stop_queue.connect(self._controller.on_polydisperse_stop_queue)
+        self._right.intake_mode_selected.connect(self._controller.processing_mode.set_intake)
         self._middle.tiff_files_dropped.connect(self._on_tiff_files_dropped)
         self._middle.history_step.connect(self._controller.history_step)
         self._middle.process_history_file_requested.connect(self._controller.process_history_file)
@@ -273,23 +274,24 @@ class LiveviewMainWindow(QMainWindow):
         self._middle.image_presence_changed.connect(
             lambda *_args: self._left.refresh_attention_coach()
         )
-        self._controller.tiff_revision_pending.connect(self._left.on_tiff_revision_pending)
+        self._controller.sample_revision_pending.connect(self._left.on_sample_revision_pending)
         self._right.analysis_arming_changed.connect(self._controller.on_analysis_arming_changed)
         self._right.analysis_arming_changed.connect(self._left.refresh_attention_coach)
         self._controller.processing_mode.mode_changed.connect(
             lambda *_args: self._left.refresh_attention_coach()
         )
+        self._controller.processing_mode.intake_changed.connect(
+            lambda *_args: self._left.refresh_attention_coach()
+        )
 
     def _open_subtraction_wizard(self) -> None:
-        from .session.state import LiveviewState
-
-        st = self._state.current_state()
-        if st not in (LiveviewState.C, LiveviewState.CD):
+        buf = self._state.buffer_dat_path
+        has_buffer = self._state.buffer_ready() and buf is not None and buf.is_file()
+        if not has_buffer:
             QMessageBox.information(
                 self,
                 "Subtraction wizard",
-                "Subtraction scaling is available after buffer subtraction is configured "
-                "(sample + buffer curves for the current file).",
+                "Configure a buffer curve first (left Buffer panel), then open S+buffer.",
             )
             return
         ctx = self._controller.middle_subtraction_context()
@@ -297,6 +299,13 @@ class LiveviewMainWindow(QMainWindow):
         buffer_dat = str(ctx.get("buffer_dat") or "")
         subtracted_dat = str(ctx.get("subtracted_dat") or "")
         subtract_options = ctx.get("subtract_options") if isinstance(ctx.get("subtract_options"), dict) else {}
+        if not buffer_dat and self._state.buffer_dat_path is not None:
+            buffer_dat = str(self._state.buffer_dat_path.resolve())
+        if not sample_dat:
+            # Prefer last integrated / boarded averaged curve when middle context is empty.
+            lip = self._state.last_integrated_dat_path
+            if lip is not None and lip.is_file():
+                sample_dat = str(lip.resolve())
         if not sample_dat or not buffer_dat:
             QMessageBox.warning(
                 self,

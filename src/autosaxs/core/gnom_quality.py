@@ -15,6 +15,11 @@ DEFAULT_DELTA_RG_PCT_MAX = 10.0
 DEFAULT_DELTA_RG_PCT_ACCEPTABLE = 15.0
 DEFAULT_PDI_MONODISPERSE_MAX = 0.10
 DEFAULT_PDI_POLYDISPERSE_MAX = 0.30
+# Reduced χ² (I_exp vs I_fit) bands for passport classification.
+DEFAULT_CHI2_GOOD_MIN = 0.5
+DEFAULT_CHI2_GOOD_MAX = 1.5
+DEFAULT_CHI2_ACCEPTABLE_MIN = 0.3
+DEFAULT_CHI2_ACCEPTABLE_MAX = 2.5
 
 
 @dataclass(frozen=True)
@@ -22,6 +27,10 @@ class PrQualityThresholds:
     total_estimate_min: float = DEFAULT_TOTAL_ESTIMATE_MIN
     delta_rg_pct_max: float = DEFAULT_DELTA_RG_PCT_MAX
     delta_rg_pct_acceptable: float = DEFAULT_DELTA_RG_PCT_ACCEPTABLE
+    chi2_good_min: float = DEFAULT_CHI2_GOOD_MIN
+    chi2_good_max: float = DEFAULT_CHI2_GOOD_MAX
+    chi2_acceptable_min: float = DEFAULT_CHI2_ACCEPTABLE_MIN
+    chi2_acceptable_max: float = DEFAULT_CHI2_ACCEPTABLE_MAX
 
 
 @dataclass(frozen=True)
@@ -29,6 +38,70 @@ class DrQualityThresholds:
     total_estimate_min: float = DEFAULT_TOTAL_ESTIMATE_MIN
     pdi_monodisperse_max: float = DEFAULT_PDI_MONODISPERSE_MAX
     pdi_polydisperse_max: float = DEFAULT_PDI_POLYDISPERSE_MAX
+    chi2_good_min: float = DEFAULT_CHI2_GOOD_MIN
+    chi2_good_max: float = DEFAULT_CHI2_GOOD_MAX
+    chi2_acceptable_min: float = DEFAULT_CHI2_ACCEPTABLE_MIN
+    chi2_acceptable_max: float = DEFAULT_CHI2_ACCEPTABLE_MAX
+
+
+def chi2_from_iq_table(iq_table: Any) -> Optional[float]:
+    """Reduced χ² from ``parse_gnom_out`` ``iq_table`` ``(q, I_exp, sigma, I_fit)``."""
+    if iq_table is None:
+        return None
+    try:
+        _q, i_exp, sigma, i_fit = iq_table
+    except (TypeError, ValueError):
+        return None
+    try:
+        from autosaxs.core.utils import calc_chi2
+
+        ie = np.asarray(i_exp, dtype=float)
+        ifit = np.asarray(i_fit, dtype=float)
+        sig = np.asarray(sigma, dtype=float) if sigma is not None else None
+    except (TypeError, ValueError):
+        return None
+    if sig is None:
+        return None
+    mask = np.isfinite(ie) & np.isfinite(ifit) & np.isfinite(sig) & (sig > 0)
+    if int(np.count_nonzero(mask)) < 2:
+        return None
+    try:
+        return float(calc_chi2(ie[mask], ifit[mask], sig[mask]))
+    except Exception:
+        return None
+
+
+def classify_chi2(
+    chi2: Optional[float],
+    *,
+    good_min: float = DEFAULT_CHI2_GOOD_MIN,
+    good_max: float = DEFAULT_CHI2_GOOD_MAX,
+    acceptable_min: float = DEFAULT_CHI2_ACCEPTABLE_MIN,
+    acceptable_max: float = DEFAULT_CHI2_ACCEPTABLE_MAX,
+) -> str:
+    """
+    Classify reduced χ² for passport display.
+
+    Returns ``high_quality``, ``acceptable``, ``failed``, or ``unknown``.
+    """
+    if chi2 is None:
+        return "unknown"
+    try:
+        v = float(chi2)
+    except (TypeError, ValueError):
+        return "unknown"
+    if not np.isfinite(v) or v < 0:
+        return "unknown"
+    if good_min <= v <= good_max:
+        return "high_quality"
+    if acceptable_min <= v <= acceptable_max:
+        return "acceptable"
+    return "failed"
+
+
+def _downgrade_quality(current: str, other: str) -> str:
+    rank = {"high_quality": 0, "acceptable": 1, "failed": 2}
+    return current if rank.get(current, 2) >= rank.get(other, 2) else other
 
 
 def rg_from_pr(r: np.ndarray, p: np.ndarray) -> Optional[float]:
@@ -307,6 +380,20 @@ def analyze_pr_quality(
         suspicious=suspicious,
         thresholds=t,
     )
+    chi2 = chi2_from_iq_table(parsed.get("iq_table"))
+    chi2_class = classify_chi2(
+        chi2,
+        good_min=t.chi2_good_min,
+        good_max=t.chi2_good_max,
+        acceptable_min=t.chi2_acceptable_min,
+        acceptable_max=t.chi2_acceptable_max,
+    )
+    if chi2_class in ("acceptable", "failed"):
+        pr_class = _downgrade_quality(pr_class, chi2_class)
+        if chi2 is not None and chi2_class == "failed":
+            rationale = list(rationale) + [f"Reduced χ² = {float(chi2):.3f} is outside acceptable range."]
+        elif chi2 is not None and chi2_class == "acceptable":
+            rationale = list(rationale) + [f"Reduced χ² = {float(chi2):.3f} is only marginally acceptable."]
     s_tip = shannon_tip(s_min, s_class)
     user_tips = build_pr_user_tips(
         pr_quality_class=pr_class,
@@ -325,6 +412,8 @@ def analyze_pr_quality(
         "rg_guinier_nm": rg_guinier_nm,
         "q_min_fit_nm": q_min_fit_nm,
         "total_estimate": total_estimate,
+        "chi2": chi2,
+        "chi2_class": chi2_class,
         "delta_rg_pct": drg,
         "shannon_s_min": s_min,
         "shannon_class": s_class,
@@ -902,6 +991,20 @@ def analyze_dr_quality(
         neg_frac=neg_frac,
         thresholds=t,
     )
+    chi2 = chi2_from_iq_table(parsed.get("iq_table"))
+    chi2_class = classify_chi2(
+        chi2,
+        good_min=t.chi2_good_min,
+        good_max=t.chi2_good_max,
+        acceptable_min=t.chi2_acceptable_min,
+        acceptable_max=t.chi2_acceptable_max,
+    )
+    if chi2_class in ("acceptable", "failed"):
+        sizes_class = _downgrade_quality(sizes_class, chi2_class)
+        if chi2 is not None and chi2_class == "failed":
+            rationale = list(rationale) + [f"Reduced χ² = {float(chi2):.3f} is outside acceptable range."]
+        elif chi2 is not None and chi2_class == "acceptable":
+            rationale = list(rationale) + [f"Reduced χ² = {float(chi2):.3f} is only marginally acceptable."]
     user_tips = build_sizes_user_tips(
         sizes_quality_class=sizes_class,
         modality_class=modality,
@@ -926,6 +1029,8 @@ def analyze_dr_quality(
         "dmax_nm": dmax_nm,
         "q_min_fit_nm": q_min_fit_nm,
         "total_estimate": parsed.get("total_estimate"),
+        "chi2": chi2,
+        "chi2_class": chi2_class,
         "shannon_s_min": s_min,
         "shannon_class": s_class,
         "shannon_ok": s_ok,

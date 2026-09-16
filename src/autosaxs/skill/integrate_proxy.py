@@ -383,6 +383,7 @@ def _integrate_proxy_paths(
         I,
         sigma,
         metadata={
+            "autoSAXS": True,
             "type": "integrated_proxy_1d",
             "parent": image,
             "x_axis": "r_px",

@@ -1094,7 +1094,13 @@ def test_fit_sizes_rmax_optimization_invoked(monkeypatch):
         assert len(guinier_calls) == 1
         assert len(optimize_calls) == 1
         assert optimize_calls[0]["rg_max_nm"] == pytest.approx(2.5)
-        assert float(out["best_gnom_out_path"].split("rmax_")[-1].split(".out")[0]) == pytest.approx(7.5)
+        best_out = Path(str(out["best_gnom_out_path"]))
+        assert best_out.name == "gnom_best.out"
+        assert best_out.is_file()
+        import yaml
+
+        handoff = yaml.safe_load(Path(str(out["fit_params_path"])).read_text(encoding="utf-8"))
+        assert float(handoff["fit"]["rmax_nm"]) == pytest.approx(7.5)
 
 # ---------------------------------------------------------------------------
 # model_bodies / model_dam: contract (require profile)

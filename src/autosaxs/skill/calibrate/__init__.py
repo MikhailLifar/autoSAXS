@@ -272,6 +272,12 @@ def _calibrate_paths(
         write_saxs(calibration_curve_dat_path, q_cal, I_cal, sigma, metadata)
     integrator_dir = os.path.join(output_dir, "integrator")
     result["integrator"].to_disk(integrator_dir)
+    provenance = {
+        "calibrant_image": os.path.abspath(calibrant_image),
+        "user_mask": os.path.abspath(mask_path) if mask_path else None,
+    }
+    with open(os.path.join(integrator_dir, "provenance.yml"), "w") as f:
+        yaml.safe_dump(provenance, f, default_flow_style=False, sort_keys=False)
     refined_path = os.path.join(output_dir, "refined.yml")
     with open(refined_path, "w") as f:
         yaml.dump(result["refined"], f, default_flow_style=False)

@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 import yaml
 
 from .....session.output_paths import (
+    analysis_output_root,
     dammif_dir,
     denss_dir,
     model_bodies_dir,
@@ -96,7 +97,7 @@ class MonodisperseArtifactPresenter:
         prof = (self._profile_path or "").strip()
         if prof and os.path.isfile(prof):
             return prof
-        p = self._state.default_fit_distances_profile_path()
+        p = self._state.preferred_profile_path()
         if p is not None and p.is_file():
             return str(p.resolve())
         return ""
@@ -279,8 +280,19 @@ class MonodisperseArtifactPresenter:
                 snap["alpha"] = float(alpha)
             except (TypeError, ValueError):
                 pass
-        snap["force_zero_rmin"] = "Y"
-        snap["force_zero_rmax"] = "Y"
+        is_refined = str(result.get("refined") or "").strip().lower() in ("true", "1", "yes")
+        wp = dict(self._state.monodisperse_wizard_params or {})
+        if not is_refined:
+            # Auto DATGNOM always forces P(0)=P(Dmax)=0.
+            snap["force_zero_rmin"] = "Y"
+            snap["force_zero_rmax"] = "Y"
+        else:
+            # Refine path: keep the user's confirmed boundary conditions.
+            for k in ("force_zero_rmin", "force_zero_rmax"):
+                if wp.get(k) is not None:
+                    snap[k] = wp[k]
+                else:
+                    snap[k] = "Y"
         rg = scalar_value(result.get("rg_guinier_nm"))
         if rg is not None and rg not in ("", None):
             try:
@@ -288,17 +300,22 @@ class MonodisperseArtifactPresenter:
             except (TypeError, ValueError):
                 pass
 
-        wp = dict(self._state.monodisperse_wizard_params or {})
         for k, v in snap.items():
             wp[k] = v
-        is_datgnom = "datgnom" in os.path.basename(gnom_out_path).lower()
-        if is_datgnom:
+        if not is_refined:
             wp["gnom_auto"] = {
                 k: snap[k]
                 for k in ("first", "last", "dmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax", "rg_nm")
                 if k in snap
             }
         self._state.monodisperse_wizard_params = wp
+        try:
+            from .config_sync import MonodisperseConfigSync
+
+            # Persist refine params (incl. force_zero) without rebuilding the whole wizard sync.
+            MonodisperseConfigSync(state=self._state, wizard=self._wizard).persist_confs()
+        except Exception:
+            pass
 
     def _ingest_shape(self, result: dict, *, skill_name: str) -> None:
         sub = result.get("output_subdir")
@@ -484,7 +501,7 @@ class MonodisperseArtifactPresenter:
         tiff_path: str = "",
         watch_mode: LiveviewWatchMode = LiveviewWatchMode.FLAT,
     ) -> None:
-        root = tiff_output_root(watchdir=watchdir, tiff_path=tiff_path, mode=watch_mode)
+        root = analysis_output_root(watchdir=watchdir, sample_path=tiff_path, mode=watch_mode)
         self.set_context(profile_path=self._profile_path, output_root=root, tiff_path=tiff_path, watch_mode=watch_mode)
         gstem = guinier_mono_dir(root) / stem
         if gstem.is_dir():

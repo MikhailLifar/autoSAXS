@@ -135,6 +135,27 @@ def format_gnom_passport_rows(
             te_poor = False
         rows.append((f"Total est. = {format_display_number(te)}", te_poor))
 
+    chi2 = scalar_value(result.get("chi2"))
+    chi2_class = str(scalar_value(result.get("chi2_class")) or "").strip()
+    if chi2 is not None and chi2 not in ("", None):
+        if not chi2_class or chi2_class == "unknown":
+            from autosaxs.core.gnom_quality import classify_chi2
+
+            chi2_class = classify_chi2(
+                float(chi2) if chi2 is not None else None,
+                good_min=t.chi2_good_min,
+                good_max=t.chi2_good_max,
+                acceptable_min=t.chi2_acceptable_min,
+                acceptable_max=t.chi2_acceptable_max,
+            )
+        chi2_label = {
+            "high_quality": "good",
+            "acceptable": "acceptable",
+            "failed": "failed",
+        }.get(chi2_class.lower(), chi2_class or "—")
+        chi2_poor = chi2_class.lower() in ("failed", "fail")
+        rows.append((f"χ² = {format_display_number(chi2)} ({chi2_label})", chi2_poor))
+
     s_min = scalar_value(result.get("shannon_s_min"))
     s_class = str(scalar_value(result.get("shannon_class")) or "unknown")
     s_status = str(scalar_value(result.get("overall_status")) or "")

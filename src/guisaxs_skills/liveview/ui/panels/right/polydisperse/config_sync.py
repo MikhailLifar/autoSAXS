@@ -25,10 +25,6 @@ class PolydisperseConfigSync:
     def __init__(self, *, state: LiveviewSessionState, window: Any) -> None:
         self._state = state
         self._window = window
-        self._sizes_adjust: Any = None
-
-    def set_sizes_adjust_wizard(self, dlg: Any) -> None:
-        self._sizes_adjust = dlg
 
     def sync_params_to_state(self) -> None:
         wp = dict(self._state.polydisperse_window_params or {})
@@ -58,12 +54,7 @@ class PolydisperseConfigSync:
         self.persist_confs()
 
     def _sizes_params_from_ui(self) -> dict:
-        dlg = self._sizes_adjust
-        if dlg is not None and hasattr(dlg, "sizes_params"):
-            try:
-                return dict(dlg.sizes_params())
-            except Exception:
-                pass
+        # Only committed (Confirm) values live in session state — never pull live dirty UI.
         wp = self._state.polydisperse_window_params or {}
         return {k: wp[k] for k in _SIZES_CONF_KEYS if wp.get(k) is not None}
 
@@ -91,12 +82,17 @@ class PolydisperseConfigSync:
             gopts["first"] = int(g_first)
             gopts["last"] = int(g_last)
         sopts = self._sizes_params_from_ui()
+        refine_opts = dict(sopts)
         # Auto conf must not pin rmax/alpha/force_zero (that would force refine on every TIFF).
         for k in _SIZES_REFINE_KEYS:
             sopts.pop(k, None)
         sopts["shape"] = "spheres"
         if sopts.get("first") is None:
             sopts["first"] = 1
+        refine_opts["shape"] = "spheres"
+        if refine_opts.get("first") is None:
+            refine_opts["first"] = 1
+        refine_path = fit_sizes_dir(wd) / "fit_sizes_refine.conf"
         try:
             mix = dict(self._window.mixture_pane.mixture_params())
         except Exception:
@@ -110,6 +106,11 @@ class PolydisperseConfigSync:
         try:
             spath.write_text(yaml.safe_dump(sopts, sort_keys=True), encoding="utf-8")
             self._state.fit_sizes_conf_path = spath
+        except OSError:
+            pass
+        try:
+            if any(k in refine_opts for k in _SIZES_REFINE_KEYS):
+                refine_path.write_text(yaml.safe_dump(refine_opts, sort_keys=True), encoding="utf-8")
         except OSError:
             pass
         try:

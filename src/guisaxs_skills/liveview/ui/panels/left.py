@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
 from ....logic.session_state import SessionPathHints
 from ....ui.preview_panel import PreviewPanel
 from ...services.calibration.display import refined_yml_display_rows
-from ...session.state import LiveviewSessionState
+from ...session.state import LiveviewIntakeMode, LiveviewSessionState
 from ..attention import AttentionPulse
 from ..wizards.left import BufferWizardDialog, CalibrationWizardDialog
 from ..wizards.mask import MaskWizardDialog
@@ -154,6 +154,22 @@ class LiveviewLeftPanel(QWidget):
         self._refresh_mask_preview_from_state()
         self.refresh_attention_coach()
 
+    def apply_intake_visibility(self, mode: LiveviewIntakeMode) -> None:
+        """Show only left-column groups relevant to the current boarding mode."""
+        if mode == LiveviewIntakeMode.FRAME_2D:
+            self._cal_group.setVisible(True)
+            self._mask_group.setVisible(True)
+            self._buf_group.setVisible(True)
+        elif mode == LiveviewIntakeMode.CURVE_1D:
+            self._cal_group.setVisible(False)
+            self._mask_group.setVisible(False)
+            self._buf_group.setVisible(True)
+        else:
+            self._cal_group.setVisible(False)
+            self._mask_group.setVisible(False)
+            self._buf_group.setVisible(False)
+        self.refresh_attention_coach()
+
     def set_coach_peers(self, *, middle, right) -> None:
         """Middle/right panels used for post-setup coaching (canvas + analysis icons)."""
         self._middle = middle
@@ -161,6 +177,7 @@ class LiveviewLeftPanel(QWidget):
 
     def refresh_attention_coach(self) -> None:
         """Pulse the next calibration / buffer / analysis setup control(s)."""
+        intake = self._state.intake_mode
         calibrated = self._state.integrator_dir is not None
         buffer_ready = (
             self._state.buffer_dat_path is not None and self._state.subtract_options is not None
@@ -171,7 +188,50 @@ class LiveviewLeftPanel(QWidget):
         right = self._right
         middle = self._middle
 
-        if not calibrated:
+        if intake == LiveviewIntakeMode.CURVE_SUB:
+            # No left-column setup; coach drop canvas + optional analysis icons.
+            if middle is not None:
+                if hasattr(middle, "curve_drop_host"):
+                    targets.append(middle.curve_drop_host())
+                if hasattr(middle, "drop_hint_canvas"):
+                    targets.append(middle.drop_hint_canvas())
+            analysis_open = False
+            if right is not None and hasattr(right, "analysis_windows_open"):
+                analysis_open = bool(right.analysis_windows_open())
+            if not analysis_open and right is not None:
+                if hasattr(right, "mono_analysis_button"):
+                    targets.append(right.mono_analysis_button())
+                if hasattr(right, "poly_analysis_button"):
+                    targets.append(right.poly_analysis_button())
+        elif intake == LiveviewIntakeMode.CURVE_1D:
+            if not buffer_ready:
+                if buf is not None and buf.isVisible():
+                    if not buf.has_buffer_path():
+                        targets.append(buf.buffer_browse_button())
+                    elif not buf.has_q_range():
+                        targets.append(buf.q_min_field())
+                        targets.append(buf.q_max_field())
+                    elif not buf.apply_coach_dismissed():
+                        targets.append(buf.apply_button())
+                else:
+                    targets.append(self._buf_open)
+            else:
+                if buf is not None and buf.isVisible() and buf.close_coach_armed():
+                    targets.append(buf.close_button())
+                analysis_open = False
+                if right is not None and hasattr(right, "analysis_windows_open"):
+                    analysis_open = bool(right.analysis_windows_open())
+                if not analysis_open and right is not None:
+                    if hasattr(right, "mono_analysis_button"):
+                        targets.append(right.mono_analysis_button())
+                    if hasattr(right, "poly_analysis_button"):
+                        targets.append(right.poly_analysis_button())
+            if middle is not None:
+                if hasattr(middle, "curve_drop_host"):
+                    targets.append(middle.curve_drop_host())
+                if hasattr(middle, "drop_hint_canvas"):
+                    targets.append(middle.drop_hint_canvas())
+        elif not calibrated:
             # Calibration wizard coaching is independent of the middle column
             # (proxy / sample TIFFs may already be shown there).
             if cal is not None and cal.isVisible():
@@ -229,8 +289,13 @@ class LiveviewLeftPanel(QWidget):
                     if hasattr(right, "poly_analysis_button"):
                         targets.append(right.poly_analysis_button())
 
-        # Central canvas: pulse when calibrated and empty (drop a TIFF); never while an image is shown.
-        if calibrated and middle is not None and not middle.has_image():
+        # Central canvas: pulse when calibrated and empty (2D intake only).
+        if (
+            intake == LiveviewIntakeMode.FRAME_2D
+            and calibrated
+            and middle is not None
+            and not middle.has_image()
+        ):
             if hasattr(middle, "drop_canvas_host"):
                 targets.append(middle.drop_canvas_host())
             if hasattr(middle, "drop_hint_canvas"):
@@ -260,6 +325,13 @@ class LiveviewLeftPanel(QWidget):
         if lip is not None and lip.is_file():
             h.last_integrated_dat_path = str(lip.resolve())
             h.one_d_profile_dir = str(lip.parent.resolve())
+        else:
+            from ....logic.smart_defaults import find_latest_dat_in_workdir
+
+            latest = find_latest_dat_in_workdir(wd)
+            if latest is not None:
+                h.last_integrated_dat_path = str(latest)
+                h.one_d_profile_dir = str(latest.parent)
         buf = self._state.buffer_dat_path
         if buf is not None and buf.is_file():
             h.buffer_dat_path = str(buf.resolve())
@@ -280,11 +352,14 @@ class LiveviewLeftPanel(QWidget):
         self._cal_wizard.activateWindow()
         self.refresh_calibration_coach()
 
-    def on_tiff_revision_pending(self, _revision: object = None) -> None:
-        """Re-guess empty ``calibrant_image`` when a new TIFF appears in the watchdir."""
+    def on_sample_revision_pending(self, _revision: object = None) -> None:
+        """Re-guess empty calibrant / buffer path hints when new files appear."""
         cal = self._cal_wizard
         if cal is not None:
             cal.maybe_apply_empty_calibrant_hint()
+        buf = self._buf_wizard
+        if buf is not None:
+            buf.maybe_apply_empty_buffer_hint()
         self.refresh_attention_coach()
 
     def _open_mask_wizard(self) -> None:
@@ -474,6 +549,7 @@ class LiveviewLeftPanel(QWidget):
             self._buf_wizard.attention_context_changed.connect(self.refresh_calibration_coach)
         else:
             self._buf_wizard.rebuild(hints, saved_state=saved if not self._buf_wizard.has_buffer_path() else None)
+        self._buf_wizard.maybe_apply_empty_buffer_hint()
         self._buf_wizard.show()
         self._buf_wizard.raise_()
         self._buf_wizard.activateWindow()

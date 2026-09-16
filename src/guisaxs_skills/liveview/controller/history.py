@@ -4,11 +4,11 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
-from ..services.history.middle_from_stem import apply_middle_view_from_disk
+from ..services.history.middle_from_stem import sync_middle_view
 from ..services.history.right_from_stem import apply_right_outputs_from_disk
 from ..session.output_paths import tiff_history_label
 from ..ingest.stability import FileStatSnapshot
-from ..ingest.tiff_revision import TiffRevision, TiffRevisionSource, make_revision
+from ..ingest.sample_revision import SampleRevision, SampleRevisionSource, make_revision
 
 if TYPE_CHECKING:
     from .controller import LiveviewController
@@ -17,45 +17,33 @@ if TYPE_CHECKING:
 class LiveviewHistoryHandler:
     def __init__(self, controller: LiveviewController) -> None:
         self._c = controller
-        self._index: int = 0
         self._last_2d_shown: Optional[Tuple[str, FileStatSnapshot]] = None
 
+    @property
+    def _index(self) -> int:
+        return self._c.samples.index
+
+    @_index.setter
+    def _index(self, value: int) -> None:
+        self._c.samples.index = int(value)
+
     def reset_index(self) -> None:
-        self._index = 0
+        self._c.samples.index = 0
 
     def clear_2d_cache(self) -> None:
         self._last_2d_shown = None
 
     def middle_updates_follow_pipeline(self) -> bool:
-        hist = self._c.executor.session_processed_tiffs
-        n = len(hist)
+        n = len(self._c.samples)
         if n == 0:
             return True
         return self._index == n - 1
-
-    def reload_view(self) -> None:
-        hist = list(self._c.executor.session_processed_tiffs)
-        middle = self._c.middle
-        if not hist or middle is None:
-            return
-        self._index = max(0, min(self._index, len(hist) - 1))
-        tiff_path = hist[self._index]
-        apply_middle_view_from_disk(
-            middle,
-            watchdir=self._c.watchdir,
-            tiff_path=tiff_path,
-            state=self._c.state,
-            subtract_options=self._c.history.subtract_options(),
-        )
-        if tiff_path.lower().endswith((".tif", ".tiff")):
-            self._record_2d_shown(tiff_path)
-        self.refresh_right_outputs()
 
     def refresh_chrome(self) -> None:
         middle = self._c.middle
         if middle is None:
             return
-        hist = list(self._c.executor.session_processed_tiffs)
+        hist = list(self._c.samples.paths())
         n = len(hist)
         if n == 0:
             middle.set_history_nav_visible(False)
@@ -82,7 +70,7 @@ class LiveviewHistoryHandler:
             left.refresh_attention_coach()
 
     def on_session_file_completed(self) -> None:
-        hist = self._c.executor.session_processed_tiffs
+        hist = list(self._c.samples.paths())
         n = len(hist)
         if n == 0:
             self.refresh_chrome()
@@ -91,29 +79,49 @@ class LiveviewHistoryHandler:
         if was_at_previous_tail:
             self._index = n - 1
         self.refresh_chrome()
+        # Same disk path as history < / > — curve jobs never emit integrate/subtract keys.
+        if self.middle_updates_follow_pipeline():
+            self.refresh_middle_for_sample(hist[self._index])
 
-    def step(self, delta: int) -> None:
-        hist = list(self._c.executor.session_processed_tiffs)
-        n = len(hist)
+    def on_pipeline_job_started(self, sample_path: str) -> None:
+        """Show middle views for the boarded sample as soon as the job starts."""
+        self.refresh_middle_for_sample(sample_path)
+
+    def sync_middle(self, *, sample: Any = None, force: bool = False) -> None:
+        """Sole controller entry for middle layout + content."""
         middle = self._c.middle
-        if n == 0 or delta == 0 or middle is None:
+        if middle is None:
             return
-        self._index = max(0, min(n - 1, self._index + int(delta)))
-        self.refresh_chrome()
-        tiff_path = hist[self._index]
-        apply_middle_view_from_disk(
+        if sample is None:
+            sample = self._c.samples.current()
+        sync_middle_view(
             middle,
-            watchdir=self._c.watchdir,
-            tiff_path=tiff_path,
             state=self._c.state,
-            subtract_options=self._c.history.subtract_options(),
+            sample=sample,
+            subtract_options=self.subtract_options(),
+            force=force,
         )
-        if tiff_path.lower().endswith((".tif", ".tiff")):
-            self._record_2d_shown(tiff_path)
-        self.refresh_right_outputs()
+
+    def refresh_middle_for_sample(self, sample_path: str) -> None:
+        """Middle content for a sample path (pipeline / job start)."""
+        middle = self._c.middle
+        path = (sample_path or "").strip()
+        if middle is None or not path:
+            return
+        if not self.middle_updates_follow_pipeline():
+            return
+        sample = self._c.samples.get(path)
+        if sample is None:
+            boarding = self._c.samples.boarding_for(path) or self._c.state.intake_mode
+            from ..session.sample import Sample
+
+            sample = Sample.from_path(path, boarding=boarding)
+        self.sync_middle(sample=sample, force=True)
+        if sample.path.lower().endswith((".tif", ".tiff")):
+            self._record_2d_shown(sample.path)
 
     def process_current_file(self) -> None:
-        hist = list(self._c.executor.session_processed_tiffs)
+        hist = list(self._c.samples.paths())
         if not hist:
             return
         idx = max(0, min(self._index, len(hist) - 1))
@@ -122,39 +130,72 @@ class LiveviewHistoryHandler:
             key = str(Path(path).resolve())
         except Exception:
             key = path.strip()
-        if key:
-            self._c.ingest.enqueue_manual_tiff(key)
+        if not key:
+            return
+        sample = self._c.samples.get(key) or self._c.samples.at(idx)
+        boarding = sample.boarding if sample is not None else self._c.samples.boarding_for(key)
+        self._c.ingest.enqueue_manual_sample(key, boarding=boarding)
 
-    def on_tiff_revision_pending(self, revision: object) -> None:
+    def on_sample_revision_pending(self, revision: object) -> None:
         middle = self._c.middle
-        if not isinstance(revision, TiffRevision) or middle is None:
+        if not isinstance(revision, SampleRevision) or middle is None:
             return
         if not self.middle_updates_follow_pipeline():
             return
-        if self._last_2d_shown is not None:
-            prev_path, prev_snap = self._last_2d_shown
-            if prev_path == revision.path and prev_snap == revision.stat:
-                return
-        self._last_2d_shown = (revision.path, revision.stat)
-        middle.show_image(revision.path)
+        path = revision.path
+        if path.lower().endswith((".tif", ".tiff")):
+            if self._last_2d_shown is not None:
+                prev_path, prev_snap = self._last_2d_shown
+                if prev_path == revision.path and prev_snap == revision.stat:
+                    return
+            self._last_2d_shown = (revision.path, revision.stat)
+            middle.show_image(revision.path)
 
+    def reload_view(self) -> None:
+        hist = list(self._c.samples.paths())
+        if self._c.middle is None:
+            return
+        if hist:
+            self._index = max(0, min(self._index, len(hist) - 1))
+        self.sync_middle(force=True)
+        sample = self._c.samples.current()
+        if sample is not None and sample.path.lower().endswith((".tif", ".tiff")):
+            self._record_2d_shown(sample.path)
+        self.refresh_right_outputs()
+
+    def step(self, delta: int) -> None:
+        hist = list(self._c.samples.paths())
+        n = len(hist)
+        if n == 0 or delta == 0 or self._c.middle is None:
+            return
+        self._index = max(0, min(n - 1, self._index + int(delta)))
+        self.refresh_chrome()
+        self.sync_middle(force=True)
+        sample = self._c.samples.current()
+        if sample is not None and sample.path.lower().endswith((".tif", ".tiff")):
+            self._record_2d_shown(sample.path)
+        self.refresh_right_outputs()
     def refresh_right_outputs(self) -> None:
         right = self._c.right
         if right is None:
             return
-        hist = list(self._c.executor.session_processed_tiffs)
+        hist = list(self._c.samples.paths())
         if not hist:
             right.sync_modeling_ui_to_session_state()
             return
         idx = max(0, min(self._index, len(hist) - 1))
-        stem = Path(hist[idx]).stem
+        from ..ingest.sample_revision import sample_stem_from_path
+
+        sample = self._c.samples.at(idx)
+        path = sample.path if sample is not None else hist[idx]
+        stem = sample.stem if sample is not None else sample_stem_from_path(path)
         apply_right_outputs_from_disk(
             right,
             watchdir=self._c.watchdir,
             tiff_stem=stem,
             monodisperse_armed=self._c.state.monodisperse_armed,
             polydisperse_armed=self._c.state.polydisperse_armed,
-            tiff_path=hist[idx],
+            tiff_path=path,
             watch_mode=self._c.state.watch_mode,
         )
         right.sync_modeling_ui_to_session_state()
@@ -163,7 +204,7 @@ class LiveviewHistoryHandler:
         rev = make_revision(
             path=path,
             detected_at=time.monotonic(),
-            source=TiffRevisionSource.MANUAL,
+            source=SampleRevisionSource.MANUAL,
         )
         if rev is not None:
             self._last_2d_shown = (rev.path, rev.stat)

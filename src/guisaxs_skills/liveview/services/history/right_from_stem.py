@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ...ingest.sample_revision import is_dat_path
 from ...session.output_paths import (
     integrated_dat_path,
     subtracted_dat_path,
@@ -24,15 +25,24 @@ def apply_right_outputs_from_disk(
     tiff_path: str = "",
     watch_mode: LiveviewWatchMode = LiveviewWatchMode.FLAT,
 ) -> None:
-    """Clear analysis previews, then load paths for ``tiff_stem`` under the TIFF output root."""
+    """Clear analysis previews, then load paths for ``tiff_stem`` under the sample output root."""
     right.clear_output_previews()
     if not (monodisperse_armed or polydisperse_armed) or not (tiff_stem or "").strip():
         return
     stem = tiff_stem.strip()
-    root = tiff_output_root(watchdir=watchdir, tiff_path=tiff_path, mode=watch_mode)
+    # Curve boarding always writes analysis under watchdir (not beside the .dat parent).
+    if is_dat_path(tiff_path or ""):
+        root = watchdir.expanduser().resolve()
+    else:
+        root = tiff_output_root(watchdir=watchdir, tiff_path=tiff_path, mode=watch_mode)
     sub = subtracted_dat_path(root=root, stem=stem)
     integ = integrated_dat_path(root=root, stem=stem, integrator_ready=True)
-    prof = sub if sub.is_file() else integ
+    if is_dat_path(tiff_path or "") and Path(tiff_path).is_file():
+        # Prefer the boarded curve itself as profile when it exists.
+        boarded = Path(tiff_path).expanduser().resolve()
+        prof = boarded if boarded.is_file() else (sub if sub.is_file() else integ)
+    else:
+        prof = sub if sub.is_file() else integ
     profile_path = str(prof.resolve()) if prof.is_file() else ""
 
     if monodisperse_armed and hasattr(right, "load_monodisperse_from_disk"):

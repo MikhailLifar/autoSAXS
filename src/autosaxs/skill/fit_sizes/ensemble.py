@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import csv
+import glob
 import os
+import shutil
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -21,6 +23,41 @@ from .runners import _run_gnom_once
 
 _CLOSE_FIT_RMAX_FACTORS = (0.90, 0.95, 1.00, 1.05, 1.10)
 _FORCE_ZERO_OFF_RMAX_FACTOR = 1.5
+
+GNOM_BEST_OUT = "gnom_best.out"
+FORCE_ZERO_OFF_OUT = "gnom_force_zero_off.out"
+
+
+def close_fit_out_name(rmax_factor: float) -> str:
+    return f"gnom_fac_{float(rmax_factor):.2f}.out"
+
+
+def _prepare_ensemble_dirs(sample_output_dir: str) -> tuple[str, str]:
+    ensemble_dir = os.path.join(sample_output_dir, "ensemble")
+    if os.path.isdir(ensemble_dir):
+        shutil.rmtree(ensemble_dir, ignore_errors=True)
+    close_fits_dir = os.path.join(ensemble_dir, "close_fits")
+    os.makedirs(close_fits_dir, exist_ok=True)
+    return ensemble_dir, close_fits_dir
+
+
+def clear_ensemble_dir(sample_output_dir: str) -> None:
+    """Remove ``ensemble/`` without regenerating (used by ``minimal`` refine)."""
+    ensemble_dir = os.path.join(sample_output_dir, "ensemble")
+    if os.path.isdir(ensemble_dir):
+        shutil.rmtree(ensemble_dir, ignore_errors=True)
+
+
+def cleanup_legacy_best_outs(output_dir: str, *, keep: str) -> None:
+    keep_abs = os.path.abspath(keep)
+    for pat in ("gnom_system_*_rmax_*.out", "gnom_rmax_*.out"):
+        for p in glob.glob(os.path.join(output_dir, pat)):
+            if os.path.abspath(p) == keep_abs:
+                continue
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
 
 def _row_from_out(
@@ -94,18 +131,17 @@ def run_rmax_ensemble(
     nr: Optional[int],
     best_parsed: Dict[str, Any],
     event_bus: Optional[EventBus],
+    run_force_zero_off: bool = True,
 ) -> Dict[str, Any]:
-    """Persist Rmax±10% close fits and a force-zero-off validation .out."""
-    ensemble_dir = os.path.join(sample_output_dir, "ensemble")
-    close_fits_dir = os.path.join(ensemble_dir, "close_fits")
-    os.makedirs(close_fits_dir, exist_ok=True)
+    """Persist Rmax±10% close fits and optionally a force-zero-off validation .out."""
+    ensemble_dir, close_fits_dir = _prepare_ensemble_dirs(sample_output_dir)
 
     rows: List[Dict[str, Any]] = []
     close_fit_out_paths: List[str] = []
 
     for fac in _CLOSE_FIT_RMAX_FACTORS:
         rmax = float(best_rmax_nm) * float(fac)
-        out_name = f"gnom_rmax_{rmax:.4f}.out"
+        out_name = close_fit_out_name(fac)
         out_path = os.path.join(close_fits_dir, out_name)
         ok, rc, stderr, out_text = _run_gnom_once(
             atsas_dat_path=atsas_dat_path,
@@ -144,49 +180,50 @@ def run_rmax_ensemble(
 
     force_zero_off_out_path = ""
     force_zero_off_parsed: Optional[Dict[str, Any]] = None
-    rmax_ext = float(best_rmax_nm) * float(_FORCE_ZERO_OFF_RMAX_FACTOR)
-    fz_out = os.path.join(ensemble_dir, f"gnom_rmax_{rmax_ext:.4f}_force_zero_off.out")
-    ok_fz, rc_fz, stderr_fz, out_text_fz = _run_gnom_once(
-        atsas_dat_path=atsas_dat_path,
-        output_dir=ensemble_dir,
-        system=system,
-        rmin_nm=rmin_nm,
-        rmax_nm=rmax_ext,
-        rad56_nm=rad56_nm,
-        first=first,
-        last=last,
-        alpha=alpha,
-        nr=nr,
-        out_path=fz_out,
-        force_zero_rmax="N",
-    )
-    fz_row = _row_from_out(
-        role="force_zero_off",
-        rmax_factor=float(_FORCE_ZERO_OFF_RMAX_FACTOR),
-        rmax_nm=rmax_ext,
-        force_zero_rmax="N",
-        ok=ok_fz,
-        rc=rc_fz,
-        stderr=stderr_fz,
-        out_path=fz_out,
-        out_text=out_text_fz,
-        rmax_ref_nm=float(best_rmax_nm),
-    )
-    rows.append(fz_row)
-    if ok_fz:
-        force_zero_off_out_path = fz_out
-        force_zero_off_parsed = parse_gnom_out(out_text_fz)
-    if event_bus:
-        status = "ok" if ok_fz else f"failed rc={rc_fz}"
-        event_bus.publish(
-            EventType.MESSAGE,
-            {
-                "text": (
-                    f"GNOM (fit_sizes): force-zero-off probe at "
-                    f"{_FORCE_ZERO_OFF_RMAX_FACTOR:.2f}×Rmax={rmax_ext:.4g} nm ({status})"
-                ),
-            },
+    if run_force_zero_off:
+        rmax_ext = float(best_rmax_nm) * float(_FORCE_ZERO_OFF_RMAX_FACTOR)
+        fz_out = os.path.join(ensemble_dir, FORCE_ZERO_OFF_OUT)
+        ok_fz, rc_fz, stderr_fz, out_text_fz = _run_gnom_once(
+            atsas_dat_path=atsas_dat_path,
+            output_dir=ensemble_dir,
+            system=system,
+            rmin_nm=rmin_nm,
+            rmax_nm=rmax_ext,
+            rad56_nm=rad56_nm,
+            first=first,
+            last=last,
+            alpha=alpha,
+            nr=nr,
+            out_path=fz_out,
+            force_zero_rmax="N",
         )
+        fz_row = _row_from_out(
+            role="force_zero_off",
+            rmax_factor=float(_FORCE_ZERO_OFF_RMAX_FACTOR),
+            rmax_nm=rmax_ext,
+            force_zero_rmax="N",
+            ok=ok_fz,
+            rc=rc_fz,
+            stderr=stderr_fz,
+            out_path=fz_out,
+            out_text=out_text_fz,
+            rmax_ref_nm=float(best_rmax_nm),
+        )
+        rows.append(fz_row)
+        if ok_fz:
+            force_zero_off_out_path = fz_out
+            force_zero_off_parsed = parse_gnom_out(out_text_fz)
+        if event_bus:
+            status = "ok" if ok_fz else f"failed rc={rc_fz}"
+            event_bus.publish(
+                EventType.MESSAGE,
+                {
+                    "text": (
+                        f"GNOM (fit_sizes): force-zero-off probe at "
+                        f"{_FORCE_ZERO_OFF_RMAX_FACTOR:.2f}×Rmax={rmax_ext:.4g} nm ({status})"
+                    ),
+                },
+            )
 
     summary_path = os.path.join(ensemble_dir, "ensemble_summary.csv")
     with open(summary_path, "w", newline="") as fp:

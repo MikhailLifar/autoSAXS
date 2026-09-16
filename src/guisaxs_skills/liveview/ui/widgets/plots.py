@@ -21,6 +21,37 @@ def mpl_navigation_toolbar(canvas: FigureCanvas, parent: QWidget) -> NavigationT
     return NavigationToolbar2QT(canvas, parent)
 
 
+def _is_tif_path(path: str) -> bool:
+    p = path.lower()
+    return p.endswith(".tif") or p.endswith(".tiff")
+
+
+def _is_dat_path(path: str) -> bool:
+    return path.lower().endswith(".dat")
+
+
+def _is_saxs_drop_path(path: str) -> bool:
+    return _is_tif_path(path) or _is_dat_path(path)
+
+
+def collect_saxs_drop_paths(mime) -> list[str]:
+    """Absolute paths of dropped .tif/.tiff/.dat files from Qt mime data."""
+    paths: list[str] = []
+    if mime is None or not mime.hasUrls():
+        return paths
+    for url in mime.urls():
+        local = url.toLocalFile()
+        if not local or not os.path.isfile(local):
+            continue
+        if not _is_saxs_drop_path(local):
+            continue
+        paths.append(os.path.abspath(local))
+    return paths
+
+
+_DROP_HINT = "Drop .tif or .dat with SAXS data"
+
+
 def draw_q_match_band(ax, q_min: Any, q_max: Any) -> None:
     """Shade the q-match window when both bounds are finite and ordered."""
     if q_min is None or q_max is None:
@@ -36,6 +67,10 @@ def draw_q_match_band(ax, q_min: Any, q_max: Any) -> None:
 
 
 class LogCurvePlot(FigureCanvas):
+    """1D curve canvas; optional empty-state drop hint + file drops for curve intake."""
+
+    files_dropped = pyqtSignal(object)  # list[str]
+
     def __init__(self) -> None:
         self._fig = Figure(figsize=(4, 3), dpi=100)
         super().__init__(self._fig)
@@ -44,19 +79,126 @@ class LogCurvePlot(FigureCanvas):
         self._ax.set_xlabel(self._x_label)
         self._ax.set_ylabel("I (a.u.)")
         self._ax.set_yscale("log")
+        self._drop_hint_enabled = False
+        self._has_curve = False
+        self._attention_on = False
+        self._attention_alpha = 0.5
+        self.setAcceptDrops(False)
+
+    def set_drop_hint_enabled(self, enabled: bool) -> None:
+        """When enabled and empty, show the same drop inscription as the 2D canvas."""
+        self._drop_hint_enabled = bool(enabled)
+        self.setAcceptDrops(self._drop_hint_enabled)
+        if self._drop_hint_enabled and not self._has_curve:
+            self._draw_drop_hint()
+        elif not self._drop_hint_enabled and not self._has_curve:
+            self.clear()
+
+    def set_attention_pulse(self, on: bool, *, alpha: float | None = None) -> None:
+        was_on = self._attention_on
+        old_alpha = self._attention_alpha
+        self._attention_on = bool(on)
+        if alpha is not None:
+            self._attention_alpha = float(alpha)
+        if not self._drop_hint_enabled or self._has_curve:
+            return
+        if (
+            was_on
+            and self._attention_on
+            and abs(old_alpha - self._attention_alpha) < 0.08
+        ):
+            return
+        self._draw_drop_hint()
+
+    def _draw_drop_hint(self) -> None:
+        hint = _DROP_HINT
+        self._ax.clear()
+        if self._attention_on:
+            a = max(0.25, min(1.0, float(self._attention_alpha)))
+            self._ax.text(
+                0.5,
+                0.5,
+                hint,
+                transform=self._ax.transAxes,
+                ha="center",
+                va="center",
+                alpha=a,
+                fontsize=12,
+                color="#4c8dff",
+                fontweight="bold",
+                wrap=True,
+            )
+            from matplotlib.patches import FancyBboxPatch
+
+            rect = FancyBboxPatch(
+                (0.06, 0.06),
+                0.88,
+                0.88,
+                boxstyle="round,pad=0.02,rounding_size=0.04",
+                transform=self._ax.transAxes,
+                fill=False,
+                edgecolor="#4c8dff",
+                linewidth=2.5,
+                alpha=a,
+                linestyle="--",
+            )
+            self._ax.add_patch(rect)
+        else:
+            self._ax.text(
+                0.5,
+                0.5,
+                hint,
+                transform=self._ax.transAxes,
+                ha="center",
+                va="center",
+                alpha=0.5,
+                fontsize=10,
+                wrap=True,
+            )
+        self._ax.set_axis_off()
+        self.draw_idle()
+        self.setCursor(Qt.ArrowCursor)
 
     def set_x_label(self, label: str) -> None:
         self._x_label = str(label)
-        self._ax.set_xlabel(self._x_label)
-        self.draw_idle()
+        if self._has_curve:
+            self._ax.set_xlabel(self._x_label)
+            self.draw_idle()
 
     def clear(self) -> None:
+        self._has_curve = False
+        if self._drop_hint_enabled:
+            self._draw_drop_hint()
+            return
         self._ax.clear()
         self._ax.set_xlabel(self._x_label)
         self._ax.set_ylabel("I (a.u.)")
         self._ax.set_yscale("log")
         self.draw_idle()
         self.setCursor(Qt.ArrowCursor)
+
+    def dragEnterEvent(self, event) -> None:  # type: ignore[override]
+        if not self._drop_hint_enabled:
+            event.ignore()
+            return
+        paths = collect_saxs_drop_paths(event.mimeData())
+        if paths:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:  # type: ignore[override]
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event) -> None:  # type: ignore[override]
+        if not self._drop_hint_enabled:
+            event.ignore()
+            return
+        paths = collect_saxs_drop_paths(event.mimeData())
+        if paths:
+            self.files_dropped.emit(paths)
+        event.setDropAction(Qt.CopyAction)
+        event.accept()
 
     def plot_dat(
         self,
@@ -68,13 +210,30 @@ class LogCurvePlot(FigureCanvas):
     ) -> None:
         from autosaxs.core.utils import read_saxs
 
-        q, I, sigma, _meta = read_saxs(path)
+        try:
+            q, I, sigma, _meta = read_saxs(path)
+        except Exception:
+            self.clear()
+            self._ax.text(
+                0.5,
+                0.5,
+                "Not a sample curve",
+                transform=self._ax.transAxes,
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="0.4",
+            )
+            self._fig.tight_layout()
+            self.draw_idle()
+            return
         q = np.asarray(q)
         I = np.asarray(I)
         sigma = np.asarray(sigma) if sigma is not None else None
         m = np.isfinite(q) & np.isfinite(I) & (I > 0)
         if sigma is not None:
             m = m & np.isfinite(sigma) & (sigma >= 0)
+        self._has_curve = True
         self._ax.clear()
         short, _f = contracted_path_label(path)
         if m.any():
@@ -581,11 +740,6 @@ def subtract_options_to_match_tail_ops(opts: Dict[str, Any]) -> tuple[str, Optio
     return method_key, match_tail_ops if match_tail_ops else None
 
 
-def _is_tif_path(path: str) -> bool:
-    p = path.lower()
-    return p.endswith(".tif") or p.endswith(".tiff")
-
-
 class Image2DPlot(FigureCanvas):
     def __init__(self) -> None:
         self._fig = Figure(figsize=(4, 3), dpi=100)
@@ -690,8 +844,8 @@ class Image2DPlot(FigureCanvas):
 
 class DropTiffImageCanvas(Image2DPlot):
     """
-    Same 2D matplotlib canvas as Image2DPlot, but accepts drag-and-drop of .tif/.tiff only
-    (no browse, no text field). Emits absolute paths of dropped files.
+    Same 2D matplotlib canvas as Image2DPlot, but accepts drag-and-drop of
+    ``.tif`` / ``.tiff`` / ``.dat`` (no browse, no text field). Emits absolute paths.
     """
 
     tiff_files_dropped = pyqtSignal(object)  # list[str]
@@ -708,7 +862,7 @@ class DropTiffImageCanvas(Image2DPlot):
         self._draw_drop_hint()
 
     def set_attention_pulse(self, on: bool, *, alpha: float | None = None) -> None:
-        """Drive Drop .tif coaching from ``AttentionPulse`` (no-op while an image is shown)."""
+        """Drive drop-hint coaching from ``AttentionPulse`` (no-op while an image is shown)."""
         was_on = self._attention_on
         old_alpha = self._attention_alpha
         self._attention_on = bool(on)
@@ -732,14 +886,15 @@ class DropTiffImageCanvas(Image2DPlot):
             self._ax.text(
                 0.5,
                 0.5,
-                "Drop .tif",
+                _DROP_HINT,
                 transform=self._ax.transAxes,
                 ha="center",
                 va="center",
                 alpha=a,
-                fontsize=14,
+                fontsize=12,
                 color="#4c8dff",
                 fontweight="bold",
+                wrap=True,
             )
             from matplotlib.patches import FancyBboxPatch
 
@@ -760,38 +915,28 @@ class DropTiffImageCanvas(Image2DPlot):
             self._ax.text(
                 0.5,
                 0.5,
-                "Drop .tif",
+                _DROP_HINT,
                 transform=self._ax.transAxes,
                 ha="center",
                 va="center",
                 alpha=0.5,
-                fontsize=11,
+                fontsize=10,
+                wrap=True,
             )
         self._ax.set_axis_off()
         self.draw_idle()
 
     def dragEnterEvent(self, event) -> None:  # type: ignore[override]
-        if event.mimeData().hasUrls():
-            for url in event.mimeData().urls():
-                local = url.toLocalFile()
-                if local and os.path.isfile(local) and _is_tif_path(local):
-                    event.acceptProposedAction()
-                    return
+        if collect_saxs_drop_paths(event.mimeData()):
+            event.acceptProposedAction()
+            return
         event.ignore()
 
     def dragMoveEvent(self, event) -> None:  # type: ignore[override]
         self.dragEnterEvent(event)
 
     def dropEvent(self, event) -> None:  # type: ignore[override]
-        paths: list[str] = []
-        if event.mimeData().hasUrls():
-            for url in event.mimeData().urls():
-                local = url.toLocalFile()
-                if not local or not os.path.isfile(local):
-                    continue
-                if not _is_tif_path(local):
-                    continue
-                paths.append(os.path.abspath(local))
+        paths = collect_saxs_drop_paths(event.mimeData())
         if paths:
             self.tiff_files_dropped.emit(paths)
         event.setDropAction(Qt.CopyAction)

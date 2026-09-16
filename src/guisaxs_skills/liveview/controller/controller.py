@@ -9,7 +9,8 @@ from PyQt5.QtWidgets import QMessageBox, QWidget
 from ...logic.runner_qprocess import SkillRunner
 from ..pipeline import LiveviewJobExecutor, LiveviewQueueStatus
 from ..session import load_liveview_session_settings, save_liveview_session_settings
-from ..session.output_paths import tiff_output_root
+from ..session.output_paths import analysis_output_root
+from ..session.sample_store import SampleStore
 from ..session.state import LiveviewSessionState, LiveviewWatchMode
 from ..ui.panels import LiveviewLeftPanel, LiveviewMiddlePanel, LiveviewRightPanel
 
@@ -17,7 +18,7 @@ from .history import LiveviewHistoryHandler
 from .ingest import LiveviewIngestHandler
 from .monodisperse import LiveviewMonodisperseHandler
 from .polydisperse import LiveviewPolydisperseHandler
-from .processing_mode import ProcessingModeGate
+from .processing_mode import LiveviewProcessingMode
 from .session import (
     LiveviewSessionHandler,
     LiveviewSkillOutcomesHandler,
@@ -32,7 +33,7 @@ class LiveviewController(QObject):
     error = pyqtSignal(str)
     latest_artifacts = pyqtSignal(object)
     session_file_completed = pyqtSignal(str)
-    tiff_revision_pending = pyqtSignal(object)
+    sample_revision_pending = pyqtSignal(object)
     skill_started = pyqtSignal(str)
     skill_finished = pyqtSignal(object)
 
@@ -43,8 +44,13 @@ class LiveviewController(QObject):
 
         self._watchdir = watchdir.resolve()
         self._runner = SkillRunner(workdir=watchdir)
-        self._executor = LiveviewJobExecutor(state=self._state, runner=self._runner)
-        self.processing_mode = ProcessingModeGate(self._executor)
+        self.samples = SampleStore()
+        self._executor = LiveviewJobExecutor(
+            state=self._state,
+            runner=self._runner,
+            sample_store=self.samples,
+        )
+        self.processing_mode = LiveviewProcessingMode(self._executor, state=self._state)
 
         self._left: Optional[LiveviewLeftPanel] = None
         self._middle: Optional[LiveviewMiddlePanel] = None
@@ -109,7 +115,14 @@ class LiveviewController(QObject):
         self.processing_mode.bind_right_panel(right)
         self._wire_log_streams()
         self.session.apply_loaded_to_ui()
+        mode = self._state.intake_mode
+        right.sync_intake_toggles(mode)
+        left.apply_intake_visibility(mode)
+        self.history.sync_middle(force=True)
         self.history.refresh_chrome()
+        # Rebind watchers for persisted intake (ingest ctor already ran once at 2D default
+        # before session load — apply again with the loaded mode).
+        self.ingest.apply_watch_mode_watchers()
 
     def _wire_log_streams(self) -> None:
         if self._right is None:
@@ -163,8 +176,9 @@ class LiveviewController(QObject):
         executor.latest_artifacts.connect(self.latest_artifacts.emit)
         executor.session_file_completed.connect(self.history.on_session_file_completed)
         executor.session_file_completed.connect(self.session_file_completed.emit)
-        executor.tiff_revision_pending.connect(self.history.on_tiff_revision_pending)
-        executor.tiff_revision_pending.connect(self.tiff_revision_pending.emit)
+        executor.job_started.connect(self.history.on_pipeline_job_started)
+        executor.sample_revision_pending.connect(self.history.on_sample_revision_pending)
+        executor.sample_revision_pending.connect(self.sample_revision_pending.emit)
         executor.skill_started.connect(self.outcomes.on_started)
         executor.skill_started.connect(self.skill_started.emit)
         executor.skill_finished.connect(self.outcomes.on_finished)
@@ -216,20 +230,20 @@ class LiveviewController(QObject):
             self.processing_mode.resume()
 
     def enqueue_report_for_current_sample(self) -> None:
-        """Queue ``report_individual`` for the history-current TIFF (Resume auto-processing)."""
+        """Queue ``report_individual`` for the history-current sample (Resume auto-processing)."""
         if not self._state.analysis_enabled():
             return
-        hist = list(self._executor.session_processed_tiffs)
+        hist = list(self.samples.paths())
         if not hist:
             return
-        idx = max(0, min(self.history._index, len(hist) - 1))
+        idx = max(0, min(self.samples.index, len(hist) - 1))
         tiff_path = hist[idx]
         stem = Path(tiff_path).stem
         if not stem:
             return
-        root = tiff_output_root(
+        root = analysis_output_root(
             watchdir=self._watchdir,
-            tiff_path=tiff_path,
+            sample_path=tiff_path,
             mode=self._state.watch_mode,
         )
         self._executor.enqueue_report_individual_for_sample(

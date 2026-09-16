@@ -8,7 +8,13 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from .....session.output_paths import fit_sizes_dir, guinier_poly_dir, mixture_dir, tiff_output_root
+from .....session.output_paths import (
+    analysis_output_root,
+    fit_sizes_dir,
+    guinier_poly_dir,
+    mixture_dir,
+    tiff_output_root,
+)
 from .....session.state import LiveviewSessionState, LiveviewWatchMode, PolydisperseMixtureMode
 from .....services.artifacts import (
     merge_fit_sizes_quality_fields,
@@ -88,7 +94,7 @@ class PolydisperseArtifactPresenter:
         prof = (self._profile_path or "").strip()
         if prof and os.path.isfile(prof):
             return prof
-        p = self._state.default_fit_distances_profile_path()
+        p = self._state.preferred_profile_path()
         if p is not None and p.is_file():
             return str(p.resolve())
         return ""
@@ -257,21 +263,34 @@ class PolydisperseArtifactPresenter:
                 snap["alpha"] = float(alpha)
             except (TypeError, ValueError):
                 pass
-        snap["force_zero_rmin"] = "Y"
-        snap["force_zero_rmax"] = "Y"
-
+        # Auto runs refresh sizes_auto; refined runs keep the user's boundary conditions.
+        is_refined = str(result.get("refined") or "").strip().lower() in ("true", "1", "yes")
         wp = dict(self._state.polydisperse_window_params or {})
+        if not is_refined:
+            snap["force_zero_rmin"] = "Y"
+            snap["force_zero_rmax"] = "Y"
+        else:
+            for k in ("force_zero_rmin", "force_zero_rmax"):
+                if wp.get(k) is not None:
+                    snap[k] = wp[k]
+                else:
+                    snap[k] = "Y"
+
         for k, v in snap.items():
             wp[k] = v
-        # Full auto runs write an Rmax ensemble; refine skips it — only then refresh sizes_auto.
-        ens = str(result.get("ensemble_dir") or "").strip()
-        if ens or not wp.get("sizes_auto"):
+        if not is_refined:
             wp["sizes_auto"] = {
                 k: snap[k]
                 for k in ("first", "last", "rmin_nm", "rmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax")
                 if k in snap
             }
         self._state.polydisperse_window_params = wp
+        try:
+            from .config_sync import PolydisperseConfigSync
+
+            PolydisperseConfigSync(state=self._state, window=self._window).persist_confs()
+        except Exception:
+            pass
 
     def _ingest_mixture(self, result: dict) -> None:
         if self._state.polydisperse_mixture_mode == PolydisperseMixtureMode.NONE:
@@ -351,7 +370,7 @@ class PolydisperseArtifactPresenter:
         tiff_path: str = "",
         watch_mode: LiveviewWatchMode = LiveviewWatchMode.FLAT,
     ) -> None:
-        root = tiff_output_root(watchdir=watchdir, tiff_path=tiff_path, mode=watch_mode)
+        root = analysis_output_root(watchdir=watchdir, sample_path=tiff_path, mode=watch_mode)
         self.set_context(
             profile_path=self._profile_path,
             output_root=root,
