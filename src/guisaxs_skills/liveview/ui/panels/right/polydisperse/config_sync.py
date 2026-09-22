@@ -10,6 +10,8 @@ from .....session.output_paths import fit_sizes_dir, guinier_poly_dir, mixture_d
 from .....session.state import LiveviewSessionState, PolydisperseMixtureMode
 
 _SIZES_CONF_KEYS = (
+    "q_min",
+    "q_max",
     "first",
     "last",
     "rmin_nm",
@@ -40,8 +42,12 @@ class PolydisperseConfigSync:
             for k in _SIZES_CONF_KEYS:
                 if k in sizes:
                     wp[k] = sizes[k]
-                elif k in ("last", "rmin_nm", "alpha") and k not in sizes:
+                elif k in ("q_max", "last", "rmin_nm", "alpha") and k not in sizes:
                     wp.pop(k, None)
+            if wp.get("q_min") is not None:
+                wp.pop("first", None)
+            if wp.get("q_max") is not None:
+                wp.pop("last", None)
         mix = self._window.mixture_pane.mixture_params()
         wp["mixture"] = mix
         self._state.polydisperse_window_params = wp
@@ -56,7 +62,12 @@ class PolydisperseConfigSync:
     def _sizes_params_from_ui(self) -> dict:
         # Only committed (Confirm) values live in session state — never pull live dirty UI.
         wp = self._state.polydisperse_window_params or {}
-        return {k: wp[k] for k in _SIZES_CONF_KEYS if wp.get(k) is not None}
+        out = {k: wp[k] for k in _SIZES_CONF_KEYS if wp.get(k) is not None}
+        if out.get("q_min") is not None:
+            out.pop("first", None)
+        if out.get("q_max") is not None:
+            out.pop("last", None)
+        return out
 
     def persist_confs(self) -> None:
         wd = self._state.watchdir
@@ -87,11 +98,7 @@ class PolydisperseConfigSync:
         for k in _SIZES_REFINE_KEYS:
             sopts.pop(k, None)
         sopts["shape"] = "spheres"
-        if sopts.get("first") is None:
-            sopts["first"] = 1
         refine_opts["shape"] = "spheres"
-        if refine_opts.get("first") is None:
-            refine_opts["first"] = 1
         refine_path = fit_sizes_dir(wd) / "fit_sizes_refine.conf"
         try:
             mix = dict(self._window.mixture_pane.mixture_params())
@@ -128,12 +135,17 @@ class PolydisperseConfigSync:
                     wp.pop(k, None)
                 else:
                     wp[k] = params[k]
+        if "q_max" not in params:
+            wp.pop("q_max", None)
         if "last" not in params:
             wp.pop("last", None)
         if "rmin_nm" not in params:
             wp.pop("rmin_nm", None)
         if "alpha" not in params:
             wp.pop("alpha", None)
+        if "q_min" in params or "q_max" in params:
+            wp.pop("first", None)
+            wp.pop("last", None)
         self._state.polydisperse_window_params = wp
         self.persist_confs()
 

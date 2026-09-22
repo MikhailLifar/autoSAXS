@@ -43,18 +43,24 @@ def fit_sizes_opts(
         opts.update(load_yaml(state.fit_sizes_conf_path))
     wp = state.polydisperse_window_params
     if isinstance(wp, dict):
-        for key in ("first", "last"):
+        for key in ("first", "last", "q_min", "q_max"):
             if wp.get(key) is not None:
                 opts[key] = wp[key]
         if refine:
             for key in ("rmin_nm", "rmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax"):
                 if wp.get(key) is not None:
                     opts[key] = wp[key]
+    # q_min/q_max are alternate ways to set first/last — never pass both.
+    if opts.get("q_min") is not None:
+        opts.pop("first", None)
+    if opts.get("q_max") is not None:
+        opts.pop("last", None)
     opts["shape"] = "spheres"
-    if coerce_opt_int(opts.get("first")) is None:
-        opts["first"] = 1
-    else:
-        opts["first"] = int(coerce_opt_int(opts.get("first")) or 1)
+    if opts.get("q_min") is None:
+        if coerce_opt_int(opts.get("first")) is None:
+            opts["first"] = 1
+        else:
+            opts["first"] = int(coerce_opt_int(opts.get("first")) or 1)
     if not refine:
         # Auto path must always search Rmax — never pin refine keys from window params / conf.
         for key in ("rmin_nm", "rmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax"):
@@ -94,10 +100,6 @@ def model_mixture_opts(
                     continue
                 opts[str(key)] = value
     return opts
-
-
-def job_includes_mixture(steps: List[JobStep]) -> bool:
-    return any(s.name == "model_mixture" for s in steps)
 
 
 def build_polydisperse_steps(

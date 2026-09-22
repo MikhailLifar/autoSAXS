@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....pipeline.monodisperse_pipeline import FIT_GUINIER_MONO_STEP, FIT_GUINIER_POLY_STEP
+from ....session.api import LiveviewSession
 from ....session.state import LiveviewIntakeMode, LiveviewSessionState
 from ...icons import monodisperse_analysis_icon, polydisperse_analysis_icon
 from ...log_panel import LiveviewLogPanel
@@ -56,24 +57,25 @@ class LiveviewRightPanel(QWidget):
     polydisperse_resume_queue = pyqtSignal()
     polydisperse_stop_queue = pyqtSignal()
 
-    def __init__(self, *, state: LiveviewSessionState) -> None:
+    def __init__(self, *, session: LiveviewSession) -> None:
         super().__init__()
-        self._state = state
+        self._session = session
+        self._state = session.state
         self._meta_fit, self._meta_sizes, self._meta_mixture = discover_fit_skill_meta()
-        self._config = RightPanelConfigRestore(state=state)
+        self._config = RightPanelConfigRestore(state=self._state)
         self._log = LiveviewLogPanel(parent=self)
         self._syncing_intake = False
 
         self._mono_wizard_widget = MonodisperseWizardWidget()
         self._mono_dialog: Optional[MonodisperseWizardDialog] = None
-        self._mono = MonodisperseCoordinator(state=state, wizard=self._mono_wizard_widget)
-        self._mono_wizard_widget.bind_state(state)
+        self._mono = MonodisperseCoordinator(state=self._state, wizard=self._mono_wizard_widget)
+        self._mono_wizard_widget.bind_state(self._state)
         self._wire_monodisperse_coordinator()
 
         self._poly_window_widget = PolydisperseWindowWidget()
         self._poly_dialog: Optional[PolydisperseAnalysisWindow] = None
-        self._poly = PolydisperseCoordinator(state=state, window=self._poly_window_widget)
-        self._poly_window_widget.bind_state(state)
+        self._poly = PolydisperseCoordinator(state=self._state, window=self._poly_window_widget)
+        self._poly_window_widget.bind_state(self._state)
         self._wire_polydisperse_coordinator()
 
         self._btn_mono = QToolButton()
@@ -175,7 +177,7 @@ class LiveviewRightPanel(QWidget):
         if self._meta_fit is None:
             self._btn_mono.setEnabled(False)
             self._btn_poly.setEnabled(False)
-        self.sync_intake_toggles(state.intake_mode)
+        self.sync_intake_toggles(self._state.intake_mode)
         self.sync_modeling_ui_to_session_state()
 
     def _emit_intake(self, mode: LiveviewIntakeMode) -> None:
@@ -288,8 +290,7 @@ class LiveviewRightPanel(QWidget):
                 parent=self,
             )
             self._mono_dialog.closed.connect(self._on_mono_dialog_closed)
-        if not self._state.monodisperse_armed:
-            self._state.monodisperse_armed = True
+        if self._session.set_monodisperse_armed(True):
             self._log.append_app("Monodisperse analysis armed")
             self._emit_arming(prev_enabled=prev)
         self._mono_dialog.show()
@@ -308,8 +309,7 @@ class LiveviewRightPanel(QWidget):
                 parent=self,
             )
             self._poly_dialog.closed.connect(self._on_poly_dialog_closed)
-        if not self._state.polydisperse_armed:
-            self._state.polydisperse_armed = True
+        if self._session.set_polydisperse_armed(True):
             self._log.append_app("Polydisperse analysis armed")
             self._emit_arming(prev_enabled=prev)
         self._poly_dialog.show()
@@ -323,7 +323,7 @@ class LiveviewRightPanel(QWidget):
             self._sync_button_checked()
             return
         prev = self._state.analysis_enabled()
-        self._state.monodisperse_armed = False
+        self._session.set_monodisperse_armed(False)
         self._log.append_app("Monodisperse analysis disarmed")
         self._emit_arming(prev_enabled=prev)
 
@@ -332,20 +332,19 @@ class LiveviewRightPanel(QWidget):
             self._sync_button_checked()
             return
         prev = self._state.analysis_enabled()
-        self._state.polydisperse_armed = False
+        self._session.set_polydisperse_armed(False)
         self._log.append_app("Polydisperse analysis disarmed")
         self._emit_arming(prev_enabled=prev)
 
     def close_analysis_windows(self) -> None:
         """Close both analysis dialogs and clear arm flags (used on calibration/buffer reset)."""
         prev = self._state.analysis_enabled()
-        self._state.monodisperse_armed = False
-        self._state.polydisperse_armed = False
+        changed = self._session.disarm_analysis()
         if self._mono_dialog is not None and self._mono_dialog.isVisible():
             self._mono_dialog.hide()
         if self._poly_dialog is not None and self._poly_dialog.isVisible():
             self._poly_dialog.hide()
-        if prev:
+        if prev and changed:
             self._log.append_app("Analysis disarmed (session reset)")
             self.modeling_enabled_changed.emit(False)
         self._sync_button_checked()
@@ -360,9 +359,6 @@ class LiveviewRightPanel(QWidget):
 
     def force_analysis_disarmed(self) -> None:
         self.close_analysis_windows()
-
-    # Back-compat alias for older call sites during transition.
-    force_analysis_mode_off = force_analysis_disarmed
 
     def sync_modeling_ui_to_session_state(
         self, *, queue_paused: bool | None = None, processing_idle: bool | None = None
@@ -436,7 +432,39 @@ class LiveviewRightPanel(QWidget):
         if self._state.polydisperse_armed:
             self.set_polydisperse_running(running)
 
-    set_fit_distances_running = set_analysis_busy
+    def apply_monodisperse_bundle(self, bundle: object) -> None:
+        if bundle.profile_path or bundle.output_root is not None:
+            root = bundle.output_root
+            if root is None:
+                from ....session.output_paths import analysis_output_root
+
+                root = analysis_output_root(
+                    watchdir=self._state.watchdir,
+                    sample_path="",
+                    mode=self._state.watch_mode,
+                )
+            self._mono.set_context(
+                profile_path=bundle.profile_path,
+                output_root=root,
+            )
+        self._mono.apply_bundle(bundle)
+
+    def apply_polydisperse_bundle(self, bundle: object) -> None:
+        if bundle.profile_path or bundle.output_root is not None:
+            root = bundle.output_root
+            if root is None:
+                from ....session.output_paths import analysis_output_root
+
+                root = analysis_output_root(
+                    watchdir=self._state.watchdir,
+                    sample_path="",
+                    mode=self._state.watch_mode,
+                )
+            self._poly.set_context(
+                profile_path=bundle.profile_path,
+                output_root=root,
+            )
+        self._poly.apply_bundle(bundle)
 
     def load_monodisperse_from_disk(
         self,

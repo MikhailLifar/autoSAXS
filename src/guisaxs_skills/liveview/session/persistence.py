@@ -1,6 +1,10 @@
 """
-Persist calibration (integrator dir, curve preview path) and buffer/subtract options
-under the watch directory so a restart restores them without re-entering wizards.
+Persist calibration (integrator dir, curve preview path), buffer/subtract options,
+intake/watch mode, and mask paths under the watch directory so a restart restores
+them without re-entering wizards.
+
+``auto_processing`` (Auto/Manual) is intentionally not persisted — launches always
+start in Auto.
 
 Layout: ``<watchdir>/.guisaxs_liveview/session.yaml``
 """
@@ -58,7 +62,6 @@ def save_liveview_session_settings(state: LiveviewSessionState) -> None:
             "version": 1,
             "watch_mode": state.watch_mode.value,
             "intake_mode": state.intake_mode.value,
-            "auto_processing": bool(state.auto_processing),
             "integrator_dir": _as_rel_if_under(wd, state.integrator_dir),
             "buffer_dat_path": _as_rel_if_under(wd, state.buffer_dat_path),
             "subtract_options": state.subtract_options,
@@ -108,8 +111,7 @@ def load_liveview_session_settings(state: LiveviewSessionState) -> bool:
     except ValueError:
         state.intake_mode = LiveviewIntakeMode.FRAME_2D
 
-    if "auto_processing" in raw:
-        state.auto_processing = bool(raw.get("auto_processing"))
+    # auto_processing is in-memory only (always default Auto on launch).
 
     integ = _resolve_saved_path(wd, raw.get("integrator_dir") if raw.get("integrator_dir") else None)
     if integ is not None and integ.is_dir():

@@ -528,8 +528,10 @@ SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance
 - `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where the outputs are written (one subdirectory per input profile).
 - `rg_nm` (float | None, default `None`): Expected Rg in nm, usually passed from Guinier analysis. If omitted, in-process Guinier analysis (`fit_guinier`) is run for an Rg span, then 1D Rg optimization in `[0, 1.5 × rg_max]` (30 s max) takes place.
-- `first` (int | None, default `None`): DATGNOM `--first` (1-based point index). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
-- `last` (int | None, default `None`): DATGNOM `--last`. If omitted, `--last` is not passed to DATGNOM.
+- `first` (int | None, default `None`): DATGNOM `--first` (1-based point index). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
+- `last` (int | None, default `None`): DATGNOM `--last`. If omitted, taken from `q_max` when set; otherwise `--last` is not passed to DATGNOM.
+- `q_min` (float | None, default `None`): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
+- `q_max` (float | None, default `None`): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`.
 - `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`. Unused when `dmax_nm` is set (GNOM refine).
 - `dmax_nm` (float | None, default `None`): When set, skip DATGNOM search and run monodisperse GNOM (`--rmax`) with this Dmax (nm). Still writes the Dmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
 - `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted, GNOM chooses automatically. Ignored when `dmax_nm` is unset.
@@ -611,8 +613,10 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtai
 - `rmin_nm` (float | None): GNOM `--rmin` (nm). If omitted, not passed to GNOM.
 - `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, optimized in `[ε, 3 × rg_max]` from in-process `fit_guinier` (30 s max). When set, skip Rmax search but still write the Rmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
 - `rad56_nm` (float | None): GNOM `--rad56` for `shape=rods` (nm cylinder radius), deprecated. Ignored for spheres.
-- `first` (int | None): GNOM `--first` (1-based). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
-- `last` (int | None): GNOM `--last`. If omitted, not passed to GNOM.
+- `first` (int | None): GNOM `--first` (1-based). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
+- `last` (int | None): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise not passed to GNOM.
+- `q_min` (float | None): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
+- `q_max` (float | None): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`.
 - `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
 - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
 - `force_zero_rmin` (str | None): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.

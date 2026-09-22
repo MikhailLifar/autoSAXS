@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Optional
 
 from ..ingest.curve_classify import try_classify_curve_boarding
 from ..ingest.dir_tree_observer import TREE_STABILITY, TreeDirObserver, TreeObserverConfig
+from ..ingest.ingress import RevisionIngress
 from ..ingest.poll_watcher import POLL_TRIGGERED_STABILITY, ProcessedTiffPoller, PollWatcherConfig
 from ..ingest.stability import StabilityConfig
 from ..ingest.sample_revision import (
@@ -30,6 +31,15 @@ class LiveviewIngestHandler:
     def __init__(self, controller: LiveviewController) -> None:
         self._c = controller
         wd = controller.watchdir
+        self._ingress = RevisionIngress(
+            is_owned_output=controller.executor.is_owned_output,
+            remember_boarding=controller.samples.remember_boarding,
+            enqueue_revision=self._enqueue_to_executor,
+            infer_boarding=self._infer_boarding,
+            current_intake=lambda: controller.state.intake_mode,
+            frame_2d_boarding=LiveviewIntakeMode.FRAME_2D,
+            acknowledge_stat=self._acknowledge_sample_stat,
+        )
         self._watcher = DirectoryWatcher(
             directory=wd,
             cfg=WatcherConfig(recursive=False),
@@ -47,7 +57,6 @@ class LiveviewIngestHandler:
         self._poll_watcher.set_idle_check(controller.executor.is_idle)
         self._tree_observer.set_idle_check(controller.executor.is_idle)
         controller.executor.session_file_completed.connect(self._poll_watcher.track_processed_path)
-        controller.processing_mode.set_intake_listener(self._on_intake_changed)
         self.apply_watch_mode_watchers()
 
     def stop_all(self) -> None:
@@ -62,7 +71,7 @@ class LiveviewIngestHandler:
             except Exception:
                 pass
 
-    def _on_intake_changed(self, _mode: LiveviewIntakeMode) -> None:
+    def on_intake_changed(self, _mode: LiveviewIntakeMode) -> None:
         self.apply_watch_mode_watchers()
         left = self._c.left
         right = self._c.right
@@ -231,12 +240,7 @@ class LiveviewIngestHandler:
         if rev is None:
             return
         mode = boarding or self._infer_boarding(rev.path)
-        self._c.samples.remember_boarding(rev.path, mode)
-        self._enqueue_revision(rev)
-
-    def enqueue_manual_tiff(self, path: str) -> None:
-        """Backward-compatible alias for TIFF/manual re-Process."""
-        self.enqueue_manual_sample(path)
+        self._ingress.accept_manual(rev, boarding=mode)
 
     def ingest_dropped_files(self, paths: list[str]) -> None:
         """Drop intake with Option A auto-switch; manual toggle wins within 1D/Sub."""
@@ -256,7 +260,7 @@ class LiveviewIngestHandler:
 
         if is_tiff_path(path_s):
             if intake != LiveviewIntakeMode.FRAME_2D:
-                self._c.processing_mode.set_intake(LiveviewIntakeMode.FRAME_2D)
+                self._c.session.set_intake(LiveviewIntakeMode.FRAME_2D)
             dest = self._copy_tiff_into_watchdir(src_r)
             self.enqueue_manual_sample(dest, boarding=LiveviewIntakeMode.FRAME_2D)
             return
@@ -275,7 +279,7 @@ class LiveviewIngestHandler:
 
         if intake == LiveviewIntakeMode.FRAME_2D:
             # Auto-switch from 2D based on classification.
-            self._c.processing_mode.set_intake(classified)
+            self._c.session.set_intake(classified)
             boarding = classified
         else:
             # Already in 1D or Sub: manual toggle wins.
@@ -339,13 +343,16 @@ class LiveviewIngestHandler:
         except ValueError:
             return False
 
-    def _enqueue_revision(self, revision: SampleRevision, *, stability_cfg: StabilityConfig | None = None) -> None:
+    def _enqueue_to_executor(
+        self,
+        revision: SampleRevision,
+        *,
+        stability_cfg: StabilityConfig | None = None,
+    ) -> None:
         if revision.source != SampleRevisionSource.MANUAL:
             if self._c.executor.is_owned_output(revision.path):
                 return
         self._c.executor.enqueue_revision(revision, stability_cfg=stability_cfg)
-        # Align all detectors so drop+watch / inotify+poll do not re-fire the same bytes.
-        self._acknowledge_sample_stat(revision.path, revision.stat)
 
     def _acknowledge_sample_stat(self, path: str, snap=None) -> None:
         for w in (self._watcher, getattr(self, "_dat_root_watcher", None)):
@@ -359,18 +366,25 @@ class LiveviewIngestHandler:
             self._poll_watcher.note_path_stat(path, snap)
         except Exception:
             pass
+        try:
+            self._tree_observer.note_path_stat(path, snap)
+        except Exception:
+            pass
 
     def _on_revision(self, revision: SampleRevision, *, stability_cfg: object = None) -> None:
         cfg = stability_cfg if isinstance(stability_cfg, StabilityConfig) else None
-        if revision.source != SampleRevisionSource.MANUAL:
-            # Watcher never changes intake; tag boarding from current intake.
-            self._c.samples.remember_boarding(revision.path, self._c.state.intake_mode)
-        self._enqueue_revision(revision, stability_cfg=cfg)
+        self._ingress.accept(revision, stability_cfg=cfg, boarding_from="intake")
 
     def _on_revision_from_poll(self, revision: SampleRevision) -> None:
-        self._c.samples.remember_boarding(revision.path, self._infer_boarding(revision.path))
-        self._enqueue_revision(revision, stability_cfg=POLL_TRIGGERED_STABILITY)
+        self._ingress.accept(
+            revision,
+            stability_cfg=POLL_TRIGGERED_STABILITY,
+            boarding_from="infer",
+        )
 
     def _on_revision_from_tree(self, revision: SampleRevision) -> None:
-        self._c.samples.remember_boarding(revision.path, LiveviewIntakeMode.FRAME_2D)
-        self._enqueue_revision(revision, stability_cfg=TREE_STABILITY)
+        self._ingress.accept(
+            revision,
+            stability_cfg=TREE_STABILITY,
+            boarding_from="frame_2d",
+        )

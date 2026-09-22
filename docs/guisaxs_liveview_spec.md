@@ -1,7 +1,7 @@
 # guisaxs-liveview — Technical Specification
 
 Product and behavior contract for **guisaxs-liveview** (implementation: `guisaxs_skills.liveview`).  
-**Architecture SSOT:** [`liveview_session_sample_plan.md`](liveview_session_sample_plan.md) (Session, SampleStore, `plan_for`, middle sync).  
+**Architecture:** [`liveview_architecture.md`](liveview_architecture.md) (full); ownership cheat sheet [`liveview_session_sample_plan.md`](liveview_session_sample_plan.md) (Session, SampleStore, `plan_for`, middle sync).  
 **Package map:** [`../AGENTS.md`](../AGENTS.md). End-user help: `autosaxs/resources/help/guisaxs_liveview/`.
 
 Code is authoritative when this document and the tree disagree; update this file to match code.
@@ -43,15 +43,16 @@ Typical skills: `integrate_proxy`, `calibrate`, `integrate`, `subtract`, `fit_gu
 
 ## 3. Architecture (summary)
 
-Three owners — details in [`liveview_session_sample_plan.md`](liveview_session_sample_plan.md):
+Three owners — details in [`liveview_session_sample_plan.md`](liveview_session_sample_plan.md); fuller map in [`liveview_architecture.md`](liveview_architecture.md):
 
 | Owner | Role |
 |-------|------|
-| **Session** (`LiveviewSessionState`) | `intake_mode`, `auto_processing`, calibrated?, `buffer_ready()`, analysis arming, watch mode, persistence |
+| **LiveviewSession** (`session/api.py`) | `intake_mode`, `auto_processing`, calibrated?, `buffer_ready()`, analysis arming, watch mode, persistence; safe mutation API |
 | **SampleStore** | Ordered history of `Sample` (path + boarding + stem + revision) |
-| **`plan_for`** | Sole builder of per-sample job steps |
+| **`plan_for`** | Sole builder of per-sample job steps (`completed=` for remaining) |
 
-Middle column: **`sync_middle_view`** / `history.sync_middle` only.
+Middle column: **`sync_middle_view`** / `history.sync_middle` only.  
+Right analysis: **`present_right`**. Ingest: **`RevisionIngress.accept`**.
 
 ---
 
@@ -87,7 +88,7 @@ Drops may auto-switch intake (Option A): `.dat` in 2D → classify to 1D/Sub; `.
 
 ### 4.5 Auto vs Manual
 
-Session owns `auto_processing` (default Auto). **Stop** / interventions set Manual; **Resume** restores Auto. Manual holds **auto** queue advance; manual jobs still run.
+Session owns `auto_processing` (default Auto; **in-memory only** — not restored from `session.yaml`). **Stop** / interventions set Manual; **Resume** restores Auto. Manual holds **auto** queue advance; manual jobs still run.
 
 ---
 
@@ -137,7 +138,7 @@ Content + layout: `history.sync_middle` only.
 - Monodisperse / polydisperse analysis openers (separate windows).
 - Live log.
 
-Analysis windows start **disarmed** on cold start; arming while open enables analysis steps in `plan_for` for subsequent samples. Closing the window disarms.
+Analysis windows start **disarmed** on cold start; arming while open enables analysis steps in `plan_for` for the **current** auto job’s remaining phases and for subsequent samples. Closing the window disarms.
 
 ---
 
@@ -196,7 +197,8 @@ Analysis steps run **inline** in the same FIFO job as integrate/subtract (determ
 
 | Doc | Role |
 |-----|------|
-| `liveview_session_sample_plan.md` | Architecture owners |
+| `liveview_architecture.md` | Full architecture: concepts, code map, scenarios |
+| `liveview_session_sample_plan.md` | Ownership cheat sheet (three owners + middle) |
 | `skills_paradigm.md` | Skills contract for the package |
 | `guisaxs_skills_spec.md` | Skill-console product requirements |
 | Help HTML under `resources/help/guisaxs_liveview/` | End-user concepts (intake, queue, revisions) |

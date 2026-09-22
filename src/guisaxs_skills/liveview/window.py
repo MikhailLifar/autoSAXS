@@ -36,13 +36,14 @@ class LiveviewMainWindow(QMainWindow):
         super().__init__()
         self._controller = LiveviewController(watchdir=watchdir)
         self._state = self._controller.state
+        self._session = self._controller.session
 
         self.setWindowTitle("guisaxs-liveview")
 
         self._splitter = QSplitter(Qt.Horizontal)
-        self._left = LiveviewLeftPanel(state=self._state)
+        self._left = LiveviewLeftPanel(session=self._session)
         self._middle = LiveviewMiddlePanel()
-        self._right = LiveviewRightPanel(state=self._state)
+        self._right = LiveviewRightPanel(session=self._session)
 
         self._splitter.addWidget(self._left)
         self._splitter.addWidget(self._middle)
@@ -266,7 +267,7 @@ class LiveviewMainWindow(QMainWindow):
         self._right.polydisperse_mixture_rerun.connect(self._controller.on_polydisperse_mixture_rerun)
         self._right.polydisperse_resume_queue.connect(self._controller.on_polydisperse_resume_queue)
         self._right.polydisperse_stop_queue.connect(self._controller.on_polydisperse_stop_queue)
-        self._right.intake_mode_selected.connect(self._controller.processing_mode.set_intake)
+        self._right.intake_mode_selected.connect(self._controller.session.set_intake)
         self._middle.tiff_files_dropped.connect(self._on_tiff_files_dropped)
         self._middle.history_step.connect(self._controller.history_step)
         self._middle.process_history_file_requested.connect(self._controller.process_history_file)
@@ -277,10 +278,10 @@ class LiveviewMainWindow(QMainWindow):
         self._controller.sample_revision_pending.connect(self._left.on_sample_revision_pending)
         self._right.analysis_arming_changed.connect(self._controller.on_analysis_arming_changed)
         self._right.analysis_arming_changed.connect(self._left.refresh_attention_coach)
-        self._controller.processing_mode.mode_changed.connect(
+        self._controller.session.mode_changed.connect(
             lambda *_args: self._left.refresh_attention_coach()
         )
-        self._controller.processing_mode.intake_changed.connect(
+        self._controller.session.intake_changed.connect(
             lambda *_args: self._left.refresh_attention_coach()
         )
 

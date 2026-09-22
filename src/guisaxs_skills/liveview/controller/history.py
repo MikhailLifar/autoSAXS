@@ -137,8 +137,7 @@ class LiveviewHistoryHandler:
         self._c.ingest.enqueue_manual_sample(key, boarding=boarding)
 
     def on_sample_revision_pending(self, revision: object) -> None:
-        middle = self._c.middle
-        if not isinstance(revision, SampleRevision) or middle is None:
+        if not isinstance(revision, SampleRevision):
             return
         if not self.middle_updates_follow_pipeline():
             return
@@ -149,7 +148,11 @@ class LiveviewHistoryHandler:
                 if prev_path == revision.path and prev_snap == revision.stat:
                     return
             self._last_2d_shown = (revision.path, revision.stat)
-            middle.show_image(revision.path)
+            boarding = self._c.samples.boarding_for(path) or self._c.state.intake_mode
+            from ..session.sample import Sample
+
+            sample = self._c.samples.get(path) or Sample.from_path(path, boarding=boarding)
+            self.sync_middle(sample=sample, force=True)
 
     def reload_view(self) -> None:
         hist = list(self._c.samples.paths())
@@ -197,6 +200,8 @@ class LiveviewHistoryHandler:
             polydisperse_armed=self._c.state.polydisperse_armed,
             tiff_path=path,
             watch_mode=self._c.state.watch_mode,
+            state=self._c.state,
+            session=self._c.session,
         )
         right.sync_modeling_ui_to_session_state()
 

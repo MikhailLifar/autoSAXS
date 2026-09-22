@@ -43,7 +43,8 @@ class LiveviewSessionState:
     watchdir: Path
     watch_mode: LiveviewWatchMode = LiveviewWatchMode.TREE
     intake_mode: LiveviewIntakeMode = LiveviewIntakeMode.FRAME_2D
-    # Auto/Manual gate: True = auto queue may advance; False = manual jobs only.
+    # Auto/Manual gate (in-memory only): True = auto queue may advance; False = manual.
+    # Always starts Auto on launch; not written to session.yaml.
     auto_processing: bool = True
 
     integrator_dir: Optional[Path] = None

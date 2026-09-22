@@ -176,6 +176,9 @@ class MonodisperseCoordinator(QObject):
             watch_mode=watch_mode,
         )
 
+    def apply_bundle(self, bundle: object) -> None:
+        self._presenter.apply_bundle(bundle)
+
     def set_running(self, running: bool) -> None:
         if self._gnom_adjust is not None:
             self._gnom_adjust.set_running(bool(running))

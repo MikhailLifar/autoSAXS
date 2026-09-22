@@ -19,7 +19,6 @@ from ..ingest.sample_revision import (
     is_dat_path,
     is_newer_than,
     is_tiff_path,
-    make_revision,
     normalize_sample_path,
 )
 from ..session.output_paths import (
@@ -31,9 +30,6 @@ from ..session.sample_store import SampleStore
 from ..session.state import (
     LiveviewIntakeMode,
     LiveviewSessionState,
-    LiveviewWatchMode,
-    MonodisperseShapeMode,
-    PolydisperseMixtureMode,
 )
 from ..services.artifacts import merge_fit_distances_quality_fields
 from .jobs import Job, JobStep, PlaceholderError, is_manual_job, resolve_request_placeholders
@@ -42,17 +38,17 @@ from .monodisperse_pipeline import (
     FIT_GUINIER_POLY_STEP,
     MonodispersePipelineParts,
     build_monodisperse_steps,
-    job_includes_shape,
     profile_sample_stem,
 )
 from .plan import plan_for
 from .polydisperse_pipeline import (
     PolydispersePipelineParts,
     build_polydisperse_steps,
-    job_includes_mixture,
 )
 from .queue import FIFOQueue, JobQueue, QueueItem, RevisionEnqueueResult
 from .report_pipeline import report_individual_step
+from . import artifact_enrichment as _artifacts
+from . import manual_jobs as _manual_jobs
 
 
 @dataclass(frozen=True)
@@ -69,6 +65,8 @@ class LiveviewJobExecutor(QObject):
     Single orchestrator for liveview:
     - tracks incoming samples until stable
     - builds Jobs via ``plan_for(session, sample)``
+    - re-plans the *current* auto job at start and after each successful step
+      (``plan_for(..., completed=)``); queued jobs are untouched until they start
     - executes Jobs step-by-step using SkillRunner
     """
 
@@ -109,7 +107,7 @@ class LiveviewJobExecutor(QObject):
         self._current_job: Optional[Job] = None
         self._job_step_idx: int = 0
         self._pending_step_name: Optional[str] = None
-        self._step_results: Dict[str, Dict[str, Any]] = {}
+        # Completed progress (phases + step results) lives only on Job.completed.
 
         self._last_processed: str = ""
         self._durations: List[float] = []
@@ -167,7 +165,6 @@ class LiveviewJobExecutor(QObject):
         self._current_job = None
         self._job_step_idx = 0
         self._pending_step_name = None
-        self._step_results.clear()
 
     def cancel_current(self) -> None:
         # Cancellation policy: by default we requeue the current job so users don't lose the file.
@@ -216,25 +213,6 @@ class LiveviewJobExecutor(QObject):
         if accepted:
             self._jobs.drop_jobs_for_tiff_path(revision.path)
             self.sample_revision_pending.emit(revision)
-
-    def enqueue_tiff(
-        self,
-        *,
-        path: str,
-        detected_at_monotonic: float,
-        stability_cfg: Optional[StabilityConfig] = None,
-        stat: Optional[object] = None,
-    ) -> None:
-        snap = stat if isinstance(stat, FileStatSnapshot) else None
-        rev = make_revision(
-            path=path,
-            detected_at=detected_at_monotonic,
-            source=SampleRevisionSource.MANUAL,
-            stat=snap,
-        )
-        if rev is None:
-            return
-        self.enqueue_revision(rev, stability_cfg=stability_cfg)
 
     def _accept_incoming_revision(
         self,
@@ -336,49 +314,14 @@ class LiveviewJobExecutor(QObject):
         priority: int = 100,
         use_ui_params: bool = False,
     ) -> Job:
-        """
-        Build a high-priority job to rerun subtraction for a single displayed file and optionally rerun analysis.
-
-        `sample_dat` is expected to be `averaged/int_<stem>.dat`.
-        Output overwrites `subtracted/sub_<stem>.dat` by autosaxs naming convention.
-
-        When ``use_ui_params`` is True, analysis steps use pane/session values already synced
-        from the open analysis windows (explicit Guinier interval when set; omit when auto).
-        """
-        sp = (sample_dat or "").strip()
-        bp = (buffer_dat or "").strip()
-        stem = Path(sp).stem
-        if stem.startswith("int_"):
-            stem = stem[len("int_") :]
-        root = self._subtraction_output_root(sample_dat=sp)
-        subdir = subtracted_dir(root)
-        subdir.mkdir(parents=True, exist_ok=True)
-        opts = {"output_dir": str(subdir.resolve()), "use_cache": False}
-        opts.update(dict(self._state.subtract_options or {}))
-        opts["scaling_factor"] = float(scaling_factor)
-        steps: List[JobStep] = [
-            JobStep(
-                name="subtract",
-                request=RunRequest(
-                    skill_name="subtract",
-                    positional=[sp, bp],
-                    options=opts,
-                ),
-            )
-        ]
-        profile = str(subtracted_dat_path(root=root, stem=stem).resolve())
-        steps.extend(
-            self._analysis_steps_for_profile(
-                profile,
-                output_root=root,
-                use_ui_params=bool(use_ui_params),
-            )
-        )
-        return Job(
-            id=f"rerun_sub:{stem}:{time.time_ns()}",
-            priority=int(priority),
-            steps=steps,
-            context={"manual": True, "sample_stem": stem, "profile_path": profile},
+        return _manual_jobs.build_rerun_subtraction_job(
+            state=self._state,
+            sample_dat=sample_dat,
+            buffer_dat=buffer_dat,
+            scaling_factor=scaling_factor,
+            load_yaml=self._load_yaml_options,
+            priority=priority,
+            use_ui_params=use_ui_params,
         )
 
     def _append_session_sample(self, path: str, *, boarding: LiveviewIntakeMode) -> None:
@@ -545,12 +488,56 @@ class LiveviewJobExecutor(QObject):
         self._current_job = job
         self._job_step_idx = 0
         self._pending_step_name = None
-        self._step_results = {}
         self._job_started_at = time.monotonic()
+        # Fresh plan at start so arming/session changes since enqueue apply.
+        # Progress comes from Job.completed (preserved across cancel-requeue).
+        # Never touches the queue — only mutates ``_current_job``.
+        if not is_manual_job(job):
+            if not self._replan_current_job():
+                self._finish_job(ok=False)
+                return
+            job = self._current_job or job
         self._sync_last_paths_from_job_context(job)
         sample = self.current_job_sample_path
         if sample:
             self.job_started.emit(sample)
+
+    def _replan_current_job(self) -> bool:
+        """
+        Replace remaining steps of the active auto job via ``plan_for(..., completed=)``.
+
+        Does not enqueue, dequeue, or mutate any queued job.
+        Returns False if replanning failed (caller should abort the job).
+        """
+        job = self._current_job
+        if job is None or is_manual_job(job):
+            return True
+        source = str(job.context.get("source_path") or job.context.get("tiff_path") or "").strip()
+        if not source:
+            self.error.emit("Cannot replan current job: missing source_path")
+            return False
+        boarding = self._boarding_from_job_context(job)
+        try:
+            sample = Sample.from_path(source, boarding=boarding)
+            plan = plan_for(
+                self._state,
+                sample,
+                load_yaml=self._load_yaml_options,
+                completed=job.completed,
+            )
+        except Exception as e:
+            self.error.emit(f"Cannot replan current job for sample: {source}\n{e}")
+            return False
+        ctx = dict(job.context)
+        ctx["profile_path"] = plan.profile_path
+        ctx["output_root"] = str(plan.output_root.resolve())
+        if plan.subtracted_path:
+            ctx["subtracted_path"] = plan.subtracted_path
+        updated = job.with_remaining_steps(list(plan.steps), context=ctx)
+        self._register_job_outputs(updated)
+        self._current_job = updated
+        self._job_step_idx = 0
+        return True
 
     def _sync_last_paths_from_job_context(self, job: Job) -> None:
         """Curve boarding never emits integrate/subtract artifacts — seed last_* from context."""
@@ -607,152 +594,21 @@ class LiveviewJobExecutor(QObject):
                 self._append_session_sample(source_path, boarding=boarding)
                 self.session_file_completed.emit(source_path)
                 self._last_processed = source_path
-        followup = self._shape_followup_job_if_needed(job=job, ok=ok)
-        if followup is None:
-            followup = self._mixture_followup_job_if_needed(job=job, ok=ok)
+        # Shape / mixture arming mid-job is handled by phase-boundary replan
+        # (``plan_for(..., completed=job.completed)``). No post-job followup path.
         self._current_job = None
         self._job_step_idx = 0
         self._pending_step_name = None
-        self._step_results.clear()
-        if followup is not None:
-            self._jobs.put(followup)
-
-    def _shape_followup_job_if_needed(self, *, job: Job, ok: bool) -> Optional[Job]:
-        """
-        If an auto job finished without a shape step but shape mode is now set
-        (e.g. user selected DAMMIF mid-run), enqueue a shape-only follow-up.
-        """
-        if not ok or is_manual_job(job):
-            return None
-        if not self._state.monodisperse_armed:
-            return None
-        if self._state.monodisperse_shape_mode == MonodisperseShapeMode.NONE:
-            return None
-        if job_includes_shape(list(job.steps)):
-            return None
-        fd = self._step_results.get("fit_distances")
-        if not isinstance(fd, dict) or not is_atsas_fit_ok(fd):
-            return None
-        prof = str(job.context.get("profile_path") or "").strip()
-        if not prof:
-            for step in job.steps:
-                if step.name in (FIT_GUINIER_MONO_STEP, "fit_distances") and step.request.positional:
-                    prof = str(step.request.positional[0]).strip()
-                    break
-        if not prof:
-            return None
-        try:
-            root_raw = job.context.get("output_root")
-            root = (
-                Path(str(root_raw)).expanduser().resolve()
-                if root_raw
-                else self._state.watchdir.expanduser().resolve()
-            )
-        except OSError:
-            root = self._state.watchdir.expanduser().resolve()
-        gnom_hint = ""
-        if isinstance(fd.get("best_gnom_out_path"), str):
-            gnom_hint = fd["best_gnom_out_path"].strip()
-        steps = build_monodisperse_steps(
-            prof,
-            output_root=root,
-            state=self._state,
-            parts=MonodispersePipelineParts.SHAPE_ONLY,
-            load_yaml=self._load_yaml_options,
-            gnom_out_path=gnom_hint or None,
-        )
-        if not steps:
-            return None
-        stem = profile_sample_stem(prof)
-        if self._state.analysis_enabled():
-            steps.append(report_individual_step(output_root=root, basename=stem))
-        return Job(
-            id=f"mono_shape_followup:{stem}:{time.time_ns()}",
-            priority=0,
-            steps=steps,
-            context={
-                "monodisperse": True,
-                "shape_followup": True,
-                "profile_path": str(Path(prof).expanduser().resolve()),
-                "sample_stem": stem,
-                "output_root": str(root),
-                "source_path": str(
-                    job.context.get("source_path") or job.context.get("tiff_path") or ""
-                ).strip(),
-                "boarding": str(job.context.get("boarding") or "").strip(),
-            },
-        )
-
-    def _mixture_followup_job_if_needed(self, *, job: Job, ok: bool) -> Optional[Job]:
-        """
-        If an auto job finished without a mixture step but mixture mode is now set
-        (e.g. user enabled Mixture mid-run), enqueue a mixture-only follow-up.
-        """
-        if not ok or is_manual_job(job):
-            return None
-        if not self._state.polydisperse_armed:
-            return None
-        if self._state.polydisperse_mixture_mode == PolydisperseMixtureMode.NONE:
-            return None
-        if job_includes_mixture(list(job.steps)):
-            return None
-        fs = self._step_results.get("fit_sizes")
-        if not isinstance(fs, dict) or not is_atsas_fit_ok(fs):
-            return None
-        prof = str(job.context.get("profile_path") or "").strip()
-        if not prof:
-            for step in job.steps:
-                if step.name in (FIT_GUINIER_POLY_STEP, FIT_GUINIER_MONO_STEP, "fit_sizes") and step.request.positional:
-                    prof = str(step.request.positional[0]).strip()
-                    break
-        if not prof:
-            return None
-        try:
-            root_raw = job.context.get("output_root")
-            root = (
-                Path(str(root_raw)).expanduser().resolve()
-                if root_raw
-                else self._state.watchdir.expanduser().resolve()
-            )
-        except OSError:
-            root = self._state.watchdir.expanduser().resolve()
-        steps = build_polydisperse_steps(
-            prof,
-            output_root=root,
-            state=self._state,
-            parts=PolydispersePipelineParts.MIXTURE_ONLY,
-            load_yaml=self._load_yaml_options,
-        )
-        if not steps:
-            return None
-        stem = profile_sample_stem(prof)
-        if self._state.analysis_enabled():
-            steps.append(report_individual_step(output_root=root, basename=stem))
-        return Job(
-            id=f"poly_mixture_followup:{stem}:{time.time_ns()}",
-            priority=0,
-            steps=steps,
-            context={
-                "polydisperse": True,
-                "mixture_followup": True,
-                "profile_path": str(Path(prof).expanduser().resolve()),
-                "sample_stem": stem,
-                "output_root": str(root),
-                "source_path": str(
-                    job.context.get("source_path") or job.context.get("tiff_path") or ""
-                ).strip(),
-                "boarding": str(job.context.get("boarding") or "").strip(),
-            },
-        )
 
     def _start_next_job_step(self) -> None:
         assert self._current_job is not None
         step = self._current_job.steps[self._job_step_idx]
+        step_results = self._current_job.completed.results
         try:
-            req = resolve_request_placeholders(step.request, results_by_step=self._step_results)
+            req = resolve_request_placeholders(step.request, results_by_step=step_results)
         except PlaceholderError as e:
             if step.name in ("fit_distances", "analyze_kratky") and "fit_guinier." in str(e):
-                guinier = self._step_results.get("fit_guinier")
+                guinier = step_results.get("fit_guinier")
                 if isinstance(guinier, dict):
                     guinier = self._enrich_fit_guinier_result(
                         dict(guinier), resolve_bases=self._artifact_resolve_bases_for_job()
@@ -771,155 +627,27 @@ class LiveviewJobExecutor(QObject):
         self.skill_started.emit(req.skill_name)
         self._runner.start(req)
 
-    @staticmethod
-    def _coerce_opt_int(val: Any) -> Optional[int]:
-        if val is None or isinstance(val, bool):
-            return None
-        try:
-            return int(val)
-        except (TypeError, ValueError):
-            return None
-
-    @staticmethod
-    def _read_first_last_from_best_summary(path: Path) -> Tuple[Optional[int], Optional[int]]:
-        try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace"))
-        except (OSError, TypeError, yaml.YAMLError):
-            return None, None
-        if not isinstance(data, dict):
-            return None, None
-        sel = data.get("selected")
-        if not isinstance(sel, dict):
-            return None, None
-        return (
-            LiveviewJobExecutor._coerce_opt_int(sel.get("first")),
-            LiveviewJobExecutor._coerce_opt_int(sel.get("last")),
-        )
-
-    @staticmethod
-    def _read_first_last_from_fit_params(path: Path) -> Tuple[Optional[int], Optional[int]]:
-        try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace"))
-        except (OSError, TypeError, yaml.YAMLError):
-            return None, None
-        if not isinstance(data, dict):
-            return None, None
-        return (
-            LiveviewJobExecutor._coerce_opt_int(data.get("first")),
-            LiveviewJobExecutor._coerce_opt_int(data.get("last")),
-        )
-
     def _enrich_fit_distances_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        out = dict(result or {})
-        watchdir = self._state.watchdir
-        bs = out.get("fit_distances_log_path")
-        fp = out.get("fit_params_path")
-        first_i: Optional[int] = None
-        last_i: Optional[int] = None
-        try:
-            if isinstance(bs, str) and bs.strip():
-                p = Path(bs.strip()).expanduser()
-                p = p.resolve() if p.is_absolute() else (watchdir / p).resolve()
-                if p.is_file():
-                    first_i, last_i = self._read_first_last_from_best_summary(p)
-        except Exception:
-            first_i, last_i = None, None
-        if first_i is None and last_i is None:
-            try:
-                if isinstance(fp, str) and fp.strip():
-                    p2 = Path(fp.strip()).expanduser()
-                    p2 = p2.resolve() if p2.is_absolute() else (watchdir / p2).resolve()
-                    if p2.is_file():
-                        first_i, last_i = self._read_first_last_from_fit_params(p2)
-            except Exception:
-                first_i, last_i = None, None
-        if first_i is not None:
-            out["selected_first"] = int(first_i)
-        if last_i is not None:
-            out["selected_last"] = int(last_i)
-        return merge_fit_distances_quality_fields(out, watchdir=watchdir)
+        return _artifacts.enrich_fit_distances_result(result, watchdir=self._state.watchdir)
 
     def _resolve_artifact_path(
         self, path_str: str, *, resolve_bases: Optional[Sequence[Path]] = None
     ) -> Path:
-        p = Path(path_str.strip()).expanduser()
-        if p.is_absolute():
-            return p.resolve()
-        bases = [b.expanduser().resolve() for b in (resolve_bases or [])]
-        if not bases:
-            bases = [self._state.watchdir.expanduser().resolve()]
-        for base in bases:
-            cand = (base / p).resolve()
-            if cand.is_file():
-                return cand
-        return (bases[0] / p).resolve()
+        return _artifacts.resolve_artifact_path(
+            path_str, resolve_bases=resolve_bases, watchdir=self._state.watchdir
+        )
 
     def _artifact_resolve_bases_for_job(self) -> List[Path]:
-        bases: List[Path] = []
-        job = self._current_job
-        if job is None:
-            return [self._state.watchdir.expanduser().resolve()]
-        or_raw = job.context.get("output_root")
-        if isinstance(or_raw, str) and or_raw.strip():
-            bases.append(Path(or_raw.strip()).expanduser().resolve())
-        for step in job.steps:
-            if step.name not in (FIT_GUINIER_MONO_STEP, FIT_GUINIER_POLY_STEP):
-                continue
-            od = (step.request.options or {}).get("output_dir")
-            if isinstance(od, str) and od.strip():
-                bases.append(Path(od.strip()).expanduser().resolve())
-        bases.append(self._state.watchdir.expanduser().resolve())
-        seen: set[str] = set()
-        out: List[Path] = []
-        for b in bases:
-            key = str(b)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(b)
-        return out
+        return _artifacts.artifact_resolve_bases_for_job(
+            self._current_job, watchdir=self._state.watchdir
+        )
 
     def _enrich_fit_guinier_result(
         self, result: Dict[str, Any], *, resolve_bases: Optional[Sequence[Path]] = None
     ) -> Dict[str, Any]:
-        from autosaxs.core.guinier import parse_guinier_results_txt
-        from autosaxs.skill.fit_guinier.guinier import guinier_point_range_1based
-
-        out = dict(result or {})
-        raw = out.get("results_path")
-        if isinstance(raw, list) and len(raw) == 1:
-            raw = raw[0]
-        if not isinstance(raw, str) or not raw.strip():
-            return out
-        try:
-            p = self._resolve_artifact_path(raw.strip(), resolve_bases=resolve_bases)
-            if not p.is_file():
-                return out
-            data = parse_guinier_results_txt(str(p))
-        except (OSError, TypeError, ValueError):
-            return out
-        if not isinstance(data, dict):
-            return out
-        for key in (
-            "rg",
-            "i0",
-            "first_point_1based",
-            "last_point_1based",
-            "classification",
-            "quality_class",
-            "q_min",
-            "q_max",
-            "interval_r2",
-            "fit_quality",
-        ):
-            if key in data and data[key] is not None and out.get(key) is None:
-                out[key] = data[key]
-        fp, lp = guinier_point_range_1based(data)
-        if fp is not None:
-            out["first_point_1based"] = fp
-        if lp is not None:
-            out["last_point_1based"] = lp
-        return out
+        return _artifacts.enrich_fit_guinier_result(
+            result, watchdir=self._state.watchdir, resolve_bases=resolve_bases
+        )
 
     def build_polydisperse_manual_job(
         self,
@@ -929,20 +657,12 @@ class LiveviewJobExecutor(QObject):
         output_root: Optional[Path] = None,
         priority: int = 150,
     ) -> Job:
-        prof = str(Path(profile_abs).expanduser().resolve())
-        stem = profile_sample_stem(prof)
-        root = (output_root or self._state.watchdir).expanduser().resolve()
-        return Job(
-            id=f"poly_manual:{stem}:{time.time_ns()}",
-            priority=int(priority),
+        return _manual_jobs.build_polydisperse_manual_job(
+            profile_abs=profile_abs,
             steps=steps,
-            context={
-                "manual": True,
-                "polydisperse": True,
-                "profile_path": prof,
-                "sample_stem": stem,
-                "output_root": str(root),
-            },
+            output_root=output_root,
+            watchdir=self._state.watchdir,
+            priority=priority,
         )
 
     def build_monodisperse_manual_job(
@@ -953,20 +673,12 @@ class LiveviewJobExecutor(QObject):
         output_root: Optional[Path] = None,
         priority: int = 150,
     ) -> Job:
-        prof = str(Path(profile_abs).expanduser().resolve())
-        stem = profile_sample_stem(prof)
-        root = (output_root or self._state.watchdir).expanduser().resolve()
-        return Job(
-            id=f"mono_manual:{stem}:{time.time_ns()}",
-            priority=int(priority),
+        return _manual_jobs.build_monodisperse_manual_job(
+            profile_abs=profile_abs,
             steps=steps,
-            context={
-                "manual": True,
-                "monodisperse": True,
-                "profile_path": prof,
-                "sample_stem": stem,
-                "output_root": str(root),
-            },
+            output_root=output_root,
+            watchdir=self._state.watchdir,
+            priority=priority,
         )
 
     def monodisperse_steps_guinier_and_distances(
@@ -1012,24 +724,14 @@ class LiveviewJobExecutor(QObject):
         shape_mode: str,
         gnom_out_path: Optional[str] = None,
     ) -> Optional[JobStep]:
-        # Prefer explicit mode passed by caller; temporarily sync session if needed.
-        prev = self._state.monodisperse_shape_mode
-        try:
-            self._state.monodisperse_shape_mode = MonodisperseShapeMode(str(shape_mode).lower())
-        except ValueError:
-            self._state.monodisperse_shape_mode = MonodisperseShapeMode.NONE
-        try:
-            steps = build_monodisperse_steps(
-                profile_abs,
-                output_root=output_root,
-                state=self._state,
-                parts=MonodispersePipelineParts.SHAPE_ONLY,
-                load_yaml=self._load_yaml_options,
-                gnom_out_path=gnom_out_path,
-            )
-        finally:
-            self._state.monodisperse_shape_mode = prev
-        return steps[0] if steps else None
+        return _manual_jobs.monodisperse_step_shape(
+            state=self._state,
+            profile_abs=profile_abs,
+            output_root=output_root,
+            shape_mode=shape_mode,
+            load_yaml=self._load_yaml_options,
+            gnom_out_path=gnom_out_path,
+        )
 
     def _sync_last_paths_from_result(self, result: Dict[str, Any]) -> None:
         integ = result.get("integrated_1d")
@@ -1080,27 +782,21 @@ class LiveviewJobExecutor(QObject):
             self._sync_last_paths_from_result(outcome.result)
             self.skill_finished.emit(outcome)
 
-            # Record step result for placeholder substitution.
+            # Record step result on the Job (sole progress owner), then advance.
             res = dict(outcome.result or {})
             if step_name == "fit_distances":
                 res = self._enrich_fit_distances_result(res)
             if step_name in (FIT_GUINIER_MONO_STEP, FIT_GUINIER_POLY_STEP):
                 res = self._enrich_fit_guinier_result(res, resolve_bases=self._artifact_resolve_bases_for_job())
-            if step_name:
-                self._step_results[step_name] = res
 
             if not outcome.success:
                 # Job failed/cancelled.
                 if self._requeue_cancelled_job and self._current_job is not None:
                     try:
-                        j = self._current_job
-                        retry = Job(
-                            id=f"{j.id}:retry:{time.time_ns()}",
-                            priority=int(self._requeue_priority),
-                            steps=list(j.steps),
-                            context=dict(j.context),
+                        # Job.completed (phases + results) is preserved on retry.
+                        self._jobs.put(
+                            self._current_job.as_retry(priority=int(self._requeue_priority))
                         )
-                        self._jobs.put(retry)
                     except Exception:
                         pass
                 self._requeue_cancelled_job = False
@@ -1117,19 +813,19 @@ class LiveviewJobExecutor(QObject):
                 self._finish_job(ok=True)
                 return
 
-            # Advance to next step.
-            self._job_step_idx += 1
+            # Mark progress on the Job, then replan remaining steps (auto only).
+            # Manual jobs keep a frozen step list (index advance).
+            self._current_job = self._current_job.mark_step_done(step_name, result=res)
+            if is_manual_job(self._current_job):
+                self._job_step_idx += 1
+            else:
+                if not self._replan_current_job():
+                    self._finish_job(ok=False)
         finally:
             self._handling_skill_outcome = False
 
     def _subtraction_output_root(self, *, sample_dat: str) -> Path:
-        wd = self._state.watchdir.resolve()
-        if self._state.watch_mode != LiveviewWatchMode.TREE:
-            return wd
-        sp = Path((sample_dat or "").strip()).expanduser().resolve()
-        if sp.parent.name in ("averaged", "averaged_proxy"):
-            return sp.parent.parent
-        return sp.parent
+        return _manual_jobs.subtraction_output_root(state=self._state, sample_dat=sample_dat)
 
     def _analysis_steps_for_profile(
         self,
@@ -1138,37 +834,13 @@ class LiveviewJobExecutor(QObject):
         output_root: Path,
         use_ui_params: bool = False,
     ) -> List[JobStep]:
-        if not self._state.analysis_enabled():
-            return []
-        prof = str(Path(profile_abs).expanduser().resolve())
-        steps: List[JobStep] = []
-        # When driven from open analysis panes, pass fixed_guinier_interval so
-        # explicit first/last from session are used; omit when still (auto).
-        fixed = bool(use_ui_params)
-        if self._state.monodisperse_armed:
-            steps.extend(
-                build_monodisperse_steps(
-                    prof,
-                    output_root=output_root,
-                    state=self._state,
-                    parts=MonodispersePipelineParts.FULL,
-                    load_yaml=self._load_yaml_options,
-                    guinier_handoff=None,
-                    fixed_guinier_interval=fixed,
-                )
-            )
-        if self._state.polydisperse_armed:
-            steps.extend(
-                build_polydisperse_steps(
-                    prof,
-                    output_root=output_root,
-                    state=self._state,
-                    parts=PolydispersePipelineParts.FULL,
-                    load_yaml=self._load_yaml_options,
-                    fixed_guinier_interval=fixed,
-                )
-            )
-        return steps
+        return _manual_jobs.analysis_steps_for_profile(
+            self._state,
+            profile_abs,
+            output_root=output_root,
+            load_yaml=self._load_yaml_options,
+            use_ui_params=use_ui_params,
+        )
 
     def _model_mixture_run_options(self) -> dict:
         """Skill options from window Apply; omit empty values and persistence-only keys."""

@@ -21,7 +21,10 @@ from ...services.calibration.storage import calibration_subdir, ensure_tiff_in_c
 from ....core.models import RunRequest
 from ....logic.session_state import SessionPathHints
 from ....logic.skill_catalog import discover_skills
-from ....logic.smart_defaults import find_calibrant_image_in_workdir, find_latest_dat_in_workdir
+from ....logic.smart_defaults import (
+    find_calibrant_image_in_workdir,
+    session_hint_soft_buffer_1d,
+)
 from ....ui.path_field import PathField
 from ....ui.skill_form import SkillForm
 from ..skill_form_utils import (
@@ -538,10 +541,12 @@ class BufferWizardDialog(QDialog):
             self.setMinimumWidth(900)
             self.resize(1120, 640)
         self._watchdir = watchdir
+        self._hints = hints
         self._dat_viewer = None
         self._apply_coach_dismissed = False
         self._close_coach_armed = False
         self._autofill_buffer_key = None
+        self._auto_hinted_buffer_path: str | None = None
         self._btn_close = QPushButton("Close")
         self._btn_close.clicked.connect(self.close)
 
@@ -601,6 +606,7 @@ class BufferWizardDialog(QDialog):
             splitter.setStretchFactor(1, 2)
             lay.addWidget(splitter, 1)
             self._attach_options_help_button()
+            self._sync_auto_hint_marker_from_field()
             self._autofill_q_range_from_buffer(force=False)
             self._refresh_buffer_plot()
         else:
@@ -632,25 +638,76 @@ class BufferWizardDialog(QDialog):
     def has_buffer_path(self) -> bool:
         return bool(self._buffer_path_text())
 
+    def update_path_hints(self, hints: SessionPathHints) -> None:
+        self._hints = hints
+
     def maybe_apply_empty_buffer_hint(self) -> bool:
         """
-        If ``buffer_1d`` is empty, fill with the newest ``*.dat`` under the watchdir
-        (same spirit as calibrant TIFF guessing for calibration).
+        Keep empty / auto-hinted ``buffer_1d`` aligned with the last integrated curve.
+
+        Soft hints (coalesce or this method) refresh when ``last_integrated_dat_path``
+        advances; user edits and applied session buffers are left alone.
         """
-        if self.has_buffer_path():
-            return False
-        found = find_latest_dat_in_workdir(self._watchdir)
+        found = session_hint_soft_buffer_1d(self._hints, self._watchdir)
         if found is None:
             return False
         f = self._buffer_field()
         if f is None:
             return False
-        f.set_text(str(found))
-        f.set_browse_start_dir(str(found.parent))
+        current = self._buffer_path_text()
+        if current:
+            auto = self._auto_hinted_buffer_path
+            if auto is None or not self._same_buffer_path(current, auto):
+                return False
+            if self._same_buffer_path(current, found):
+                return False
+        f.set_text(found)
+        f.set_browse_start_dir(str(Path(found).parent))
+        self._auto_hinted_buffer_path = found
         self._sync_q_range_to_buffer(force=True)
         self._refresh_buffer_plot()
         self.attention_context_changed.emit()
         return True
+
+    def _same_buffer_path(self, a: str, b: str) -> bool:
+        try:
+            pa = Path(a).expanduser()
+            pb = Path(b).expanduser()
+            if not pa.is_absolute():
+                pa = (self._watchdir / pa).resolve()
+            else:
+                pa = pa.resolve()
+            if not pb.is_absolute():
+                pb = (self._watchdir / pb).resolve()
+            else:
+                pb = pb.resolve()
+            return pa == pb
+        except OSError:
+            return Path(a).as_posix() == Path(b).as_posix()
+
+    def _is_soft_auto_hinted(self) -> bool:
+        auto = self._auto_hinted_buffer_path
+        if not auto:
+            return False
+        current = self._buffer_path_text()
+        return bool(current) and self._same_buffer_path(current, auto)
+
+    def _sync_auto_hint_marker_from_field(self) -> None:
+        """After silent coalesce, mark buffer soft iff it matches last-integrated / latest .dat."""
+        text = self._buffer_path_text()
+        if not text:
+            self._auto_hinted_buffer_path = None
+            return
+        buf = getattr(self._hints, "buffer_dat_path", None)
+        if buf and self._same_buffer_path(text, buf):
+            # Applied session buffer — hard seed, do not refresh away.
+            self._auto_hinted_buffer_path = None
+            return
+        soft = session_hint_soft_buffer_1d(self._hints, self._watchdir)
+        if soft and self._same_buffer_path(text, soft):
+            self._auto_hinted_buffer_path = soft
+            return
+        self._auto_hinted_buffer_path = None
 
     def has_q_range(self) -> bool:
         q_min, q_max = self._q_range()
@@ -715,6 +772,8 @@ class BufferWizardDialog(QDialog):
         self.attention_context_changed.emit()
 
     def _on_buffer_path_changed(self, *_args) -> None:
+        # User browse/edit/drop owns the path; stop refreshing soft hints over it.
+        self._auto_hinted_buffer_path = None
         # New / edited buffer path → always recompute the pre-knee window.
         self._sync_q_range_to_buffer(force=True)
         self._refresh_buffer_plot()
@@ -887,7 +946,9 @@ class BufferWizardDialog(QDialog):
     def reset_form_to_empty(self, hints: SessionPathHints) -> None:
         if self._meta is None:
             return
+        self._hints = hints
         self._autofill_buffer_key = None
+        self._auto_hinted_buffer_path = None
         out = self._watchdir / "subtracted"
         out.mkdir(parents=True, exist_ok=True)
         self._form.set_skill(
@@ -901,6 +962,7 @@ class BufferWizardDialog(QDialog):
         _disable_subtract_sample_field(self._form, self._meta)
         self._wire_form_plot_updates()
         self._attach_options_help_button()
+        self._sync_auto_hint_marker_from_field()
         self._sync_q_range_to_buffer(force=False)
         self._refresh_buffer_plot()
         self._apply_coach_dismissed = False
@@ -914,8 +976,11 @@ class BufferWizardDialog(QDialog):
         saved = saved_state if saved_state is not None else self._form.state()
         # Align hint with the path we are about to restore so silent set_text coalesce
         # cannot swap the buffer while leaving the previous q window.
-        if saved_state is None:
+        # Soft auto-hints must NOT be locked as buffer_dat_path — that would pin an
+        # old integrated curve and block last_integrated from winning on coalesce.
+        if saved_state is None and not self._is_soft_auto_hinted():
             hints = self._hints_with_form_buffer(hints)
+        self._hints = hints
         out = self._watchdir / "subtracted"
         out.mkdir(parents=True, exist_ok=True)
         self._form.set_skill(
@@ -929,6 +994,7 @@ class BufferWizardDialog(QDialog):
         _disable_subtract_sample_field(self._form, self._meta)
         self._wire_form_plot_updates()
         self._attach_options_help_button()
+        self._sync_auto_hint_marker_from_field()
         # Buffer may have been filled via silent set_text (hints); sync q to that identity.
         self._sync_q_range_to_buffer(force=False)
         self._refresh_buffer_plot()

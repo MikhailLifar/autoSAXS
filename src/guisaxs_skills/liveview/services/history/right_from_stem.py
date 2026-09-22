@@ -1,18 +1,13 @@
 """
-Load right-column analysis previews from disk using autosaxs per-sample subdirs (stem = TIFF basename).
+Load right-column analysis previews from disk (and live skill results via present_right).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from ...ingest.sample_revision import is_dat_path
-from ...session.output_paths import (
-    integrated_dat_path,
-    subtracted_dat_path,
-    tiff_output_root,
-)
-from ...session.state import LiveviewWatchMode
+from ...session.state import LiveviewSessionState, LiveviewWatchMode
+from .right_artifacts import RightPresentSource, present_right
 
 
 def apply_right_outputs_from_disk(
@@ -24,36 +19,22 @@ def apply_right_outputs_from_disk(
     polydisperse_armed: bool = False,
     tiff_path: str = "",
     watch_mode: LiveviewWatchMode = LiveviewWatchMode.FLAT,
+    state: LiveviewSessionState | None = None,
+    session=None,
 ) -> None:
-    """Clear analysis previews, then load paths for ``tiff_stem`` under the sample output root."""
-    right.clear_output_previews()
-    if not (monodisperse_armed or polydisperse_armed) or not (tiff_stem or "").strip():
-        return
-    stem = tiff_stem.strip()
-    # Curve boarding always writes analysis under watchdir (not beside the .dat parent).
-    if is_dat_path(tiff_path or ""):
-        root = watchdir.expanduser().resolve()
-    else:
-        root = tiff_output_root(watchdir=watchdir, tiff_path=tiff_path, mode=watch_mode)
-    sub = subtracted_dat_path(root=root, stem=stem)
-    integ = integrated_dat_path(root=root, stem=stem, integrator_ready=True)
-    if is_dat_path(tiff_path or "") and Path(tiff_path).is_file():
-        # Prefer the boarded curve itself as profile when it exists.
-        boarded = Path(tiff_path).expanduser().resolve()
-        prof = boarded if boarded.is_file() else (sub if sub.is_file() else integ)
-    else:
-        prof = sub if sub.is_file() else integ
-    profile_path = str(prof.resolve()) if prof.is_file() else ""
-
-    if monodisperse_armed and hasattr(right, "load_monodisperse_from_disk"):
-        right.load_monodisperse_from_disk(
-            profile_path=profile_path,
-            stem=stem,
-            tiff_path=tiff_path,
-        )
-    if polydisperse_armed and hasattr(right, "load_polydisperse_from_disk"):
-        right.load_polydisperse_from_disk(
-            profile_path=profile_path,
-            stem=stem,
-            tiff_path=tiff_path,
-        )
+    """Clear analysis previews, then present discovered artifacts for ``tiff_stem``."""
+    if state is None:
+        # Backward-compatible: build a minimal view from kwargs (tests / old callers).
+        if not hasattr(right, "_state"):
+            right.clear_output_previews()
+            return
+        state = right._state
+    present_right(
+        right,
+        state=state,
+        sample_path=tiff_path,
+        stem=tiff_stem,
+        watch_mode=watch_mode,
+        source=RightPresentSource.DISK,
+        session=session,
+    )

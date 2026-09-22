@@ -1,3 +1,4 @@
+from .api import LiveviewSession
 from .persistence import (
     load_liveview_session_settings,
     save_liveview_session_settings,
@@ -16,6 +17,7 @@ from .workdir import default_watchdir, select_watchdir
 __all__ = [
     "DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES",
     "LiveviewIntakeMode",
+    "LiveviewSession",
     "LiveviewSessionState",
     "LiveviewWatchMode",
     "Sample",

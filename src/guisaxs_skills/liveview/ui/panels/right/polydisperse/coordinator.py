@@ -146,6 +146,9 @@ class PolydisperseCoordinator(QObject):
             if quality:
                 self._sizes_adjust.set_passport_from_quality(quality)
 
+    def apply_bundle(self, bundle: object) -> None:
+        self._presenter.apply_bundle(bundle)
+
     def load_from_disk(
         self,
         *,

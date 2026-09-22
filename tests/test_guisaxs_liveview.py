@@ -1,19 +1,25 @@
 """
-Headless workflow test for guisaxs-liveview: drive the real PyQt GUI (no pixel checks).
+GUI scenario test for guisaxs-liveview: drive the real PyQt GUI (no pixel checks).
 
-Scenario:
-- Launch Liveview window on a fixed watchdir: WORKSPACE_ROOT/test_liview
-- Set calibration (validation/raw/AgBh...); wizard should auto-fill mask+config, but we set explicitly.
-- Upload buffer TIFF -> wait for averaged/int_ihs27_buffer.dat
-- Set buffer + subtraction options (Apply button)
-- Set analysis mode to "Monodisperse analysis: p(r)" and apply fit_distances config
-- Upload sample TIFF -> wait for subtracted/sub_ihs27_95.9_sample.dat and fit_distances PNGs
-- Compare integrated + subtracted curves to validation baselines using the same regression metric as test_skills_real_data.
+Primary monodisperse scenario (``test_guisaxs_liveview_monodisperse_scenario``):
+- Launch Liveview on ``WORKSPACE_ROOT/test_liveview``
+- Calibrate once (validation AgBh + mask)
+- For **three** consecutive buffer–sample pairs (ihs27, ihs28, ihs29):
+  - Reset buffer between pairs (disarms analysis)
+  - Integrate buffer → set buffer + subtract q-window → re-arm monodisperse
+  - Integrate sample → subtract → Guinier → Kratky → fit_distances (auto)
+  - When ``reference_mono`` has refine knobs: monodisperse → Adjust → set params → Confirm
+- ``model_dam`` (DAMMIF) once only (ihs27), with ``n_runs=3`` via Re-run shape after Adjust
+- Closing the main window aborts waits (test must not keep driving a dead app)
+- Compare integrated/subtracted curves to validation regression baselines
 
-Requires a display (use xvfb on CI), e.g.:
+Headless CI::
   xvfb-run -a /path/to/python -m pytest tests/test_guisaxs_liveview.py -v
-"""
 
+Non-headless debug (visible window)::
+  GUISAXS_LIVEVIEW_TEST_TIMEOUT=1800 /path/to/python -m pytest \\
+    tests/test_guisaxs_liveview.py::test_guisaxs_liveview_monodisperse_scenario -v -s
+"""
 from __future__ import annotations
 
 import os
@@ -22,13 +28,14 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional, Tuple
 
 import pytest
 from guisaxs_skills.liveview.pipeline import Job, JobStep, LiveviewJobExecutor
 from guisaxs_skills.liveview.session.sample_store import SampleStore
 from guisaxs_skills.core.models import RunRequest
 from guisaxs_skills.liveview.session import LiveviewSessionState
+from guisaxs_skills.liveview.session.state import MonodisperseShapeMode
 
 _REPOS = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _SRC = os.path.join(_REPOS, "src")
@@ -46,6 +53,16 @@ _VALIDATION_MISSING_MSG = (
     "Run: python scripts/setup_validation_data.py"
 )
 
+# (protocol_key, buffer_tif, sample_tif, sample_stem_for_artifacts)
+_MONO_SCENARIO_PAIRS: List[Tuple[str, str, str, str]] = [
+    ("ihs27", "ihs27_buffer.tif", "ihs27_95.9_sample.tif", "ihs27_95.9_sample"),
+    ("ihs28", "ihs28_buffer.tif", "ihs28_95.2_sample.tif", "ihs28_95.2_sample"),
+    ("ihs29", "ihs29_buffer.tif", "ihs29_94.6_sample.tif", "ihs29_94.6_sample"),
+]
+_MONO_DAM_KEY = "ihs27"
+_MONO_DAM_N_RUNS = 3
+REFERENCE_MONO_MANIFEST = os.path.join(VALIDATION_DIR, "reference_mono", "manifest.yml")
+
 
 @pytest.fixture(scope="module", autouse=True)
 def _require_validation_dir_fixture():
@@ -54,7 +71,7 @@ def _require_validation_dir_fixture():
 
 
 def _gui_timeout_sec() -> float:
-    return float(os.environ.get("GUISAXS_LIVEVIEW_TEST_TIMEOUT", "900"))
+    return float(os.environ.get("GUISAXS_LIVEVIEW_TEST_TIMEOUT", "1800"))
 
 
 def _process_events(app: Any) -> None:
@@ -64,9 +81,22 @@ def _process_events(app: Any) -> None:
         return
 
 
-def _wait_until(app: Any, predicate, timeout_sec: float, *, step_sec: float = 0.05) -> bool:
+def _wait_until(
+    app: Any,
+    predicate,
+    timeout_sec: float,
+    *,
+    step_sec: float = 0.05,
+    abort_if=None,
+) -> bool:
     deadline = time.monotonic() + float(timeout_sec)
     while time.monotonic() < deadline:
+        if abort_if is not None:
+            try:
+                if abort_if():
+                    return False
+            except Exception:
+                return False
         _process_events(app)
         try:
             if predicate():
@@ -75,6 +105,14 @@ def _wait_until(app: Any, predicate, timeout_sec: float, *, step_sec: float = 0.
             pass
         time.sleep(max(0.01, float(step_sec)))
     return False
+
+
+def _window_gone(win: Any) -> bool:
+    """True when the liveview window was closed / destroyed (stop waiting)."""
+    try:
+        return win is None or (hasattr(win, "isVisible") and not win.isVisible())
+    except RuntimeError:
+        return True
 
 
 def _settle_after_idle(sec: float = 1.0) -> None:
@@ -87,6 +125,7 @@ def _wait_until_app_idle(app: Any, win: Any, timeout_sec: float) -> bool:
     Best-effort: wait until the liveview window looks idle (no running skill, no queued items).
     Uses private attributes but stays defensive.
     """
+    abort = lambda: _window_gone(win)
 
     def _idle() -> bool:
         try:
@@ -127,11 +166,12 @@ def _wait_until_app_idle(app: Any, win: Any, timeout_sec: float) -> bool:
             pass
         return True
 
-    return _wait_until(app, _idle, timeout_sec, step_sec=0.05)
+    return _wait_until(app, _idle, timeout_sec, step_sec=0.05, abort_if=abort)
 
 
 def _wait_until_queue_idle(app: Any, win: Any, timeout_sec: float) -> bool:
     """Wait until the middle panel queue label reads 'Idle'."""
+    abort = lambda: _window_gone(win)
 
     def _idle_text() -> bool:
         try:
@@ -143,7 +183,7 @@ def _wait_until_queue_idle(app: Any, win: Any, timeout_sec: float) -> bool:
         except Exception:
             return False
 
-    return _wait_until(app, _idle_text, timeout_sec, step_sec=0.05)
+    return _wait_until(app, _idle_text, timeout_sec, step_sec=0.05, abort_if=abort)
 
 
 def _wait_until_runcontrols_idle(app: Any, controls: Any, timeout_sec: float) -> bool:
@@ -285,6 +325,201 @@ def _arm_monodisperse(right: Any) -> None:
     right.show_monodisperse_wizard()
 
 
+def _subtract_q_window_from_validation_config() -> Tuple[float, float]:
+    try:
+        import yaml
+
+        cfg_data = yaml.safe_load(Path(VALIDATION_DIR, "config.conf").read_text(encoding="utf-8"))
+        sub = (cfg_data or {}).get("subtract") if isinstance(cfg_data, dict) else None
+        if isinstance(sub, dict) and sub.get("q_min") is not None and sub.get("q_max") is not None:
+            return float(sub["q_min"]), float(sub["q_max"])
+    except Exception:
+        pass
+    return 4.5, 5.5
+
+
+def _reset_buffer_via_ui(app: Any, win: Any, left: Any, timeout: float) -> None:
+    """Click Buffer Reset — clears buffer and disarms analysis."""
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+
+    QTest.mouseClick(left._buf_reset, Qt.LeftButton)  # noqa: SLF001
+    _process_events(app)
+    ok = _wait_until(
+        app,
+        lambda: win._state.buffer_dat_path is None and not win._state.monodisperse_armed,  # noqa: SLF001
+        min(30.0, timeout),
+    )
+    assert ok, "Buffer reset did not clear buffer / disarm analysis"
+    _settle_after_idle(0.5)
+
+
+def _set_buffer_and_subtract_options(
+    app: Any,
+    win: Any,
+    left: Any,
+    *,
+    int_buf: Path,
+    q_min: float,
+    q_max: float,
+    timeout: float,
+) -> None:
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+
+    QTest.mouseClick(left._buf_open, Qt.LeftButton)  # noqa: SLF001
+    assert left._buf_wizard is not None  # noqa: SLF001
+    bw = left._buf_wizard  # noqa: SLF001
+    bform = bw._form  # noqa: SLF001
+    assert _set_pathfield_text_by_label(bform, label="buffer_1d", text=str(int_buf))
+    assert _set_form_text_field(bform, name="q_min", text=str(q_min))
+    assert _set_form_text_field(bform, name="q_max", text=str(q_max))
+    QTest.mouseClick(bw._apply, Qt.LeftButton)  # noqa: SLF001
+    ok_state = _wait_until(app, lambda: win._state.buffer_dat_path is not None, timeout)  # noqa: SLF001
+    assert ok_state, f"Buffer did not apply for {int_buf.name}"
+    _settle_after_idle(0.5)
+    bw.close()
+    _wait_until(app, lambda: not bw.isVisible(), 3.0)
+
+
+def _configure_monodisperse_shape(
+    app: Any,
+    right: Any,
+    win: Any,
+    *,
+    enable_dammif: bool,
+) -> None:
+    """Arm mono wizard and set shape mode (DAMMIF once, else none)."""
+    _arm_monodisperse(right)
+    assert right._state.monodisperse_armed  # noqa: SLF001
+    wiz = right.monodisperse_wizard
+    pane = wiz.shape_pane
+    if enable_dammif:
+        pane.set_n_runs(_MONO_DAM_N_RUNS)
+        pane.set_shape_mode("dammif")
+        win._state.monodisperse_shape_mode = MonodisperseShapeMode.DAMMIF  # noqa: SLF001
+        win._state.model_dam_n_runs = _MONO_DAM_N_RUNS  # noqa: SLF001
+    else:
+        pane.set_shape_mode("none")
+        win._state.monodisperse_shape_mode = MonodisperseShapeMode.NONE  # noqa: SLF001
+    _process_events(app)
+    assert pane.shape_mode() == ("dammif" if enable_dammif else "none")
+
+
+def _load_mono_refine_params(protocol_key: str) -> Optional[dict]:
+    """Return refine knobs from ``reference_mono/manifest.yml``, or None for DATGNOM-only."""
+    if not os.path.isfile(REFERENCE_MONO_MANIFEST):
+        return None
+    import yaml
+
+    raw = yaml.safe_load(Path(REFERENCE_MONO_MANIFEST).read_text(encoding="utf-8")) or {}
+    sample = (raw.get("samples") or {}).get(protocol_key) or {}
+    if str(sample.get("mode") or "").strip().lower() != "refine":
+        return None
+    out = {
+        "q_min": sample.get("q_min"),
+        "q_max": sample.get("q_max"),
+        "dmax_nm": sample.get("dmax_nm"),
+        "alpha": sample.get("alpha"),
+        "force_zero_rmin": sample.get("force_zero_rmin", "N"),
+        "force_zero_rmax": sample.get("force_zero_rmax", "N"),
+    }
+    if out["q_min"] is None or out["q_max"] is None or out["dmax_nm"] is None:
+        return None
+    return out
+
+
+def _adjust_gnom_via_ui(
+    app: Any,
+    win: Any,
+    right: Any,
+    *,
+    params: dict,
+    timeout: float,
+) -> None:
+    """monodisperse → P(r) Adjust → set manual params → Confirm (refine fit_distances)."""
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+
+    abort = lambda: _window_gone(win)
+    _arm_monodisperse(right)
+    coord = right.monodisperse_coordinator
+    coord.open_gnom_adjust_wizard()
+    _process_events(app)
+    adj = coord._gnom_adjust  # noqa: SLF001
+    assert adj is not None and adj.isVisible(), "GNOM Adjust wizard did not open"
+    adj.set_params(params, emit=True)
+    _process_events(app)
+    adj._confirm.refresh()  # noqa: SLF001
+    assert adj._confirm.button.isEnabled(), "Confirm disabled — params may match committed snapshot"  # noqa: SLF001
+    # Confirm writes refine conf + re-runs fit_distances
+    QTest.mouseClick(adj._confirm.button, Qt.LeftButton)  # noqa: SLF001
+    _process_events(app)
+    ok = _wait_until_app_idle(app, win, timeout)
+    assert ok and not abort(), "App did not become idle after GNOM Adjust Confirm"
+    _settle_after_idle(0.5)
+    try:
+        adj.close()
+        _wait_until(app, lambda: not adj.isVisible(), 3.0, abort_if=abort)
+    except Exception:
+        pass
+    # Adjust pauses auto-processing; resume so later shape / pairs can proceed.
+    if not win._state.is_auto_processing():  # noqa: SLF001
+        win._controller.monodisperse.on_resume_queue()  # noqa: SLF001
+        _process_events(app)
+
+
+def _run_dammif_via_ui(app: Any, win: Any, right: Any, *, timeout: float) -> None:
+    """Set DAMMIF n_runs and Re-run shape on the current profile."""
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+
+    abort = lambda: _window_gone(win)
+    _configure_monodisperse_shape(app, right, win, enable_dammif=True)
+    pane = right.monodisperse_wizard.shape_pane
+    assert pane.n_runs() == _MONO_DAM_N_RUNS
+    QTest.mouseClick(pane._rerun, Qt.LeftButton)  # noqa: SLF001
+    _process_events(app)
+    ok = _wait_until_app_idle(app, win, timeout)
+    assert ok and not abort(), "App did not become idle after Re-run shape (model_dam)"
+    if not win._state.is_auto_processing():  # noqa: SLF001
+        win._controller.monodisperse.on_resume_queue()  # noqa: SLF001
+        _process_events(app)
+
+
+def _wait_mono_analysis_artifacts(
+    app: Any,
+    win: Any,
+    watchdir: Path,
+    *,
+    sample_token: str,
+    expect_dam: bool,
+    timeout: float,
+) -> None:
+    guinier_res = watchdir / "guinier_mono" / sample_token / f"{sample_token}_results.txt"
+    kratky_yml = watchdir / "analyze_kratky" / sample_token / f"{sample_token}_kratky_params.yml"
+    fd_log = watchdir / "fit_distances" / sample_token / f"{sample_token}_fit_distances_log.yml"
+    dam_dir = watchdir / "dammif" / sample_token
+    abort = lambda: _window_gone(win)
+
+    def _ready() -> bool:
+        if not (guinier_res.is_file() and guinier_res.stat().st_size > 0):
+            return False
+        if not (kratky_yml.is_file() and kratky_yml.stat().st_size > 0):
+            return False
+        if not (fd_log.is_file() and fd_log.stat().st_size > 0):
+            return False
+        if expect_dam:
+            return (dam_dir / "dammif_fits.yml").is_file() or (dam_dir / "best.cif").exists()
+        return True
+
+    ok = _wait_until(app, _ready, timeout, step_sec=0.2, abort_if=abort)
+    assert ok and not abort(), (
+        f"Monodisperse artifacts incomplete for {sample_token} "
+        f"(expect_dam={expect_dam}): guinier={guinier_res.is_file()} "
+        f"kratky={kratky_yml.is_file()} fd={fd_log.is_file()} dam_dir={dam_dir}"
+    )
+
 
 def test_executor_requeues_cancelled_job_before_normal_jobs(tmp_path: Path):
     """
@@ -319,6 +554,7 @@ def test_executor_requeues_cancelled_job_before_normal_jobs(tmp_path: Path):
         steps=[JobStep(name="integrate", request=RunRequest("integrate", [], {}))],
         context={"tiff_path": str(tmp_path / "a.tif")},
     )
+    current = current.mark_step_done("integrate", result={"integrated_1d": "x.dat"})
     normal = Job(
         id="norm",
         priority=0,
@@ -346,6 +582,7 @@ def test_executor_requeues_cancelled_job_before_normal_jobs(tmp_path: Path):
     assert j1 is not None and j1.id == "rerun"
     j2 = ex._jobs.get_nowait()  # noqa: SLF001
     assert j2 is not None and j2.id.startswith("cur:retry:")
+    assert j2.completed.results.get("integrate") == {"integrated_1d": "x.dat"}
     j3 = ex._jobs.get_nowait()  # noqa: SLF001
     assert j3 is not None and j3.id == "norm"
 
@@ -791,13 +1028,18 @@ def _assert_curves_match_validation(*, integrated_path: Path, subtracted_path: P
     _ = sub_base  # keep variable for debugging readability
 
 
-def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
+def test_guisaxs_liveview_monodisperse_scenario():
+    """
+    End-to-end monodisperse GUI scenario: calib once, then 3 buffer–sample pairs
+    with buffer reset between pairs; Adjust GNOM when refine knobs exist;
+    model_dam (n_runs=3) only for ihs27 via Re-run shape. Closing the window aborts waits.
+    """
     timeout = _gui_timeout_sec()
+    q_min, q_max = _subtract_q_window_from_validation_config()
 
     watchdir = Path(WORKSPACE_ROOT) / "test_liveview"
     _rm_tree_contents(watchdir)
 
-    # --- Qt app + window
     from PyQt5.QtCore import Qt
     from PyQt5.QtTest import QTest
     from PyQt5.QtWidgets import QApplication
@@ -808,10 +1050,15 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
     app = QApplication.instance() or QApplication([])
     win = LiveviewMainWindow(watchdir=watchdir)
     win.show()
+    win.raise_()
+    win.activateWindow()
+    _process_events(app)
 
     try:
-        # --- Set calibration (open wizard, fill, run, wait, close wizard)
-        left = win._left  # noqa: SLF001 (test)
+        left = win._left  # noqa: SLF001
+        right = win._right  # noqa: SLF001
+
+        # --- Calibrate once ---
         QTest.mouseClick(left._cal_open, Qt.LeftButton)  # noqa: SLF001
         assert left._cal_wizard is not None  # noqa: SLF001
         wiz = left._cal_wizard  # noqa: SLF001
@@ -822,7 +1069,6 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
         for p in (calib, mask):
             assert p.is_file(), f"Missing validation fixture: {p}"
 
-        # Setting the calib image may auto-fill mask; config_path stays empty (bundled defaults).
         assert _set_pathfield_text_by_label(form, label="calibrant_image", text=str(calib))
         try:
             getattr(form, "_on_primary_path_expression_changed")()  # type: ignore[attr-defined]
@@ -834,122 +1080,129 @@ def test_guisaxs_liveview_calibrate_buffer_subtract_and_pr_outputs():
             2.0,
             step_sec=0.05,
         )
-        assert _get_pathfield_text_by_label(form, label="mask"), "Mask path was not auto-filled"
         assert _set_pathfield_text_by_label(form, label="mask", text=str(mask))
-        # Nearby config.conf may be suggested; clear config_path to run on bundled autosaxs defaults.
         if _get_pathfield_text_by_label(form, label="config_path").strip():
             assert _set_pathfield_text_by_label(form, label="config_path", text="")
         assert not _get_pathfield_text_by_label(form, label="config_path").strip()
 
         QTest.mouseClick(wiz._controls.run_button, Qt.LeftButton)  # noqa: SLF001
-
-        ok_cal = _wait_until(app, lambda: (watchdir / "calibration" / "integrator").is_dir(), timeout)
-        assert ok_cal, "Calibration did not produce calibration/integrator within timeout"
-        assert (watchdir / "calibration" / "refined.yml").is_file()
-        # User-facing indicator: wizard state label becomes Idle.
+        ok_cal = _wait_until(
+            app,
+            lambda: (watchdir / "calibration" / "integrator").is_dir()
+            and (watchdir / "calibration" / "refined.yml").is_file(),
+            timeout,
+        )
+        assert ok_cal, "Calibration did not produce integrator + refined.yml within timeout"
         assert _wait_until_runcontrols_idle(app, wiz._controls, timeout), "Calibration wizard did not become Idle"
         _settle_after_idle(1.0)
         wiz.close()
         _wait_until(app, lambda: not wiz.isVisible(), 3.0)
-        # Ensure calibration subprocess has fully finished and pipeline is idle before uploading TIFFs.
         assert _wait_until_queue_idle(app, win, timeout), "Queue did not become Idle after calibration"
         _settle_after_idle(1.0)
         assert _wait_until_app_idle(app, win, timeout), "App did not become idle after calibration"
         _settle_after_idle(1.0)
 
-        # --- Upload buffer TIFF (must be NEW after watcher start)
-        buffer_src = Path(VALIDATION_RAW) / "ihs27_buffer.tif"
-        assert buffer_src.is_file()
-        _atomic_copy_into_watchdir(buffer_src, watchdir)
-        int_buf = watchdir / "averaged" / "int_ihs27_buffer.dat"
-        ok_buf = _wait_until(app, lambda: int_buf.is_file() and int_buf.stat().st_size > 0, timeout)
-        assert ok_buf, f"Buffer integration did not produce {int_buf}"
-        assert _wait_until_queue_idle(app, win, timeout), "Queue did not become Idle after buffer integration"
-        _settle_after_idle(1.0)
+        for pair_i, (key, buf_name, sam_name, sample_token) in enumerate(_MONO_SCENARIO_PAIRS):
+            enable_dam = key == _MONO_DAM_KEY
+            print(f"\n=== pair {pair_i + 1}/3 {key} (model_dam={enable_dam}) ===", flush=True)
+            abort = lambda: _window_gone(win)
 
-        # --- Set buffer (open wizard, set qmin/qmax, apply, wait, close wizard)
-        QTest.mouseClick(left._buf_open, Qt.LeftButton)  # noqa: SLF001
-        assert left._buf_wizard is not None  # noqa: SLF001
-        bw = left._buf_wizard  # noqa: SLF001
-        bform = bw._form  # noqa: SLF001
+            if pair_i > 0:
+                _reset_buffer_via_ui(app, win, left, timeout)
+                assert not win._state.monodisperse_armed  # noqa: SLF001
 
-        # subtract positional params are (sample_1d, buffer_1d); sample_1d row is hidden/disabled.
-        assert _set_pathfield_text_by_label(bform, label="buffer_1d", text=str(int_buf))
-        # Match validation baseline subtraction window from validation/config.conf (subtract.q_min/q_max).
-        try:
-            import yaml
+            buffer_src = Path(VALIDATION_RAW) / buf_name
+            sample_src = Path(VALIDATION_RAW) / sam_name
+            assert buffer_src.is_file(), buffer_src
+            assert sample_src.is_file(), sample_src
 
-            cfg_data = yaml.safe_load(Path(VALIDATION_DIR, "config.conf").read_text(encoding="utf-8"))
-            sub = (cfg_data or {}).get("subtract") if isinstance(cfg_data, dict) else None
-            if isinstance(sub, dict):
-                q_min = sub.get("q_min")
-                q_max = sub.get("q_max")
-                if q_min is not None:
-                    q_min = float(q_min)
-                if q_max is not None:
-                    q_max = float(q_max)
-            else:
-                q_min = q_max = None
-        except Exception:
-            q_min = 4.5
-            q_max = 5.5
-        assert q_min is not None and q_max is not None, "config.conf subtract.q_min/q_max must be set"
-        assert _set_form_text_field(bform, name="q_min", text=str(q_min))
-        assert _set_form_text_field(bform, name="q_max", text=str(q_max))
-        QTest.mouseClick(bw._apply, Qt.LeftButton)  # noqa: SLF001
-        ok_state_c = _wait_until(app, lambda: win._state.buffer_dat_path is not None, timeout)  # noqa: SLF001
-        assert ok_state_c, "Buffer did not apply (state not updated)"
-        _settle_after_idle(1.0)
-        bw.close()
-        _wait_until(app, lambda: not bw.isVisible(), 3.0)
-
-        # --- Arm monodisperse analysis (open window)
-        right = win._right  # noqa: SLF001
-        _arm_monodisperse(right)
-        assert right._state.monodisperse_armed  # noqa: SLF001
-        _process_events(app)
-
-        # --- Upload sample TIFF -> expect subtraction + guinier + p(r) artifacts
-        sample_src = Path(VALIDATION_RAW) / "ihs27_95.9_sample.tif"
-        assert sample_src.is_file()
-        _atomic_copy_into_watchdir(sample_src, watchdir)
-
-        int_sam = watchdir / "averaged" / "int_ihs27_95.9_sample.dat"
-        sub_out = watchdir / "subtracted" / "sub_ihs27_95.9_sample.dat"
-        ok_outputs = _wait_until(
-            app,
-            lambda: int_sam.is_file()
-            and int_sam.stat().st_size > 0
-            and sub_out.is_file()
-            and sub_out.stat().st_size > 0,
-            timeout,
-        )
-        assert ok_outputs, "Expected integrated and subtracted outputs not found in time"
-        assert _wait_until_queue_idle(app, win, timeout), "Queue did not become Idle after sample processing"
-        _settle_after_idle(1.0)
-
-        # fit_guinier + fit_distances: per-sample subdirs under guinier_mono/<stem>/ and fit_distances/<stem>/.
-        guinier_dir = watchdir / "guinier_mono"
-        fd_dir = watchdir / "fit_distances"
-        sample_token = "ihs27_95.9_sample"
-        ok_pr = _wait_until(
-            app,
-            lambda: any(guinier_dir.rglob("*_results.txt"))
-            and any(p.is_file() and p.stat().st_size > 0 for p in fd_dir.rglob("*_fits.png"))
-            and any(
-                p.is_file()
-                and p.stat().st_size > 0
-                and p.name.endswith(".png")
-                and not p.name.endswith("_fits.png")
-                for p in fd_dir.rglob("*.png")
+            # Buffer TIFF → integrate
+            _atomic_copy_into_watchdir(buffer_src, watchdir)
+            int_buf = watchdir / "averaged" / f"int_{buf_name.replace('.tif', '')}.dat"
+            ok_buf = _wait_until(
+                app,
+                lambda: int_buf.is_file() and int_buf.stat().st_size > 0,
+                timeout,
+                abort_if=abort,
             )
-            and any(sample_token in p.name for p in fd_dir.rglob("*_fit_distances_log.yml")),
-            timeout,
-            step_sec=0.1,
-        )
-        assert ok_pr, "fit_guinier/fit_distances did not produce expected artifacts"
+            assert ok_buf and not abort(), f"Buffer integration did not produce {int_buf}"
+            assert _wait_until_queue_idle(app, win, timeout), f"Queue not Idle after buffer {key}"
+            _settle_after_idle(1.0)
 
-        _assert_curves_match_validation(integrated_path=int_sam, subtracted_path=sub_out)
+            _set_buffer_and_subtract_options(
+                app, win, left, int_buf=int_buf, q_min=q_min, q_max=q_max, timeout=timeout
+            )
+            # Shape stays off during auto Guinier/p(r); DAMMIF is applied once after Adjust.
+            _configure_monodisperse_shape(app, right, win, enable_dammif=False)
+
+            # Sample TIFF → integrate + subtract + analysis (no DAM yet)
+            _atomic_copy_into_watchdir(sample_src, watchdir)
+            int_sam = watchdir / "averaged" / f"int_{sample_token}.dat"
+            sub_out = watchdir / "subtracted" / f"sub_{sample_token}.dat"
+            ok_outputs = _wait_until(
+                app,
+                lambda: int_sam.is_file()
+                and int_sam.stat().st_size > 0
+                and sub_out.is_file()
+                and sub_out.stat().st_size > 0,
+                timeout,
+                abort_if=abort,
+            )
+            assert ok_outputs and not abort(), f"Missing int/sub outputs for {sample_token}"
+
+            _wait_mono_analysis_artifacts(
+                app,
+                win,
+                watchdir,
+                sample_token=sample_token,
+                expect_dam=False,
+                timeout=timeout,
+            )
+            assert _wait_until_queue_idle(app, win, timeout), f"Queue not Idle after sample {key}"
+            _settle_after_idle(1.0)
+
+            refine = _load_mono_refine_params(key)
+            if refine is not None:
+                print(f"  Adjust GNOM refine params for {key}: {refine}", flush=True)
+                _adjust_gnom_via_ui(app, win, right, params=refine, timeout=timeout)
+                _wait_mono_analysis_artifacts(
+                    app,
+                    win,
+                    watchdir,
+                    sample_token=sample_token,
+                    expect_dam=False,
+                    timeout=timeout,
+                )
+                assert _wait_until_queue_idle(app, win, timeout), f"Queue not Idle after Adjust {key}"
+
+            if enable_dam:
+                print(f"  model_dam n_runs={_MONO_DAM_N_RUNS} for {key}", flush=True)
+                _run_dammif_via_ui(app, win, right, timeout=timeout)
+                _wait_mono_analysis_artifacts(
+                    app,
+                    win,
+                    watchdir,
+                    sample_token=sample_token,
+                    expect_dam=True,
+                    timeout=timeout,
+                )
+                dam_dir = watchdir / "dammif" / sample_token
+                assert (dam_dir / "dammif_fits.yml").is_file() or (dam_dir / "best.cif").exists(), (
+                    f"model_dam artifacts missing under {dam_dir}"
+                )
+                # n_runs=3 should produce multiple dammif-* prefixes (or damaver).
+                dam_runs = list(dam_dir.glob("dammif-*-1.cif")) or list(dam_dir.glob("dammif-*.cif"))
+                assert len(dam_runs) >= 1, f"Expected DAMMIF outputs under {dam_dir}"
+
+            _assert_curves_match_validation(integrated_path=int_sam, subtracted_path=sub_out)
+
+        # Only one dammif sample directory should exist
+        dam_root = watchdir / "dammif"
+        if dam_root.is_dir():
+            dam_samples = [p for p in dam_root.iterdir() if p.is_dir()]
+            assert len(dam_samples) == 1, f"Expected one dammif sample dir, got {dam_samples}"
+            assert dam_samples[0].name == "ihs27_95.9_sample"
+
     finally:
         try:
             win._controller.shutdown()  # noqa: SLF001

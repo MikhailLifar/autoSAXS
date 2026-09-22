@@ -35,8 +35,8 @@ from .optimize import (
     _candidate_from_out_text,
     _guinier_from_profile,
     _optimize_rg_nm,
-    _q_to_first_point_1based,
 )
+from autosaxs.skill.gnom_fit_common import resolve_first_last
 from .quality_io import _assess_and_write_pr_quality
 from autosaxs.core.atsas_gnom import normalize_force_zero
 from .runners import (
@@ -57,6 +57,8 @@ def fit_distances(
     rg_nm: Optional[float] = None,
     first: Optional[int] = None,
     last: Optional[int] = None,
+    q_min: Optional[float] = None,
+    q_max: Optional[float] = None,
     smooth: Optional[float] = None,
     dmax_nm: Optional[float] = None,
     alpha: Optional[float] = None,
@@ -73,8 +75,10 @@ def fit_distances(
     - `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
     - `output_dir` (str, default `.`): Directory where the outputs are written (one subdirectory per input profile).
     - `rg_nm` (float | None, default `None`): Expected Rg in nm, usually passed from Guinier analysis. If omitted, in-process Guinier analysis (`fit_guinier`) is run for an Rg span, then 1D Rg optimization in `[0, 1.5 × rg_max]` (30 s max) takes place.
-    - `first` (int | None, default `None`): DATGNOM `--first` (1-based point index). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
-    - `last` (int | None, default `None`): DATGNOM `--last`. If omitted, `--last` is not passed to DATGNOM.
+    - `first` (int | None, default `None`): DATGNOM `--first` (1-based point index). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
+    - `last` (int | None, default `None`): DATGNOM `--last`. If omitted, taken from `q_max` when set; otherwise `--last` is not passed to DATGNOM.
+    - `q_min` (float | None, default `None`): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
+    - `q_max` (float | None, default `None`): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`.
     - `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`. Unused when `dmax_nm` is set (GNOM refine).
     - `dmax_nm` (float | None, default `None`): When set, skip DATGNOM search and run monodisperse GNOM (`--rmax`) with this Dmax (nm). Still writes the Dmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
     - `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted, GNOM chooses automatically. Ignored when `dmax_nm` is unset.
@@ -155,6 +159,8 @@ def fit_distances(
         rg_nm=None if rg_nm is None else float(rg_nm),
         first=first,
         last=last,
+        q_min=None if q_min is None else float(q_min),
+        q_max=None if q_max is None else float(q_max),
         smooth=smooth,
         dmax_nm=None if dmax_nm is None else float(dmax_nm),
         alpha=None if alpha is None else float(alpha),
@@ -175,6 +181,8 @@ def fit_distances(
         "rg_nm",
         "first",
         "last",
+        "q_min",
+        "q_max",
         "smooth",
         "dmax_nm",
         "alpha",
@@ -190,6 +198,8 @@ def _fit_distances_paths(
     rg_nm: Optional[float] = None,
     first: Optional[int] = None,
     last: Optional[int] = None,
+    q_min: Optional[float] = None,
+    q_max: Optional[float] = None,
     smooth: Optional[float] = None,
     dmax_nm: Optional[float] = None,
     alpha: Optional[float] = None,
@@ -222,6 +232,8 @@ def _fit_distances_paths(
     user_rg_nm = rg_nm
     user_first = first
     user_last = last
+    user_q_min = q_min
+    user_q_max = q_max
     user_smooth = smooth
     user_dmax_nm = dmax_nm
     user_alpha = alpha
@@ -229,7 +241,9 @@ def _fit_distances_paths(
     fz_rmax = normalize_force_zero(force_zero_rmax, default="Y")
 
     n_pts = int(len(q_nm))
-    need_guinier = (user_first is None) or (user_dmax_nm is None and user_rg_nm is None)
+    need_guinier = (user_first is None and user_q_min is None) or (
+        user_dmax_nm is None and user_rg_nm is None
+    )
     guinier_info: Optional[Dict[str, Any]] = None
     if need_guinier:
         if event_bus:
@@ -262,26 +276,22 @@ def _fit_distances_paths(
         except (TypeError, ValueError):
             rg_guinier_nm_val = None
 
-    if user_first is not None:
-        first_pt = int(user_first)
-    else:
-        if guinier_info is None or guinier_info.get("q_min") is None:
-            raise RuntimeError("fit_distances: cannot derive --first without fit_guinier q_min.")
-        first_pt = _q_to_first_point_1based(q_nm, float(guinier_info["q_min"]))
-
-    last_pt: Optional[int] = int(user_last) if user_last is not None else None
+    fallback_q_min = None
+    if guinier_info is not None and guinier_info.get("q_min") is not None:
+        try:
+            fallback_q_min = float(guinier_info["q_min"])
+        except (TypeError, ValueError):
+            fallback_q_min = None
+    first_pt, last_pt = resolve_first_last(
+        q_nm,
+        first=user_first,
+        last=user_last,
+        q_min=user_q_min,
+        q_max=user_q_max,
+        fallback_q_min=fallback_q_min,
+        skill_id="fit_distances",
+    )
     smooth_val = float(user_smooth) if user_smooth is not None else 2.0
-
-    if first_pt < 1 or first_pt >= n_pts:
-        raise ValueError(
-            f"fit_distances: require 1 <= first < n_points ({n_pts}); got first={first_pt}",
-        )
-    if last_pt is not None:
-        if last_pt < 1 or last_pt > n_pts or first_pt >= last_pt:
-            raise ValueError(
-                f"fit_distances: require 1 <= first < last <= n_points ({n_pts}); "
-                f"got first={first_pt}, last={last_pt}",
-            )
 
     if user_dmax_nm is not None:
         dmax_f = float(user_dmax_nm)

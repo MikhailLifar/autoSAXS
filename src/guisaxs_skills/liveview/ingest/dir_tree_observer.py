@@ -180,7 +180,12 @@ class TreeScanEngine:
         return prev is None or prev != snap
 
     def _prune_missing_tiffs(self, dir_path: Path, present: Set[str]) -> None:
-        """Drop cache entries for TIFFs that no longer exist in ``dir_path``."""
+        """Drop cache entries for TIFFs that no longer exist in ``dir_path``.
+
+        Only prune after a successful directory listing. Never drop a path that
+        still exists on disk (listing gaps / transient ``glob`` failures must not
+        look like delete→recreate, or the same TIFF is re-emitted forever).
+        """
         try:
             dir_key = str(dir_path.resolve())
         except OSError:
@@ -190,10 +195,15 @@ class TreeScanEngine:
             if file_key in present:
                 continue
             try:
-                if str(Path(file_key).resolve().parent) == dir_key:
-                    stale.append(file_key)
+                p = Path(file_key)
+                if str(p.resolve().parent) != dir_key:
+                    continue
+                # Positive existence check: do not trust an empty ``present`` alone.
+                if p.is_file():
+                    continue
             except OSError:
                 continue
+            stale.append(file_key)
         if not stale:
             return
         for file_key in stale:
@@ -203,9 +213,11 @@ class TreeScanEngine:
     def _scan_tiffs_in_dir(self, dir_path: Path) -> List[str]:
         found: List[str] = []
         present: Set[str] = set()
+        listed_ok = False
         for pattern in ("*.tif", "*.tiff"):
             try:
                 entries = list(dir_path.glob(pattern))
+                listed_ok = True
             except OSError:
                 continue
             for f in entries:
@@ -218,7 +230,9 @@ class TreeScanEngine:
                 present.add(file_key)
                 if self._record_tiff(file_key, snap):
                     found.append(file_key)
-        self._prune_missing_tiffs(dir_path, present)
+        # If every glob failed, skip prune — an empty ``present`` would wipe the cache.
+        if listed_ok:
+            self._prune_missing_tiffs(dir_path, present)
         return found
 
     def _scan_directory(
@@ -391,6 +405,25 @@ class TreeDirObserver(QObject):
     def clear(self) -> None:
         self._pending.clear()
         self._engine.clear_hot_dirs()
+
+    def note_path_stat(self, path: str, snap: Optional[FileStatSnapshot] = None) -> None:
+        """Align tree file cache with an already-handled revision (ingress ack)."""
+        raw = (path or "").strip()
+        if not raw or not is_tiff_path(raw):
+            return
+        try:
+            key = str(Path(raw).expanduser().resolve())
+        except OSError:
+            return
+        if snap is None:
+            snap = _try_stat(key)
+        if snap is None:
+            return
+        prev = self._cache.files.get(key)
+        self._cache.files[key] = snap
+        if prev != snap:
+            self._cache.dirty = True
+        self._pending.pop(key, None)
 
     def pending_paths(self) -> Tuple[str, ...]:
         return tuple(self._pending.keys())

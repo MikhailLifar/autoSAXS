@@ -1,9 +1,77 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+import time
+from dataclasses import dataclass, field, replace
+from enum import Enum
+from typing import Any, Dict, List, Mapping, Optional
 
 from ...core.models import RunRequest
+
+
+class PlanPhase(str, Enum):
+    """Coarse pipeline stages for phase-boundary replanning."""
+
+    INTEGRATE = "integrate"
+    SUBTRACT = "subtract"
+    ANALYSIS = "analysis"
+    REPORT = "report"
+
+
+@dataclass(frozen=True)
+class CompletedWork:
+    """
+    Progress already finished for one Job run.
+
+    Owned by ``Job.completed`` (not the executor). ``plan_for(..., completed=)``
+    uses phases / step_names to return only remaining steps; ``results`` feeds
+    placeholder resolution for later steps (and survives cancel-requeue).
+
+    ``phases``: finished coarse stages (INTEGRATE / SUBTRACT / REPORT).
+    ``step_names``: finished individual steps (ANALYSIS mid-chain so arming can
+    append later analysis without re-running finished ones).
+    ``results``: skill result dicts keyed by step name.
+    """
+
+    phases: frozenset[PlanPhase] = frozenset()
+    step_names: frozenset[str] = frozenset()
+    results: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+    def is_empty(self) -> bool:
+        return not self.phases and not self.step_names
+
+    def with_step(
+        self,
+        step_name: str,
+        result: Mapping[str, Any] | None = None,
+    ) -> CompletedWork:
+        name = (step_name or "").strip()
+        if not name:
+            return self
+        names = frozenset(set(self.step_names) | {name})
+        phases = set(self.phases)
+        phase = step_phase(name)
+        if phase in (PlanPhase.INTEGRATE, PlanPhase.SUBTRACT, PlanPhase.REPORT):
+            phases.add(phase)
+        new_results = dict(self.results)
+        if result is not None:
+            new_results[name] = dict(result)
+        return CompletedWork(
+            phases=frozenset(phases),
+            step_names=names,
+            results=new_results,
+        )
+
+
+def step_phase(step_name: str) -> PlanPhase:
+    """Map a job step name to its coarse plan phase."""
+    n = (step_name or "").strip()
+    if n in ("integrate", "integrate_proxy"):
+        return PlanPhase.INTEGRATE
+    if n == "subtract":
+        return PlanPhase.SUBTRACT
+    if n == "report_individual":
+        return PlanPhase.REPORT
+    return PlanPhase.ANALYSIS
 
 
 @dataclass(frozen=True)
@@ -26,16 +94,52 @@ def is_manual_job(job: Job) -> bool:
 @dataclass(frozen=True)
 class Job:
     """
-    Generic job executed sequentially by the liveview job executor.
+    Executable unit: remaining steps, context, and **owned** completion progress.
 
-    `priority`: higher values run earlier (FIFO among same priority).
-    `context`: small metadata for UI refresh (e.g. tiff_path, tiff_stem).
+    ``completed`` is the sole record of finished work for this run. The executor
+    never keeps a parallel progress store — it only calls the methods below and
+    holds the current ``Job`` value.
     """
 
     id: str
     priority: int = 0
     steps: List[JobStep] = field(default_factory=list)
     context: Dict[str, Any] = field(default_factory=dict)
+    completed: CompletedWork = field(default_factory=CompletedWork)
+
+    def mark_step_done(
+        self,
+        step_name: str,
+        *,
+        result: Mapping[str, Any] | None = None,
+    ) -> Job:
+        """Record a finished step and optional skill result (new frozen Job)."""
+        return replace(self, completed=self.completed.with_step(step_name, result))
+
+    def with_remaining_steps(
+        self,
+        steps: List[JobStep],
+        *,
+        context: Mapping[str, Any] | None = None,
+    ) -> Job:
+        """Replace the remaining step list after ``plan_for(..., completed=)``."""
+        if context is None:
+            return replace(self, steps=list(steps))
+        return replace(self, steps=list(steps), context=dict(context))
+
+    def as_retry(self, *, priority: int) -> Job:
+        """
+        Cancel-requeue: same ``completed`` (phases + results) / context / steps,
+        new id and priority.
+
+        ``_start_job`` replans from ``completed`` so finished work is not repeated
+        and placeholders still resolve from stored results.
+        """
+        return replace(
+            self,
+            id=f"{self.id}:retry:{time.time_ns()}",
+            priority=int(priority),
+        )
 
 
 class PlaceholderError(RuntimeError):
@@ -108,4 +212,3 @@ def resolve_request_placeholders(req: RunRequest, *, results_by_step: Dict[str, 
         else:
             opts[k] = v
     return RunRequest(skill_name=req.skill_name, positional=pos, options=opts)
-

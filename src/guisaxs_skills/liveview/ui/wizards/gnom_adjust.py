@@ -14,13 +14,13 @@ from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import (
     QCheckBox,
     QDialog,
+    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QSizePolicy,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -35,6 +35,7 @@ from ....ui.widgets.spin_sliders import AlphaSpinSlider, LengthNmSpinSlider
 from ..panels.right.monodisperse.format_display import format_gnom_passport_html
 from ..panels.right.monodisperse.plots import GnomFitPlot, PrPlot
 from .adjust_confirm import AdjustConfirmController
+from .q_fit_bounds import first_last_from_q_values, make_q_max_spin, make_q_min_spin, q_bounds_from_params
 
 _PREVIEW_DEBOUNCE_MS = 100
 
@@ -44,7 +45,7 @@ class GnomAdjustWizardDialog(QDialog):
     Interactive GNOM refine wizard.
 
     Left: P(r) (top) and I(q) fit (bottom).
-    Right: first/last/Dmax/alpha/boundary checkboxes, Restore auto, passport.
+    Right: q-min/q-max/Dmax/alpha/boundary checkboxes, Restore auto, passport.
     """
 
     params_changed = pyqtSignal()
@@ -105,15 +106,8 @@ class GnomAdjustWizardDialog(QDialog):
         left.addWidget(pr_box, 1)
         left.addWidget(iq_box, 1)
 
-        self._first = QSpinBox()
-        self._first.setMinimum(1)
-        self._first.setMaximum(99999)
-        self._first.setValue(1)
-        self._last = QSpinBox()
-        self._last.setMinimum(0)
-        self._last.setMaximum(99999)
-        self._last.setSpecialValueText("(none)")
-        self._last.setValue(0)
+        self._q_min = make_q_min_spin()
+        self._q_max = make_q_max_spin()
         self._dmax = LengthNmSpinSlider()
         self._alpha = AlphaSpinSlider()
         self._p0 = QCheckBox("P(0) = 0")
@@ -141,8 +135,8 @@ class GnomAdjustWizardDialog(QDialog):
         self._lbl_passport.setContentsMargins(0, 0, 0, 0)
 
         form = QFormLayout()
-        form.addRow("first", self._first)
-        form.addRow("last", self._last)
+        form.addRow("q-min (nm⁻¹)", self._q_min)
+        form.addRow("q-max (nm⁻¹)", self._q_max)
         form.addRow("Dmax (nm)", self._dmax)
         form.addRow("alpha", self._alpha)
 
@@ -181,8 +175,8 @@ class GnomAdjustWizardDialog(QDialog):
         self._preview_debounce.setSingleShot(True)
         self._preview_debounce.setInterval(_PREVIEW_DEBOUNCE_MS)
         self._preview_debounce.timeout.connect(self._run_preview)
-        self._first.valueChanged.connect(self._schedule_preview)
-        self._last.valueChanged.connect(self._schedule_preview)
+        self._q_min.valueChanged.connect(self._schedule_preview)
+        self._q_max.valueChanged.connect(self._schedule_preview)
         self._dmax.valueChanged.connect(self._schedule_preview)
         self._alpha.valueChanged.connect(self._schedule_preview)
         self._p0.toggled.connect(self._schedule_preview)
@@ -192,7 +186,7 @@ class GnomAdjustWizardDialog(QDialog):
         if running:
             self._preview_debounce.stop()
         enabled = not running
-        for w in (self._first, self._last, self._dmax, self._alpha, self._p0, self._pdmax, self._btn_restore):
+        for w in (self._q_min, self._q_max, self._dmax, self._alpha, self._p0, self._pdmax, self._btn_restore):
             w.setEnabled(enabled)
         self._confirm.set_controls_enabled(enabled)
 
@@ -228,6 +222,7 @@ class GnomAdjustWizardDialog(QDialog):
         self._atsas_dat_path = ""
         self._q_nm = None
         self._pause_emitted = False
+        self._ensure_atsas_dat()
         params = dict(working_params or {})
         if not params and self._auto_snapshot:
             params = dict(self._auto_snapshot)
@@ -251,7 +246,7 @@ class GnomAdjustWizardDialog(QDialog):
                 pass
         self._apply_dmax_slider_span()
         if gnom_out_path and os.path.isfile(gnom_out_path):
-            self._fit_plot.plot_from_gnom_out(gnom_out_path)
+            self._fit_plot.plot_from_dat_and_gnom_out(self._profile_path, gnom_out_path)
             self._plot_pr_adjust(gnom_out_path)
         if passport_html:
             self.set_passport(html_text=passport_html)
@@ -261,6 +256,8 @@ class GnomAdjustWizardDialog(QDialog):
             self._lbl_passport.setText(passport_text)
             self._lbl_passport.setStyleSheet("")
         self._confirm.set_committed(self.gnom_params())
+        # Refresh I(q)/P(r) for the loaded q-min/q-max (disk .out may differ).
+        self._run_preview()
 
     def _apply_dmax_slider_span(self) -> None:
         """Slider domain 0 … 4× best-auto Dmax (fallback: current Dmax); spin can exceed."""
@@ -286,16 +283,19 @@ class GnomAdjustWizardDialog(QDialog):
             return
         self._preview_debounce.stop()
         self._block_params = True
-        widgets = (self._first, self._last, self._dmax, self._alpha, self._p0, self._pdmax)
+        widgets = (self._q_min, self._q_max, self._dmax, self._alpha, self._p0, self._pdmax)
         for w in widgets:
             w.blockSignals(True)
         try:
-            if params.get("first") is not None:
-                self._first.setValue(max(1, int(params["first"])))
-            if params.get("last") is not None:
-                self._last.setValue(max(0, int(params["last"])))
-            elif "last" in params and params.get("last") is None:
-                self._last.setValue(0)
+            q_lo, q_hi = q_bounds_from_params(params, self._q_nm)
+            if q_lo is not None:
+                self._q_min.setValue(float(q_lo))
+            if q_hi is not None:
+                self._q_max.setValue(float(q_hi))
+            elif "q_max" in params and params.get("q_max") is None:
+                self._q_max.setValue(0.0)
+            elif "last" in params and params.get("last") is None and params.get("q_max") is None:
+                self._q_max.setValue(0.0)
             if params.get("dmax_nm") is not None:
                 self._dmax.setValue(float(params["dmax_nm"]))
             if params.get("alpha") is not None:
@@ -319,14 +319,14 @@ class GnomAdjustWizardDialog(QDialog):
 
     def gnom_params(self) -> dict:
         out: dict = {
-            "first": int(self._first.value()),
+            "q_min": float(self._q_min.value()),
             "dmax_nm": float(self._dmax.value()),
             "force_zero_rmin": "Y" if self._p0.isChecked() else "N",
             "force_zero_rmax": "Y" if self._pdmax.isChecked() else "N",
         }
-        last = int(self._last.value())
-        if last > 0:
-            out["last"] = last
+        q_max = float(self._q_max.value())
+        if q_max > 0.0:
+            out["q_max"] = q_max
         alpha = float(self._alpha.value())
         if alpha > 0.0:
             out["alpha"] = alpha
@@ -363,7 +363,7 @@ class GnomAdjustWizardDialog(QDialog):
             # Persist path may become the new auto reference after DATGNOM auto.
             if "datgnom" in os.path.basename(gnom_out_path).lower():
                 self._auto_gnom_out = gnom_out_path
-            self._fit_plot.plot_from_gnom_out(gnom_out_path)
+            self._fit_plot.plot_from_dat_and_gnom_out(self._profile_path, gnom_out_path)
             self._plot_pr_adjust(gnom_out_path)
 
     def _on_restore_auto(self) -> None:
@@ -410,13 +410,21 @@ class GnomAdjustWizardDialog(QDialog):
             return False
 
     def _run_preview(self) -> None:
-        if not self._ensure_atsas_dat():
+        if not self._ensure_atsas_dat() or self._q_nm is None:
             self.set_passport(text="No profile available for preview.", poor=True)
             return
         params = self.gnom_params()
         dmax = float(params["dmax_nm"])
-        first = int(params["first"])
-        last = params.get("last")
+        try:
+            first, last = first_last_from_q_values(
+                self._q_nm,
+                q_min=params.get("q_min"),
+                q_max=params.get("q_max"),
+            )
+        except (TypeError, ValueError, RuntimeError) as exc:
+            msg = html.escape(f"Invalid q-min/q-max: {exc}")
+            self.set_passport(html_text=f'<span style="color:{COLOR_QUALITY_POOR}">{msg}</span>')
+            return
         alpha = params.get("alpha")
         out_path = (self._preview_tmp or "") + ".out"
         ok, _rc, stderr, out_text = run_gnom_pr(
@@ -435,7 +443,7 @@ class GnomAdjustWizardDialog(QDialog):
             self.set_passport(html_text=f'<span style="color:{COLOR_QUALITY_POOR}">{msg}</span>')
             return
         try:
-            self._fit_plot.plot_from_gnom_out(out_path)
+            self._fit_plot.plot_from_dat_and_gnom_out(self._profile_path, out_path)
             self._plot_pr_adjust(out_path)
         except Exception:
             pass

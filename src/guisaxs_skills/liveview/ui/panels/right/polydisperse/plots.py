@@ -53,33 +53,17 @@ class _BaseMplPlot(FigureCanvas):
 
 class GnomFitPlot(_BaseMplPlot):
     def plot_from_gnom_out(self, gnom_out_path: str) -> None:
-        if not gnom_out_path or not os.path.isfile(gnom_out_path):
-            self._show_status("No GNOM .out")
-            return
-        try:
-            parsed = parse_gnom_out(gnom_out_path)
-            iq = parsed.get("iq_table")
-        except Exception:
-            self._show_status("GNOM parse error")
-            return
-        if not iq or len(iq) != 4:
-            self._show_status("No I(q) table in .out")
-            return
-        q, i_exp, sigma, i_fit = (np.asarray(a, dtype=float) for a in iq)
-        m = np.isfinite(q) & np.isfinite(i_exp) & (i_exp > 0) & np.isfinite(i_fit) & (i_fit > 0)
-        if not m.any():
-            self._show_status("Empty GNOM I(q)")
+        self.plot_from_dat_and_gnom_out("", gnom_out_path)
+
+    def plot_from_dat_and_gnom_out(self, profile_path: str, gnom_out_path: str) -> None:
+        from ..gnom_iq_plot import draw_gnom_iq_on_ax
+
+        err = draw_gnom_iq_on_ax(self._ax, gnom_out_path, profile_path=profile_path or "")
+        if err:
+            self._show_status(err)
             return
         self._click_path = gnom_out_path
         self._click_viewer = "gnom_iq"
-        self._ax.clear()
-        self._ax.scatter(q[m], i_exp[m], s=8, alpha=0.7, label="exp")
-        self._ax.plot(q[m], i_fit[m], "r-", lw=1.2, label="GNOM")
-        self._ax.set_yscale("log")
-        self._ax.set_xlabel("q (nm⁻¹)")
-        self._ax.set_ylabel("I")
-        self._ax.legend(fontsize=7)
-        self._ax.grid(True, alpha=0.2)
         self._fig.tight_layout()
         self.draw_idle()
         self.setCursor(Qt.PointingHandCursor)

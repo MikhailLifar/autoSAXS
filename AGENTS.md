@@ -113,7 +113,7 @@ autosaxs/
 | report_individual | `skill/report_individual.py` | Per-sample PDF from fragments |
 | report_summary | `skill/report_summary.py` | Pipeline summary PDF |
 
-**Adding a skill:** register in `_SKILL_IMPORTS` (`skill/__init__.py`), add to `SKILL_ORDER`, extend `tests/test_skill.py`.
+**Adding a skill:** register in `_SKILL_IMPORTS` (`skill/__init__.py`), add to `SKILL_ORDER`, extend `tests/test_skills_real_data.py` when the skill belongs on the real-data path, otherwise add a focused case in `tests/test_skill.py` (edges / skills not yet on that path).
 
 ### `autosaxs/core/` — primitives
 
@@ -194,16 +194,19 @@ guisaxs_skills/
 | `logic/runner_qprocess.py` | `SkillRunner` — subprocess CLI, streams logs |
 | `logic/app_relaunch.py` | Detached liveview process relaunch (watchdir change, post-update) |
 | `logic/autosaxs_cli.py` | Blocking `get-default-config` helper |
-| `liveview/pipeline/plan.py` | `plan_for(session, sample)` — sole pipeline decision owner |
-| `liveview/pipeline/executor.py` | Queue worker; consumes `plan_for` + session `auto_processing` |
-| `liveview/session/state.py` | Session facts (intake, `auto_processing`, calib, buffer, analysis) |
+| `liveview/pipeline/plan.py` | `plan_for(session, sample, completed=?)` — sole pipeline decision owner |
+| `liveview/pipeline/executor.py` | Queue worker facade; `manual_jobs` / `artifact_enrichment`; progress via `Job` API |
+| `liveview/session/api.py` | `LiveviewSession` — facts + safe mutations (intake, Auto/Manual, buffer, arming) |
+| `liveview/session/state.py` | Session fact bag |
 | `liveview/session/sample.py` / `sample_store.py` | `Sample` identity + history/boarding store |
 | `liveview/services/history/middle_from_stem.py` | `sync_middle_view` — middle layout + content |
+| `liveview/services/history/right_artifacts.py` | `present_right` — right analysis live/disk entry |
+| `liveview/ingest/ingress.py` | `RevisionIngress` — single revision front door |
 | `liveview/ingest/sample_revision.py` | On-disk sample revision (frame or `.dat`) |
 | `liveview/ingest/watcher.py` | FLAT mode: watchdog + known-path baseline |
 | `liveview/ingest/dir_tree_observer.py` | TREE mode: hierarchical mtime/ctime/ino scan + prune |
 
-**Liveview:** three owners — Session, SampleStore, `plan_for` — plus middle sync. See `docs/liveview_session_sample_plan.md` and `docs/guisaxs_liveview_spec.md`. Sample change identity is `FileStatSnapshot` in `liveview/ingest/stability.py`.
+**Liveview:** Session API (`LiveviewSession`) + SampleStore + `plan_for` + middle sync + `present_right` + `RevisionIngress`. See `docs/liveview_architecture.md`, `docs/liveview_session_sample_plan.md`, and `docs/guisaxs_liveview_spec.md`. Sample change identity is `FileStatSnapshot` in `liveview/ingest/stability.py`.
 
 ### `guisaxs_liveview/`
 
@@ -216,12 +219,12 @@ Help assets live in `autosaxs/resources/help/guisaxs_liveview/`.
 
 | Task | Start here |
 |------|------------|
-| Add/modify a processing step | `autosaxs/skill/`, `skill/__init__.py`, `tests/test_skill.py` |
+| Add/modify a processing step | `autosaxs/skill/`, `skill/__init__.py`, `tests/test_skills_real_data.py` (+ `tests/test_skill.py` for edges) |
 | CLI argument parsing | `autosaxs/cli/cli.py` (`_add_skill_subparser`) |
 | Path expansion rules | `autosaxs/core/path_expression.py`, `skill/common.py` |
 | Caching (`.cache` YAML) | `autosaxs/skill/skill_wrap.py`, `docs/skills_paradigm.md` §2.1 |
 | Config merge precedence | `autosaxs/skill/config.py`, `resources/config_base.conf` |
-| Subtraction algorithm | `autosaxs/skill/subtract.py`, `tests/test_skill.py` |
+| Subtraction algorithm | `autosaxs/skill/subtract.py`, `tests/test_skills_real_data.py` |
 | Guinier / GNOM / ATSAS fits | `skill/fit_guinier/`, `fit_distances.py`, `fit_sizes.py`, `gnom_fit_common.py` |
 | Report assembly | `autosaxs/core/report_fragments.py`, `skill/report_*.py` |
 | GUI skill metadata | `guisaxs_skills/logic/skill_catalog.py` |
@@ -274,8 +277,8 @@ No parallel APIs or duplicated literals.
 
 | Location | What |
 |----------|------|
-| `tests/test_skill.py` | **Primary** — every skill's contract, cache, return keys |
-| `tests/test_skills_real_data.py` | E2E vs `validation/` reference data |
+| `tests/test_skills_real_data.py` | **Primary** — E2E scientific correctness vs `validation/` (calib→integrate→subtract→monodisperse) |
+| `tests/test_skill.py` | Gaps only — cache/config/CLI, skills not on the real-data path, validation/branch edges |
 | `tests/test_guisaxs_liveview.py` | Liveview GUI (needs xvfb + `[gui]`) |
 | `tests/guisaxs-liveview/` | Liveview unit tests (session, smart_defaults, …) |
 
@@ -289,6 +292,7 @@ Run all (CI order): `helpers/run_tests.sh`.
 | `README.md` | Short PyPI / GitHub landing page (generated) |
 | `autosaxs-docs/skills_reference.md` | Detailed per-skill reference (generated) |
 | `docs/skills_paradigm.md` | Skills architecture (primary package contract) |
+| `docs/liveview_architecture.md` | Liveview architecture (concepts, code map, scenarios) |
 | `docs/liveview_session_sample_plan.md` | Liveview three owners + middle sync |
 | `docs/guisaxs_liveview_spec.md` | Liveview product / behavior |
 | `docs/guisaxs_skills_spec.md` | Skills GUI product requirements |

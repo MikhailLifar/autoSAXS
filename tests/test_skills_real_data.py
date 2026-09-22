@@ -1,11 +1,17 @@
 """
-Validation test for calibration + integration + subtraction: run pipeline on validation data,
-compare integrated 1D curves to reference .chi, subtracted curves to reference sub_*.dat; plot and compute metric.
+Validation tests for real-data skill pipelines under ``validation/``.
+
+Covered stages:
+  - calibrate → integrate → subtract (curve metrics vs reference .chi / sub_*.dat)
+  - monodisperse: fit-guinier → analyze-kratky → fit-distances (DATGNOM smoke + pinned
+    GNOM refine) → model-dam (ihs27 only, last)
 
 Prerequisites:
   - Run scripts/setup_validation_data.py once to create validation/ and copy/rename data.
   - validation/ must contain raw/*_calib.tif, raw/*_buffer.tif, raw/*_sample.tif,
-    reference/*.chi, reference_subtracted/sub_*.dat, config.conf (skill-keyed YAML), and a mask file (e.g. mask*.msk).
+    reference/*.chi, reference_subtracted/sub_*.dat, config.conf (skill-keyed YAML),
+    a mask file (e.g. mask*.msk), and reference_mono/ (Guinier/Kratky/GNOM goldens for
+    ihs27–ihs31; synced from the protocol 2d tree by setup when available).
 
 Metric (integrated): int_{q0}^{qmax} 2 * |I1(q) - I2(q)| / (|I1(q)|*|I2(q)| + eps)
 
@@ -19,6 +25,12 @@ as a regression baseline against the pipeline output for the configured ``sub`` 
 ``point_match``). The reference files are not a perfect ground truth; when the subtraction
 algorithm changes intentionally, refresh the CSV (by running this test once) so future runs
 guard against accidental drift rather than enforcing agreement with an older heuristic.
+
+Monodisperse GNOM: DATGNOM smoke runs on every subtracted sample; pinned refine (dmax/alpha/
+force_zero + q_min/q_max from reference_mono/manifest.yml) runs for protocol keys with
+mode=refine. Total Estimate is not used as a pass/fail metric. model_dam runs last and only
+for ihs27, feeding the just-produced refined ``.out`` (artifact smoke only; DAMMIF Rg is not
+gated — too stochastic for regression).
 """
 import os
 import sys
@@ -26,12 +38,13 @@ import glob
 import re
 import csv
 import shutil
-from typing import Optional
+from typing import Any, Dict, List, Optional
 import pytest
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import yaml
 
 # Add src/ to path when running as script (src layout)
 _REPOS = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -40,6 +53,8 @@ for _p in (_SRC, _REPOS):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+from autosaxs.core.gnom import parse_gnom_out
+from autosaxs.core.guinier import parse_guinier_results_txt
 from autosaxs.core.utils import (
     chi2_average_sigma,
     integration_comparison_metric,
@@ -49,9 +64,13 @@ from autosaxs.core.utils import (
     read_saxs,
     subtraction_comparison_metric,
 )
+from autosaxs.skill.analyze_kratky import analyze_kratky
 from autosaxs.skill.calibrate import calibrate
 from autosaxs.skill.config import merge_skill_params
+from autosaxs.skill.fit_distances import fit_distances
+from autosaxs.skill.fit_guinier import fit_guinier
 from autosaxs.skill.integrate import integrate
+from autosaxs.skill.model_dam import model_dam
 from autosaxs.skill.subtract import subtract
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(_REPOS, ".."))
@@ -76,7 +95,27 @@ SUCCESS_TXT = os.path.join(VALIDATION_DIR, "success.txt")
 SIGNIFICANT_INCREASE_REL = 0.01  # >1%
 REFERENCE_DEFAULT_REL_SIGMA = 0.03
 
+REFERENCE_MONO_DIR = os.path.join(VALIDATION_DIR, "reference_mono")
+REFERENCE_MONO_MANIFEST = os.path.join(REFERENCE_MONO_DIR, "manifest.yml")
+MONO_GUINIER_DIR = os.path.join(VALIDATION_DIR, "guinier_mono")
+MONO_KRATKY_DIR = os.path.join(VALIDATION_DIR, "analyze_kratky")
+MONO_FD_SMOKE_DIR = os.path.join(VALIDATION_DIR, "fit_distances_datgnom")
+MONO_FD_REFINE_DIR = os.path.join(VALIDATION_DIR, "fit_distances_refine")
+MONO_DAM_DIR = os.path.join(VALIDATION_DIR, "dammif")
+METRICS_MONO_GUINIER_CSV = os.path.join(VALIDATION_DIR, "metrics_mono_guinier.csv")
+METRICS_MONO_KRATKY_CSV = os.path.join(VALIDATION_DIR, "metrics_mono_kratky.csv")
+METRICS_MONO_FD_REFINE_CSV = os.path.join(VALIDATION_DIR, "metrics_mono_fit_distances_refine.csv")
+SUCCESS_MONO_TXT = os.path.join(VALIDATION_DIR, "success_mono.txt")
+
+# Relative tolerances vs protocol goldens (E2E regenerated curves may differ slightly).
+MONO_RG_REL_TOL = 0.10
+MONO_KRATKY_PEAK_REL_TOL = 0.15
+MONO_PR_RG_REL_TOL = 0.10
+MONO_PR_DIST_METRIC_MAX = 0.25
+MONO_DAM_N_RUNS = 3
+
 SUB_DAT_PATTERN = re.compile(r"^sub_\d+\.dat$")
+PROTOCOL_KEY_FROM_STEM = re.compile(r"^(ihs\d+)")
 
 _VALIDATION_MISSING_MSG = (
     f"Validation directory not found: {VALIDATION_DIR}. "
@@ -147,10 +186,10 @@ def _write_metrics_csv(path: str, rows):
             w.writerow(row)
 
 
-def _compare_metrics(old: dict, new_rows, label: str):
+def _compare_metrics(old: dict, new_rows, label: str, rel_tol: float = SIGNIFICANT_INCREASE_REL):
     """
     Compare new metrics to old.
-    If any metric increases by >1% for an existing (reference, generated) pair -> warn and fail.
+    If any metric increases by >rel_tol for an existing (reference, generated) pair -> warn and fail.
     Missing old rows are ignored and do not fail validation.
     """
     increased = []
@@ -160,12 +199,12 @@ def _compare_metrics(old: dict, new_rows, label: str):
         old_m = old.get(key)
         if old_m is None:
             continue
-        if new_m > old_m * (1.0 + SIGNIFICANT_INCREASE_REL):
+        if new_m > old_m * (1.0 + rel_tol):
             increased.append((key[0], key[1], old_m, new_m))
 
     if increased:
         print(
-            f"WARNING: {label} validation metric increased by > {SIGNIFICANT_INCREASE_REL*100:.0f}% "
+            f"WARNING: {label} validation metric increased by > {rel_tol*100:.0f}% "
             f"for {len(increased)} case(s). Please check correctness."
         )
         for ref, gen, old_m, new_m in increased:
@@ -478,6 +517,329 @@ def compare_and_plot_subtracted():
     return results, metrics_rows, chi2_rows
 
 
+def _load_mono_manifest() -> Dict[str, Any]:
+    if not os.path.isfile(REFERENCE_MONO_MANIFEST):
+        raise FileNotFoundError(
+            f"Missing {REFERENCE_MONO_MANIFEST}. "
+            "Sync with scripts/setup_validation_data.py (PROTOCOL_MONO_2D) or copy reference_mono/."
+        )
+    with open(REFERENCE_MONO_MANIFEST, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def _as_scalar(value: Any) -> Any:
+    if isinstance(value, list):
+        return value[0] if value else None
+    return value
+
+
+def _protocol_key_from_sub_path(sub_path: str) -> Optional[str]:
+    base = os.path.splitext(os.path.basename(sub_path))[0]
+    if base.startswith("sub_"):
+        base = base[4:]
+    if base.endswith("_sample"):
+        base = base[: -len("_sample")]
+    m = PROTOCOL_KEY_FROM_STEM.match(base)
+    return m.group(1) if m else None
+
+
+def _sample_stem_from_sub_path(sub_path: str) -> str:
+    base = os.path.splitext(os.path.basename(sub_path))[0]
+    if base.startswith("sub_"):
+        base = base[4:]
+    return base
+
+
+def _validation_sub_dat_paths() -> List[str]:
+    paths = sorted(glob.glob(os.path.join(SUBTRACTED_DIR, "sub_*_sample.dat")))
+    if not paths:
+        raise FileNotFoundError(f"No sub_*_sample.dat under {SUBTRACTED_DIR}")
+    return paths
+
+
+def _rel_err(a: float, b: float) -> float:
+    denom = max(abs(b), 1e-12)
+    return abs(float(a) - float(b)) / denom
+
+
+def _pr_distribution_metric(parsed_ref: Dict[str, Any], parsed_pipe: Dict[str, Any]) -> float:
+    """Mean relative |p_ref - p_pipe| / (|p_ref| + |p_pipe| + eps) on a common r grid."""
+    dist_ref = parsed_ref.get("distribution")
+    dist_pipe = parsed_pipe.get("distribution")
+    if not dist_ref or not dist_pipe:
+        return float("nan")
+    r_ref, p_ref, _ = dist_ref
+    r_pipe, p_pipe, _ = dist_pipe
+    r_ref = np.asarray(r_ref, dtype=float)
+    p_ref = np.asarray(p_ref, dtype=float)
+    r_pipe = np.asarray(r_pipe, dtype=float)
+    p_pipe = np.asarray(p_pipe, dtype=float)
+    r0 = max(float(np.min(r_ref)), float(np.min(r_pipe)))
+    r1 = min(float(np.max(r_ref)), float(np.max(r_pipe)))
+    if not np.isfinite(r0) or not np.isfinite(r1) or r1 <= r0:
+        return float("nan")
+    r_common = np.linspace(r0, r1, num=200)
+    p1 = np.interp(r_common, r_ref, p_ref)
+    p2 = np.interp(r_common, r_pipe, p_pipe)
+    eps = 1e-12
+    return float(np.mean(np.abs(p1 - p2) / (np.abs(p1) + np.abs(p2) + eps)))
+
+
+def _guinier_results_path_for_stem(stem: str) -> str:
+    return os.path.join(MONO_GUINIER_DIR, f"{stem}_results.txt")
+
+
+def _reset_mono_output_dirs() -> None:
+    for d in (MONO_GUINIER_DIR, MONO_KRATKY_DIR, MONO_FD_SMOKE_DIR, MONO_FD_REFINE_DIR, MONO_DAM_DIR):
+        if os.path.isdir(d):
+            shutil.rmtree(d)
+        os.makedirs(d, exist_ok=True)
+
+
+def run_monodisperse_skills() -> Dict[str, Any]:
+    """
+    E2E monodisperse stage on regenerated subtracted curves.
+
+    Order: Guinier → Kratky → DATGNOM smoke (all samples) → pinned GNOM refine
+    (protocol refine keys) → model_dam (ihs27 only, last).
+    """
+    manifest = _load_mono_manifest()
+    samples_meta: Dict[str, Any] = manifest.get("samples") or {}
+    model_dam_key = str(manifest.get("model_dam_key") or "ihs27")
+
+    run_calibration_integration_subtraction()
+    _reset_mono_output_dirs()
+    sub_paths = _validation_sub_dat_paths()
+
+    # --- fit-guinier (all) ---
+    fit_guinier(
+        os.path.join(SUBTRACTED_DIR, "sub_*_sample.dat"),
+        output_dir=MONO_GUINIER_DIR,
+        use_cache=False,
+    )
+
+    guinier_by_stem: Dict[str, Dict[str, Any]] = {}
+    for sub in sub_paths:
+        stem = _sample_stem_from_sub_path(sub)
+        parsed = parse_guinier_results_txt(_guinier_results_path_for_stem(stem))
+        if not parsed.get("rg"):
+            raise RuntimeError(f"Guinier failed for {stem}: missing Rg in results")
+        guinier_by_stem[stem] = parsed
+
+    # --- analyze-kratky (all; Rg/I0 from just-produced Guinier) ---
+    kratky_by_stem: Dict[str, Dict[str, Any]] = {}
+    for sub in sub_paths:
+        stem = _sample_stem_from_sub_path(sub)
+        g = guinier_by_stem[stem]
+        out_k = analyze_kratky(
+            sub,
+            output_dir=MONO_KRATKY_DIR,
+            rg_nm=float(g["rg"]),
+            i0=float(g["i0"]) if g.get("i0") is not None else None,
+            use_cache=False,
+        )
+        kratky_by_stem[stem] = {
+            "classification": _as_scalar(out_k.get("classification")),
+            "x_max": _as_scalar(out_k.get("x_max")),
+            "y_max": _as_scalar(out_k.get("y_max")),
+            "results_path": _as_scalar(out_k.get("results_path")),
+        }
+
+    # --- DATGNOM smoke (all) ---
+    smoke_out_by_stem: Dict[str, Dict[str, Any]] = {}
+    for sub in sub_paths:
+        stem = _sample_stem_from_sub_path(sub)
+        g = guinier_by_stem[stem]
+        out_fd = fit_distances(
+            sub,
+            output_dir=MONO_FD_SMOKE_DIR,
+            rg_nm=float(g["rg"]),
+            use_cache=False,
+        )
+        best = _as_scalar(out_fd.get("best_gnom_out_path"))
+        if not best or not os.path.isfile(str(best)):
+            raise RuntimeError(f"DATGNOM smoke produced no .out for {stem}")
+        smoke_out_by_stem[stem] = out_fd
+
+    # --- pinned GNOM refine (protocol refine keys only) ---
+    refine_out_by_key: Dict[str, Dict[str, Any]] = {}
+    sub_by_key: Dict[str, str] = {}
+    for sub in sub_paths:
+        key = _protocol_key_from_sub_path(sub)
+        if key:
+            sub_by_key[key] = sub
+
+    for key, meta in samples_meta.items():
+        if str(meta.get("mode") or "") != "refine":
+            continue
+        sub = sub_by_key.get(key)
+        if not sub:
+            raise RuntimeError(f"No validation sub_*.dat mapped to protocol key {key}")
+        stem = _sample_stem_from_sub_path(sub)
+        g = guinier_by_stem[stem]
+        out_ref = fit_distances(
+            sub,
+            output_dir=MONO_FD_REFINE_DIR,
+            rg_nm=float(g["rg"]),
+            q_min=float(meta["q_min"]),
+            q_max=float(meta["q_max"]),
+            dmax_nm=float(meta["dmax_nm"]),
+            alpha=float(meta["alpha"]),
+            force_zero_rmin=str(meta.get("force_zero_rmin") or "N"),
+            force_zero_rmax=str(meta.get("force_zero_rmax") or "N"),
+            minimal=True,
+            use_cache=False,
+        )
+        best = _as_scalar(out_ref.get("best_gnom_out_path"))
+        if not best or not os.path.isfile(str(best)):
+            raise RuntimeError(f"Pinned refine produced no .out for {key}")
+        refine_out_by_key[key] = out_ref
+
+    # --- model_dam last (ihs27 only), feed just-produced refine .out ---
+    dam_out: Dict[str, Any] = {}
+    if model_dam_key not in refine_out_by_key:
+        raise RuntimeError(f"model_dam key {model_dam_key} missing from refine outputs")
+    sub_dam = sub_by_key[model_dam_key]
+    gnom_dam = _as_scalar(refine_out_by_key[model_dam_key].get("best_gnom_out_path"))
+    dam_out = model_dam(
+        sub_dam,
+        output_dir=MONO_DAM_DIR,
+        gnom_path=str(gnom_dam),
+        n_runs=MONO_DAM_N_RUNS,
+        dammif_mode="fast",
+        use_cache=False,
+    )
+    best_cif = _as_scalar(dam_out.get("best_cif_path"))
+    if not best_cif or not os.path.lexists(str(best_cif)):
+        raise RuntimeError("model_dam did not produce best.cif for ihs27")
+
+    return {
+        "manifest": manifest,
+        "sub_paths": sub_paths,
+        "guinier_by_stem": guinier_by_stem,
+        "kratky_by_stem": kratky_by_stem,
+        "smoke_out_by_stem": smoke_out_by_stem,
+        "refine_out_by_key": refine_out_by_key,
+        "sub_by_key": sub_by_key,
+        "dam_out": dam_out,
+        "model_dam_key": model_dam_key,
+    }
+
+
+def compare_monodisperse_to_reference(run_state: Dict[str, Any]):
+    """
+    Compare protocol-keyed mono outputs to reference_mono goldens.
+
+    Returns (ok_flags_dict, metric_row_groups).
+    """
+    manifest = run_state["manifest"]
+    samples_meta: Dict[str, Any] = manifest.get("samples") or {}
+    guinier_by_stem = run_state["guinier_by_stem"]
+    kratky_by_stem = run_state["kratky_by_stem"]
+    refine_out_by_key = run_state["refine_out_by_key"]
+    sub_by_key = run_state["sub_by_key"]
+    dam_out = run_state["dam_out"]
+
+    guinier_rows = []
+    kratky_rows = []
+    refine_rows = []
+    failures: List[str] = []
+
+    for key, meta in samples_meta.items():
+        sub = sub_by_key.get(key)
+        if not sub:
+            failures.append(f"{key}: missing validation sub curve")
+            continue
+        stem = _sample_stem_from_sub_path(sub)
+
+        # Guinier
+        ref_g_path = os.path.join(REFERENCE_MONO_DIR, meta["guinier_results"])
+        ref_g = parse_guinier_results_txt(ref_g_path)
+        pipe_g = guinier_by_stem[stem]
+        rg_err = _rel_err(pipe_g["rg"], ref_g["rg"])
+        guinier_rows.append(
+            {
+                "reference": f"{key}:{os.path.basename(ref_g_path)}",
+                "generated": f"{stem}_results.txt",
+                "metric": float(rg_err),
+            }
+        )
+        if rg_err > MONO_RG_REL_TOL:
+            failures.append(f"{key} Guinier Rg rel_err={rg_err:.3f} > {MONO_RG_REL_TOL}")
+
+        # Kratky
+        ref_k_path = os.path.join(REFERENCE_MONO_DIR, meta["kratky_params"])
+        with open(ref_k_path, "r", encoding="utf-8") as f:
+            ref_k = yaml.safe_load(f) or {}
+        pipe_k = kratky_by_stem[stem]
+        ref_cls = str(ref_k.get("classification") or "").strip().lower()
+        pipe_cls = str(pipe_k.get("classification") or "").strip().lower()
+        if ref_cls and pipe_cls != ref_cls:
+            failures.append(f"{key} Kratky classification {pipe_cls!r} != {ref_cls!r}")
+        x_err = _rel_err(float(pipe_k["x_max"]), float(ref_k["x_max"]))
+        y_err = _rel_err(float(pipe_k["y_max"]), float(ref_k["y_max"]))
+        kratky_metric = max(x_err, y_err)
+        kratky_rows.append(
+            {
+                "reference": f"{key}:{os.path.basename(ref_k_path)}",
+                "generated": stem,
+                "metric": float(kratky_metric),
+            }
+        )
+        if x_err > MONO_KRATKY_PEAK_REL_TOL or y_err > MONO_KRATKY_PEAK_REL_TOL:
+            failures.append(
+                f"{key} Kratky peak rel_err x={x_err:.3f} y={y_err:.3f} "
+                f"> {MONO_KRATKY_PEAK_REL_TOL}"
+            )
+
+        # Pinned refine vs golden .out (refine keys only)
+        if str(meta.get("mode") or "") != "refine":
+            continue
+        out_ref = refine_out_by_key.get(key) or {}
+        best = _as_scalar(out_ref.get("best_gnom_out_path"))
+        ref_out_path = os.path.join(REFERENCE_MONO_DIR, meta["best_out_path"])
+        parsed_ref = parse_gnom_out(ref_out_path)
+        parsed_pipe = parse_gnom_out(str(best))
+        rg_ref = parsed_ref.get("real_space_rg")
+        rg_pipe = parsed_pipe.get("real_space_rg")
+        if rg_ref is None or rg_pipe is None:
+            failures.append(f"{key} refine: missing real-space Rg in .out")
+            continue
+        rg_pr_err = _rel_err(rg_pipe, rg_ref)
+        dist_metric = _pr_distribution_metric(parsed_ref, parsed_pipe)
+        refine_rows.append(
+            {
+                "reference": f"{key}:{os.path.basename(ref_out_path)}",
+                "generated": os.path.basename(str(best)),
+                "metric": float(dist_metric) if np.isfinite(dist_metric) else float(rg_pr_err),
+            }
+        )
+        if rg_pr_err > MONO_PR_RG_REL_TOL:
+            failures.append(f"{key} refine Rg_pr rel_err={rg_pr_err:.3f} > {MONO_PR_RG_REL_TOL}")
+        if np.isfinite(dist_metric) and dist_metric > MONO_PR_DIST_METRIC_MAX:
+            failures.append(
+                f"{key} refine p(r) metric={dist_metric:.3f} > {MONO_PR_DIST_METRIC_MAX}"
+            )
+
+    # model_dam: smoke only (DAMMIF Rg is too stochastic for regression / relative-error gates)
+    dam_yml = _as_scalar(dam_out.get("output_subdir"))
+    fits_path = os.path.join(str(dam_yml or ""), "dammif_fits.yml") if dam_yml else ""
+    if not os.path.isfile(fits_path):
+        failures.append(f"model_dam: missing {fits_path}")
+
+    # Smoke sanity: every sample produced an .out (already enforced in run); count for reporting
+    n_smoke = len(run_state["smoke_out_by_stem"])
+    if n_smoke < 1:
+        failures.append("DATGNOM smoke: no samples")
+
+    ok = len(failures) == 0
+    return ok, failures, {
+        "guinier": guinier_rows,
+        "kratky": kratky_rows,
+        "refine": refine_rows,
+    }
+
+
 def test_calib_integration_validation():
     """Pytest entry: run calibrate+integrate and compare to reference .chi."""
     _reset_validation_plots_dir()
@@ -514,6 +876,41 @@ def test_calib_integration_subtraction_validation():
         f.write("SUCCESS\n" if ok and ok_chi2 else "FAIL\n")
     print(f"VALIDATION: {'SUCCESS' if ok and ok_chi2 else 'FAIL'} (subtracted)")
     assert ok and ok_chi2, "Subtracted metric regression detected (>1% increase)."
+
+
+def test_monodisperse_pipeline_validation():
+    """Pytest entry: full E2E monodisperse chain; model_dam last (ihs27 only)."""
+    if not os.path.isdir(REFERENCE_MONO_DIR):
+        raise FileNotFoundError(
+            f"Missing {REFERENCE_MONO_DIR}. Run setup_validation_data.py with PROTOCOL_MONO_2D set."
+        )
+
+    old_g = _read_metrics_csv(METRICS_MONO_GUINIER_CSV)
+    old_k = _read_metrics_csv(METRICS_MONO_KRATKY_CSV)
+    old_r = _read_metrics_csv(METRICS_MONO_FD_REFINE_CSV)
+
+    run_state = run_monodisperse_skills()
+    ok_cmp, failures, rows = compare_monodisperse_to_reference(run_state)
+
+    ok_reg = True
+    ok_reg = _compare_metrics(old_g, rows["guinier"], label="Mono Guinier") and ok_reg
+    ok_reg = _compare_metrics(old_k, rows["kratky"], label="Mono Kratky") and ok_reg
+    ok_reg = _compare_metrics(old_r, rows["refine"], label="Mono fit_distances refine") and ok_reg
+
+    _write_metrics_csv(METRICS_MONO_GUINIER_CSV, rows["guinier"])
+    _write_metrics_csv(METRICS_MONO_KRATKY_CSV, rows["kratky"])
+    _write_metrics_csv(METRICS_MONO_FD_REFINE_CSV, rows["refine"])
+
+    ok_all = ok_cmp and ok_reg
+    with open(SUCCESS_MONO_TXT, "w") as f:
+        f.write("SUCCESS\n" if ok_all else "FAIL\n")
+    print(f"VALIDATION MONO: {'SUCCESS' if ok_all else 'FAIL'}")
+    print(f"  samples smoked (DATGNOM): {len(run_state['smoke_out_by_stem'])}")
+    print(f"  refine keys: {sorted(run_state['refine_out_by_key'])}")
+    print(f"  model_dam key: {run_state['model_dam_key']}")
+    for msg in failures:
+        print(f"  FAIL: {msg}")
+    assert ok_all, "Monodisperse validation failed:\n" + "\n".join(failures)
 
 
 if __name__ == "__main__":

@@ -231,7 +231,7 @@ No UI component calls a skill. The **script** (or a thin orchestrator in the scr
 ## 7. Relation to GUIs and legacy Controller
 
 - **Skills paradigm** (this document): skills as functions, composition in scripts / liveview planner, EventBus only for optional progress from skills or legacy Controller.
-- **Liveview:** Session + SampleStore + `plan_for` — `docs/liveview_session_sample_plan.md`, `docs/guisaxs_liveview_spec.md`.
+- **Liveview:** Session + SampleStore + `plan_for` — `docs/liveview_architecture.md`, `docs/liveview_session_sample_plan.md`, `docs/guisaxs_liveview_spec.md`.
 - **Skills GUI:** product requirements in `docs/guisaxs_skills_spec.md`; package layout in `AGENTS.md`.
 - **Legacy interactive Controller** (`autosaxs/pipeline/`, lab `saxsprocessing/pipeline.py`): still callable; **not** a maintained product spec. Prefer skills for new work.
 

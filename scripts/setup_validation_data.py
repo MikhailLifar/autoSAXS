@@ -8,10 +8,14 @@ to follow pipeline conventions:
   - sub_\\d+.dat -> reference_subtracted/ (reference subtracted 1D curves; metadata gives sample/buffer .chi)
   - config.conf copied from resources/validation_config.conf (skill-keyed YAML)
   - Mask: place a file matching mask* (e.g. mask_fti2d_1225.msk) in validation/ for calibration.
+  - Optional monodisperse references: when PROTOCOL_MONO_2D (or ~/tmp/test_autosaxs/test_protocol/2d)
+    exists, sync validation/reference_mono/ (Guinier/Kratky/GNOM/.out + manifest) from that tree.
 """
 import re
 import shutil
 import os
+
+import yaml
 
 SUB_DAT_PATTERN = re.compile(r"^sub_\d+\.dat$")
 
@@ -20,6 +24,7 @@ WORKSPACE_ROOT = os.path.abspath(os.path.join(REPO_DIR, ".."))
 SOURCE_DIR = os.path.join(WORKSPACE_ROOT, "data", "ihs", "06-06-2025", "cell")
 VALIDATION_DIR = os.path.join(WORKSPACE_ROOT, "validation")
 CONFIG_SOURCE = os.path.join(REPO_DIR, "resources", "validation_config.conf")
+DEFAULT_PROTOCOL_MONO_2D = os.path.expanduser("~/tmp/test_autosaxs/test_protocol/2d")
 
 CALIB_PATTERN = re.compile(r"^(.+)_AgBh\d+_(.+)\.tif$")
 BUFFER_PATTERN = re.compile(r"^(.+_ihs\d+)b_(.+)\.tif$")
@@ -133,6 +138,123 @@ def main():
     print(f"  raw: {len(os.listdir(raw_dir))} files")
     print(f"  reference: {len(os.listdir(ref_dir))} .chi files")
     print(f"  reference_subtracted: {n_sub} sub_*.dat files")
+
+    protocol_mono = os.environ.get("PROTOCOL_MONO_2D", DEFAULT_PROTOCOL_MONO_2D)
+    if os.path.isdir(protocol_mono):
+        n_mono = sync_reference_mono(protocol_mono)
+        print(f"  reference_mono: synced {n_mono} files from {protocol_mono}")
+    else:
+        print(f"  reference_mono: skip (protocol tree not found: {protocol_mono})")
+
+
+def sync_reference_mono(protocol_2d: str) -> int:
+    """
+    Copy monodisperse golden artifacts from a protocol 2d tree into validation/reference_mono.
+
+    Uses filesystem copy (not retype). Returns number of files written under reference_mono.
+    """
+    proto = os.path.abspath(os.path.expanduser(protocol_2d))
+    ref_root = os.path.join(VALIDATION_DIR, "reference_mono")
+    for sub in ("guinier", "kratky", "fit_distances", "dammif"):
+        os.makedirs(os.path.join(ref_root, sub), exist_ok=True)
+
+    samples = {
+        "ihs27": {
+            "mode": "refine",
+            "q_min": 0.142,
+            "q_max": 5.0037,
+            "dmax_nm": 6.5,
+            "alpha": 35.4,
+            "force_zero_rmin": "N",
+            "force_zero_rmax": "N",
+            "best_out": "gnom_best.out",
+        },
+        "ihs28": {
+            "mode": "datgnom",
+            "q_min": 0.2502,
+            "q_max": 4.8864,
+            "best_out": "datgnom_best.out",
+        },
+        "ihs29": {
+            "mode": "refine",
+            "q_min": 0.142,
+            "q_max": 5.0037,
+            "dmax_nm": 9.0,
+            "alpha": 5.1,
+            "force_zero_rmin": "N",
+            "force_zero_rmax": "N",
+            "best_out": "gnom_best.out",
+        },
+        "ihs30": {
+            "mode": "refine",
+            "q_min": 0.142,
+            "q_max": 5.0037,
+            "dmax_nm": 7.03,
+            "alpha": 11.3,
+            "force_zero_rmin": "N",
+            "force_zero_rmax": "N",
+            "best_out": "gnom_best.out",
+        },
+        "ihs31": {
+            "mode": "refine",
+            "q_min": 0.142,
+            "q_max": 5.0037,
+            "dmax_nm": 9.2,
+            "alpha": 3.61,
+            "force_zero_rmin": "N",
+            "force_zero_rmax": "N",
+            "best_out": "gnom_best.out",
+        },
+    }
+
+    n_written = 0
+    manifest = {
+        "protocol_keys": list(samples.keys()),
+        "model_dam_key": "ihs27",
+        "samples": {},
+        "dammif_ihs27": "dammif/ihs27_dammif_fits.yml",
+    }
+
+    def _cp(src: str, dst: str) -> None:
+        nonlocal n_written
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+        n_written += 1
+
+    for key, meta in samples.items():
+        _cp(
+            os.path.join(proto, "guinier_mono", f"{key}_sample", f"{key}_sample_results.txt"),
+            os.path.join(ref_root, "guinier", f"{key}_results.txt"),
+        )
+        _cp(
+            os.path.join(proto, "analyze_kratky", f"{key}_sample", f"{key}_sample_kratky_params.yml"),
+            os.path.join(ref_root, "kratky", f"{key}_kratky_params.yml"),
+        )
+        fd_src = os.path.join(proto, "fit_distances", f"{key}_sample")
+        fd_dst = os.path.join(ref_root, "fit_distances", key)
+        best_name = meta["best_out"]
+        _cp(os.path.join(fd_src, best_name), os.path.join(fd_dst, best_name))
+        dg = os.path.join(fd_src, "datgnom_best.out")
+        if os.path.isfile(dg) and best_name != "datgnom_best.out":
+            _cp(dg, os.path.join(fd_dst, "datgnom_best.out"))
+        qpath = os.path.join(fd_src, f"{key}_sample_fit_distances_quality.yml")
+        if os.path.isfile(qpath):
+            _cp(qpath, os.path.join(fd_dst, "quality.yml"))
+        entry = dict(meta)
+        entry["guinier_results"] = f"guinier/{key}_results.txt"
+        entry["kratky_params"] = f"kratky/{key}_kratky_params.yml"
+        entry["best_out_path"] = f"fit_distances/{key}/{best_name}"
+        manifest["samples"][key] = entry
+
+    _cp(
+        os.path.join(proto, "dammif", "ihs27_sample", "dammif_fits.yml"),
+        os.path.join(ref_root, "dammif", "ihs27_dammif_fits.yml"),
+    )
+    man_path = os.path.join(ref_root, "manifest.yml")
+    with open(man_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(manifest, f, sort_keys=False)
+    n_written += 1
+    return n_written
 
 
 if __name__ == "__main__":

@@ -4,7 +4,8 @@ Specs plus **code under `src/`** are the source of truth. Prefer updating a drif
 
 Primary docs:
 - `docs/skills_paradigm.md` — skills package contract
-- `docs/liveview_session_sample_plan.md` — liveview architecture
+- `docs/liveview_architecture.md` — liveview architecture (full)
+- `docs/liveview_session_sample_plan.md` — liveview ownership cheat sheet
 - `docs/guisaxs_liveview_spec.md` — liveview product/UX
 - `docs/guisaxs_skills_spec.md` — skills GUI product/UX
 - `AGENTS.md` — navigation map

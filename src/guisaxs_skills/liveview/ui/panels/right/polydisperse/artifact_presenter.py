@@ -226,22 +226,47 @@ class PolydisperseArtifactPresenter:
         from autosaxs.core.gnom import parse_gnom_out
 
         snap: dict = {}
-        first = result.get("selected_first")
-        if first is None:
-            first = result.get("first")
-        last = result.get("selected_last")
-        if last is None:
-            last = result.get("last")
-        if first is not None:
-            try:
-                snap["first"] = int(scalar_value(first))
-            except (TypeError, ValueError):
-                pass
-        if last is not None:
-            try:
-                snap["last"] = int(scalar_value(last))
-            except (TypeError, ValueError):
-                pass
+        alpha = None
+        try:
+            parsed = parse_gnom_out(Path(gnom_out_path).read_text(errors="replace"))
+            alpha = parsed.get("current_alpha")
+            ar = parsed.get("angular_range")
+            if isinstance(ar, (tuple, list)) and len(ar) == 2:
+                try:
+                    q0, q1 = float(ar[0]), float(ar[1])
+                    if q0 > 0 and q1 > q0:
+                        snap["q_min"] = q0
+                        snap["q_max"] = q1
+                except (TypeError, ValueError):
+                    pass
+            if snap.get("rmax_nm") is None and parsed.get("real_space_rmax") is not None:
+                snap["rmax_nm"] = float(parsed["real_space_rmax"])
+        except Exception:
+            parsed = {}
+        if "q_min" not in snap:
+            q_min = scalar_value(result.get("q_min_fit_nm"))
+            if q_min is not None and q_min not in ("", None):
+                try:
+                    snap["q_min"] = float(q_min)
+                except (TypeError, ValueError):
+                    pass
+        if "q_min" not in snap:
+            first = result.get("selected_first")
+            if first is None:
+                first = result.get("first")
+            last = result.get("selected_last")
+            if last is None:
+                last = result.get("last")
+            if first is not None:
+                try:
+                    snap["first"] = int(scalar_value(first))
+                except (TypeError, ValueError):
+                    pass
+            if last is not None:
+                try:
+                    snap["last"] = int(scalar_value(last))
+                except (TypeError, ValueError):
+                    pass
         rmax = scalar_value(result.get("dmax_nm"))
         if rmax is None:
             rmax = scalar_value(result.get("rmax_nm"))
@@ -250,14 +275,6 @@ class PolydisperseArtifactPresenter:
                 snap["rmax_nm"] = float(rmax)
             except (TypeError, ValueError):
                 pass
-        alpha = None
-        try:
-            parsed = parse_gnom_out(Path(gnom_out_path).read_text(errors="replace"))
-            alpha = parsed.get("current_alpha")
-            if snap.get("rmax_nm") is None and parsed.get("real_space_rmax") is not None:
-                snap["rmax_nm"] = float(parsed["real_space_rmax"])
-        except Exception:
-            parsed = {}
         if alpha is not None:
             try:
                 snap["alpha"] = float(alpha)
@@ -278,10 +295,24 @@ class PolydisperseArtifactPresenter:
 
         for k, v in snap.items():
             wp[k] = v
+        if snap.get("q_min") is not None:
+            wp.pop("first", None)
+        if snap.get("q_max") is not None:
+            wp.pop("last", None)
         if not is_refined:
             wp["sizes_auto"] = {
                 k: snap[k]
-                for k in ("first", "last", "rmin_nm", "rmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax")
+                for k in (
+                    "q_min",
+                    "q_max",
+                    "first",
+                    "last",
+                    "rmin_nm",
+                    "rmax_nm",
+                    "alpha",
+                    "force_zero_rmin",
+                    "force_zero_rmax",
+                )
                 if k in snap
             }
         self._state.polydisperse_window_params = wp
@@ -370,47 +401,31 @@ class PolydisperseArtifactPresenter:
         tiff_path: str = "",
         watch_mode: LiveviewWatchMode = LiveviewWatchMode.FLAT,
     ) -> None:
-        root = analysis_output_root(watchdir=watchdir, sample_path=tiff_path, mode=watch_mode)
-        self.set_context(
-            profile_path=self._profile_path,
-            output_root=root,
+        from .....services.history.right_artifacts import discover_polydisperse_artifacts
+
+        bundle = discover_polydisperse_artifacts(
+            watchdir=watchdir,
+            stem=stem,
             tiff_path=tiff_path,
             watch_mode=watch_mode,
+            mixture_mode=self._state.polydisperse_mixture_mode,
         )
-        gstem = guinier_poly_dir(root) / stem
-        if gstem.is_dir():
-            for txt in sorted(gstem.glob("*_results.txt"), key=lambda p: p.stat().st_mtime, reverse=True):
-                if "kratky" in txt.name.lower():
-                    continue
-                self._ingest_guinier({"results_path": str(txt)})
-                break
-        fs = fit_sizes_dir(root) / stem
-        if fs.is_dir():
-            gnom = ""
-            outs = sorted(fs.glob("*.out"), key=lambda p: p.stat().st_mtime, reverse=True)
-            if outs:
-                gnom = str(outs[0])
-            payload: dict[str, Any] = {
-                "atsas_fit_ok": True,
-                "output_subdir": str(fs),
-                "best_gnom_out_path": gnom,
-            }
-            best_yml = list(fs.glob("*_fit_sizes_best.yml"))
-            if best_yml:
-                payload["best_summary_path"] = str(best_yml[0])
-            q_yml = list(fs.glob("*_fit_sizes_quality.yml"))
-            if q_yml:
-                payload["quality_passport_path"] = str(q_yml[0])
-            self._ingest_sizes(payload)
-        if self._state.polydisperse_mixture_mode == PolydisperseMixtureMode.MIXTURE:
-            mx = mixture_dir(root) / stem
-            if mx.is_dir():
-                csvs = list(mx.glob("mixture_results.csv"))
-                payload = {
-                    "output_subdir": str(mx),
-                    "results_csv_path": str(csvs[0]) if csvs else "",
-                }
-                self._ingest_mixture(payload)
+        self.apply_bundle(bundle)
+
+    def apply_bundle(self, bundle: Any) -> None:
+        root = bundle.output_root
+        if root is None:
+            root = self._state.watchdir.expanduser().resolve()
+        self.set_context(
+            profile_path=bundle.profile_path or self._profile_path,
+            output_root=root,
+        )
+        if bundle.guinier:
+            self._ingest_guinier(bundle.guinier)
+        if bundle.sizes:
+            self._ingest_sizes(bundle.sizes)
+        if bundle.mixture:
+            self._ingest_mixture(bundle.mixture)
 
     def summary_text(self) -> tuple[str, str]:
         hint = "Open Polydisperse analysis for Guinier, D(R), and optional mixture."

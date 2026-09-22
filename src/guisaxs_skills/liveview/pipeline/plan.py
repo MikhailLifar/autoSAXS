@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -18,8 +17,14 @@ from ..session.output_paths import (
     tiff_output_root,
 )
 from ..session.sample import Sample
-from ..session.state import LiveviewIntakeMode, LiveviewSessionState, LiveviewWatchMode
-from .jobs import Job, JobStep
+from ..session.state import LiveviewIntakeMode, LiveviewSessionState
+from .jobs import (
+    CompletedWork,
+    Job,
+    JobStep,
+    PlanPhase,
+    step_phase,
+)
 from .monodisperse_pipeline import MonodispersePipelineParts, build_monodisperse_steps
 from .polydisperse_pipeline import PolydispersePipelineParts, build_polydisperse_steps
 from .report_pipeline import report_individual_step
@@ -27,10 +32,19 @@ from .report_pipeline import report_individual_step
 YamlOptionsLoader = Callable[[Optional[Path]], dict]
 
 
-class MiddleViewHint(str, Enum):
-    FRAME_IMAGE = "frame_image"
-    SINGLE_CURVE = "single_curve"
-    DUAL_SUBTRACT = "dual_subtract"
+def _remaining_steps(steps: List[JobStep], completed: CompletedWork | None) -> List[JobStep]:
+    if completed is None or completed.is_empty():
+        return list(steps)
+    out: List[JobStep] = []
+    for step in steps:
+        phase = step_phase(step.name)
+        # Whole-phase skip for integrate / subtract / report.
+        if phase in completed.phases and phase != PlanPhase.ANALYSIS:
+            continue
+        if step.name in completed.step_names:
+            continue
+        out.append(step)
+    return out
 
 
 @dataclass(frozen=True)
@@ -38,7 +52,6 @@ class PipelinePlan:
     steps: List[JobStep]
     profile_path: str
     output_root: Path
-    middle: MiddleViewHint
     source_path: str
     boarding: LiveviewIntakeMode
     sample_stem: str
@@ -65,6 +78,7 @@ class PipelinePlan:
             priority=0,
             steps=list(self.steps),
             context=ctx,
+            # completed defaults empty — Job owns progress from here on
         )
 
 
@@ -73,14 +87,32 @@ def plan_for(
     sample: Sample,
     *,
     load_yaml: YamlOptionsLoader,
+    completed: CompletedWork | None = None,
 ) -> PipelinePlan:
-    """Build the auto-process plan for ``sample`` from session facts only."""
+    """
+    Build the auto-process plan for ``sample`` from session facts only.
+
+    When ``completed`` is set, returns only the **remaining** steps for that sample
+    (phase-boundary replan). Callers must not apply this to other queued jobs.
+    """
     boarding = sample.boarding
     if boarding == LiveviewIntakeMode.FRAME_2D:
-        return _plan_frame(state, sample, load_yaml=load_yaml)
-    if boarding == LiveviewIntakeMode.CURVE_SUB:
-        return _plan_curve_sub(state, sample, load_yaml=load_yaml)
-    return _plan_curve_1d(state, sample, load_yaml=load_yaml)
+        plan = _plan_frame(state, sample, load_yaml=load_yaml)
+    elif boarding == LiveviewIntakeMode.CURVE_SUB:
+        plan = _plan_curve_sub(state, sample, load_yaml=load_yaml)
+    else:
+        plan = _plan_curve_1d(state, sample, load_yaml=load_yaml)
+    if completed is None or completed.is_empty():
+        return plan
+    return PipelinePlan(
+        steps=_remaining_steps(plan.steps, completed),
+        profile_path=plan.profile_path,
+        output_root=plan.output_root,
+        source_path=plan.source_path,
+        boarding=plan.boarding,
+        sample_stem=plan.sample_stem,
+        subtracted_path=plan.subtracted_path,
+    )
 
 
 def _analysis_steps(
@@ -151,7 +183,6 @@ def _plan_frame(
             steps=steps,
             profile_path="",
             output_root=root,
-            middle=MiddleViewHint.FRAME_IMAGE,
             source_path=tp,
             boarding=LiveviewIntakeMode.FRAME_2D,
             sample_stem=stem,
@@ -201,7 +232,6 @@ def _plan_frame(
             steps=steps,
             profile_path=profile,
             output_root=root,
-            middle=MiddleViewHint.DUAL_SUBTRACT,
             source_path=tp,
             boarding=LiveviewIntakeMode.FRAME_2D,
             sample_stem=stem,
@@ -216,7 +246,6 @@ def _plan_frame(
         steps=steps,
         profile_path=profile,
         output_root=root,
-        middle=MiddleViewHint.FRAME_IMAGE,
         source_path=tp,
         boarding=LiveviewIntakeMode.FRAME_2D,
         sample_stem=stem,
@@ -258,7 +287,6 @@ def _plan_curve_1d(
             steps=steps,
             profile_path=profile,
             output_root=root,
-            middle=MiddleViewHint.DUAL_SUBTRACT,
             source_path=dp,
             boarding=LiveviewIntakeMode.CURVE_1D,
             sample_stem=stem,
@@ -273,7 +301,6 @@ def _plan_curve_1d(
         steps=steps,
         profile_path=profile,
         output_root=root,
-        middle=MiddleViewHint.SINGLE_CURVE,
         source_path=dp,
         boarding=LiveviewIntakeMode.CURVE_1D,
         sample_stem=stem,
@@ -298,7 +325,6 @@ def _plan_curve_sub(
         steps=steps,
         profile_path=profile,
         output_root=root,
-        middle=MiddleViewHint.SINGLE_CURVE,
         source_path=dp,
         boarding=LiveviewIntakeMode.CURVE_SUB,
         sample_stem=stem,

@@ -241,9 +241,11 @@ def find_calibrant_image_in_workdir(workdir: Path) -> Optional[Path]:
 
 def find_latest_dat_in_workdir(workdir: Path) -> Optional[Path]:
     """
-    Newest ``*.dat`` under ``workdir`` (and one level of subdirs), by mtime.
+    Newest integrated-like ``*.dat`` for buffer soft-hints, by mtime.
 
-    Skips ``averaged_proxy`` trees (proxy-axis curves are not valid buffer sources).
+    Prefers ``workdir/averaged/`` (liveview integrate output). Falls back to
+    ``workdir`` root only. Does not scan ``subtracted/``, analysis trees, or
+    ``averaged_proxy/`` — those are not buffer sources.
     """
     try:
         root = workdir.expanduser().resolve()
@@ -252,30 +254,42 @@ def find_latest_dat_in_workdir(workdir: Path) -> Optional[Path]:
     if not root.is_dir():
         return None
 
-    search_dirs: List[Path] = [root]
-    try:
-        for child in root.iterdir():
-            if child.is_dir() and child.name.lower() != "averaged_proxy":
-                search_dirs.append(child)
-    except OSError:
-        pass
-
-    candidates: List[Path] = []
-    for directory in search_dirs:
+    def _newest_dat(directory: Path) -> Optional[Path]:
+        if not directory.is_dir():
+            return None
         try:
-            candidates.extend(p for p in directory.glob("*.dat") if p.is_file())
+            candidates = [p for p in directory.glob("*.dat") if p.is_file()]
         except OSError:
-            continue
-    if not candidates:
-        return None
+            return None
+        if not candidates:
+            return None
 
-    def _mtime(p: Path) -> float:
-        try:
-            return float(p.stat().st_mtime)
-        except OSError:
-            return 0.0
+        def _mtime(p: Path) -> float:
+            try:
+                return float(p.stat().st_mtime)
+            except OSError:
+                return 0.0
 
-    return max(candidates, key=_mtime).resolve()
+        return max(candidates, key=_mtime).resolve()
+
+    hit = _newest_dat(root / "averaged")
+    if hit is not None:
+        return hit
+    return _newest_dat(root)
+
+
+def session_hint_soft_buffer_1d(hints: SessionPathHints, workdir: Path) -> Optional[str]:
+    """
+    Soft suggestion for liveview buffer_1d: last integrated curve, else filesystem fallback.
+
+    Unlike :func:`session_hint_for_positional_path` for ``buffer_1d``, this ignores
+    ``buffer_dat_path`` (applied session buffer) so coaching can track new integrations.
+    """
+    li = _file_hint_if_exists(hints.last_integrated_dat_path, workdir)
+    if li:
+        return li
+    found = find_latest_dat_in_workdir(workdir)
+    return str(found) if found is not None else None
 
 
 def browse_start_dir_for_resolved_paths(paths: List[str], workdir: Path) -> Optional[str]:
@@ -528,13 +542,7 @@ def session_hint_for_positional_path(
         buf = _file_hint_if_exists(getattr(hints, "buffer_dat_path", None), workdir)
         if buf:
             return buf
-        li = _file_hint_if_exists(hints.last_integrated_dat_path, workdir)
-        if li:
-            return li
-        found = find_latest_dat_in_workdir(workdir)
-        if found is not None:
-            return str(found)
-        return None
+        return session_hint_soft_buffer_1d(hints, workdir)
     if skill_name in ANALYSIS_SKILLS_WITH_PROFILE and param_name == "profile":
         pf = _file_hint_if_exists(hints.preferred_profile_dat_path, workdir)
         if pf:

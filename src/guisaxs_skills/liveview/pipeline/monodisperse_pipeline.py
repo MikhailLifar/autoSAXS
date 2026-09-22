@@ -131,7 +131,7 @@ def fit_distances_opts(
         opts.update(load_yaml(state.fit_distances_conf_path))
     wp = state.monodisperse_wizard_params
     if isinstance(wp, dict):
-        for key in ("rg_nm", "first", "last", "smooth"):
+        for key in ("rg_nm", "first", "last", "q_min", "q_max", "smooth"):
             if wp.get(key) is not None:
                 opts[key] = wp[key]
         if refine:
@@ -141,16 +141,25 @@ def fit_distances_opts(
     if isinstance(guinier_handoff, dict):
         if guinier_handoff.get("rg") is not None and opts.get("rg_nm") is None:
             opts["rg_nm"] = guinier_handoff["rg"]
-        if guinier_handoff.get("first_point_1based") is not None and opts.get("first") is None:
+        if (
+            guinier_handoff.get("first_point_1based") is not None
+            and opts.get("first") is None
+            and opts.get("q_min") is None
+        ):
             opts["first"] = guinier_handoff["first_point_1based"]
         # Never pass Guinier last → DATGNOM: the Guinier window is far too narrow for
         # p(r)/DAMMIF (ATSAS "insufficient data"). Omit --last so DATGNOM chooses it.
     if use_guinier_placeholders:
         # Same-job cascade: Rg/first from fit_guinier; never last (see above).
-        for key in ("rg_nm", "first", "last"):
+        for key in ("rg_nm", "first", "last", "q_min", "q_max"):
             opts.pop(key, None)
         opts["rg_nm"] = "${fit_guinier.rg}"
         opts["first"] = "${fit_guinier.first_point_1based}"
+    # q_min/q_max are alternate ways to set first/last — never pass both.
+    if opts.get("q_min") is not None:
+        opts.pop("first", None)
+    if opts.get("q_max") is not None:
+        opts.pop("last", None)
     if not refine:
         # Auto / Guinier-chain path must always use DATGNOM search, never pinned Dmax.
         for key in ("dmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax"):
@@ -267,10 +276,6 @@ def shape_step(
             request=RunRequest("model_density", [prof], opts),
         )
     return None
-
-
-def job_includes_shape(steps: List[JobStep]) -> bool:
-    return any(s.name in ("model_dam", "model_bodies", "model_density") for s in steps)
 
 
 def build_monodisperse_steps(

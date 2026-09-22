@@ -100,8 +100,7 @@ class SizesPane(QWidget):
         self._lbl_diagnostics.setText(msg)
 
     def show_sizes(self, profile_path: str, gnom_out_path: str) -> None:
-        _ = profile_path
-        self._fit_plot.plot_from_gnom_out(gnom_out_path)
+        self._fit_plot.plot_from_dat_and_gnom_out(profile_path, gnom_out_path)
         self._dr_plot.plot_from_gnom_out(gnom_out_path)
 
     def clear_view(self) -> None:

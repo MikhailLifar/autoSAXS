@@ -21,10 +21,10 @@ class LiveviewPolydisperseHandler:
         self._c = controller
 
     def refresh_queue_ui(self) -> None:
-        self._c.processing_mode.sync_ui()
+        self._c.session.sync_processing_ui()
 
     def on_intervention(self) -> None:
-        self._c.processing_mode.stop()
+        self._c.session.stop()
         self._c.executor.cancel_current()
 
     def on_mixture_config_changed(self) -> None:
@@ -39,7 +39,7 @@ class LiveviewPolydisperseHandler:
 
     def on_resume_queue(self) -> None:
         self._c.enqueue_report_for_current_sample()
-        self._c.processing_mode.resume()
+        self._c.session.resume()
 
     def _current_sample_path(self) -> str:
         cur = self._c.samples.current()

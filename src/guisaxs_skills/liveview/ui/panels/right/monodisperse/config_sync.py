@@ -11,6 +11,8 @@ from .....session.state import LiveviewSessionState, MonodisperseShapeMode
 
 _GNOM_CONF_KEYS = (
     "rg_nm",
+    "q_min",
+    "q_max",
     "first",
     "last",
     "dmax_nm",
@@ -37,11 +39,16 @@ class MonodisperseConfigSync:
         # Committed GNOM refine params (Confirm) already live in monodisperse_wizard_params.
         gnom = self._gnom_params_from_ui()
         if gnom:
-            for k in ("first", "last", "dmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax", "rg_nm"):
+            for k in _GNOM_CONF_KEYS:
                 if k in gnom:
                     wp[k] = gnom[k]
-                elif k in ("last", "alpha") and k not in gnom:
+                elif k in ("q_max", "last", "alpha") and k not in gnom:
                     wp.pop(k, None)
+            # Prefer q bounds over point indices when both are present.
+            if wp.get("q_min") is not None:
+                wp.pop("first", None)
+            if wp.get("q_max") is not None:
+                wp.pop("last", None)
         self._state.monodisperse_wizard_params = wp
         mode = self._wizard.shape_pane.shape_mode()
         try:
@@ -58,7 +65,13 @@ class MonodisperseConfigSync:
     def _gnom_params_from_ui(self) -> dict:
         # Only committed (Confirm) values live in session state — never pull live dirty UI.
         wp = self._state.monodisperse_wizard_params or {}
-        return {k: wp[k] for k in _GNOM_CONF_KEYS if wp.get(k) is not None}
+        out = {k: wp[k] for k in _GNOM_CONF_KEYS if wp.get(k) is not None}
+        # Avoid passing both q_* and first/last to the skill.
+        if out.get("q_min") is not None:
+            out.pop("first", None)
+        if out.get("q_max") is not None:
+            out.pop("last", None)
+        return out
 
     def persist_confs(self) -> None:
         wd = self._state.watchdir
@@ -112,11 +125,17 @@ class MonodisperseConfigSync:
                     wp.pop(k, None)
                 else:
                     wp[k] = params[k]
-        # Clear keys omitted by gnom_params (e.g. last/alpha auto).
+        # Clear keys omitted by gnom_params (e.g. q_max/alpha auto).
+        if "q_max" not in params:
+            wp.pop("q_max", None)
         if "last" not in params:
             wp.pop("last", None)
         if "alpha" not in params:
             wp.pop("alpha", None)
+        # Wizard emits q_min/q_max; drop legacy point indices to avoid skill conflicts.
+        if "q_min" in params or "q_max" in params:
+            wp.pop("first", None)
+            wp.pop("last", None)
         self._state.monodisperse_wizard_params = wp
         self.persist_confs()
 

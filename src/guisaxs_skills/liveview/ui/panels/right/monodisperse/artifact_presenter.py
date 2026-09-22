@@ -249,32 +249,49 @@ class MonodisperseArtifactPresenter:
         from autosaxs.core.gnom import parse_gnom_out
 
         snap: dict = {}
-        first = result.get("selected_first")
-        last = result.get("selected_last")
-        if first is not None:
-            try:
-                snap["first"] = int(scalar_value(first))
-            except (TypeError, ValueError):
-                pass
-        if last is not None:
-            try:
-                snap["last"] = int(scalar_value(last))
-            except (TypeError, ValueError):
-                pass
+        alpha = None
+        try:
+            parsed = parse_gnom_out(Path(gnom_out_path).read_text(errors="replace"))
+            alpha = parsed.get("current_alpha")
+            ar = parsed.get("angular_range")
+            if isinstance(ar, (tuple, list)) and len(ar) == 2:
+                try:
+                    q0, q1 = float(ar[0]), float(ar[1])
+                    if q0 > 0 and q1 > q0:
+                        snap["q_min"] = q0
+                        snap["q_max"] = q1
+                except (TypeError, ValueError):
+                    pass
+            if snap.get("dmax_nm") is None and parsed.get("real_space_rmax") is not None:
+                snap["dmax_nm"] = float(parsed["real_space_rmax"])
+        except Exception:
+            parsed = {}
+        if "q_min" not in snap:
+            q_min = scalar_value(result.get("q_min_fit_nm"))
+            if q_min is not None and q_min not in ("", None):
+                try:
+                    snap["q_min"] = float(q_min)
+                except (TypeError, ValueError):
+                    pass
+        if "q_min" not in snap:
+            first = result.get("selected_first")
+            if first is not None:
+                try:
+                    snap["first"] = int(scalar_value(first))
+                except (TypeError, ValueError):
+                    pass
+            last = result.get("selected_last")
+            if last is not None:
+                try:
+                    snap["last"] = int(scalar_value(last))
+                except (TypeError, ValueError):
+                    pass
         dmax = scalar_value(result.get("dmax_nm"))
         if dmax is not None and dmax not in ("", None):
             try:
                 snap["dmax_nm"] = float(dmax)
             except (TypeError, ValueError):
                 pass
-        alpha = None
-        try:
-            parsed = parse_gnom_out(Path(gnom_out_path).read_text(errors="replace"))
-            alpha = parsed.get("current_alpha")
-            if snap.get("dmax_nm") is None and parsed.get("real_space_rmax") is not None:
-                snap["dmax_nm"] = float(parsed["real_space_rmax"])
-        except Exception:
-            parsed = {}
         if alpha is not None:
             try:
                 snap["alpha"] = float(alpha)
@@ -302,10 +319,24 @@ class MonodisperseArtifactPresenter:
 
         for k, v in snap.items():
             wp[k] = v
+        if snap.get("q_min") is not None:
+            wp.pop("first", None)
+        if snap.get("q_max") is not None:
+            wp.pop("last", None)
         if not is_refined:
             wp["gnom_auto"] = {
                 k: snap[k]
-                for k in ("first", "last", "dmax_nm", "alpha", "force_zero_rmin", "force_zero_rmax", "rg_nm")
+                for k in (
+                    "q_min",
+                    "q_max",
+                    "first",
+                    "last",
+                    "dmax_nm",
+                    "alpha",
+                    "force_zero_rmin",
+                    "force_zero_rmax",
+                    "rg_nm",
+                )
                 if k in snap
             }
         self._state.monodisperse_wizard_params = wp
@@ -501,56 +532,39 @@ class MonodisperseArtifactPresenter:
         tiff_path: str = "",
         watch_mode: LiveviewWatchMode = LiveviewWatchMode.FLAT,
     ) -> None:
-        root = analysis_output_root(watchdir=watchdir, sample_path=tiff_path, mode=watch_mode)
-        self.set_context(profile_path=self._profile_path, output_root=root, tiff_path=tiff_path, watch_mode=watch_mode)
-        gstem = guinier_mono_dir(root) / stem
-        if gstem.is_dir():
-            for txt in sorted(gstem.glob("*_results.txt"), key=lambda p: p.stat().st_mtime, reverse=True):
-                if "kratky" in txt.name.lower():
-                    continue
-                self._ingest_guinier({"results_path": str(txt)})
-                break
-        fd = fit_distances_dir(root) / stem
-        gnom_out = fd / f"{stem}.out"
-        if not gnom_out.is_file():
-            outs = sorted(fd.glob("*.out"), key=lambda p: p.stat().st_mtime, reverse=True)
-            gnom_out = outs[0] if outs else gnom_out
-        if gnom_out.is_file():
-            self._ingest_gnom({"best_gnom_out_path": str(gnom_out), "atsas_fit_ok": True, "output_subdir": str(fd)})
-        mode = self._state.monodisperse_shape_mode
-        if mode == MonodisperseShapeMode.NONE:
-            dam = dammif_dir(root) / stem
-            fb = model_bodies_dir(root) / stem
-            dens = denss_dir(root) / stem
-            has_dam = dam.is_dir() and (
-                any(dam.glob("dammif-*.cif")) or (dam / "dammif_fits.yml").is_file()
-            )
-            has_bod = fb.is_dir() and (
-                (fb / "bodies_fits.yml").is_file() or any(fb.glob("*.fir"))
-            )
-            has_denss = dens.is_dir() and (
-                any(dens.glob("*.mrc"))
-                or any(dens.glob("*_denss_input.dat"))
-                or any(p.is_dir() and any(p.glob("*_avg.mrc")) for p in dens.iterdir() if p.is_dir())
-            )
-            if has_denss and not has_dam and not has_bod:
-                mode = MonodisperseShapeMode.DENSS
-                self._state.monodisperse_shape_mode = mode
-                self._wizard.shape_pane.set_shape_mode("denss")
-            elif has_dam and not has_bod and not has_denss:
-                mode = MonodisperseShapeMode.DAMMIF
-                self._state.monodisperse_shape_mode = mode
-                self._wizard.shape_pane.set_shape_mode("dammif")
-            elif has_bod and not has_dam and not has_denss:
-                mode = MonodisperseShapeMode.BODIES
-                self._state.monodisperse_shape_mode = mode
-                self._wizard.shape_pane.set_shape_mode("bodies")
-        if mode == MonodisperseShapeMode.DAMMIF:
-            self._load_shape_artifacts_for_mode(root=root, stem=stem, mode="dammif")
-        elif mode == MonodisperseShapeMode.BODIES:
-            self._load_shape_artifacts_for_mode(root=root, stem=stem, mode="bodies")
-        elif mode == MonodisperseShapeMode.DENSS:
-            self._load_shape_artifacts_for_mode(root=root, stem=stem, mode="denss")
+        from .....services.history.right_artifacts import discover_monodisperse_artifacts
+
+        bundle = discover_monodisperse_artifacts(
+            watchdir=watchdir,
+            stem=stem,
+            tiff_path=tiff_path,
+            watch_mode=watch_mode,
+            shape_mode=self._state.monodisperse_shape_mode,
+        )
+        if bundle.inferred_shape_mode is not None:
+            if self._state.monodisperse_shape_mode == MonodisperseShapeMode.NONE:
+                self._state.monodisperse_shape_mode = bundle.inferred_shape_mode
+        self.apply_bundle(bundle)
+
+    def apply_bundle(self, bundle: Any) -> None:
+        """Apply a discovered monodisperse artifact bundle (disk present path)."""
+        root = bundle.output_root
+        if root is None:
+            root = self._state.watchdir.expanduser().resolve()
+        self.set_context(
+            profile_path=bundle.profile_path or self._profile_path,
+            output_root=root,
+        )
+        if bundle.guinier:
+            self._ingest_guinier(bundle.guinier)
+        if bundle.gnom:
+            self._ingest_gnom(bundle.gnom)
+        mode = bundle.shape_mode or (
+            bundle.inferred_shape_mode.value if bundle.inferred_shape_mode is not None else ""
+        )
+        if mode:
+            self._wizard.shape_pane.set_shape_mode(mode)
+            self._load_shape_artifacts_for_mode(root=root, stem=bundle.stem, mode=mode)
 
     @property
     def last_guinier_handoff(self) -> Dict[str, Any]:

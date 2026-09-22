@@ -36,8 +36,8 @@ from .optimize import (
     _candidate_from_gnom_out,
     _guinier_from_profile,
     _optimize_rmax_nm,
-    _q_to_first_point_1based,
 )
+from autosaxs.skill.gnom_fit_common import resolve_first_last
 from .parametric import classify_dr_parametric
 from .quality_io import _assess_and_write_dr_quality, normalize_fit_sizes_single_sample
 from autosaxs.core.atsas_gnom import normalize_force_zero
@@ -57,6 +57,8 @@ def fit_sizes(
     rad56_nm: Optional[float] = None,
     first: Optional[int] = None,
     last: Optional[int] = None,
+    q_min: Optional[float] = None,
+    q_max: Optional[float] = None,
     alpha: Optional[float] = None,
     nr: Optional[int] = None,
     force_zero_rmin: Optional[str] = None,
@@ -76,8 +78,10 @@ def fit_sizes(
     - `rmin_nm` (float | None): GNOM `--rmin` (nm). If omitted, not passed to GNOM.
     - `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, optimized in `[ε, 3 × rg_max]` from in-process `fit_guinier` (30 s max). When set, skip Rmax search but still write the Rmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
     - `rad56_nm` (float | None): GNOM `--rad56` for `shape=rods` (nm cylinder radius), deprecated. Ignored for spheres.
-    - `first` (int | None): GNOM `--first` (1-based). If omitted, taken from the low-q end of the Guinier interval from `fit_guinier`.
-    - `last` (int | None): GNOM `--last`. If omitted, not passed to GNOM.
+    - `first` (int | None): GNOM `--first` (1-based). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
+    - `last` (int | None): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise not passed to GNOM.
+    - `q_min` (float | None): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
+    - `q_max` (float | None): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`.
     - `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
     - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
     - `force_zero_rmin` (str | None): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
@@ -180,6 +184,8 @@ def fit_sizes(
         rad56_nm=None if rad56_nm is None else float(rad56_nm),
         first=first,
         last=last,
+        q_min=None if q_min is None else float(q_min),
+        q_max=None if q_max is None else float(q_max),
         alpha=None if alpha is None else float(alpha),
         nr=nr,
         force_zero_rmin=force_zero_rmin,
@@ -206,6 +212,8 @@ def fit_sizes(
         "rad56_nm",
         "first",
         "last",
+        "q_min",
+        "q_max",
         "alpha",
         "nr",
         "force_zero_rmin",
@@ -224,6 +232,8 @@ def _fit_sizes_paths(
     rad56_nm: Optional[float] = None,
     first: Optional[int] = None,
     last: Optional[int] = None,
+    q_min: Optional[float] = None,
+    q_max: Optional[float] = None,
     alpha: Optional[float] = None,
     nr: Optional[int] = None,
     force_zero_rmin: Optional[str] = None,
@@ -266,10 +276,13 @@ def _fit_sizes_paths(
 
     user_rg_nm = rg_nm
     user_first = first
+    user_last = last
+    user_q_min = q_min
+    user_q_max = q_max
     user_rmax_nm = rmax_nm
     n_pts = int(len(q_nm))
 
-    need_guinier = (user_first is None) or (user_rmax_nm is None)
+    need_guinier = (user_first is None and user_q_min is None) or (user_rmax_nm is None)
     guinier_info: Optional[Dict[str, Any]] = None
     if need_guinier:
         if event_bus:
@@ -297,24 +310,21 @@ def _fit_sizes_paths(
         except (TypeError, ValueError):
             rg_guinier_nm_val = None
 
-    if user_first is not None:
-        first_pt = int(user_first)
-    else:
-        if guinier_info is None or guinier_info.get("q_min") is None:
-            raise RuntimeError("fit_sizes: cannot derive --first without fit_guinier q_min.")
-        first_pt = _q_to_first_point_1based(q_nm, float(guinier_info["q_min"]))
-
-    last_pt: Optional[int] = int(last) if last is not None else None
-    if first_pt < 1 or first_pt >= n_pts:
-        raise ValueError(
-            f"fit_sizes: require 1 <= first < n_points ({n_pts}); got first={first_pt}",
-        )
-    if last_pt is not None:
-        if last_pt < 1 or last_pt > n_pts or first_pt >= last_pt:
-            raise ValueError(
-                f"fit_sizes: require 1 <= first < last <= n_points ({n_pts}); "
-                f"got first={first_pt}, last={last_pt}",
-            )
+    fallback_q_min = None
+    if guinier_info is not None and guinier_info.get("q_min") is not None:
+        try:
+            fallback_q_min = float(guinier_info["q_min"])
+        except (TypeError, ValueError):
+            fallback_q_min = None
+    first_pt, last_pt = resolve_first_last(
+        q_nm,
+        first=user_first,
+        last=user_last,
+        q_min=user_q_min,
+        q_max=user_q_max,
+        fallback_q_min=fallback_q_min,
+        skill_id="fit_sizes",
+    )
 
     if rmin_nm is not None and rmin_nm < 0:
         raise ValueError(f"fit_sizes: rmin_nm must be >= 0; got {rmin_nm}")

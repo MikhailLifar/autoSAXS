@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -109,14 +108,6 @@ class LiveviewSkillRunsHandler:
     def cancel_running(self) -> None:
         self._c.executor.cancel_running(requeue=False)
 
-    def run_fit_sizes(self) -> None:
-        """Deprecated: polydisperse window drives fit_sizes reruns."""
-        return
-
-    def run_model_mixture(self) -> None:
-        """Deprecated: polydisperse window drives model_mixture reruns."""
-        return
-
     def apply_subtraction_rerun(self, *, scaling_factor: float, sample_dat: str, buffer_dat: str) -> None:
         # Sync live pane numbers into session before building the after-subtract chain.
         right = self._c.right
@@ -125,7 +116,7 @@ class LiveviewSkillRunsHandler:
                 right.monodisperse_coordinator.sync_params_to_state()
             if self._c.state.polydisperse_armed:
                 right.polydisperse_coordinator.sync_params_to_state()
-        self._c.processing_mode.stop()
+        self._c.session.stop()
         self._c.executor.cancel_current()
         job = self._c.executor.build_rerun_subtraction_job(
             sample_dat=sample_dat,
@@ -136,7 +127,7 @@ class LiveviewSkillRunsHandler:
         )
         self._c.executor.enqueue_job(job)
         if not (self._c.state.monodisperse_armed or self._c.state.polydisperse_armed):
-            self._c.processing_mode.resume()
+            self._c.session.resume()
 
     def _run_manual_fit(
         self,
@@ -194,7 +185,7 @@ class LiveviewSkillOutcomesHandler:
             self._c.right.set_analysis_busy(True)
             if skill_name:
                 self._c.right.log_panel.append_app(f"Started {skill_name}")
-        self._c.processing_mode.sync_ui()
+        self._c.session.sync_processing_ui()
 
     def on_finished(self, outcome: RunOutcome) -> None:
         if self._c.left is not None:
@@ -203,7 +194,7 @@ class LiveviewSkillOutcomesHandler:
             self._c.right.set_analysis_busy(False)
         self._handle_failure(outcome)
         self._handle_success(outcome)
-        self._c.processing_mode.sync_ui()
+        self._c.session.sync_processing_ui()
 
     def on_latest_artifacts(self, result: dict) -> None:
         middle, right = self._c.middle, self._c.right
@@ -224,34 +215,25 @@ class LiveviewSkillOutcomesHandler:
                 if sample:
                     self._c.history.refresh_middle_for_sample(sample)
                 else:
-                    self._update_middle_plots_from_artifacts(middle, result)
-                right.ingest_skill_result(result, skill_name=str(result.get("skill_name") or ""))
+                    # Calibrate-only / no boarded sample: layout via sync, no direct paint.
+                    self._c.history.sync_middle(sample=None, force=True)
+                from ..services.history.right_artifacts import RightPresentSource, present_right
+
+                present_right(
+                    right,
+                    state=self._c.state,
+                    sample_path=str(sample or ""),
+                    stem="",
+                    watch_mode=self._c.state.watch_mode,
+                    source=RightPresentSource.LIVE,
+                    result=result,
+                    skill_name=str(result.get("skill_name") or ""),
+                    session=self._c.session,
+                )
             self._c.monodisperse.update_profile_from_artifacts(result)
             self._c.polydisperse.update_profile_from_artifacts(result)
         finally:
             right.sync_modeling_ui_to_session_state()
-
-    def _update_middle_plots_from_artifacts(self, middle, result: dict) -> None:
-        """Fallback when no sample path is known (e.g. calibration-only skill)."""
-        opts = self._c.history.subtract_options()
-        sub = result.get("subtracted_1d")
-        sub_path = sub.strip() if isinstance(sub, str) else ""
-        if self._c.state.buffer_ready() and sub_path and os.path.isfile(sub_path):
-            samp = self._c.state.last_integrated_dat_path
-            buf = self._c.state.buffer_dat_path
-            middle.show_subtraction_views(
-                sample_dat=str(samp) if samp is not None and samp.is_file() else "",
-                buffer_dat=str(buf) if buf is not None and buf.is_file() else "",
-                subtracted_dat=sub_path,
-                subtract_options=opts,
-            )
-            return
-        integ = result.get("integrated_1d")
-        xlab = "px" if not self._c.state.is_calibrated() else "q (nm$^{-1}$)"
-        if isinstance(integ, list) and integ and isinstance(integ[-1], str):
-            middle.show_curve(integ[-1], x_label=xlab)
-        elif isinstance(integ, str) and integ:
-            middle.show_curve(integ, x_label=xlab)
 
     def _handle_failure(self, outcome: RunOutcome) -> None:
         if outcome.request is None or outcome.success:
@@ -303,8 +285,20 @@ class LiveviewSkillOutcomesHandler:
             self._c.monodisperse.sync_wizard_context_before_ingest(outcome)
             self._c.polydisperse.sync_window_context_before_ingest(outcome)
             if self._c.right is not None:
-                self._c.right.ingest_skill_result(outcome.result or {}, skill_name=skill)
-        self._c.processing_mode.sync_ui()
+                from ..services.history.right_artifacts import RightPresentSource, present_right
+
+                present_right(
+                    self._c.right,
+                    state=self._c.state,
+                    sample_path="",
+                    stem="",
+                    watch_mode=self._c.state.watch_mode,
+                    source=RightPresentSource.LIVE,
+                    result=outcome.result or {},
+                    skill_name=skill,
+                    session=self._c.session,
+                )
+        self._c.session.sync_processing_ui()
         if skill in ("fit_distances", "fit_sizes") and not is_atsas_fit_ok(outcome.result):
             parent = self._c.parent_widget
             if parent is not None:

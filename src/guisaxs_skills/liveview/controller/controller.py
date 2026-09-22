@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import QMessageBox, QWidget
 
 from ...logic.runner_qprocess import SkillRunner
 from ..pipeline import LiveviewJobExecutor, LiveviewQueueStatus
-from ..session import load_liveview_session_settings, save_liveview_session_settings
+from ..session import LiveviewSession
 from ..session.output_paths import analysis_output_root
 from ..session.sample_store import SampleStore
 from ..session.state import LiveviewSessionState, LiveviewWatchMode
@@ -18,7 +18,6 @@ from .history import LiveviewHistoryHandler
 from .ingest import LiveviewIngestHandler
 from .monodisperse import LiveviewMonodisperseHandler
 from .polydisperse import LiveviewPolydisperseHandler
-from .processing_mode import LiveviewProcessingMode
 from .session import (
     LiveviewSessionHandler,
     LiveviewSkillOutcomesHandler,
@@ -39,18 +38,16 @@ class LiveviewController(QObject):
 
     def __init__(self, *, watchdir: Path) -> None:
         super().__init__()
-        self._state = LiveviewSessionState(watchdir=watchdir)
-        load_liveview_session_settings(self._state)
-
+        self.session = LiveviewSession(watchdir=watchdir)
         self._watchdir = watchdir.resolve()
         self._runner = SkillRunner(workdir=watchdir)
         self.samples = SampleStore()
         self._executor = LiveviewJobExecutor(
-            state=self._state,
+            state=self.session.state,
             runner=self._runner,
             sample_store=self.samples,
         )
-        self.processing_mode = LiveviewProcessingMode(self._executor, state=self._state)
+        self.session.bind_executor(self._executor)
 
         self._left: Optional[LiveviewLeftPanel] = None
         self._middle: Optional[LiveviewMiddlePanel] = None
@@ -59,18 +56,21 @@ class LiveviewController(QObject):
 
         self.history = LiveviewHistoryHandler(self)
         self.ingest = LiveviewIngestHandler(self)
-        self.session = LiveviewSessionHandler(self)
+        self.session_handler = LiveviewSessionHandler(self)
         self.skill_runs = LiveviewSkillRunsHandler(self)
         self.outcomes = LiveviewSkillOutcomesHandler(self)
         self.monodisperse = LiveviewMonodisperseHandler(self)
         self.polydisperse = LiveviewPolydisperseHandler(self)
+
+        self.session.intake_changed.connect(self.ingest.on_intake_changed)
+        self.session.buffer_changed.connect(self.session_handler.on_subtract_config_changed)
 
         self._connect_executor(self._executor)
         self._executor.start()
 
     @property
     def state(self) -> LiveviewSessionState:
-        return self._state
+        return self.session.state
 
     @property
     def watchdir(self) -> Path:
@@ -112,10 +112,10 @@ class LiveviewController(QObject):
         self._middle = middle
         self._right = right
         self._parent_widget = parent
-        self.processing_mode.bind_right_panel(right)
+        self.session.bind_right_panel(right)
         self._wire_log_streams()
-        self.session.apply_loaded_to_ui()
-        mode = self._state.intake_mode
+        self.session_handler.apply_loaded_to_ui()
+        mode = self.state.intake_mode
         right.sync_intake_toggles(mode)
         left.apply_intake_visibility(mode)
         self.history.sync_middle(force=True)
@@ -167,7 +167,7 @@ class LiveviewController(QObject):
         return True
 
     def persist_session_settings(self) -> None:
-        save_liveview_session_settings(self._state)
+        self.session.persist()
 
     def _connect_executor(self, executor: LiveviewJobExecutor) -> None:
         executor.queue_status.connect(self.on_queue_status)
@@ -193,25 +193,19 @@ class LiveviewController(QObject):
         self.ingest.ingest_dropped_tiffs(paths)
 
     def reset_calibration(self) -> None:
-        self.session.reset_calibration()
+        self.session_handler.reset_calibration()
 
     def reset_buffer(self) -> None:
-        self.session.reset_buffer()
+        self.session_handler.reset_buffer()
 
     def on_subtract_config_changed(self) -> None:
-        self.session.on_subtract_config_changed()
+        self.session_handler.on_subtract_config_changed()
 
     def run_calibration(self) -> None:
         self.skill_runs.run_calibration()
 
     def cancel_running_skill(self) -> None:
         self.skill_runs.cancel_running()
-
-    def run_fit_sizes(self) -> None:
-        self.skill_runs.run_fit_sizes()
-
-    def run_model_mixture(self) -> None:
-        self.skill_runs.run_model_mixture()
 
     def apply_subtraction_rerun(self, *, scaling_factor: float, sample_dat: str, buffer_dat: str) -> None:
         self.skill_runs.apply_subtraction_rerun(
@@ -222,16 +216,16 @@ class LiveviewController(QObject):
 
     def on_subtraction_control_changed(self) -> None:
         """Scale spinbox touched — enter Manual (idempotent)."""
-        self.processing_mode.stop()
+        self.session.stop()
 
     def on_subtraction_wizard_closed(self) -> None:
         """Close without Apply: resume Auto only when no analysis windows are armed."""
-        if not (self._state.monodisperse_armed or self._state.polydisperse_armed):
-            self.processing_mode.resume()
+        if not (self.state.monodisperse_armed or self.state.polydisperse_armed):
+            self.session.resume()
 
     def enqueue_report_for_current_sample(self) -> None:
         """Queue ``report_individual`` for the history-current sample (Resume auto-processing)."""
-        if not self._state.analysis_enabled():
+        if not self.state.analysis_enabled():
             return
         hist = list(self.samples.paths())
         if not hist:
@@ -244,7 +238,7 @@ class LiveviewController(QObject):
         root = analysis_output_root(
             watchdir=self._watchdir,
             sample_path=tiff_path,
-            mode=self._state.watch_mode,
+            mode=self.state.watch_mode,
         )
         self._executor.enqueue_report_individual_for_sample(
             output_root=root,
@@ -269,11 +263,7 @@ class LiveviewController(QObject):
 
     def on_analysis_arming_changed(self) -> None:
         self.history.refresh_right_outputs()
-        self.processing_mode.sync_ui()
-
-    def on_analysis_mode_changed(self) -> None:
-        """Deprecated alias."""
-        self.on_analysis_arming_changed()
+        self.session.sync_processing_ui()
 
     def append_app_log(self, text: str) -> None:
         if self._right is not None:

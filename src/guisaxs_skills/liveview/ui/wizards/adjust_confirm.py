@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import QMessageBox, QPushButton, QWidget
 from ..attention import AttentionPulse
 
 _FLOAT_KEYS = frozenset(
-    {"dmax_nm", "rmax_nm", "rmin_nm", "alpha", "rg_nm"}
+    {"dmax_nm", "rmax_nm", "rmin_nm", "alpha", "rg_nm", "q_min", "q_max"}
 )
 _FLOAT_EPS = 1e-6
 

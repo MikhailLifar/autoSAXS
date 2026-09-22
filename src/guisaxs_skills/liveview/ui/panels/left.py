@@ -22,13 +22,13 @@ from PyQt5.QtWidgets import (
 from ....logic.session_state import SessionPathHints
 from ....ui.preview_panel import PreviewPanel
 from ...services.calibration.display import refined_yml_display_rows
+from ...session.api import LiveviewSession
 from ...session.state import LiveviewIntakeMode, LiveviewSessionState
 from ..attention import AttentionPulse
 from ..wizards.left import BufferWizardDialog, CalibrationWizardDialog
 from ..wizards.mask import MaskWizardDialog
 from ...services.calibration.mask_preview import render_mask_overlay_png
 from ...services.calibration.storage import calibration_subdir
-from ...session.persistence import save_liveview_session_settings
 
 
 def pick_calibration_curve_image_path(result: Dict[str, Any]) -> str:
@@ -61,9 +61,10 @@ class LiveviewLeftPanel(QWidget):
     buffer_reset_requested = pyqtSignal()
     subtract_config_changed = pyqtSignal()
 
-    def __init__(self, *, state: LiveviewSessionState) -> None:
+    def __init__(self, *, session: LiveviewSession) -> None:
         super().__init__()
-        self._state = state
+        self._session = session
+        self._state = session.state
         self._cal_wizard: CalibrationWizardDialog | None = None
         self._buf_wizard: BufferWizardDialog | None = None
         self._mask_wizard: MaskWizardDialog | None = None
@@ -325,13 +326,8 @@ class LiveviewLeftPanel(QWidget):
         if lip is not None and lip.is_file():
             h.last_integrated_dat_path = str(lip.resolve())
             h.one_d_profile_dir = str(lip.parent.resolve())
-        else:
-            from ....logic.smart_defaults import find_latest_dat_in_workdir
-
-            latest = find_latest_dat_in_workdir(wd)
-            if latest is not None:
-                h.last_integrated_dat_path = str(latest)
-                h.one_d_profile_dir = str(latest.parent)
+        elif av.is_dir():
+            h.one_d_profile_dir = str(av.resolve())
         buf = self._state.buffer_dat_path
         if buf is not None and buf.is_file():
             h.buffer_dat_path = str(buf.resolve())
@@ -359,6 +355,7 @@ class LiveviewLeftPanel(QWidget):
             cal.maybe_apply_empty_calibrant_hint()
         buf = self._buf_wizard
         if buf is not None:
+            buf.update_path_hints(self._build_buffer_path_hints())
             buf.maybe_apply_empty_buffer_hint()
         self.refresh_attention_coach()
 
@@ -411,21 +408,18 @@ class LiveviewLeftPanel(QWidget):
             pass
         if not p.is_file():
             return
-        self._state.mask_path = p
+        self._session.set_mask_path(p)
         if self._cal_wizard is not None:
             self._cal_wizard.set_mask_path(str(p))
         self._update_mask_preview_file()
         self._refresh_mask_preview_from_state()
-        save_liveview_session_settings(self._state)
         self.refresh_attention_coach()
 
     def _on_cal_mask_path_edited(self, path: str) -> None:
         chosen = (path or "").strip()
         if not chosen:
-            self._state.mask_path = None
-            self._state.mask_preview_path = None
+            self._session.set_mask_path(None, clear_preview=True)
             self._refresh_mask_preview_from_state()
-            save_liveview_session_settings(self._state)
             self.refresh_attention_coach()
             return
         p = Path(chosen).expanduser()
@@ -435,19 +429,16 @@ class LiveviewLeftPanel(QWidget):
             return
         if not p.is_file():
             return
-        self._state.mask_path = p
+        self._session.set_mask_path(p)
         self._update_mask_preview_file()
         self._refresh_mask_preview_from_state()
-        save_liveview_session_settings(self._state)
         self.refresh_attention_coach()
 
     def _on_mask_reset(self) -> None:
-        self._state.mask_path = None
-        self._state.mask_preview_path = None
+        self._session.set_mask_path(None, clear_preview=True)
         if self._cal_wizard is not None:
             self._cal_wizard.set_mask_path("")
         self._refresh_mask_preview_from_state()
-        save_liveview_session_settings(self._state)
         self.refresh_attention_coach()
 
     def _calibrant_path_for_mask_preview(self) -> str:
@@ -466,7 +457,7 @@ class LiveviewLeftPanel(QWidget):
     def _update_mask_preview_file(self) -> None:
         mask = self._state.mask_path
         if mask is None or not mask.is_file():
-            self._state.mask_preview_path = None
+            self._session.set_mask_preview_path(None)
             return
         image = self._calibrant_path_for_mask_preview()
         out = calibration_subdir(self._state.watchdir) / "mask_preview.png"
@@ -475,7 +466,7 @@ class LiveviewLeftPanel(QWidget):
             mask_path=str(mask),
             out_path=str(out),
         )
-        self._state.mask_preview_path = out if ok else None
+        self._session.set_mask_preview_path(out if ok else None)
 
     def _refresh_mask_preview_from_state(self) -> None:
         prev = self._state.mask_preview_path
@@ -549,6 +540,7 @@ class LiveviewLeftPanel(QWidget):
             self._buf_wizard.attention_context_changed.connect(self.refresh_calibration_coach)
         else:
             self._buf_wizard.rebuild(hints, saved_state=saved if not self._buf_wizard.has_buffer_path() else None)
+        self._buf_wizard.update_path_hints(hints)
         self._buf_wizard.maybe_apply_empty_buffer_hint()
         self._buf_wizard.show()
         self._buf_wizard.raise_()
@@ -659,10 +651,8 @@ class LiveviewLeftPanel(QWidget):
 
             # Do not copy buffer.dat or write subtract.conf.
             # Keep the selected buffer and subtract parameters in session state only.
-            self._state.buffer_dat_path = buffer_path
-            self._state.subtract_options = dict(opts)
+            self._session.set_buffer(buffer_path, dict(opts))
             self._refresh_buffer_preview_from_state()
-            self.subtract_config_changed.emit()
             if self._buf_wizard is not None:
                 self._buf_wizard.arm_close_coach()
             self.refresh_calibration_coach()

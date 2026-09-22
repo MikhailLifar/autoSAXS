@@ -6,7 +6,7 @@ Instead go to `docs/`, choose there an appropriate spec file and modify the spec
 Specs (code under `src/` is SSOT when docs drift — keep them aligned):
 
 - **Skills paradigm** (package contract): `docs/skills_paradigm.md`
-- **Liveview architecture** (Session / SampleStore / plan_for): `docs/liveview_session_sample_plan.md`
+- **Liveview architecture** (Session / SampleStore / plan_for): `docs/liveview_architecture.md`, ownership cheat sheet `docs/liveview_session_sample_plan.md`
 - **Liveview product / UX**: `docs/guisaxs_liveview_spec.md`
 - **Skills GUI product / UX**: `docs/guisaxs_skills_spec.md`
 
