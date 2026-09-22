@@ -53,7 +53,7 @@ class LiveviewSessionState:
     last_integrated_dat_path: Optional[Path] = None
     last_subtracted_dat_path: Optional[Path] = None
 
-    mask_path: Optional[Path] = None
+    mask_path: Optional[Path] = None  # applied mask (integrate --mask / UI overlay); not auto-only
     mask_preview_path: Optional[Path] = None
 
     buffer_dat_path: Optional[Path] = None

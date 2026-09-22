@@ -19,16 +19,17 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ....logic.session_state import SessionPathHints
-from ....ui.preview_panel import PreviewPanel
 from ...services.calibration.display import refined_yml_display_rows
+from ...services.calibration.mask_preview import render_mask_overlay_png
+from ...services.calibration.masks import applied_mask_path
+from ...services.calibration.storage import calibration_subdir
 from ...session.api import LiveviewSession
 from ...session.state import LiveviewIntakeMode, LiveviewSessionState
 from ..attention import AttentionPulse
 from ..wizards.left import BufferWizardDialog, CalibrationWizardDialog
 from ..wizards.mask import MaskWizardDialog
-from ...services.calibration.mask_preview import render_mask_overlay_png
-from ...services.calibration.storage import calibration_subdir
+from ....logic.session_state import SessionPathHints
+from ....ui.preview_panel import PreviewPanel
 
 
 def pick_calibration_curve_image_path(result: Dict[str, Any]) -> str:
@@ -105,7 +106,10 @@ class LiveviewLeftPanel(QWidget):
         self._mask_group = QGroupBox("Mask")
         self._mask_open = QPushButton("Set mask")
         self._mask_reset = QPushButton("Reset")
-        self._mask_reset.setToolTip("Clear the session mask path (does not delete the file on disk)")
+        self._mask_reset.setToolTip(
+            "Clear the session mask override (does not delete files; "
+            "integrate falls back to calibration effective_mask.npy when present)"
+        )
         self._mask_reset.clicked.connect(self._on_mask_reset)
         self._mask_hint = QLabel("—")
         self._mask_hint.setWordWrap(True)
@@ -339,9 +343,9 @@ class LiveviewLeftPanel(QWidget):
             self._cal_wizard.reset_requested.connect(self.calibration_reset_requested.emit)
             self._cal_wizard.attention_context_changed.connect(self.refresh_calibration_coach)
             self._cal_wizard.mask_path_edited.connect(self._on_cal_mask_path_edited)
-        # Sync session mask into the form if present.
-        if self._state.mask_path is not None and self._state.mask_path.is_file():
-            self._cal_wizard.set_mask_path(str(self._state.mask_path))
+        applied = applied_mask_path(self._state)
+        if applied is not None:
+            self._cal_wizard.set_mask_path(str(applied))
         self._cal_wizard.maybe_apply_empty_calibrant_hint()
         self._cal_wizard.show()
         self._cal_wizard.raise_()
@@ -365,8 +369,10 @@ class LiveviewLeftPanel(QWidget):
         if self._cal_wizard is not None:
             calib_path = self._cal_wizard.calibrant_image_path()
             mask_path = self._cal_wizard.mask_path_text()
-        if not mask_path and self._state.mask_path is not None and self._state.mask_path.is_file():
-            mask_path = str(self._state.mask_path)
+        if not mask_path:
+            applied = applied_mask_path(self._state)
+            if applied is not None:
+                mask_path = str(applied)
         if self._mask_wizard is None:
             self._mask_wizard = MaskWizardDialog(
                 watchdir=self._state.watchdir,
@@ -393,7 +399,7 @@ class LiveviewLeftPanel(QWidget):
         """Keep calibration form image in sync when the shared mask wizard changes it."""
         if self._cal_wizard is not None:
             self._cal_wizard.set_calibrant_image_path(image_path)
-        if self._state.mask_path is not None and self._state.mask_path.is_file():
+        if applied_mask_path(self._state) is not None:
             self._update_mask_preview_file()
             self._refresh_mask_preview_from_state()
 
@@ -408,6 +414,7 @@ class LiveviewLeftPanel(QWidget):
             pass
         if not p.is_file():
             return
+        # New saved file becomes the applied mask (do not overwrite effective_mask.npy).
         self._session.set_mask_path(p)
         if self._cal_wizard is not None:
             self._cal_wizard.set_mask_path(str(p))
@@ -419,7 +426,11 @@ class LiveviewLeftPanel(QWidget):
         chosen = (path or "").strip()
         if not chosen:
             self._session.set_mask_path(None, clear_preview=True)
+            self._update_mask_preview_file()
             self._refresh_mask_preview_from_state()
+            applied = applied_mask_path(self._state)
+            if self._cal_wizard is not None:
+                self._cal_wizard.refresh_mask_overlay(str(applied) if applied else "")
             self.refresh_attention_coach()
             return
         p = Path(chosen).expanduser()
@@ -435,9 +446,16 @@ class LiveviewLeftPanel(QWidget):
         self.refresh_attention_coach()
 
     def _on_mask_reset(self) -> None:
+        """Drop session override; if calibrated, re-point to sibling effective_mask.npy."""
         self._session.set_mask_path(None, clear_preview=True)
-        if self._cal_wizard is not None:
+        applied = applied_mask_path(self._state)
+        if applied is not None:
+            self._session.set_mask_path(applied)
+            if self._cal_wizard is not None:
+                self._cal_wizard.set_mask_path(str(applied))
+        elif self._cal_wizard is not None:
             self._cal_wizard.set_mask_path("")
+        self._update_mask_preview_file()
         self._refresh_mask_preview_from_state()
         self.refresh_attention_coach()
 
@@ -455,8 +473,8 @@ class LiveviewLeftPanel(QWidget):
         return ""
 
     def _update_mask_preview_file(self) -> None:
-        mask = self._state.mask_path
-        if mask is None or not mask.is_file():
+        mask = applied_mask_path(self._state)
+        if mask is None:
             self._session.set_mask_preview_path(None)
             return
         image = self._calibrant_path_for_mask_preview()
@@ -470,13 +488,13 @@ class LiveviewLeftPanel(QWidget):
 
     def _refresh_mask_preview_from_state(self) -> None:
         prev = self._state.mask_preview_path
-        mask = self._state.mask_path
+        mask = applied_mask_path(self._state)
         if prev is not None and prev.is_file():
             self._mask_hint.setVisible(False)
             self._mask_preview.show_path(str(prev), path_label_visible=False)
             self._mask_preview.set_image_click_handler(self._open_mask_wizard)
             return
-        if mask is not None and mask.is_file():
+        if mask is not None:
             self._mask_hint.setText(mask.name)
             self._mask_hint.setVisible(True)
             self._mask_preview.show_path("")
@@ -490,6 +508,12 @@ class LiveviewLeftPanel(QWidget):
     def sync_mask_preview_from_state(self) -> None:
         self._update_mask_preview_file()
         self._refresh_mask_preview_from_state()
+        if self._cal_wizard is not None:
+            applied = applied_mask_path(self._state)
+            if applied is not None:
+                self._cal_wizard.set_mask_path(str(applied))
+            else:
+                self._cal_wizard.refresh_mask_overlay("")
         self.refresh_attention_coach()
 
     def shutdown_ui(self) -> None:

@@ -10,6 +10,7 @@ import yaml
 from pyFAI.calibrant import ALL_CALIBRANTS
 
 from autosaxs.core.event_bus import EventBus, EventType
+from autosaxs.core.integrator import IntegratorExtended
 from autosaxs.core.utils import write_saxs
 from autosaxs.core.viewer import PLTViewer
 
@@ -78,7 +79,7 @@ def calibrate(
     - `calibrant_image` (str): Path to the calibrant image (e.g. TIFF).
     - `output_dir` (str, default `.`): Directory where results are written.
     - `config_path` (str | None, default `None`): Depricated. Path to a YAML config file with a `calibrate` section. When omitted, bundled defaults are used.
-    - `mask` (str | None, default `None`): Optional user detector pixel mask (`.txt` / `.npy` / `.msk`). When omitted, an automatic mask is used. When provided, it is OR-combined with the automatic mask into `effective_mask.npy` inside `integrator_dir` (the user mask file is never overwritten). The automatic component is also written as `auto_mask.npy` so later `integrate --mask` overrides can re-OR with it.
+    - `mask` (str | None, default `None`): Optional user detector pixel mask (`.txt` / `.npy` / `.msk`). When omitted, the automatic mask alone becomes the effective mask. When provided, it is OR-combined once with the automatic mask. The user mask file is never overwritten. Results are written as `effective_mask.npy` and `auto_mask.npy` **alongside** `integrator/` (not inside it).
     - `mask_mode` (str | None, default `None`): Deprecated compatibility selector (`f`/`from_file`, `a`/`auto`, `c`/`combined`). Effective mask is always `auto | optional user mask`; this flag only records intent for configs/GUIs. Defaults to `a`/`auto` when no user mask is given, else `c`/`combined`.
     - `calibrant` (str | None, default `None`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`). Defaults to `AgBh`.
     - `wavelength` (float | None, default `None`): X-ray wavelength in **Ångström**. Defaults to 1.445 Å.
@@ -88,7 +89,7 @@ def calibrate(
     Notes:
 
     - Automatic mask always includes the beam-stop disk and all negative-intensity pixels (plus optional IQR outliers).
-    - The integrator stores the combined result as `effective_mask.npy` and the automatic component as `auto_mask.npy` (not the user mask path).
+    - `integrator/` stores geometry only. Both `effective_mask.npy` and `auto_mask.npy` are always written next to it (even when no user mask was provided). Later `integrate --mask` replaces the effective mask entirely (no further OR).
 
     ### Short parameter list
 
@@ -102,7 +103,9 @@ def calibrate(
 
     `dict[str, str]` with these output path roles:
 
-    - `integrator_dir`: Directory containing the calibrated integrator (used by `integrate`), including `effective_mask.npy` and `auto_mask.npy`.
+    - `integrator_dir`: Directory containing calibrated geometry (used by `integrate`).
+    - `effective_mask_path`: Path to `effective_mask.npy` alongside `integrator/`.
+    - `auto_mask_path`: Path to `auto_mask.npy` alongside `integrator/`.
     - `refined_path`: Path to the refined detector geometry YAML.
     - `calibration_plots_dir`: Directory containing calibration plots.
     - `calibration_curve_plot_path`: Path to the calibrantion q/I curve plot (PNG).
@@ -272,9 +275,16 @@ def _calibrate_paths(
         write_saxs(calibration_curve_dat_path, q_cal, I_cal, sigma, metadata)
     integrator_dir = os.path.join(output_dir, "integrator")
     result["integrator"].to_disk(integrator_dir)
+    effective_mask_path, auto_mask_path = IntegratorExtended.write_masks_alongside(
+        integrator_dir,
+        effective_mask=result["integrator"].mask,
+        auto_mask=result["integrator"].auto_mask,
+    )
     provenance = {
         "calibrant_image": os.path.abspath(calibrant_image),
         "user_mask": os.path.abspath(mask_path) if mask_path else None,
+        "effective_mask": os.path.abspath(effective_mask_path),
+        "auto_mask": os.path.abspath(auto_mask_path),
     }
     with open(os.path.join(integrator_dir, "provenance.yml"), "w") as f:
         yaml.safe_dump(provenance, f, default_flow_style=False, sort_keys=False)
@@ -317,6 +327,8 @@ def _calibrate_paths(
     )
     return {
         "integrator_dir": integrator_dir,
+        "effective_mask_path": effective_mask_path,
+        "auto_mask_path": auto_mask_path,
         "refined_path": refined_path,
         "calibration_plots_dir": calibration_plots_dir,
         "calibration_curve_plot_path": calibration_curve_plot_path,

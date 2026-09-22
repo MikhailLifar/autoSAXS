@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import glob
 import json
 import os
-from typing import Optional
+from typing import Tuple
 
 import fabio
 import numpy as np
@@ -13,10 +12,16 @@ from .utils import get_detector
 
 
 class IntegratorExtended:
-    EFFECTIVE_MASK_BASENAME = "effective_mask"
-    AUTO_MASK_BASENAME = "auto_mask"
-    # Legacy name written by older autosaxs versions.
-    LEGACY_MASK_BASENAME = "mask"
+    """Calibrated geometry + optional in-memory mask for azimuthal integration.
+
+    On disk, ``integrator/`` holds geometry only. Masks live *alongside* that
+    directory as ``effective_mask.npy`` / ``auto_mask.npy`` (written by
+    ``calibrate``). ``integrate`` loads the sibling effective mask by default,
+    or replaces it entirely when ``--mask`` is given.
+    """
+
+    EFFECTIVE_MASK_FILENAME = "effective_mask.npy"
+    AUTO_MASK_FILENAME = "auto_mask.npy"
 
     def __init__(self, ai_params, detector_params, mask, auto_mask=None):
         self.detector_params = detector_params
@@ -28,21 +33,12 @@ class IntegratorExtended:
         self.ai = pyFAI.AzimuthalIntegrator(detector=self.detector, **self.ai_params)
 
     def to_disk(self, directory):
+        """Write geometry JSON only (no masks)."""
         os.makedirs(directory, exist_ok=True)
         with open(os.path.join(directory, "detector_params.json"), "w") as fwrite:
             json.dump(self.detector_params, fwrite)
         with open(os.path.join(directory, "ai_params.json"), "w") as fwrite:
             json.dump(self.ai_params, fwrite)
-        if self.mask is not None:
-            np.save(
-                os.path.join(directory, f"{self.EFFECTIVE_MASK_BASENAME}.npy"),
-                self.mask,
-            )
-        if self.auto_mask is not None:
-            np.save(
-                os.path.join(directory, f"{self.AUTO_MASK_BASENAME}.npy"),
-                self.auto_mask,
-            )
 
     @staticmethod
     def read_mask(mask_path):
@@ -59,52 +55,49 @@ class IntegratorExtended:
         return mask
 
     @classmethod
-    def _resolve_named_mask_path(cls, directory: str, basename: str) -> Optional[str]:
-        pattern = os.path.join(directory, f"{basename}.*")
-        matches = glob.glob(pattern)
-        if len(matches) == 0:
-            return None
-        if len(matches) == 1:
-            return matches[0]
-        raise RuntimeError(f'Too many files match mask pattern "{pattern}"')
+    def sibling_effective_mask_path(cls, integrator_dir: str) -> str:
+        """Hardcoded path: ``{parent_of_integrator}/effective_mask.npy``."""
+        parent = os.path.dirname(os.path.abspath(integrator_dir))
+        return os.path.join(parent, cls.EFFECTIVE_MASK_FILENAME)
 
     @classmethod
-    def _resolve_mask_path(cls, directory: str) -> Optional[str]:
-        for basename in (cls.EFFECTIVE_MASK_BASENAME, cls.LEGACY_MASK_BASENAME):
-            hit = cls._resolve_named_mask_path(directory, basename)
-            if hit is not None:
-                return hit
-        return None
+    def sibling_auto_mask_path(cls, integrator_dir: str) -> str:
+        """Hardcoded path: ``{parent_of_integrator}/auto_mask.npy``."""
+        parent = os.path.dirname(os.path.abspath(integrator_dir))
+        return os.path.join(parent, cls.AUTO_MASK_FILENAME)
 
     @classmethod
-    def resolve_auto_mask_path(cls, directory: str) -> Optional[str]:
-        """Path to the auto-only mask written by calibrate, if present."""
-        return cls._resolve_named_mask_path(directory, cls.AUTO_MASK_BASENAME)
+    def write_masks_alongside(
+        cls,
+        integrator_dir: str,
+        *,
+        effective_mask,
+        auto_mask,
+    ) -> Tuple[str, str]:
+        """Write effective + auto masks next to ``integrator_dir``. Always both."""
+        if effective_mask is None or auto_mask is None:
+            raise ValueError("write_masks_alongside requires both effective_mask and auto_mask")
+        eff_path = cls.sibling_effective_mask_path(integrator_dir)
+        auto_path = cls.sibling_auto_mask_path(integrator_dir)
+        os.makedirs(os.path.dirname(eff_path) or ".", exist_ok=True)
+        np.save(eff_path, np.asarray(effective_mask, dtype=bool))
+        np.save(auto_path, np.asarray(auto_mask, dtype=bool))
+        return eff_path, auto_path
 
     @classmethod
     def from_disk(cls, directory):
+        """Load geometry only; ``mask`` is None until the caller sets it."""
         with open(os.path.join(directory, "detector_params.json"), "r") as fread:
             detector_params = json.load(fread)
         with open(os.path.join(directory, "ai_params.json"), "r") as fread:
             ai_params = json.load(fread)
 
-        auto_mask = None
-        auto_path = cls.resolve_auto_mask_path(directory)
-        if auto_path is not None:
-            auto_mask = cls.read_mask(auto_path)
-
-        obj = cls(
+        return cls(
             ai_params=ai_params,
             detector_params=detector_params,
             mask=None,
-            auto_mask=auto_mask,
+            auto_mask=None,
         )
-
-        mask_path = cls._resolve_mask_path(directory)
-        if mask_path is not None:
-            obj.set_mask(mask_path)
-
-        return obj
 
     def set_mask(self, mask_path: str, combine_with_prev=False):
         mask = IntegratorExtended.read_mask(mask_path)
@@ -112,20 +105,6 @@ class IntegratorExtended:
             self.mask = self.mask | mask
         else:
             self.mask = mask
-
-    def apply_user_mask_override(self, mask_path: str) -> None:
-        """
-        Apply a per-run user mask for integrate.
-
-        If ``auto_mask`` is available (from calibrate's ``auto_mask.npy``), the
-        effective mask becomes ``auto_mask | user``. Otherwise the user mask
-        replaces the integrator mask as-is.
-        """
-        user = self.read_mask(mask_path)
-        if self.auto_mask is not None:
-            self.mask = np.asarray(self.auto_mask, dtype=bool) | np.asarray(user, dtype=bool)
-        else:
-            self.mask = np.asarray(user, dtype=bool)
 
     def integrate1d(self, saxs_2d, npt):
         # Pipeline convention: q in nm^-1, Rg in nm. Explicit unit ensures consistency

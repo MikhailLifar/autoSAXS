@@ -951,6 +951,66 @@ def test_integrate_raises_without_images():
             )
 
 
+def test_integrate_requires_sibling_effective_mask(monkeypatch):
+    from autosaxs.core.integrator import IntegratorExtended
+
+    with tempfile.TemporaryDirectory() as tmp:
+        integ = os.path.join(tmp, "integrator")
+        os.makedirs(integ)
+        stub = IntegratorExtended.__new__(IntegratorExtended)
+        stub.mask = None
+        stub.auto_mask = None
+        stub.set_mask = IntegratorExtended.set_mask.__get__(stub, IntegratorExtended)
+        monkeypatch.setattr(
+            "autosaxs.skill.integrate.IntegratorExtended.from_disk",
+            classmethod(lambda cls, _d: stub),
+        )
+        tif = os.path.join(tmp, "frame.tif")
+        Path(tif).write_bytes(b"not-a-real-tif")
+        with pytest.raises(FileNotFoundError, match="effective_mask"):
+            integrate(
+                images=tif,
+                integrator_dir=integ,
+                output_dir=os.path.join(tmp, "out"),
+                use_cache=False,
+            )
+        assert IntegratorExtended.sibling_effective_mask_path(integ) == os.path.join(
+            tmp, IntegratorExtended.EFFECTIVE_MASK_FILENAME
+        )
+
+
+def test_integrator_write_masks_alongside_not_inside():
+    from autosaxs.core.integrator import IntegratorExtended
+
+    with tempfile.TemporaryDirectory() as tmp:
+        integ = os.path.join(tmp, "integrator")
+        os.makedirs(integ)
+        eff = np.zeros((3, 3), dtype=bool)
+        eff[1, 1] = True
+        auto = np.zeros((3, 3), dtype=bool)
+        auto[0, 0] = True
+        eff_path, auto_path = IntegratorExtended.write_masks_alongside(
+            integ, effective_mask=eff, auto_mask=auto
+        )
+        assert eff_path == os.path.join(tmp, "effective_mask.npy")
+        assert auto_path == os.path.join(tmp, "auto_mask.npy")
+        assert not os.path.exists(os.path.join(integ, "effective_mask.npy"))
+        assert np.array_equal(np.load(eff_path), eff)
+        assert np.array_equal(np.load(auto_path), auto)
+        # Geometry-only to_disk: no masks written inside integrator/.
+        with open(os.path.join(integ, "detector_params.json"), "w") as f:
+            f.write('{"detector_name": "Pilatus1M", "pixel_size": [0.000172, 0.000172]}')
+        with open(os.path.join(integ, "ai_params.json"), "w") as f:
+            f.write(
+                '{"dist": 1.0, "poni1": 0.05, "poni2": 0.05, '
+                '"rot1": 0.0, "rot2": 0.0, "rot3": 0.0, "wavelength": 1e-10}'
+            )
+        obj = IntegratorExtended.from_disk(integ)
+        assert obj.mask is None
+        assert obj.auto_mask is None
+        obj.set_mask(eff_path)
+        assert np.array_equal(obj.mask, eff)
+
 
 def test_fit_guinier_raises_without_profile():
     with pytest.raises(FileNotFoundError):

@@ -95,8 +95,8 @@ autosaxs/
 
 | Skill | Module | Notes |
 |-------|--------|-------|
-| calibrate | `skill/calibrate/` | Ring analysis + geometry refinement; optional user mask (else auto → `effective_mask.npy`) |
-| integrate | `skill/integrate.py` | 2D→1D via saved integrator |
+| calibrate | `skill/calibrate/` | Ring analysis + geometry; writes `effective_mask.npy` + `auto_mask.npy` alongside `integrator/` |
+| integrate | `skill/integrate.py` | 2D→1D via saved integrator; default mask = sibling `effective_mask.npy`, or `--mask` replace |
 | average | `skill/average.py` | CorMap frame selection |
 | integrate_proxy | `skill/integrate_proxy.py` | Quick-look without calibration |
 | subtract | `skill/subtract.py` | Buffer subtraction |
@@ -121,7 +121,7 @@ autosaxs/
 |--------|----------------|
 | `path_expression.py` | Typed path/glob/comma-list expansion (`Dat`, `Tiff`, `Mask`, …) |
 | `utils.py` | `read_saxs`, `write_saxs`, `load_config`, detector helpers, `LATEST_STEPS_PATH` |
-| `integrator.py` | `IntegratorExtended` (pyFAI wrapper) |
+| `integrator.py` | `IntegratorExtended` (pyFAI wrapper; geometry in `integrator/`, masks alongside as `effective_mask.npy` / `auto_mask.npy`) |
 | `guinier.py` | Pure Guinier math |
 | `gnom.py` | GNOM `.out` parsing, candidate scoring |
 | `pddf.py` | p(r) from BODIES/DAMMIF shapes |

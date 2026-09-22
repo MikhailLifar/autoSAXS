@@ -217,8 +217,8 @@ class MaskWizardDialog(QDialog):
         tools_header.addWidget(self._btn_drawing_help, 0, Qt.AlignTop | Qt.AlignRight)
         tools_lay.addLayout(tools_header)
         note = QLabel(
-            "Note: you should not mask beam-stop.\n"
-            "It is masked automatically following calibration"
+            "Note: you should not mask the beam-stop.\n"
+            "Calibration writes it into effective_mask.npy automatically."
         )
         note.setWordWrap(True)
         tools_lay.addWidget(note)

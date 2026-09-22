@@ -744,19 +744,19 @@ class Controller:
                     os.path.exists(os.path.join(base, p))
                     for p in ['ai_params.json', 'detector_params.json']
                 )
-                has_mask = (
-                    os.path.exists(os.path.join(base, 'effective_mask.npy'))
-                    or os.path.exists(os.path.join(base, 'mask.npy'))
+                has_mask = os.path.exists(
+                    os.path.join(directory, IntegratorExtended.EFFECTIVE_MASK_FILENAME)
                 )
                 return has_core and has_mask
 
             while not exit_condition():
                 self._send_message(
                     f'Integration requires calibrated geometry parameters and a mask.\n'
-                    f'Provide them by uploading directory named "{ai_subdir}" which contains:\n'
+                    f'Provide geometry by uploading directory named "{ai_subdir}" which contains:\n'
                     f'ai_params.json\n'
                     f'detector_params.json\n'
-                    f'effective_mask.npy (or legacy mask.npy)\n'
+                    f'and place {IntegratorExtended.EFFECTIVE_MASK_FILENAME} alongside that directory '
+                    f'(in the working directory).\n'
                 )
                 self._request_file(
                     directory,
@@ -1268,15 +1268,16 @@ class Controller:
                     os.path.exists(os.path.join(base, p))
                     for p in ['ai_params.json', 'detector_params.json']
                 )
-                has_mask = (
-                    os.path.exists(os.path.join(base, 'effective_mask.npy'))
-                    or os.path.exists(os.path.join(base, 'mask.npy'))
+                has_mask = os.path.exists(
+                    os.path.join(directory, IntegratorExtended.EFFECTIVE_MASK_FILENAME)
                 )
                 return has_core and has_mask
             
             assert exists_condition(), 'IntegratorExtended object can not be created - the data does not exist'
-            ai = IntegratorExtended.from_disk(os.path.join(directory, ai_subdir))
-        
+            integ_dir = os.path.join(directory, ai_subdir)
+            ai = IntegratorExtended.from_disk(integ_dir)
+            ai.set_mask(IntegratorExtended.sibling_effective_mask_path(integ_dir))
+
         if 'integration' in steps:
             for p in context['paths', 'buffer_2d']:
                 int_p = self.integrate(

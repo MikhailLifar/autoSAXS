@@ -51,7 +51,7 @@ SAXS / small-angle x-ray scattering: calibrate detector geometry using calibrant
 - `calibrant_image` (str): Path to the calibrant image (e.g. TIFF).
 - `output_dir` (str, default `.`): Directory where results are written.
 - `config_path` (str | None, default `None`): Depricated. Path to a YAML config file with a `calibrate` section. When omitted, bundled defaults are used.
-- `mask` (str | None, default `None`): Optional user detector pixel mask (`.txt` / `.npy` / `.msk`). When omitted, an automatic mask is used. When provided, it is OR-combined with the automatic mask into `effective_mask.npy` inside `integrator_dir` (the user mask file is never overwritten). The automatic component is also written as `auto_mask.npy` so later `integrate --mask` overrides can re-OR with it.
+- `mask` (str | None, default `None`): Optional user detector pixel mask (`.txt` / `.npy` / `.msk`). When omitted, the automatic mask alone becomes the effective mask. When provided, it is OR-combined once with the automatic mask. The user mask file is never overwritten. Results are written as `effective_mask.npy` and `auto_mask.npy` **alongside** `integrator/` (not inside it).
 - `mask_mode` (str | None, default `None`): Deprecated compatibility selector (`f`/`from_file`, `a`/`auto`, `c`/`combined`). Effective mask is always `auto | optional user mask`; this flag only records intent for configs/GUIs. Defaults to `a`/`auto` when no user mask is given, else `c`/`combined`.
 - `calibrant` (str | None, default `None`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`). Defaults to `AgBh`.
 - `wavelength` (float | None, default `None`): X-ray wavelength in **Ångström**. Defaults to 1.445 Å.
@@ -61,7 +61,7 @@ SAXS / small-angle x-ray scattering: calibrate detector geometry using calibrant
 Notes:
 
 - Automatic mask always includes the beam-stop disk and all negative-intensity pixels (plus optional IQR outliers).
-- The integrator stores the combined result as `effective_mask.npy` and the automatic component as `auto_mask.npy` (not the user mask path).
+- `integrator/` stores geometry only. Both `effective_mask.npy` and `auto_mask.npy` are always written next to it (even when no user mask was provided). Later `integrate --mask` replaces the effective mask entirely (no further OR).
 
 ### Short parameter list
 
@@ -75,7 +75,9 @@ Notes:
 
 `dict[str, str]` with these output path roles:
 
-- `integrator_dir`: Directory containing the calibrated integrator (used by `integrate`), including `effective_mask.npy` and `auto_mask.npy`.
+- `integrator_dir`: Directory containing calibrated geometry (used by `integrate`).
+- `effective_mask_path`: Path to `effective_mask.npy` alongside `integrator/`.
+- `auto_mask_path`: Path to `auto_mask.npy` alongside `integrator/`.
 - `refined_path`: Path to the refined detector geometry YAML.
 - `calibration_plots_dir`: Directory containing calibration plots.
 - `calibration_curve_plot_path`: Path to the calibrantion q/I curve plot (PNG).
@@ -119,16 +121,16 @@ SAXS / small-angle x-ray scattering: integrate 2D SAXS images to 1D curves (q, I
   - a directory (expands to `*.tif`, non-recursive)
   - a glob expression
   - a comma-separated list of file paths (e.g. from multi-file drag & drop)
-- `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`).
+- `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`). Geometry only.
 - `output_dir` (str, default `.`): Directory where integrated curves are written.
-- `mask` (str | None, default `None`): Optional mask override (`.txt` / `.npy` / `.msk`). When set, does not rewrite `integrator_dir`. If `auto_mask.npy` is present in `integrator_dir` (written by `calibrate`), the run uses `auto_mask | override`; otherwise the override replaces the stored effective mask as-is.
+- `mask` (str | None, default `None`): Optional mask for this run (`.txt` / `.npy` / `.msk`). When set, it is used **as-is** as the effective mask (no OR with auto). When omitted, `integrate` requires `{parent_of_integrator_dir}/effective_mask.npy` (written by `calibrate`) and fails hard if it is missing.
 - `npt` (int, default `1000`): Number of points in the output q grid.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 - `validation_png` (bool, default `False`): If `True`, write a PNG next to each integrated curve showing the source image (log-intensity) with integrator-masked pixels highlighted in semi-transparent red.
 
 ### Short parameter list
 
-- mask: Optional mask override for this integrate run.
+- mask: Optional full mask replacement for this integrate run (else sibling `effective_mask.npy`).
 - npt: Number of integrated points, default: 1000
 - validation_png: Show validation image
 

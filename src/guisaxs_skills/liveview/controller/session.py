@@ -337,4 +337,12 @@ class LiveviewSkillOutcomesHandler:
         else:
             state.calibration_curve_plot_path = None
             left.set_calibration_preview_path("")
+        eff = result.get("effective_mask_path")
+        if isinstance(eff, str) and eff.strip():
+            ep = Path(eff.strip())
+            if ep.is_file():
+                self._c.session.set_mask_path(ep.resolve())
+                if left._cal_wizard is not None:
+                    left._cal_wizard.set_mask_path(str(ep.resolve()))
+        left.sync_mask_preview_from_state()
         self._c.persist_session_settings()

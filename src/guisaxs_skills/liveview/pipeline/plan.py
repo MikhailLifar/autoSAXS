@@ -18,6 +18,7 @@ from ..session.output_paths import (
 )
 from ..session.sample import Sample
 from ..session.state import LiveviewIntakeMode, LiveviewSessionState
+from ..services.calibration.masks import applied_mask_path
 from .jobs import (
     CompletedWork,
     Job,
@@ -193,8 +194,8 @@ def _plan_frame(
     outdir = averaged_dir(root)
     outdir.mkdir(parents=True, exist_ok=True)
     integrate_opts: dict = {"output_dir": str(outdir), "use_cache": False}
-    mask_p = state.mask_path
-    if mask_p is not None and mask_p.is_file():
+    mask_p = applied_mask_path(state)
+    if mask_p is not None:
         integrate_opts["mask"] = str(mask_p.resolve())
     steps.append(
         JobStep(

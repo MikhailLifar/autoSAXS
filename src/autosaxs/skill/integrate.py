@@ -118,16 +118,16 @@ def integrate(
       - a directory (expands to `*.tif`, non-recursive)
       - a glob expression
       - a comma-separated list of file paths (e.g. from multi-file drag & drop)
-    - `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`).
+    - `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`). Geometry only.
     - `output_dir` (str, default `.`): Directory where integrated curves are written.
-    - `mask` (str | None, default `None`): Optional mask override (`.txt` / `.npy` / `.msk`). When set, does not rewrite `integrator_dir`. If `auto_mask.npy` is present in `integrator_dir` (written by `calibrate`), the run uses `auto_mask | override`; otherwise the override replaces the stored effective mask as-is.
+    - `mask` (str | None, default `None`): Optional mask for this run (`.txt` / `.npy` / `.msk`). When set, it is used **as-is** as the effective mask (no OR with auto). When omitted, `integrate` requires `{parent_of_integrator_dir}/effective_mask.npy` (written by `calibrate`) and fails hard if it is missing.
     - `npt` (int, default `1000`): Number of points in the output q grid.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
     - `validation_png` (bool, default `False`): If `True`, write a PNG next to each integrated curve showing the source image (log-intensity) with integrator-masked pixels highlighted in semi-transparent red.
 
     ### Short parameter list
 
-    - mask: Optional mask override for this integrate run.
+    - mask: Optional full mask replacement for this integrate run (else sibling `effective_mask.npy`).
     - npt: Number of integrated points, default: 1000
     - validation_png: Show validation image
 
@@ -220,11 +220,22 @@ def _integrate_paths(
     if isinstance(mask_override, list):
         mask_override = mask_override[0] if mask_override else None
     if mask_override:
-        integrator.apply_user_mask_override(mask_override)
+        mask_path = str(mask_override)
+        if not os.path.isfile(mask_path):
+            raise FileNotFoundError(f"integrate mask must be an existing file path; got {mask_path!r}")
+    else:
+        mask_path = IntegratorExtended.sibling_effective_mask_path(str(integrator_dir))
+        if not os.path.isfile(mask_path):
+            raise FileNotFoundError(
+                "integrate requires a mask: pass --mask PATH, or place "
+                f"{IntegratorExtended.EFFECTIVE_MASK_FILENAME} alongside integrator_dir "
+                f"(expected {mask_path!r})"
+            )
+    integrator.set_mask(mask_path)
     os.makedirs(output_dir, exist_ok=True)
     curve_meta = integrate_curve_metadata(
         integrator_dir=str(integrator_dir),
-        mask_path=str(mask_override) if mask_override else None,
+        mask_path=mask_path,
     )
     integrated: List[str] = []
     validation_pngs: List[str] = []

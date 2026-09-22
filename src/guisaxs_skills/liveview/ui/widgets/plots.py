@@ -747,6 +747,7 @@ class Image2DPlot(FigureCanvas):
         self._ax = self._fig.add_subplot(111)
         self._cbar = None
         self._cax = None
+        self._mask_overlay_artist = None
         self._last_image_shape: Optional[tuple[int, int]] = None
         self._last_tiff_path: str = ""
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -773,7 +774,45 @@ class Image2DPlot(FigureCanvas):
                 pass
             self._cax = None
 
+    def _remove_mask_overlay(self) -> None:
+        if self._mask_overlay_artist is None:
+            return
+        try:
+            self._mask_overlay_artist.remove()
+        except Exception:
+            pass
+        self._mask_overlay_artist = None
+
+    def set_mask_overlay(self, mask: Optional[np.ndarray]) -> None:
+        """Draw or clear a semi-transparent red mask overlay on the current image."""
+        self._remove_mask_overlay()
+        if mask is None:
+            self.draw_idle()
+            return
+        m = np.asarray(mask, dtype=bool)
+        if self._last_image_shape is not None and m.shape != self._last_image_shape:
+            self.draw_idle()
+            return
+        if not m.size or not np.any(m):
+            self.draw_idle()
+            return
+        try:
+            rgba = np.zeros((m.shape[0], m.shape[1], 4), dtype=float)
+            rgba[m, 0] = 1.0
+            rgba[m, 3] = 0.40
+            self._mask_overlay_artist = self._ax.imshow(
+                rgba,
+                origin="lower",
+                aspect="equal",
+                interpolation="nearest",
+                zorder=10,
+            )
+        except Exception:
+            self._mask_overlay_artist = None
+        self.draw_idle()
+
     def clear(self) -> None:
+        self._remove_mask_overlay()
         self._remove_colorbar()
         self._ax.clear()
         self._last_image_shape = None
@@ -783,6 +822,7 @@ class Image2DPlot(FigureCanvas):
 
     def show_tiff(self, path: str) -> None:
         # Display-only load. Prefer fabio, fallback to tifffile.
+        self._remove_mask_overlay()
         arr = None
         try:
             import fabio

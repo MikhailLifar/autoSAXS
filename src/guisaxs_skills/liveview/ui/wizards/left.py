@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from typing import Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QGuiApplication
@@ -293,6 +295,27 @@ class CalibrationWizardDialog(QDialog):
         if f is None:
             return
         f.set_text((path or "").strip())
+        self.refresh_mask_overlay()
+
+    def refresh_mask_overlay(self, mask_path: Optional[str] = None) -> None:
+        """Overlay the given mask (or form mask path) on the calibrant TIFF viewer."""
+        if getattr(self, "_viewer", None) is None:
+            return
+        path = (mask_path if mask_path is not None else self.mask_path_text()).strip()
+        if not path or not os.path.isfile(path):
+            self._viewer.set_mask_overlay(None)
+            return
+        if not self._viewer.last_tiff_path():
+            self._viewer.set_mask_overlay(None)
+            return
+        try:
+            from autosaxs.core.integrator import IntegratorExtended
+
+            mask = IntegratorExtended.read_mask(path)
+        except Exception:
+            self._viewer.set_mask_overlay(None)
+            return
+        self._viewer.set_mask_overlay(mask)
 
     def set_calibrant_image_path(self, path: str) -> None:
         f = self._calib_image_field()
@@ -388,6 +411,7 @@ class CalibrationWizardDialog(QDialog):
         f = self._mask_field()
         text = f.text().strip() if f is not None else ""
         self.mask_path_edited.emit(text)
+        self.refresh_mask_overlay(text)
 
     def _on_coach_path_changed(self) -> None:
         self._run_coach_dismissed = False
@@ -401,6 +425,7 @@ class CalibrationWizardDialog(QDialog):
             return
         try:
             self._viewer.show_tiff(path)
+            self.refresh_mask_overlay()
         except Exception:
             self._viewer.clear()
 
