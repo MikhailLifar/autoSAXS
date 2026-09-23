@@ -69,19 +69,24 @@ class LiveviewHistoryHandler:
         if left is not None:
             left.refresh_attention_coach()
 
-    def on_session_file_completed(self) -> None:
+    def on_session_file_completed(self, _path: str = "") -> None:
+        """
+        Refresh chrome after a successful job.
+
+        ``SampleStore.append_history`` moves the index to the new tail only when
+        the path is newly appended. Deduped re-completions must not bump the
+        index (avoids off-by-one jumps while browsing).
+        """
         hist = list(self._c.samples.paths())
-        n = len(hist)
-        if n == 0:
+        if not hist:
             self.refresh_chrome()
+            self._c.persist_history()
             return
-        was_at_previous_tail = n == 1 or self._index == n - 2
-        if was_at_previous_tail:
-            self._index = n - 1
         self.refresh_chrome()
         # Same disk path as history < / > — curve jobs never emit integrate/subtract keys.
         if self.middle_updates_follow_pipeline():
             self.refresh_middle_for_sample(hist[self._index])
+        self._c.persist_history()
 
     def on_pipeline_job_started(self, sample_path: str) -> None:
         """Show middle views for the boarded sample as soon as the job starts."""
@@ -178,6 +183,7 @@ class LiveviewHistoryHandler:
         if sample is not None and sample.path.lower().endswith((".tif", ".tiff")):
             self._record_2d_shown(sample.path)
         self.refresh_right_outputs()
+        self._c.persist_history()
     def refresh_right_outputs(self) -> None:
         right = self._c.right
         if right is None:

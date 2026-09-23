@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import QMessageBox, QWidget
 from ...logic.runner_qprocess import SkillRunner
 from ..pipeline import LiveviewJobExecutor, LiveviewQueueStatus
 from ..session import LiveviewSession
+from ..session.history_persistence import load_liveview_history, save_liveview_history
 from ..session.output_paths import analysis_output_root
 from ..session.sample_store import SampleStore
 from ..session.state import LiveviewSessionState, LiveviewWatchMode
@@ -42,6 +43,11 @@ class LiveviewController(QObject):
         self._watchdir = watchdir.resolve()
         self._runner = SkillRunner(workdir=watchdir)
         self.samples = SampleStore()
+        load_liveview_history(
+            watchdir=self._watchdir,
+            store=self.samples,
+            state=self.session.state,
+        )
         self._executor = LiveviewJobExecutor(
             state=self.session.state,
             runner=self._runner,
@@ -118,7 +124,8 @@ class LiveviewController(QObject):
         mode = self.state.intake_mode
         right.sync_intake_toggles(mode)
         left.apply_intake_visibility(mode)
-        self.history.sync_middle(force=True)
+        # Restore middle/right from disk for persisted history + arming.
+        self.history.reload_view()
         self.history.refresh_chrome()
         # Rebind watchers for persisted intake (ingest ctor already ran once at 2D default
         # before session load — apply again with the loaded mode).
@@ -149,6 +156,7 @@ class LiveviewController(QObject):
 
     def shutdown(self) -> None:
         self.persist_session_settings()
+        self.persist_history()
         self.ingest.stop_all()
         try:
             self._executor.stop()
@@ -168,6 +176,13 @@ class LiveviewController(QObject):
 
     def persist_session_settings(self) -> None:
         self.session.persist()
+
+    def persist_history(self) -> None:
+        save_liveview_history(
+            watchdir=self._watchdir,
+            store=self.samples,
+            state=self.state,
+        )
 
     def _connect_executor(self, executor: LiveviewJobExecutor) -> None:
         executor.queue_status.connect(self.on_queue_status)
@@ -264,6 +279,7 @@ class LiveviewController(QObject):
     def on_analysis_arming_changed(self) -> None:
         self.history.refresh_right_outputs()
         self.session.sync_processing_ui()
+        self.persist_history()
 
     def append_app_log(self, text: str) -> None:
         if self._right is not None:

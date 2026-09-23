@@ -43,7 +43,7 @@ Non-negotiable: **no science compute in the UI thread** except GNOM adjust / siz
 
 | Concept | Meaning |
 |---------|---------|
-| **Watchdir** | Process working directory; session YAML under `<watchdir>/.guisaxs_liveview/`. |
+| **Watchdir** | Process working directory; session + history YAML under `<watchdir>/.guisaxs_liveview/`. |
 | **Intake / boarding** | `LiveviewIntakeMode`: `FRAME_2D`, `CURVE_1D`, `CURVE_SUB`. |
 | **Sample** | Absolute path + boarding + stem + optional `SampleRevision`. |
 | **SampleRevision** | Path + `FileStatSnapshot` (identity of “this file changed”). |
@@ -57,7 +57,7 @@ Non-negotiable: **no science compute in the UI thread** except GNOM adjust / siz
 | Concept | Owner | Module |
 |---------|-------|--------|
 | Session facts + safe mutations | `LiveviewSession` (wraps `LiveviewSessionState`) | `session/api.py`, `session/state.py` |
-| Sample history / boarding index | `SampleStore` | `session/sample_store.py` |
+| Sample history / boarding index | `SampleStore` (+ `history.yaml`) | `session/sample_store.py`, `session/history_persistence.py` |
 | Auto-process step choice | `plan_for` (+ optional `completed`) | `pipeline/plan.py` |
 | Middle layout + paint | `sync_middle_view` | `services/history/middle_from_stem.py` |
 | Right analysis presentation | `present_right` | `services/history/right_artifacts.py` |
@@ -131,7 +131,7 @@ guisaxs_liveview/          # thin CLI entry
 guisaxs_skills/liveview/
 ├── app.py, window.py
 ├── controller/            # facade + handlers (no ProcessingMode)
-├── session/               # state, api (LiveviewSession), samples, persistence
+├── session/               # state, api (LiveviewSession), samples, session/history persistence
 ├── pipeline/              # plan, jobs (CompletedWork), executor facade, manual_jobs, artifact_enrichment
 ├── ingest/                # ingress, watchers, stability, classify
 ├── services/history/      # sync_middle_view, present_right, right_artifacts

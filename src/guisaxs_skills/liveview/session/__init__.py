@@ -1,4 +1,9 @@
 from .api import LiveviewSession
+from .history_persistence import (
+    history_settings_path,
+    load_liveview_history,
+    save_liveview_history,
+)
 from .persistence import (
     load_liveview_session_settings,
     save_liveview_session_settings,
@@ -23,7 +28,10 @@ __all__ = [
     "Sample",
     "SampleStore",
     "default_watchdir",
+    "history_settings_path",
+    "load_liveview_history",
     "load_liveview_session_settings",
+    "save_liveview_history",
     "save_liveview_session_settings",
     "select_watchdir",
     "session_settings_path",

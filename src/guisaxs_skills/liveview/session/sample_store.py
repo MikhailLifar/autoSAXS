@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from ..ingest.sample_revision import normalize_sample_path
 from .sample import Sample
@@ -92,14 +92,38 @@ class SampleStore:
             )
         return self.remember(Sample.from_path(key, boarding=boarding))
 
-    def append_history(self, sample: Sample) -> None:
-        """Append to session history if not already present (by path)."""
+    def append_history(self, sample: Sample) -> bool:
+        """
+        Append to session history if not already present (by path).
+
+        Dedup is immediate: an existing path keeps its slot and index is left
+        unchanged (avoids off-by-one jumps when a sample is reprocessed).
+        Boarding/stem on the existing entry are still upserted via ``remember``.
+
+        Returns True if the ordered history list grew (new path appended).
+        """
+        key = sample.key
+        already = any(s.key == key for s in self._history)
         remembered = self.remember(sample)
-        key = remembered.key
-        if any(s.key == key for s in self._history):
-            return
+        if already:
+            return False
         self._history.append(remembered)
         self._index = len(self._history) - 1
+        return True
+
+    def replace_history(self, samples: Iterable[Sample], *, index: int = 0) -> None:
+        """
+        Replace navigable history with ``samples`` (dedup by path, first slot kept,
+        later duplicates only refresh boarding via ``remember``).
+        """
+        self.clear()
+        for sample in samples:
+            key = sample.key
+            remembered = self.remember(sample)
+            if any(s.key == key for s in self._history):
+                continue
+            self._history.append(remembered)
+        self.index = index
 
     def at(self, index: int) -> Optional[Sample]:
         if not self._history:
