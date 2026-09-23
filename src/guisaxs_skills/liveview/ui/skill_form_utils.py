@@ -31,7 +31,7 @@ def force_fixed_output(form: SkillForm, *, outdir: str) -> None:
 
 
 def prepare_liveview_calibrate_form(form: SkillForm, *, outdir: str) -> None:
-    """Hide non-interactive / rarely used options; set friendly labels and defaults."""
+    """Hide non-interactive options; fold remaining options into Inputs; hide Options group."""
     force_fixed_output(form, outdir=outdir)
     _hide_option_by_name(form, "dist_guess")
     _hide_option_by_name(form, "mask_mode")
@@ -42,6 +42,31 @@ def prepare_liveview_calibrate_form(form: SkillForm, *, outdir: str) -> None:
 
     _set_line_default(form, "calibrant", _CALIBRATE_CALIBRANT_DEFAULT)
     _set_line_default(form, "wavelength", _CALIBRATE_WAVELENGTH_A_DEFAULT)
+
+    # Liveview calibrate wizard: Inputs holds former Options fields; Results is separate.
+    for name in ("calibrant", "wavelength", "mask"):
+        _move_option_row_to_inputs(form, name)
+    form._opt_group.setVisible(False)  # type: ignore[attr-defined]
+
+
+def _move_option_row_to_inputs(form: SkillForm, name: str) -> None:
+    """Relocate one option field from Options into Inputs without destroying widgets."""
+    w = form._opt_fields.get(name)  # type: ignore[attr-defined]
+    if w is None:
+        return
+    opt_layout = form._opt_layout  # type: ignore[attr-defined]
+    pos_layout = form._pos_layout  # type: ignore[attr-defined]
+    try:
+        taken = opt_layout.takeRow(w)
+    except Exception:
+        return
+    label_w = taken.labelItem.widget() if taken.labelItem is not None else None
+    field_w = taken.fieldItem.widget() if taken.fieldItem is not None else w
+    if label_w is not None:
+        pos_layout.addRow(label_w, field_w)
+    else:
+        pos_layout.addRow(name, field_w)
+
 
 
 _SUBTRACT_HIDDEN_OPTIONS = frozenset(

@@ -103,7 +103,7 @@ def calibrate(
     `dict[str, str]` with these output path roles:
 
     - `integrator_dir`: Directory containing the calibrated integrator (used by `integrate`), including `effective_mask.npy` and `auto_mask.npy`.
-    - `refined_path`: Path to the refined detector geometry YAML.
+    - `refined_path`: Path to the refined detector geometry YAML (PONI params plus Fit2D `center_y_px` / `center_x_px`).
     - `calibration_plots_dir`: Directory containing calibration plots.
     - `calibration_curve_plot_path`: Path to the calibrantion q/I curve plot (PNG).
     - `calibration_curve_dat_path`: Path to the calibrantion q/I curve (`.dat`, same format as integrated 1D curves).
