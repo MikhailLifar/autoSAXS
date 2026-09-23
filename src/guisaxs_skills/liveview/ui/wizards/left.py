@@ -7,18 +7,27 @@ from typing import Optional
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QDialog,
+    QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from ...services.calibration.display import (
+    empty_refined_yml_display_rows,
+    refined_yml_display_rows,
+)
 from ...services.calibration.storage import calibration_subdir, ensure_tiff_in_calibration
 from ....core.models import RunRequest
 from ....logic.session_state import SessionPathHints
@@ -35,7 +44,12 @@ from ..skill_form_utils import (
     prepare_liveview_calibrate_form,
     prepare_liveview_subtract_form,
 )
-from ..widgets.plots import DropTiffImageCanvas, LogCurvePlot, open_dat_curve_dialog
+from ..widgets.plots import (
+    DropTiffImageCanvas,
+    LogCurvePlot,
+    open_dat_curve_dialog,
+    open_image_2d_dialog,
+)
 from ..widgets.plots import mpl_navigation_toolbar
 
 
@@ -137,10 +151,12 @@ class CalibrationWizardDialog(QDialog):
         self._meta = meta
         self._viewer = DropTiffImageCanvas()
         self._viewer_toolbar = None
+        self._image_2d_viewer = None
         self._run_coach_dismissed = False
         self._close_coach_armed = False
         self._btn_close = QPushButton("Close")
         self._btn_close.clicked.connect(self.close)
+        self._results_table = self._make_results_table()
 
         lay = QVBoxLayout(self)
         if meta is not None:
@@ -177,11 +193,16 @@ class CalibrationWizardDialog(QDialog):
             right_lay.setContentsMargins(0, 0, 0, 0)
             top_row = QHBoxLayout()
             top_row.addStretch(1)
-            self._btn_create_mask = QPushButton("View/Configure mask")
-            self._btn_create_mask.setToolTip("View or edit a mask for this calibration image")
+            self._btn_create_mask = QPushButton("Configure mask")
+            self._btn_create_mask.setToolTip("Configure a mask for this calibration image")
             top_row.addWidget(self._btn_create_mask, 0, Qt.AlignRight)
             right_lay.addLayout(top_row)
-            right_lay.addWidget(self._form, 1)
+            right_lay.addWidget(self._form, 0)
+            results_group = QGroupBox("Results")
+            results_lay = QVBoxLayout(results_group)
+            results_lay.setContentsMargins(6, 6, 6, 6)
+            results_lay.addWidget(self._results_table, 1)
+            right_lay.addWidget(results_group, 1)
             splitter.addWidget(right)
             splitter.setStretchFactor(0, 2)
             splitter.setStretchFactor(1, 1)
@@ -199,6 +220,7 @@ class CalibrationWizardDialog(QDialog):
             rr.addStretch(1)
             rr.addWidget(self._btn_close, 0, Qt.AlignRight)
             lay.addLayout(rr)
+            self.clear_results()
         else:
             lay.addWidget(QLabel("calibrate skill is not available."))
             self._btn_reset = None  # type: ignore[assignment]
@@ -209,7 +231,7 @@ class CalibrationWizardDialog(QDialog):
         if meta is not None:
             self._wire_viewer_updates()
             self._btn_create_mask.clicked.connect(self._open_mask_wizard)  # type: ignore[attr-defined]
-            self._viewer.mpl_connect("button_press_event", self._on_viewer_click_open_mask)
+            self._viewer.mpl_connect("button_press_event", self._on_viewer_click_open_2d)
             self._viewer.tiff_files_dropped.connect(self._on_tiff_dropped_to_viewer)
             self._refresh_viewer_from_form()
 
@@ -434,17 +456,70 @@ class CalibrationWizardDialog(QDialog):
             return False
         return int(getattr(ev, "button", 0)) == 1
 
-    def _on_viewer_click_open_mask(self, ev: object) -> None:
+    @staticmethod
+    def _make_results_table() -> QTableWidget:
+        table = QTableWidget(0, 2)
+        table.setHorizontalHeaderLabels(["Parameter", "Value"])
+        hdr = table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.Stretch)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.NoSelection)
+        table.setFocusPolicy(Qt.NoFocus)
+        table.setShowGrid(True)
+        table.setMinimumHeight(140)
+        return table
+
+    def _fill_results_table(self, rows: list[tuple[str, str]]) -> None:
+        self._results_table.setRowCount(len(rows))
+        for i, (label, val) in enumerate(rows):
+            li = QTableWidgetItem(label)
+            li.setFlags(li.flags() & ~Qt.ItemIsEditable)
+            vi = QTableWidgetItem(val)
+            vi.setFlags(vi.flags() & ~Qt.ItemIsEditable)
+            vi.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            self._results_table.setItem(i, 0, li)
+            self._results_table.setItem(i, 1, vi)
+
+    def clear_results(self) -> None:
+        """Show parameter labels with empty values (pre-calibration)."""
+        self._fill_results_table(empty_refined_yml_display_rows())
+
+    def set_results_from_path(
+        self,
+        path: str | None,
+        *,
+        integrator_dir: Path | None = None,
+    ) -> None:
+        """Fill Results from ``refined.yml``, or clear to empty values if missing."""
+        p = (path or "").strip()
+        if p and Path(p).is_file():
+            rows = refined_yml_display_rows(p, integrator_dir=integrator_dir)
+            if rows:
+                self._fill_results_table(rows)
+                return
+        self.clear_results()
+
+    def _on_viewer_click_open_2d(self, ev: object) -> None:
         if not self._is_left_click_in_axes(ev):
             return
-        # Don't open mask wizard when user is zooming/panning.
+        # Don't open the 2D viewer when user is zooming/panning.
         tb = self._viewer_toolbar
         if tb is not None and str(getattr(tb, "mode", "") or ""):
             return
         f = self._calib_image_field()
-        if f is None or not f.text().strip():
+        if f is None:
             return
-        self._open_mask_wizard()
+        path = f.text().strip()
+        if not path:
+            return
+        self._image_2d_viewer = open_image_2d_dialog(
+            self,
+            path,
+            reuse=self._image_2d_viewer,
+            window_title="Calibrant image",
+        )
 
     def _open_mask_wizard(self) -> None:
         parent = self.parent()
@@ -496,6 +571,7 @@ class CalibrationWizardDialog(QDialog):
         prepare_liveview_calibrate_form(self._form, outdir=str(out))
         self._wire_viewer_updates()
         self._refresh_viewer_from_form()
+        self.clear_results()
         self._run_coach_dismissed = False
         self._close_coach_armed = False
         self.attention_context_changed.emit()

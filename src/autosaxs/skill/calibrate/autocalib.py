@@ -978,6 +978,11 @@ def autocalib_ring_analysis(
     refine_step_ret = refine(calib_data, rings_pixels, **geometry_params)
     refined = refine_step_ret["refined"].copy()
     refined["wavelength"] = float(d_geom["wavelength"])
+    # Fit2D beam center on the detector (pixels). Kept out of integrator
+    # ai_params so pyFAI / integrate stay unchanged.
+    f2d = refine_step_ret["integrator"].ai.getFit2D()
+    refined["center_y_px"] = float(f2d["centerY"])
+    refined["center_x_px"] = float(f2d["centerX"])
 
     if calibration_curve_plot_path is not None:
         save_refined_curve_with_theoretical_peaks(

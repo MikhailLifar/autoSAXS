@@ -257,7 +257,7 @@ class LiveviewLeftPanel(QWidget):
                         targets.append(calib_line)
                 elif not cal.run_coach_dismissed():
                     if not cal.has_mask():
-                        # Suggest Run without mask (auto) together with View/Configure mask + PathField.
+                        # Suggest Run without mask (auto) together with Configure mask + PathField.
                         targets.append(cal.run_button())
                         targets.append(cal.create_mask_button())
                         targets.append(cal.mask_browse_button())
@@ -347,6 +347,11 @@ class LiveviewLeftPanel(QWidget):
         if applied is not None:
             self._cal_wizard.set_mask_path(str(applied))
         self._cal_wizard.maybe_apply_empty_calibrant_hint()
+        rp = self._state.calibration_refined_yml_path
+        self._cal_wizard.set_results_from_path(
+            str(rp) if rp is not None and rp.is_file() else None,
+            integrator_dir=self._state.integrator_dir,
+        )
         self._cal_wizard.show()
         self._cal_wizard.raise_()
         self._cal_wizard.activateWindow()
@@ -612,6 +617,11 @@ class LiveviewLeftPanel(QWidget):
             self._cal_params_table.setItem(i, 0, li)
             self._cal_params_table.setItem(i, 1, vi)
         self._cal_params_table.setVisible(bool(rows))
+        if self._cal_wizard is not None:
+            self._cal_wizard.set_results_from_path(
+                p if p and os.path.isfile(p) else None,
+                integrator_dir=self._state.integrator_dir,
+            )
         if rows and self._state.integrator_dir is not None:
             if self._cal_wizard is not None and self._cal_wizard.isVisible():
                 self._cal_wizard.arm_close_coach()
