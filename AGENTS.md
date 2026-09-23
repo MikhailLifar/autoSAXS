@@ -174,7 +174,7 @@ guisaxs_skills/
     ├── app.py, window.py   # entry + main window shell
     ├── controller/         # LiveviewController + handlers (history, ingest, session, …)
     ├── pipeline/           # plan_for, LiveviewJobExecutor, jobs, queue
-    ├── ingest/             # watchers, stability, sample_revision, curve_classify
+    ├── ingest/             # settle, watchers, stability, sample_revision, curve_classify
     ├── session/            # state, sample, sample_store, persistence, output_paths, workdir
     ├── services/           # artifacts, calibration, history (sync_middle_view), skills
     └── ui/
@@ -201,12 +201,13 @@ guisaxs_skills/
 | `liveview/session/sample.py` / `sample_store.py` | `Sample` identity + history/boarding store |
 | `liveview/services/history/middle_from_stem.py` | `sync_middle_view` — middle layout + content |
 | `liveview/services/history/right_artifacts.py` | `present_right` — right analysis live/disk entry |
-| `liveview/ingest/ingress.py` | `RevisionIngress` — single revision front door |
+| `liveview/ingest/settle.py` | `RevisionSettler` — shared readiness before ingress |
+| `liveview/ingest/ingress.py` | `RevisionIngress` — single front door for settled revisions |
 | `liveview/ingest/sample_revision.py` | On-disk sample revision (frame or `.dat`) |
 | `liveview/ingest/watcher.py` | FLAT mode: watchdog + known-path baseline |
 | `liveview/ingest/dir_tree_observer.py` | TREE mode: hierarchical mtime/ctime/ino scan + prune |
 
-**Liveview:** Session API (`LiveviewSession`) + SampleStore + `plan_for` + middle sync + `present_right` + `RevisionIngress`. See `docs/liveview_architecture.md`, `docs/liveview_session_sample_plan.md`, and `docs/guisaxs_liveview_spec.md`. Sample change identity is `FileStatSnapshot` in `liveview/ingest/stability.py`.
+**Liveview:** Session API (`LiveviewSession`) + SampleStore + `plan_for` + middle sync + `present_right` + settle + `RevisionIngress`. See `docs/liveview_architecture.md`, `docs/liveview_session_sample_plan.md`, and `docs/guisaxs_liveview_spec.md`. Sample change identity is `FileStatSnapshot` in `liveview/ingest/stability.py`.
 
 ### `guisaxs_liveview/`
 

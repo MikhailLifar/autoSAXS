@@ -12,12 +12,11 @@ from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 from ...core.models import RunRequest
 from ...logic.runner_qprocess import RunOutcome, SkillRunner
 from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
-from ..ingest.stability import FileStatSnapshot, StabilityConfig, StabilityTracker
+from ..ingest.stability import FileStatSnapshot
 from ..ingest.sample_revision import (
     SampleRevision,
     SampleRevisionSource,
     is_dat_path,
-    is_newer_than,
     is_tiff_path,
     normalize_sample_path,
 )
@@ -63,8 +62,7 @@ class LiveviewQueueStatus:
 class LiveviewJobExecutor(QObject):
     """
     Single orchestrator for liveview:
-    - tracks incoming samples until stable
-    - builds Jobs via ``plan_for(session, sample)``
+    - queues settled revisions (``_incoming``) and promotes them to Jobs via ``plan_for``
     - re-plans the *current* auto job at start and after each successful step
       (``plan_for(..., completed=)``); queued jobs are untouched until they start
     - executes Jobs step-by-step using SkillRunner
@@ -75,7 +73,7 @@ class LiveviewJobExecutor(QObject):
     error = pyqtSignal(str)
     session_file_completed = pyqtSignal(str)  # sample path
     job_started = pyqtSignal(str)  # sample path (TIFF or .dat) when a pipeline job begins
-    sample_revision_pending = pyqtSignal(object)  # SampleRevision — queued or stabilizing
+    sample_revision_pending = pyqtSignal(object)  # SampleRevision — queued for plan/run
     skill_started = pyqtSignal(str)
     skill_finished = pyqtSignal(object)  # RunOutcome
 
@@ -97,9 +95,6 @@ class LiveviewJobExecutor(QObject):
 
         self._incoming = FIFOQueue()
         self._incoming_lock = threading.Lock()
-        self._stability_cfg = StabilityConfig()
-        self._current_incoming: Optional[QueueItem] = None
-        self._current_stability: Optional[StabilityTracker] = None
         # Dedupe inotify+poll (and drop+watch) for the same path+stat; manual re-Process bypasses.
         self._last_accepted_stat: Dict[str, FileStatSnapshot] = {}
 
@@ -160,8 +155,6 @@ class LiveviewJobExecutor(QObject):
 
     def stop(self) -> None:
         self._tick_timer.stop()
-        self._current_incoming = None
-        self._current_stability = None
         self._current_job = None
         self._job_step_idx = 0
         self._pending_step_name = None
@@ -179,8 +172,6 @@ class LiveviewJobExecutor(QObject):
             return False
         if self._current_job is not None:
             return False
-        if self._current_incoming is not None:
-            return False
         if len(self._incoming) > 0 or len(self._jobs) > 0:
             return False
         return True
@@ -197,14 +188,9 @@ class LiveviewJobExecutor(QObject):
         """API hook; queue suspension follows ``session.auto_processing``."""
         return
 
-    def enqueue_revision(
-        self,
-        revision: SampleRevision,
-        *,
-        stability_cfg: Optional[StabilityConfig] = None,
-    ) -> None:
-        """Accept an observed TIFF revision into the incoming pipeline."""
-        item = QueueItem.from_revision(revision, stability_cfg=stability_cfg)
+    def enqueue_revision(self, revision: SampleRevision) -> None:
+        """Accept a settled sample revision into the incoming (admit) queue."""
+        item = QueueItem.from_revision(revision)
         with self._incoming_lock:
             accepted = self._accept_incoming_revision(
                 item,
@@ -220,31 +206,13 @@ class LiveviewJobExecutor(QObject):
         *,
         source: SampleRevisionSource = SampleRevisionSource.INOTIFY,
     ) -> bool:
-        """Queue or upgrade a revision; return True when the pending work item changed."""
+        """Queue or replace a settled revision; return True when the admit queue changed."""
         key = normalize_sample_path(item.path)
         # Non-manual: ignore identical re-notifications (inotify + poll, or drop + watch).
         if source != SampleRevisionSource.MANUAL:
             prev = self._last_accepted_stat.get(key)
             if prev is not None and prev == item.observed_stat:
                 return False
-
-        cur = self._current_incoming
-        if cur is not None and normalize_sample_path(cur.path) == key:
-            if cur.observed_stat == item.observed_stat:
-                self._last_accepted_stat[key] = item.observed_stat
-                return False
-            if not is_newer_than(item.observed_stat, cur.observed_stat):
-                return False
-            cfg = item.stability_cfg or cur.stability_cfg or self._stability_cfg
-            self._current_incoming = QueueItem(
-                path=item.path,
-                detected_at_monotonic=item.detected_at_monotonic,
-                observed_stat=item.observed_stat,
-                stability_cfg=cfg,
-            )
-            self._current_stability = StabilityTracker(path=item.path, cfg=cfg)
-            self._last_accepted_stat[key] = item.observed_stat
-            return True
 
         result = self._incoming.put_revision(item)
         if result in (RevisionEnqueueResult.ADDED, RevisionEnqueueResult.REPLACED):
@@ -355,15 +323,13 @@ class LiveviewJobExecutor(QObject):
         cur_path = ""
         if self._runner.is_running():
             cur_path = self._pending_step_name or ""
-        elif self._current_incoming is not None:
-            cur_path = self._current_incoming.path
         elif self._current_job is not None:
             cur_path = str(
                 self._current_job.context.get("source_path")
                 or self._current_job.context.get("tiff_path")
                 or ""
             )
-        rem = qn + (1 if (self._runner.is_running() or self._current_job is not None or self._current_incoming is not None) else 0)
+        rem = qn + (1 if (self._runner.is_running() or self._current_job is not None) else 0)
         self.queue_status.emit(
             LiveviewQueueStatus(
                 queue_size=qn,
@@ -408,8 +374,8 @@ class LiveviewJobExecutor(QObject):
                 self._start_job(nxt)
             return
 
-        # No current job: promote stable incoming samples into jobs.
-        self._advance_incoming_until_job_ready()
+        # No current job: promote settled incoming samples into jobs.
+        self._promote_incoming_to_jobs()
 
         # Start next job if available.
         nxt = self._jobs.get_nowait()
@@ -417,45 +383,26 @@ class LiveviewJobExecutor(QObject):
             return
         self._start_job(nxt)
 
-    def _advance_incoming_until_job_ready(self) -> None:
-        # If already tracking a file, keep polling stability.
-        if self._current_incoming is None:
+    def _promote_incoming_to_jobs(self) -> None:
+        """Move settled admit-queue items into ``_jobs`` via ``plan_for``."""
+        while True:
             with self._incoming_lock:
                 item = self._incoming.get_nowait()
             if item is None:
                 return
-            self._current_incoming = item
-            cfg = item.stability_cfg or self._stability_cfg
-            self._current_stability = StabilityTracker(path=item.path, cfg=cfg)
-
-        if self._current_stability is None or self._current_incoming is None:
-            return
-
-        stable = self._current_stability.tick()
-        if stable is None:
-            self.error.emit(f"File did not become stable (timeout), skipping: {self._current_incoming.path}")
-            self._current_incoming = None
-            self._current_stability = None
-            return
-        if stable is False:
-            return
-
-        # Stable -> Sample + plan_for -> enqueue job.
-        sample_path = self._current_incoming.path
-        self._current_incoming = None
-        self._current_stability = None
-        boarding = self._samples.boarding_for(sample_path) or self._state.intake_mode
-        try:
-            sample = Sample.from_path(sample_path, boarding=boarding)
-            self._samples.remember(sample)
-            plan = plan_for(self._state, sample, load_yaml=self._load_yaml_options)
-            job = plan.to_job()
-        except Exception as e:
-            self.error.emit(f"Cannot build job for sample: {sample_path}\n{e}")
-            return
-        self._register_job_outputs(job)
-        self._jobs.drop_jobs_for_tiff_path(sample_path)
-        self._jobs.put(job)
+            sample_path = item.path
+            boarding = self._samples.boarding_for(sample_path) or self._state.intake_mode
+            try:
+                sample = Sample.from_path(sample_path, boarding=boarding)
+                self._samples.remember(sample)
+                plan = plan_for(self._state, sample, load_yaml=self._load_yaml_options)
+                job = plan.to_job()
+            except Exception as e:
+                self.error.emit(f"Cannot build job for sample: {sample_path}\n{e}")
+                continue
+            self._register_job_outputs(job)
+            self._jobs.drop_jobs_for_tiff_path(sample_path)
+            self._jobs.put(job)
 
     @property
     def current_job_output_root(self) -> Optional[Path]:

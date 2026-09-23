@@ -37,7 +37,7 @@ Typical skills: `integrate_proxy`, `calibrate`, `integrate`, `subtract`, `fit_gu
 ### 2.3 Responsiveness and ordering
 
 - UI thread stays responsive; one sequential queue worker.
-- Eligible files are processed in FIFO order by detection time after **stability** (`FileStatSnapshot` unchanged across checks).
+- Eligible files are processed in FIFO order by detection time after **settle** (`FileStatSnapshot` unchanged across checks before ingress).
 
 ---
 
@@ -62,7 +62,7 @@ Right analysis: **`present_right`**. Ingest: **`RevisionIngress.accept`**.
 
 1. Watch directory = process cwd (must exist and be writable); else exit without a window.
 2. Load `<watchdir>/.guisaxs_liveview/session.yaml` when present (intake, calib, buffer/subtract options, watch mode, …).
-3. Start watchers for the restored **intake mode**. Files already present are baselined as **known** (not auto-queued). Revisions or new paths enqueue after stability.
+3. Start watchers for the restored **intake mode**. Files already present are baselined as **known** (not auto-queued). Revisions or new paths enqueue after settle.
 
 ### 4.2 Change watch directory
 

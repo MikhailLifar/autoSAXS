@@ -142,8 +142,6 @@ def _wait_until_app_idle(app: Any, win: Any, timeout_sec: float) -> bool:
             if ex is None:
                 ex = getattr(win, "_executor", None)
             if ex is not None:
-                if getattr(ex, "_current_incoming", None) is not None:
-                    return False
                 if getattr(ex, "_current_job", None) is not None:
                     return False
                 if getattr(ex, "_pending_step_name", None) is not None:

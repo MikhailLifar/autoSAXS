@@ -1,17 +1,16 @@
-"""Single front door for SampleRevision acceptance (watcher / poll / tree / manual)."""
+"""Single front door for settled SampleRevision acceptance."""
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable
 
 from .sample_revision import SampleRevision, SampleRevisionSource
-from .stability import StabilityConfig
 
 
 class RevisionIngress:
     """
-    Low-overhead accept path: owned-output filter → boarding remember → enqueue →
-    align backend stats. Backends only detect and call ``accept``.
+    Accept path for stable revisions: owned-output filter → boarding → enqueue →
+    align detector caches. Detectors observe → settle → ``accept``.
     """
 
     def __init__(
@@ -19,7 +18,7 @@ class RevisionIngress:
         *,
         is_owned_output: Callable[[str], bool],
         remember_boarding: Callable[[str, Any], None],
-        enqueue_revision: Callable[..., None],
+        enqueue_revision: Callable[[SampleRevision], None],
         infer_boarding: Callable[[str], Any],
         current_intake: Callable[[], Any],
         frame_2d_boarding: Any,
@@ -37,12 +36,11 @@ class RevisionIngress:
         self,
         revision: SampleRevision,
         *,
-        stability_cfg: Optional[StabilityConfig] = None,
         boarding: Any = None,
         boarding_from: str = "intake",
     ) -> None:
         """
-        Accept a revision into the pipeline.
+        Accept a settled revision into the pipeline.
 
         ``boarding_from``: ``intake`` (flat watcher), ``infer`` (poll), ``frame_2d`` (tree),
         or pass explicit ``boarding``.
@@ -58,7 +56,7 @@ class RevisionIngress:
             else:
                 boarding = self._current_intake()
         self._remember(revision.path, boarding)
-        self._enqueue(revision, stability_cfg=stability_cfg)
+        self._enqueue(revision)
         self._acknowledge(revision.path, revision.stat)
 
     def accept_manual(
@@ -66,8 +64,7 @@ class RevisionIngress:
         revision: SampleRevision,
         *,
         boarding: Any,
-        stability_cfg: Optional[StabilityConfig] = None,
     ) -> None:
         self._remember(revision.path, boarding)
-        self._enqueue(revision, stability_cfg=stability_cfg)
+        self._enqueue(revision)
         self._acknowledge(revision.path, revision.stat)

@@ -88,7 +88,7 @@ def calibrate(
 
     Notes:
 
-    - Automatic mask always includes the beam-stop disk and all negative-intensity pixels (plus optional IQR outliers).
+    - Automatic mask always includes the beam-stop disk and all negative-intensity pixels. Local IQR outlier masking is off by default; enable via `mask_config.calc_abnormal_mask` in config.
     - `integrator/` stores geometry only. Both `effective_mask.npy` and `auto_mask.npy` are always written next to it (even when no user mask was provided). Later `integrate --mask` replaces the effective mask entirely (no further OR).
 
     ### Short parameter list

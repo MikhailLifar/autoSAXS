@@ -5,15 +5,12 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set
 
 from PyQt5.QtCore import QObject, QTimer
 
-from .poll_watcher import POLL_TRIGGERED_STABILITY
 from .stability import FileStatSnapshot, _try_stat
 from .sample_revision import SampleRevision, SampleRevisionSource, is_tiff_path
-
-TREE_STABILITY = POLL_TRIGGERED_STABILITY
 
 _CACHE_VERSION = 3
 _SLOW_INTERVAL_MIN_S = 1.0
@@ -320,7 +317,7 @@ class TreeScanEngine:
 
 
 class TreeDirObserver(QObject):
-    """Hierarchical mtime observer for tree watch mode (NFS-friendly)."""
+    """Hierarchical mtime observer for tree watch mode (NFS-friendly). Detection only."""
 
     def __init__(
         self,
@@ -333,7 +330,6 @@ class TreeDirObserver(QObject):
         self._cfg = cfg or TreeObserverConfig()
         self._watchdir = watchdir.expanduser().resolve()
         self._on_revision = on_revision
-        self._idle_check: Callable[[], bool] = lambda: True
         self._cache = TreeCache(watchdir=self._watchdir)
         self._cache_path = self._watchdir / self._cfg.cache_dir_name / self._cfg.cache_file_name
         self._engine = TreeScanEngine(
@@ -341,20 +337,13 @@ class TreeDirObserver(QObject):
             cache=self._cache,
             cache_dir_name=self._cfg.cache_dir_name,
         )
-        self._pending: Dict[str, SampleRevision] = {}
         self._slow_timer = QTimer(self)
         self._slow_timer.setInterval(self._slow_interval_ms(scan_duration_s=0.0))
         self._slow_timer.timeout.connect(self._on_slow_timer)
         self._fast_timer = QTimer(self)
         self._fast_timer.setInterval(max(100, int(float(self._cfg.fast_interval_s) * 1000)))
         self._fast_timer.timeout.connect(self._on_fast_timer)
-        self._flush_timer = QTimer(self)
-        self._flush_timer.setInterval(100)
-        self._flush_timer.timeout.connect(self._try_flush_pending)
         self._running = False
-
-    def set_idle_check(self, fn: Callable[[], bool]) -> None:
-        self._idle_check = fn
 
     def _slow_interval_ms(self, *, scan_duration_s: float) -> int:
         interval_s = slow_scan_interval_s(
@@ -376,7 +365,6 @@ class TreeDirObserver(QObject):
             cache=self._cache,
             cache_dir_name=self._cfg.cache_dir_name,
         )
-        self._pending.clear()
         self.start()
 
     def start(self) -> None:
@@ -390,20 +378,17 @@ class TreeDirObserver(QObject):
         self._running = True
         self._slow_timer.start()
         self._fast_timer.start()
-        self._flush_timer.start()
 
     def stop(self) -> None:
         self._running = False
         self._slow_timer.stop()
         self._fast_timer.stop()
-        self._flush_timer.stop()
         try:
             self._cache.save(self._cache_path)
         except Exception:
             pass
 
     def clear(self) -> None:
-        self._pending.clear()
         self._engine.clear_hot_dirs()
 
     def note_path_stat(self, path: str, snap: Optional[FileStatSnapshot] = None) -> None:
@@ -423,12 +408,8 @@ class TreeDirObserver(QObject):
         self._cache.files[key] = snap
         if prev != snap:
             self._cache.dirty = True
-        self._pending.pop(key, None)
 
-    def pending_paths(self) -> Tuple[str, ...]:
-        return tuple(self._pending.keys())
-
-    def _collect(self, paths: List[str]) -> None:
+    def _emit_changed(self, paths: List[str]) -> None:
         now = time.monotonic()
         for p in paths:
             if not p or not is_tiff_path(p):
@@ -436,11 +417,13 @@ class TreeDirObserver(QObject):
             snap = self._cache.files.get(p)
             if snap is None:
                 continue
-            self._pending[p] = SampleRevision(
-                path=p,
-                stat=snap,
-                detected_at=now,
-                source=SampleRevisionSource.TREE,
+            self._on_revision(
+                SampleRevision(
+                    path=p,
+                    stat=snap,
+                    detected_at=now,
+                    source=SampleRevisionSource.TREE,
+                )
             )
 
     def _on_slow_timer(self) -> None:
@@ -448,9 +431,8 @@ class TreeDirObserver(QObject):
             return
         t0 = time.monotonic()
         self._engine.expire_hot_dirs(hot_idle_s=self._cfg.hot_idle_s)
-        self._collect(self._engine.slow_scan())
+        self._emit_changed(self._engine.slow_scan())
         self._cache.save(self._cache_path)
-        self._try_flush_pending()
         self._apply_slow_interval_from_scan(time.monotonic() - t0)
 
     def _on_fast_timer(self) -> None:
@@ -458,19 +440,8 @@ class TreeDirObserver(QObject):
             return
         if not self._engine.hot_dirs:
             return
-        self._collect(self._engine.fast_scan())
+        self._emit_changed(self._engine.fast_scan())
         self._cache.save(self._cache_path)
-        self._try_flush_pending()
-
-    def _try_flush_pending(self) -> None:
-        if not self._pending:
-            return
-        if not self._idle_check():
-            return
-        items = sorted(self._pending.values(), key=lambda rev: rev.detected_at)
-        self._pending.clear()
-        for revision in items:
-            self._on_revision(revision)
 
     # Test hooks
     def scan_slow_once(self) -> List[str]:
@@ -478,6 +449,3 @@ class TreeDirObserver(QObject):
         paths = self._engine.slow_scan()
         self._cache.save(self._cache_path)
         return paths
-
-    def flush_pending_for_tests(self) -> None:
-        self._try_flush_pending()

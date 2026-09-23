@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from ..ingest.curve_classify import try_classify_curve_boarding
-from ..ingest.dir_tree_observer import TREE_STABILITY, TreeDirObserver, TreeObserverConfig
+from ..ingest.dir_tree_observer import TreeDirObserver, TreeObserverConfig
 from ..ingest.ingress import RevisionIngress
-from ..ingest.poll_watcher import POLL_TRIGGERED_STABILITY, ProcessedTiffPoller, PollWatcherConfig
-from ..ingest.stability import StabilityConfig
+from ..ingest.poll_watcher import ProcessedTiffPoller, PollWatcherConfig
+from ..ingest.settle import RevisionSettler
 from ..ingest.sample_revision import (
     SampleRevision,
     SampleRevisionSource,
@@ -40,26 +40,36 @@ class LiveviewIngestHandler:
             frame_2d_boarding=LiveviewIntakeMode.FRAME_2D,
             acknowledge_stat=self._acknowledge_sample_stat,
         )
+        self._settler = RevisionSettler(
+            on_stable=self._on_settled,
+            on_timeout=lambda path: controller.error.emit(
+                f"File did not become stable (timeout), skipping: {path}"
+            ),
+            parent=controller,
+        )
         self._watcher = DirectoryWatcher(
             directory=wd,
             cfg=WatcherConfig(recursive=False),
-            on_revision=self._on_revision,
+            on_revision=self._observe_detected,
         )
         self._poll_watcher = ProcessedTiffPoller(
             cfg=PollWatcherConfig(),
-            on_revision=self._on_revision_from_poll,
+            on_revision=self._observe_detected,
         )
         self._tree_observer = TreeDirObserver(
             cfg=TreeObserverConfig(),
             watchdir=wd,
-            on_revision=self._on_revision_from_tree,
+            on_revision=self._observe_detected,
         )
-        self._poll_watcher.set_idle_check(controller.executor.is_idle)
-        self._tree_observer.set_idle_check(controller.executor.is_idle)
         controller.executor.session_file_completed.connect(self._poll_watcher.track_processed_path)
+        self._settler.start()
         self.apply_watch_mode_watchers()
 
     def stop_all(self) -> None:
+        try:
+            self._settler.stop()
+        except Exception:
+            pass
         for stop in (self._watcher.stop, self._poll_watcher.stop, self._tree_observer.stop):
             try:
                 stop()
@@ -193,7 +203,7 @@ class LiveviewIngestHandler:
             self._dat_root_watcher = DirectoryWatcher(
                 directory=wd,
                 cfg=cfg,
-                on_revision=self._on_dat_while_2d,
+                on_revision=self._observe_detected,
             )
         try:
             self._dat_root_watcher.restart_at(wd, cfg=cfg)
@@ -343,18 +353,17 @@ class LiveviewIngestHandler:
         except ValueError:
             return False
 
-    def _enqueue_to_executor(
-        self,
-        revision: SampleRevision,
-        *,
-        stability_cfg: StabilityConfig | None = None,
-    ) -> None:
+    def _enqueue_to_executor(self, revision: SampleRevision) -> None:
         if revision.source != SampleRevisionSource.MANUAL:
             if self._c.executor.is_owned_output(revision.path):
                 return
-        self._c.executor.enqueue_revision(revision, stability_cfg=stability_cfg)
+        self._c.executor.enqueue_revision(revision)
 
     def _acknowledge_sample_stat(self, path: str, snap=None) -> None:
+        try:
+            self._settler.discard(path)
+        except Exception:
+            pass
         for w in (self._watcher, getattr(self, "_dat_root_watcher", None)):
             if w is None:
                 continue
@@ -371,20 +380,25 @@ class LiveviewIngestHandler:
         except Exception:
             pass
 
-    def _on_revision(self, revision: SampleRevision, *, stability_cfg: object = None) -> None:
-        cfg = stability_cfg if isinstance(stability_cfg, StabilityConfig) else None
-        self._ingress.accept(revision, stability_cfg=cfg, boarding_from="intake")
+    def _observe_detected(self, revision: SampleRevision) -> None:
+        """Detector callback: settle before ingress."""
+        if revision.source != SampleRevisionSource.MANUAL:
+            if self._c.executor.is_owned_output(revision.path):
+                return
+        self._settler.observe(revision)
 
-    def _on_revision_from_poll(self, revision: SampleRevision) -> None:
-        self._ingress.accept(
-            revision,
-            stability_cfg=POLL_TRIGGERED_STABILITY,
-            boarding_from="infer",
-        )
-
-    def _on_revision_from_tree(self, revision: SampleRevision) -> None:
-        self._ingress.accept(
-            revision,
-            stability_cfg=TREE_STABILITY,
-            boarding_from="frame_2d",
-        )
+    def _on_settled(self, revision: SampleRevision) -> None:
+        """Stable revision → ingress (or 2D→curve auto-switch for root ``.dat``)."""
+        if (
+            is_sample_dat_path(revision.path)
+            and self._c.state.intake_mode == LiveviewIntakeMode.FRAME_2D
+        ):
+            self._on_dat_while_2d(revision)
+            return
+        if revision.source == SampleRevisionSource.TREE:
+            boarding_from = "frame_2d"
+        elif revision.source == SampleRevisionSource.POLL:
+            boarding_from = "infer"
+        else:
+            boarding_from = "intake"
+        self._ingress.accept(revision, boarding_from=boarding_from)

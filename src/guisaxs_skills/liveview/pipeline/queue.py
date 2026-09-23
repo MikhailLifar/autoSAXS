@@ -4,12 +4,12 @@ import collections
 import heapq
 import itertools
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Deque, List, Optional, Tuple
 
-from ..ingest.stability import FileStatSnapshot, StabilityConfig
+from ..ingest.stability import FileStatSnapshot
 from ..ingest.sample_revision import SampleRevision, is_newer_than, normalize_sample_path
 from .jobs import Job, is_manual_job
 
@@ -26,15 +26,13 @@ class QueueItem:
     path: str
     detected_at_monotonic: float
     observed_stat: FileStatSnapshot
-    stability_cfg: Optional[StabilityConfig] = field(default=None)
 
     @staticmethod
-    def from_revision(rev: SampleRevision, *, stability_cfg: Optional[StabilityConfig] = None) -> QueueItem:
+    def from_revision(rev: SampleRevision) -> QueueItem:
         return QueueItem(
             path=rev.path,
             detected_at_monotonic=float(rev.detected_at),
             observed_stat=rev.stat,
-            stability_cfg=stability_cfg,
         )
 
 

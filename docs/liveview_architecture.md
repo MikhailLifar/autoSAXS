@@ -29,7 +29,7 @@ A single-window desktop app that watches a working directory, boards samples (2D
 │  (facts + safe  │  (history)    │  (step lists)             │
 │   mutations)    │               │                           │
 ├──────────────┴──────────────────┴───────────────────────────┤
-│  RevisionIngress ← watcher / poll / tree / manual backends  │
+│  RevisionIngress ← settle ← watcher / poll / tree / manual backends  │
 │  Executor facade (+ manual_jobs / enrichment)               │
 │  History sync: sync_middle_view ; present_right             │
 ├─────────────────────────────────────────────────────────────┤
@@ -61,12 +61,13 @@ Non-negotiable: **no science compute in the UI thread** except GNOM adjust / siz
 | Auto-process step choice | `plan_for` (+ optional `completed`) | `pipeline/plan.py` |
 | Middle layout + paint | `sync_middle_view` | `services/history/middle_from_stem.py` |
 | Right analysis presentation | `present_right` | `services/history/right_artifacts.py` |
+| Revision settle | `RevisionSettler.observe` → stable snap | `ingest/settle.py` |
 | Revision acceptance | `RevisionIngress.accept` | `ingest/ingress.py` |
 | Queue / skill run | `LiveviewJobExecutor` (+ `manual_jobs`, `artifact_enrichment`) | `pipeline/` |
 | Controller wiring | `LiveviewController` + handlers | `controller/` |
 
 ```text
-Ingest backends → RevisionIngress → Executor
+Ingest backends → settle → RevisionIngress → Executor
 UI / handlers → LiveviewSession (set_intake, stop/resume, set_buffer, arming, mask)
 SampleStore + Session.state → plan_for → Job → Executor → SkillRunner
   (executor re-calls plan_for(completed=…) on the *current* auto job only)
@@ -167,7 +168,7 @@ guisaxs_skills/liveview/
 | Scenario | User sees | Internal |
 |----------|-----------|----------|
 | Cold start | Restored calib/buffer/intake; files not auto-queued | `LiveviewSession` loads YAML; watchers baseline; `sync_middle` |
-| New frame | Queue advances; plots update | Backend → `RevisionIngress.accept` → stability → `plan_for` → skills |
+| New frame | Queue advances; plots update | Backend → settle → `RevisionIngress.accept` → `plan_for` → skills |
 | Drop `.dat` | May auto-switch from 2D | Classify → `session.set_intake` → manual revision via ingress |
 | Calibrate | Left shows success; later integrate | Manual skill; outcomes write calib facts |
 | Buffer set | Dual layout | `session.set_buffer` → `buffer_changed` → middle sync |
@@ -185,7 +186,7 @@ guisaxs_skills/liveview/
 **Still worth doing when touching the area:**
 
 1. **UI module size** — still the largest debt: `ui/widgets/plots.py` (~1k), `ui/wizards/left.py`, mask dialog, left/right panels, mono presenter. Split along paint vs wizard vs chrome when those files are edited.
-2. **Executor facade size** — `pipeline/executor.py` (~900) still owns tick + incoming/stability + job lifecycle + skill outcomes. Extract `incoming.py` / `job_lifecycle.py` if that loop grows again; meanwhile prune dead facade helpers (`monodisperse_steps_*`, unused mixture option helper) and stop poking `_load_yaml_options` from controllers.
+2. **Executor facade size** — `pipeline/executor.py` still owns tick + admit queue + job lifecycle + skill outcomes. Extract `incoming.py` / `job_lifecycle.py` if that loop grows again; meanwhile prune dead facade helpers (`monodisperse_steps_*`, unused mixture option helper) and stop poking `_load_yaml_options` from controllers.
 3. **Session write discipline** — intake/stop/buffer/mask/arming go through `LiveviewSession`; wizard params, shape/mixture modes, calibration outcomes, and executor `last_*` paths still write `state` directly. Add Session helpers (or explicitly document intentional exceptions) if that surface keeps spreading.
 4. **One analysis-step assembler** — `plan._analysis_steps` and `manual_jobs.analysis_steps_for_profile` are near-duplicates. One owner (planner-side) with manual/auto call sites would match “one owner per concept.”
 5. **Single LIVE right ingest** — `LiveviewSkillOutcomesHandler` can call `present_right(LIVE)` from both `on_latest_artifacts` and success handling; collapse to one call site so analysis finishes are not double-presented.

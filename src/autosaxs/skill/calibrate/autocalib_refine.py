@@ -17,13 +17,15 @@ def calc_beam_abnormal_mask(
     center_y_px,
     center_x_px,
     r_beam_px,
-    calc_abnormal_mask: bool = True,
+    calc_abnormal_mask: bool = False,
     window_size: int = 7,
     iqr_tol: float = 1.5,
 ):
     """
     Build an automatic detector mask: beam-stop disk, all negative-intensity
     pixels, and optionally statistical outliers in log-intensity (local IQR).
+
+    IQR outlier masking is off by default (`calc_abnormal_mask=False`).
     """
     if window_size % 2 == 0:
         raise ValueError("window_size must be odd for symmetric neighborhood")

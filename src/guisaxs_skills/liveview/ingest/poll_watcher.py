@@ -2,27 +2,17 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from PyQt5.QtCore import QObject, QTimer
 
-from .stability import FileStatSnapshot, StabilityConfig, _try_stat
+from .stability import FileStatSnapshot, _try_stat
 from .sample_revision import (
     SampleRevision,
     SampleRevisionSource,
     is_sample_dat_path,
     is_tiff_path,
     normalize_sample_path,
-)
-
-
-# Tuned for NFS atomic overwrite (e.g. Lima temp.tif): fast detect, short settle.
-# Executor ticks stability every 100 ms, so required_unchanged_polls=2 ≈ 200 ms.
-POLL_TRIGGERED_STABILITY = StabilityConfig(
-    poll_interval_s=0.1,
-    required_unchanged_polls=2,
-    timeout_s=15.0,
 )
 
 
@@ -34,7 +24,7 @@ class PollWatcherConfig:
 
 
 class ProcessedTiffPollEngine:
-    """Qt-free stat polling for tracked TIFF paths."""
+    """Qt-free stat polling for tracked TIFF paths. Detection only."""
 
     def __init__(
         self,
@@ -42,11 +32,7 @@ class ProcessedTiffPollEngine:
         on_revision: Callable[[SampleRevision], None],
     ) -> None:
         self._on_revision = on_revision
-        self._idle_check: Callable[[], bool] = lambda: True
         self._tracked: Dict[str, FileStatSnapshot] = {}
-
-    def set_idle_check(self, fn: Callable[[], bool]) -> None:
-        self._idle_check = fn
 
     def clear(self) -> None:
         self._tracked.clear()
@@ -71,8 +57,6 @@ class ProcessedTiffPollEngine:
             self._tracked[key] = snap
 
     def poll_once(self) -> None:
-        if not self._idle_check():
-            return
         now = time.monotonic()
         for path, prev in list(self._tracked.items()):
             cur = _try_stat(path)
@@ -94,7 +78,7 @@ class ProcessedTiffPoller(QObject):
     Stat-poll only TIFF paths that were successfully processed at least once.
 
     Unlike watchdog's directory-wide ``PollingObserver``, this touches only tracked
-    files and runs its timer callback solely while the executor reports idle.
+    files. Changes go to the shared settle stage (not directly to ingress).
     """
 
     def __init__(
@@ -109,9 +93,6 @@ class ProcessedTiffPoller(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(max(100, int(float(self._cfg.poll_interval_s) * 1000)))
         self._timer.timeout.connect(self._engine.poll_once)
-
-    def set_idle_check(self, fn: Callable[[], bool]) -> None:
-        self._engine.set_idle_check(fn)
 
     def start(self) -> None:
         if not self._timer.isActive():
