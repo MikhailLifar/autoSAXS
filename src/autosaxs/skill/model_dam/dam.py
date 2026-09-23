@@ -634,8 +634,12 @@ def _model_dam_paths(
     )
 
     from autosaxs.core.report_fragments import write_skill_report_fragments
+    from autosaxs.core.gnom_quality import detail_indicators_from_gnom_out, detail_indicators_markdown
+
+    detail_ind = detail_indicators_from_gnom_out(str(gnom_path))
 
     md_parts = ["### ATSAS DAMMIF / DAMAVER\n"]
+    md_parts.append(detail_indicators_markdown(detail_ind))
     if best_view_path and os.path.isfile(best_view_path):
         md_parts.append(f"![Best DAMMIF model]({os.path.basename(best_view_path)})\n")
     if os.path.isfile(dammif_fits_png):
@@ -666,9 +670,15 @@ def _model_dam_paths(
         "model_dam",
         "".join(md_parts),
         summary_references=summary_refs_d or None,
+        summary_extra={
+            "detail_reliability_class": detail_ind.get("detail_reliability_class"),
+            "wiggle_index": detail_ind.get("wiggle_index"),
+            "n_shannon": detail_ind.get("n_shannon"),
+            "shannon_s_max": detail_ind.get("shannon_s_max"),
+        },
         write_summary_yaml=bool(summary_refs_d),
     )
-    out: Dict[str, Union[str, List[str]]] = {
+    out: Dict[str, Union[str, List[str], float, None]] = {
         "output_subdir": output_dir,
         "best_cif_path": best_cif_path,
         "best_view_path": best_view_path,
@@ -680,6 +690,11 @@ def _model_dam_paths(
         "overlap_gif": "",
         "occupancy_gif": "",
         "run_gifs": [],
+        "detail_reliability_class": str(detail_ind.get("detail_reliability_class") or "unknown"),
+        "wiggle_index": detail_ind.get("wiggle_index") if detail_ind.get("wiggle_index") is not None else "",
+        "wiggle_class": str(detail_ind.get("wiggle_class") or "unknown"),
+        "n_shannon": detail_ind.get("n_shannon") if detail_ind.get("n_shannon") is not None else "",
+        "shannon_s_max": detail_ind.get("shannon_s_max") if detail_ind.get("shannon_s_max") is not None else "",
     }
     if bool(visualize_all):
         from .vis import write_visuals

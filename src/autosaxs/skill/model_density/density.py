@@ -512,11 +512,15 @@ def _model_density_paths(
 
     res_a = _parse_fsc_resolution_a(fsc_path)
     from autosaxs.core.report_fragments import write_skill_report_fragments
+    from autosaxs.core.gnom_quality import detail_indicators_from_gnom_out, detail_indicators_markdown
+
+    detail_ind = detail_indicators_from_gnom_out(gnom_path)
 
     md_parts = [
         "### DENSS electron density (model_density)\n",
         f"- Protocol mode: **{protocol}**; DENSS mode: **{denss_tok}**\n",
     ]
+    md_parts.append(detail_indicators_markdown(detail_ind))
     if protocol != "pilot":
         md_parts.append(f"- Maps averaged: **{int(n_maps)}**\n")
     if res_a is not None:
@@ -607,6 +611,10 @@ def _model_density_paths(
             "denss_mode": denss_tok,
             "n_maps": int(n_maps) if protocol != "pilot" else 1,
             "fsc_resolution_A": res_a,
+            "detail_reliability_class": detail_ind.get("detail_reliability_class"),
+            "wiggle_index": detail_ind.get("wiggle_index"),
+            "n_shannon": detail_ind.get("n_shannon"),
+            "shannon_s_max": detail_ind.get("shannon_s_max"),
         },
         write_summary_yaml=True,
     )
@@ -624,4 +632,9 @@ def _model_density_paths(
         "midplanes_png": midplanes_png,
         "density_rotate_gif": density_rotate_gif,
         "sigma_rotate_gif": sigma_rotate_gif,
+        "detail_reliability_class": str(detail_ind.get("detail_reliability_class") or "unknown"),
+        "wiggle_index": detail_ind.get("wiggle_index") if detail_ind.get("wiggle_index") is not None else "",
+        "wiggle_class": str(detail_ind.get("wiggle_class") or "unknown"),
+        "n_shannon": detail_ind.get("n_shannon") if detail_ind.get("n_shannon") is not None else "",
+        "shannon_s_max": detail_ind.get("shannon_s_max") if detail_ind.get("shannon_s_max") is not None else "",
     }

@@ -175,6 +175,7 @@ def _finalize_fit_distances_failure(
             rg_guinier_nm=rg_guinier_nm,
             q_nm=np.asarray(q_nm, dtype=float),
             first_pt=first_pt,
+            last_pt=None,
             suspicious=False,
             event_bus=event_bus,
         )

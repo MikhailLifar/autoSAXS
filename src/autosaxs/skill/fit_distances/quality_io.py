@@ -20,14 +20,20 @@ def _pr_quality_result_keys() -> List[str]:
         "i0_pr",
         "rg_guinier_nm",
         "q_min_fit_nm",
+        "q_max_fit_nm",
         "total_estimate",
         "chi2",
         "chi2_class",
         "delta_rg_pct",
         "shannon_s_min",
+        "shannon_s_max",
+        "n_shannon",
         "shannon_class",
         "shannon_ok",
         "shannon_tip",
+        "wiggle_index",
+        "wiggle_class",
+        "detail_reliability_class",
         "pr_quality_class",
         "overall_status",
         "quality_rationale",
@@ -43,14 +49,20 @@ def _empty_pr_quality_fields() -> Dict[str, Any]:
         "i0_pr": None,
         "rg_guinier_nm": None,
         "q_min_fit_nm": None,
+        "q_max_fit_nm": None,
         "total_estimate": None,
         "chi2": None,
         "chi2_class": "unknown",
         "delta_rg_pct": None,
         "shannon_s_min": None,
+        "shannon_s_max": None,
+        "n_shannon": None,
         "shannon_class": "unknown",
         "shannon_ok": None,
         "shannon_tip": "",
+        "wiggle_index": None,
+        "wiggle_class": "unknown",
+        "detail_reliability_class": "unknown",
         "pr_quality_class": "failed",
         "overall_status": "FAILED",
         "quality_rationale": [],
@@ -93,6 +105,7 @@ def _assess_and_write_pr_quality(
     suspicious: bool,
     event_bus: Optional[EventBus],
     dmax_validation: Optional[Dict[str, Any]] = None,
+    last_pt: Optional[int] = None,
 ) -> Dict[str, Any]:
     parsed = parse_gnom_out(out_text)
     quality = analyze_pr_quality(
@@ -101,6 +114,7 @@ def _assess_and_write_pr_quality(
         rg_guinier_nm=rg_guinier_nm,
         q_nm=q_nm,
         first_pt_1based=first_pt,
+        last_pt_1based=last_pt,
         suspicious=suspicious,
         dmax_validation=dmax_validation,
     )
@@ -124,6 +138,9 @@ def _pr_quality_markdown(quality: Dict[str, Any]) -> str:
         "\n#### Quality assessment (p(r))\n",
         f"- **Status:** {quality.get('overall_status', 'FAILED')}",
     ]
+    det = quality.get("detail_reliability_class")
+    if det:
+        lines.append(f"\n- **Detail reliability:** {det}")
     te = quality.get("total_estimate")
     if te is not None:
         lines.append(f"\n- **Total Estimate:** {float(te):.3f}")
@@ -135,6 +152,22 @@ def _pr_quality_markdown(quality: Dict[str, Any]) -> str:
         lines.append(
             f"\n- **Shannon s_min:** {float(s_min):.3f} ({quality.get('shannon_class', 'unknown')})"
         )
+    n_s = quality.get("n_shannon")
+    if n_s is not None:
+        lines.append(f"\n- **n_shannon:** {float(n_s):.2f}")
+    s_max = quality.get("shannon_s_max")
+    if s_max is not None:
+        lines.append(f"\n- **Shannon s_max:** {float(s_max):.3f}")
+    wig = quality.get("wiggle_index")
+    if wig is not None:
+        lines.append(
+            f"\n- **Wiggle index:** {float(wig):.3f} ({quality.get('wiggle_class', 'unknown')})"
+        )
+    tips = quality.get("user_tips") or []
+    if tips:
+        lines.append("\n- **Tips:**")
+        for tip in tips:
+            lines.append(f"\n  - {tip}")
     rg_g = quality.get("rg_guinier_nm")
     rg_p = quality.get("rg_pr_nm")
     if rg_g is not None:

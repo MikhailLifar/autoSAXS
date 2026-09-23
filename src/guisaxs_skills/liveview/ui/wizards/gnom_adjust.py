@@ -458,6 +458,7 @@ class GnomAdjustWizardDialog(QDialog):
                 rg_guinier_nm=rg_g,
                 q_nm=self._q_nm,
                 first_pt_1based=first,
+                last_pt_1based=last,
                 suspicious=bool(parsed.get("suspicious")),
                 dmax_validation=None,
             )

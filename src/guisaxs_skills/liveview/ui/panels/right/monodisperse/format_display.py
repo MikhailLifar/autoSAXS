@@ -156,6 +156,28 @@ def format_gnom_passport_rows(
         chi2_poor = chi2_class.lower() in ("failed", "fail")
         rows.append((f"χ² = {format_display_number(chi2)} ({chi2_label})", chi2_poor))
 
+    det = str(scalar_value(result.get("detail_reliability_class")) or "").strip()
+    if det and det.lower() != "unknown":
+        det_poor = det.upper() == "SUSPICIOUS"
+        rows.append((f"Detail reliability = {det}", det_poor))
+
+    n_s = scalar_value(result.get("n_shannon"))
+    if n_s is not None and n_s not in ("", None):
+        rows.append((f"n_shannon = {format_display_number(n_s)}", False))
+
+    s_max = scalar_value(result.get("shannon_s_max"))
+    if s_max is not None and s_max not in ("", None):
+        rows.append((f"s_max = {format_display_number(s_max)}", False))
+
+    wig = scalar_value(result.get("wiggle_index"))
+    wig_class = str(scalar_value(result.get("wiggle_class")) or "unknown")
+    if wig is not None and wig not in ("", None):
+        wig_poor = wig_class.lower() == "high"
+        text = f"wiggle_index = {format_display_number(wig)}"
+        if wig_class and wig_class != "unknown":
+            text += f" ({wig_class})"
+        rows.append((text, wig_poor))
+
     s_min = scalar_value(result.get("shannon_s_min"))
     s_class = str(scalar_value(result.get("shannon_class")) or "unknown")
     s_status = str(scalar_value(result.get("overall_status")) or "")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
@@ -10,6 +11,12 @@ ATSAS_TOOL_BY_SKILL: Dict[str, str] = {
     "fit_distances": "DATGNOM",
     "fit_sizes": "GNOM",
 }
+
+# Shannon channel caps for silent default q_max (when user omits last/q_max).
+N_SHANNON_CAP_FIT_DISTANCES = 15
+N_SHANNON_CAP_FIT_SIZES = 25
+DEFAULT_Q_SIGNAL_SNR = 2.0
+DEFAULT_Q_SIGNAL_WINDOW = 11
 
 
 def atsas_tool_label(skill_id: str) -> str:
@@ -64,6 +71,112 @@ def q_to_point_1based(q_nm: np.ndarray, q_target: float) -> int:
         raise ValueError("q_to_point_1based: q_target is not finite")
     idx = int(np.argmin(np.abs(q_nm - float(q_target))))
     return idx + 1
+
+
+def q_signal_max_nm(
+    q_nm: np.ndarray,
+    i: np.ndarray,
+    sigma: Optional[np.ndarray],
+    *,
+    snr_min: float = DEFAULT_Q_SIGNAL_SNR,
+    window: int = DEFAULT_Q_SIGNAL_WINDOW,
+) -> Optional[float]:
+    """
+    Largest q whose trailing window still has median I/σ >= ``snr_min``.
+
+    Returns None when σ is missing/unusable (caller should skip this cap).
+    """
+    q = np.asarray(q_nm, dtype=float)
+    inten = np.asarray(i, dtype=float)
+    if q.size == 0 or inten.size != q.size:
+        return None
+    if sigma is None:
+        return None
+    sig = np.asarray(sigma, dtype=float)
+    if sig.size != q.size:
+        return None
+    mask = np.isfinite(q) & np.isfinite(inten) & np.isfinite(sig) & (sig > 0) & (q > 0)
+    if int(np.count_nonzero(mask)) < 3:
+        return None
+    q = q[mask]
+    snr = inten[mask] / sig[mask]
+    snr = np.where(np.isfinite(snr), snr, 0.0)
+    w = max(3, int(window))
+    if w % 2 == 0:
+        w += 1
+    half = w // 2
+    best: Optional[float] = None
+    for i_end in range(half, q.size):
+        lo = max(0, i_end - w + 1)
+        med = float(np.median(snr[lo : i_end + 1]))
+        if med >= float(snr_min):
+            best = float(q[i_end])
+    return best
+
+
+def suggest_q_max_nm(
+    q_nm: np.ndarray,
+    i: np.ndarray,
+    sigma: Optional[np.ndarray],
+    *,
+    d_est_nm: Optional[float],
+    n_cap: int,
+) -> Tuple[float, Dict[str, Any]]:
+    """
+    Silent default high-q bound when the user omits ``last`` / ``q_max``.
+
+    ``q_max_default = min(q_file_max, q_signal, q_shannon_cap)`` with missing
+    caps skipped. Always returns a finite q from the file range when possible.
+    """
+    q = np.asarray(q_nm, dtype=float)
+    finite_q = q[np.isfinite(q) & (q > 0)]
+    if finite_q.size == 0:
+        raise ValueError("suggest_q_max_nm: no positive finite q values")
+    q_file_max = float(np.max(finite_q))
+    caps: Dict[str, Any] = {"q_file_max": q_file_max}
+
+    candidates = [q_file_max]
+    q_sig = q_signal_max_nm(q, i, sigma)
+    if q_sig is not None and np.isfinite(q_sig) and q_sig > 0:
+        caps["q_signal"] = float(q_sig)
+        candidates.append(float(q_sig))
+    else:
+        caps["q_signal"] = None
+
+    q_shannon = None
+    try:
+        d_est = float(d_est_nm) if d_est_nm is not None else float("nan")
+    except (TypeError, ValueError):
+        d_est = float("nan")
+    n_c = int(n_cap)
+    if np.isfinite(d_est) and d_est > 0 and n_c > 0:
+        q_shannon = float(n_c) * math.pi / d_est
+        caps["q_shannon_cap"] = q_shannon
+        caps["d_est_nm"] = d_est
+        caps["n_cap"] = n_c
+        candidates.append(q_shannon)
+    else:
+        caps["q_shannon_cap"] = None
+
+    q_max = float(min(candidates))
+    # Keep inside the measured range (shannon cap can undershoot file min).
+    q_min_file = float(np.min(finite_q))
+    if q_max < q_min_file:
+        q_max = q_file_max
+    caps["q_max_default"] = q_max
+    binding = []
+    if abs(q_max - q_file_max) <= 1e-12 * max(1.0, abs(q_file_max)):
+        binding.append("q_file_max")
+    if caps.get("q_signal") is not None and abs(q_max - float(caps["q_signal"])) <= 1e-12 * max(
+        1.0, abs(float(caps["q_signal"]))
+    ):
+        binding.append("q_signal")
+    if caps.get("q_shannon_cap") is not None and abs(
+        q_max - float(caps["q_shannon_cap"])
+    ) <= 1e-12 * max(1.0, abs(float(caps["q_shannon_cap"]))):
+        binding.append("q_shannon_cap")
+    caps["binding"] = binding or ["q_file_max"]
+    return q_max, caps
 
 
 def resolve_first_last(
