@@ -62,11 +62,12 @@ Right analysis: **`present_right`**. Ingest: **`RevisionIngress.accept`**.
 
 1. Watch directory = process cwd (must exist and be writable); else exit without a window.
 2. Load `<watchdir>/.guisaxs_liveview/session.yaml` when present (intake, calib, buffer/subtract options, watch mode, …).
-3. Start watchers for the restored **intake mode**. Files already present are baselined as **known** (not auto-queued). Revisions or new paths enqueue after settle.
+3. Load `<watchdir>/.guisaxs_liveview/history.yaml` when present (ordered sample history, last history index, analysis arming). Missing source paths are dropped; outputs are re-read from disk when navigating.
+4. Start watchers for the restored **intake mode**. Files already present are baselined as **known** (not auto-queued). Revisions or new paths enqueue after settle.
 
 ### 4.2 Change watch directory
 
-**File → Open working directory…**: refuse if a skill is running; persist current session; spawn a new liveview process on the new cwd; quit. Equivalent to quit + cold start (same family as post-update relaunch).
+**File → Open working directory…**: refuse if a skill is running; persist current session + history; spawn a new liveview process on the new cwd; quit. Equivalent to quit + cold start (same family as post-update relaunch).
 
 ### 4.3 Intake mode (boarding)
 

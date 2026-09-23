@@ -232,6 +232,7 @@ class LiveviewMainWindow(QMainWindow):
         ):
             return
         self._controller.persist_session_settings()
+        self._controller.persist_history()
         try:
             launch_guisaxs_liveview(cwd=new_p)
         except OSError as exc:

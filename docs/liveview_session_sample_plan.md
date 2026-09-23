@@ -9,7 +9,7 @@ Product/UX contracts: [`guisaxs_liveview_spec.md`](guisaxs_liveview_spec.md). Ag
 | Owner | Module | Stores / decides |
 |-------|--------|------------------|
 | **LiveviewSession** | `session/api.py` + `session/state.py` | Facts + safe mutations (`set_intake`, `stop`/`resume`, `set_buffer`, arming, mask). Does **not** choose step lists. |
-| **SampleStore** | `session/sample.py`, `sample_store.py` | History + boarding on each `Sample`; path index; current sample for UI. |
+| **SampleStore** | `session/sample.py`, `sample_store.py`, `history_persistence.py` | History + boarding on each `Sample`; path index; current sample for UI; disk via `history.yaml`. |
 | **Planner** | `pipeline/plan.py` | `plan_for(session, sample, completed=?) → PipelinePlan` — **only** place that chooses integrate_proxy / integrate / subtract / analysis / report. |
 | **Job** | `pipeline/jobs.py` | Owns `CompletedWork` (phases, step names, skill results) for one run; executor mutates only via Job API. |
 | **Middle sync** | `services/history/middle_from_stem.py` | `sync_middle_view` — layout + disk paint. |
