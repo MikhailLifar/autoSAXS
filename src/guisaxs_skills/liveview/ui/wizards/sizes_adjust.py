@@ -466,6 +466,7 @@ class SizesAdjustWizardDialog(QDialog):
                 shape="spheres",
                 q_nm=self._q_nm,
                 first_pt_1based=first,
+                last_pt_1based=last,
             )
             self.set_passport_from_quality(quality)
         except Exception as exc:

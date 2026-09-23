@@ -37,7 +37,11 @@ from .optimize import (
     _guinier_from_profile,
     _optimize_rmax_nm,
 )
-from autosaxs.skill.gnom_fit_common import resolve_first_last
+from autosaxs.skill.gnom_fit_common import (
+    N_SHANNON_CAP_FIT_SIZES,
+    resolve_first_last,
+    suggest_q_max_nm,
+)
 from .parametric import classify_dr_parametric
 from .quality_io import _assess_and_write_dr_quality, normalize_fit_sizes_single_sample
 from autosaxs.core.atsas_gnom import normalize_force_zero
@@ -79,9 +83,9 @@ def fit_sizes(
     - `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, optimized in `[ε, 3 × rg_max]` from in-process `fit_guinier` (30 s max). When set, skip Rmax search but still write the Rmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
     - `rad56_nm` (float | None): GNOM `--rad56` for `shape=rods` (nm cylinder radius), deprecated. Ignored for spheres.
     - `first` (int | None): GNOM `--first` (1-based). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
-    - `last` (int | None): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise not passed to GNOM.
+    - `last` (int | None): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
     - `q_min` (float | None): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
-    - `q_max` (float | None): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`.
+    - `q_max` (float | None): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`. When both `last` and `q_max` are omitted, a silent safer default is applied.
     - `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
     - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
     - `force_zero_rmin` (str | None): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
@@ -130,9 +134,14 @@ def fit_sizes(
     - `q_min_fit_nm`: Low-q bound (nm⁻¹) used in the GNOM fit.
     - `total_estimate`: GNOM Total Estimate of the selected fit.
     - `shannon_s_min`: Minimum Shannon sampling value.
+    - `shannon_s_max`: Maximum Shannon sampling value ``(q_max · R_max) / π``.
+    - `n_shannon`: Number of Shannon channels in the fitted q-window.
     - `shannon_class`: Shannon classification.
     - `shannon_ok`: `"true"` / `"false"` / `""` — acceptable Shannon sampling.
     - `shannon_tip`: Shannon interpretation guide.
+    - `wiggle_index`: Real-space high-frequency wiggle index (~0 clean, ~1 borderline, ≥2 high).
+    - `wiggle_class`: ``low`` / ``acceptable`` / ``high`` / ``unknown``.
+    - `detail_reliability_class`: Combined ``RELIABLE`` / ``SUSPICIOUS`` / ``unknown`` (indicator only).
     - `parametric_family`: Best-fit parametric family name (e.g. `normal`, `gamma`).
     - `parametric_R0_nm`: Parametric model center (nm).
     - `parametric_width_nm`: Parametric model width (nm).
@@ -316,6 +325,38 @@ def _fit_sizes_paths(
             fallback_q_min = float(guinier_info["q_min"])
         except (TypeError, ValueError):
             fallback_q_min = None
+
+    # Silent safer q_max when the user did not set last / q_max.
+    if user_last is None and user_q_max is None:
+        d_est: Optional[float] = None
+        if user_rmax_nm is not None:
+            try:
+                d_est = float(user_rmax_nm)
+            except (TypeError, ValueError):
+                d_est = None
+        if d_est is None or not (np.isfinite(d_est) and d_est > 0):
+            if rg_guinier_nm_val is not None and np.isfinite(rg_guinier_nm_val) and rg_guinier_nm_val > 0:
+                d_est = 3.0 * float(rg_guinier_nm_val)
+        q_max_default, q_max_caps = suggest_q_max_nm(
+            q_nm,
+            I,
+            sigma,
+            d_est_nm=d_est,
+            n_cap=N_SHANNON_CAP_FIT_SIZES,
+        )
+        user_q_max = q_max_default
+        if event_bus:
+            bind = ",".join(str(x) for x in (q_max_caps.get("binding") or []))
+            event_bus.publish(
+                EventType.MESSAGE,
+                {
+                    "text": (
+                        f"fit_sizes: default q_max={q_max_default:.4g} nm⁻¹ "
+                        f"(caps binding: {bind or 'q_file_max'})"
+                    ),
+                },
+            )
+
     first_pt, last_pt = resolve_first_last(
         q_nm,
         first=user_first,
@@ -487,6 +528,7 @@ def _fit_sizes_paths(
         event_bus=event_bus,
         q_nm=q_nm,
         first_pt_1based=first_pt,
+        last_pt_1based=last_pt,
     )
 
     best_parsed = parse_gnom_out(out_text_final)

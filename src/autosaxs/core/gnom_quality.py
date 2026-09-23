@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -153,10 +154,227 @@ def q_min_from_gnom_fit(
     return None
 
 
+def q_max_from_gnom_fit(
+    parsed: Dict[str, Any],
+    *,
+    q_nm: Optional[np.ndarray] = None,
+    last_pt_1based: Optional[int] = None,
+) -> Optional[float]:
+    """High-q bound used in the GNOM fit (nm⁻¹)."""
+    angular = parsed.get("angular_range")
+    if angular is not None:
+        try:
+            q_hi = float(angular[1])
+            if np.isfinite(q_hi) and q_hi > 0:
+                return q_hi
+        except (TypeError, ValueError, IndexError):
+            pass
+    iq_table = parsed.get("iq_table")
+    if iq_table is not None:
+        try:
+            q = np.asarray(iq_table[0], dtype=float)
+            finite = q[np.isfinite(q) & (q > 0)]
+            if finite.size:
+                return float(np.max(finite))
+        except (TypeError, ValueError, IndexError):
+            pass
+    if q_nm is not None and last_pt_1based is not None:
+        idx = int(last_pt_1based) - 1
+        q_arr = np.asarray(q_nm, dtype=float)
+        if 0 <= idx < q_arr.size and np.isfinite(q_arr[idx]) and q_arr[idx] > 0:
+            return float(q_arr[idx])
+    return None
+
+
 def shannon_s_min(q_min_nm: float, dmax_nm: float) -> Optional[float]:
     if not (np.isfinite(q_min_nm) and q_min_nm > 0 and np.isfinite(dmax_nm) and dmax_nm > 0):
         return None
     return float((q_min_nm * dmax_nm) / math.pi)
+
+
+def shannon_s_max(q_max_nm: float, dmax_nm: float) -> Optional[float]:
+    if not (np.isfinite(q_max_nm) and q_max_nm > 0 and np.isfinite(dmax_nm) and dmax_nm > 0):
+        return None
+    return float((q_max_nm * dmax_nm) / math.pi)
+
+
+def n_shannon_channels(
+    q_min_nm: float,
+    q_max_nm: float,
+    dmax_nm: float,
+) -> Optional[float]:
+    if not (
+        np.isfinite(q_min_nm)
+        and q_min_nm > 0
+        and np.isfinite(q_max_nm)
+        and q_max_nm > q_min_nm
+        and np.isfinite(dmax_nm)
+        and dmax_nm > 0
+    ):
+        return None
+    return float(((q_max_nm - q_min_nm) * dmax_nm) / math.pi)
+
+
+# High-frequency residual scale for wiggle_index = hf / WIGGLE_HF_REF.
+# Calibrated on validation mono GNOM outs (tests/test_skills_real_data.py /
+# validation/reference_mono + fit_distances_datgnom/refine): median hf ≈ 0.026
+# → wiggle_index ≈ 0.53 on accepted fits (target band ~0.2–0.8).
+WIGGLE_HF_REF = 0.05
+DEFAULT_DETAIL_N_SHANNON_FLOOR = 8.0
+
+
+def _box_smooth(y: np.ndarray, *, half_width: int) -> np.ndarray:
+    half = max(1, int(half_width))
+    w = 2 * half + 1
+    kernel = np.ones(w, dtype=float) / float(w)
+    return np.convolve(np.asarray(y, dtype=float), kernel, mode="same")
+
+
+def wiggle_hf_ratio(
+    r: np.ndarray,
+    y: np.ndarray,
+    *,
+    q_max_nm: float,
+) -> Optional[float]:
+    """
+    High-frequency residual ratio for a real-space curve.
+
+    ``hf = rms(y - smooth(y)) / (rms(y) + eps)`` after peak-normalization,
+    with smooth window width ~ π/q_max. Independent of ``neg_frac``.
+    """
+    try:
+        q_max = float(q_max_nm)
+    except (TypeError, ValueError):
+        return None
+    if not (np.isfinite(q_max) and q_max > 0):
+        return None
+    r_arr = np.asarray(r, dtype=float)
+    y_arr = np.asarray(y, dtype=float)
+    mask = np.isfinite(r_arr) & np.isfinite(y_arr)
+    r_arr, y_arr = r_arr[mask], y_arr[mask]
+    if r_arr.size < 5:
+        return None
+    peak = float(np.max(np.abs(y_arr)))
+    if not (np.isfinite(peak) and peak > 0):
+        return None
+    y_n = y_arr / peak
+    r_res = math.pi / q_max
+    dr = float(np.median(np.diff(r_arr)))
+    if not (np.isfinite(dr) and dr > 0):
+        return None
+    half = max(1, int(round(r_res / dr / 2.0)))
+    y_smooth = _box_smooth(y_n, half_width=half)
+    y_hf = y_n - y_smooth
+    eps = 1e-12
+    rms_y = float(np.sqrt(np.mean(y_n ** 2)))
+    rms_hf = float(np.sqrt(np.mean(y_hf ** 2)))
+    if not np.isfinite(rms_hf) or not np.isfinite(rms_y):
+        return None
+    return float(rms_hf / (rms_y + eps))
+
+
+def wiggle_index_from_distribution(
+    r: np.ndarray,
+    y: np.ndarray,
+    *,
+    q_max_nm: float,
+    hf_ref: float = WIGGLE_HF_REF,
+) -> Optional[float]:
+    """Wiggle index (~0 clean, ~1 borderline, >=2 too wiggly). Requires fit ``q_max``."""
+    hf = wiggle_hf_ratio(r, y, q_max_nm=q_max_nm)
+    if hf is None:
+        return None
+    try:
+        ref = float(hf_ref)
+    except (TypeError, ValueError):
+        return None
+    if not (np.isfinite(ref) and ref > 0):
+        return None
+    return float(hf / ref)
+
+
+def classify_wiggle_index(wiggle_index: Optional[float]) -> str:
+    if wiggle_index is None or not np.isfinite(wiggle_index):
+        return "unknown"
+    if wiggle_index < 1.0:
+        return "low"
+    if wiggle_index < 2.0:
+        return "acceptable"
+    return "high"
+
+
+def classify_detail_reliability(
+    *,
+    wiggle_index: Optional[float],
+    chi2: Optional[float],
+    n_shannon: Optional[float],
+    chi2_good_min: float = DEFAULT_CHI2_GOOD_MIN,
+    n_shannon_floor: float = DEFAULT_DETAIL_N_SHANNON_FLOOR,
+) -> str:
+    """
+    Combined fit-detail reliability from wiggles, χ², and Shannon channel count.
+
+    Does not use ``neg_frac``. Does not change overall p(r)/D(R) quality class.
+    """
+    if wiggle_index is None or not np.isfinite(wiggle_index):
+        return "unknown"
+    if wiggle_index >= 2.0:
+        return "SUSPICIOUS"
+    ns = n_shannon
+    try:
+        ns_v = float(ns) if ns is not None else float("nan")
+    except (TypeError, ValueError):
+        ns_v = float("nan")
+    chi2_v: Optional[float]
+    try:
+        chi2_v = float(chi2) if chi2 is not None else None
+    except (TypeError, ValueError):
+        chi2_v = None
+    if (
+        wiggle_index >= 1.0
+        and chi2_v is not None
+        and np.isfinite(chi2_v)
+        and chi2_v < float(chi2_good_min)
+        and np.isfinite(ns_v)
+        and ns_v >= float(n_shannon_floor)
+    ):
+        return "SUSPICIOUS"
+    return "RELIABLE"
+
+
+def detail_reliability_tips(
+    *,
+    detail_reliability_class: str,
+    wiggle_index: Optional[float],
+    wiggle_class: str,
+    shannon_s_max: Optional[float],
+    n_shannon: Optional[float],
+) -> List[str]:
+    tips: List[str] = []
+    parts = [f"Detail reliability: {detail_reliability_class}."]
+    if n_shannon is not None and np.isfinite(n_shannon):
+        parts.append(f"n_shannon = {float(n_shannon):.2f}.")
+    if shannon_s_max is not None and np.isfinite(shannon_s_max):
+        parts.append(f"s_max = (q_max · D_max) / π = {float(shannon_s_max):.3f}.")
+    if wiggle_index is not None and np.isfinite(wiggle_index):
+        parts.append(f"wiggle_index = {float(wiggle_index):.3f} ({wiggle_class}).")
+    tips.append(" ".join(parts))
+    if detail_reliability_class == "SUSPICIOUS":
+        tips.append(
+            "High-q detail may be unreliable (wiggles and/or over-fitting noise). "
+            "Consider lowering q-max before interpreting fine structure or running shape modeling."
+        )
+    elif wiggle_class == "high":
+        tips.append(
+            "Real-space curve shows rapid ripples finer than the fit resolution (π/q_max); "
+            "treat fine features with caution."
+        )
+    elif wiggle_class == "acceptable":
+        tips.append(
+            "Mild real-space ripples — acceptable if Total Estimate / χ² look sane; "
+            "avoid over-interpreting small shoulders."
+        )
+    return tips
 
 
 def classify_shannon(s_min: Optional[float]) -> str:
@@ -333,6 +551,57 @@ def overall_status_from_class(quality_class: str) -> str:
     return mapping.get(quality_class, "FAILED")
 
 
+def _detail_metrics_from_fit(
+    parsed: Dict[str, Any],
+    *,
+    dmax_nm: Any,
+    q_min_fit_nm: Optional[float],
+    q_max_fit_nm: Optional[float],
+    arrays: Optional[Tuple[np.ndarray, np.ndarray, Any]],
+    chi2: Optional[float],
+    chi2_good_min: float,
+) -> Dict[str, Any]:
+    """Shannon high-q + wiggle + detail reliability (no effect on overall class)."""
+    s_max = None
+    n_s = None
+    if dmax_nm is not None and q_max_fit_nm is not None:
+        s_max = shannon_s_max(float(q_max_fit_nm), float(dmax_nm))
+    if dmax_nm is not None and q_min_fit_nm is not None and q_max_fit_nm is not None:
+        n_s = n_shannon_channels(float(q_min_fit_nm), float(q_max_fit_nm), float(dmax_nm))
+
+    wiggle_index = None
+    if arrays is not None and q_max_fit_nm is not None:
+        r, y, _err = arrays
+        wiggle_index = wiggle_index_from_distribution(
+            np.asarray(r, dtype=float),
+            np.asarray(y, dtype=float),
+            q_max_nm=float(q_max_fit_nm),
+        )
+    wiggle_class = classify_wiggle_index(wiggle_index)
+    detail_class = classify_detail_reliability(
+        wiggle_index=wiggle_index,
+        chi2=chi2,
+        n_shannon=n_s,
+        chi2_good_min=chi2_good_min,
+    )
+    detail_tips = detail_reliability_tips(
+        detail_reliability_class=detail_class,
+        wiggle_index=wiggle_index,
+        wiggle_class=wiggle_class,
+        shannon_s_max=s_max,
+        n_shannon=n_s,
+    )
+    return {
+        "q_max_fit_nm": q_max_fit_nm,
+        "shannon_s_max": s_max,
+        "n_shannon": n_s,
+        "wiggle_index": wiggle_index,
+        "wiggle_class": wiggle_class,
+        "detail_reliability_class": detail_class,
+        "detail_tips": detail_tips,
+    }
+
+
 def analyze_pr_quality(
     parsed: Dict[str, Any],
     *,
@@ -340,6 +609,7 @@ def analyze_pr_quality(
     rg_guinier_nm: Optional[float],
     q_nm: Optional[np.ndarray] = None,
     first_pt_1based: Optional[int] = None,
+    last_pt_1based: Optional[int] = None,
     suspicious: bool = False,
     thresholds: Optional[PrQualityThresholds] = None,
     dmax_validation: Optional[Dict[str, Any]] = None,
@@ -361,6 +631,9 @@ def analyze_pr_quality(
 
     q_min_fit_nm = q_min_from_gnom_fit(
         parsed, q_nm=q_nm, first_pt_1based=first_pt_1based,
+    )
+    q_max_fit_nm = q_max_from_gnom_fit(
+        parsed, q_nm=q_nm, last_pt_1based=last_pt_1based,
     )
 
     s_min = None
@@ -394,6 +667,17 @@ def analyze_pr_quality(
             rationale = list(rationale) + [f"Reduced χ² = {float(chi2):.3f} is outside acceptable range."]
         elif chi2 is not None and chi2_class == "acceptable":
             rationale = list(rationale) + [f"Reduced χ² = {float(chi2):.3f} is only marginally acceptable."]
+
+    detail = _detail_metrics_from_fit(
+        parsed,
+        dmax_nm=dmax_nm,
+        q_min_fit_nm=q_min_fit_nm,
+        q_max_fit_nm=q_max_fit_nm,
+        arrays=arrays,
+        chi2=chi2,
+        chi2_good_min=t.chi2_good_min,
+    )
+
     s_tip = shannon_tip(s_min, s_class)
     user_tips = build_pr_user_tips(
         pr_quality_class=pr_class,
@@ -404,6 +688,9 @@ def analyze_pr_quality(
         suspicious=suspicious,
         thresholds=t,
     )
+    for tip in detail.get("detail_tips") or []:
+        if tip and tip not in user_tips:
+            user_tips.append(tip)
 
     out: Dict[str, Any] = {
         "dmax_nm": dmax_nm,
@@ -411,14 +698,20 @@ def analyze_pr_quality(
         "i0_pr": i0_pr,
         "rg_guinier_nm": rg_guinier_nm,
         "q_min_fit_nm": q_min_fit_nm,
+        "q_max_fit_nm": detail["q_max_fit_nm"],
         "total_estimate": total_estimate,
         "chi2": chi2,
         "chi2_class": chi2_class,
         "delta_rg_pct": drg,
         "shannon_s_min": s_min,
+        "shannon_s_max": detail["shannon_s_max"],
+        "n_shannon": detail["n_shannon"],
         "shannon_class": s_class,
         "shannon_ok": s_ok,
         "shannon_tip": s_tip,
+        "wiggle_index": detail["wiggle_index"],
+        "wiggle_class": detail["wiggle_class"],
+        "detail_reliability_class": detail["detail_reliability_class"],
         "pr_quality_class": pr_class,
         "overall_status": overall_status_from_class(pr_class),
         "quality_rationale": rationale,
@@ -943,6 +1236,16 @@ def apply_sizes_extended_quality(
     )
     if out.get("shannon_tip"):
         out["user_tips"] = list(out["user_tips"]) + [str(out["shannon_tip"])]
+    detail_tips = detail_reliability_tips(
+        detail_reliability_class=str(out.get("detail_reliability_class") or "unknown"),
+        wiggle_index=out.get("wiggle_index"),
+        wiggle_class=str(out.get("wiggle_class") or "unknown"),
+        shannon_s_max=out.get("shannon_s_max"),
+        n_shannon=out.get("n_shannon"),
+    )
+    for tip in detail_tips:
+        if tip and tip not in out["user_tips"]:
+            out["user_tips"].append(tip)
     return out
 
 
@@ -956,6 +1259,7 @@ def analyze_dr_quality(
     thresholds: Optional[DrQualityThresholds] = None,
     q_nm: Optional[np.ndarray] = None,
     first_pt_1based: Optional[int] = None,
+    last_pt_1based: Optional[int] = None,
 ) -> Dict[str, Any]:
     t = thresholds or DrQualityThresholds()
     dr = parsed.get("distribution")
@@ -973,6 +1277,9 @@ def analyze_dr_quality(
     dmax_nm = parsed.get("real_space_rmax")
     q_min_fit_nm = q_min_from_gnom_fit(
         parsed, q_nm=q_nm, first_pt_1based=first_pt_1based,
+    )
+    q_max_fit_nm = q_max_from_gnom_fit(
+        parsed, q_nm=q_nm, last_pt_1based=last_pt_1based,
     )
     s_min = None
     s_class = "unknown"
@@ -1005,6 +1312,17 @@ def analyze_dr_quality(
             rationale = list(rationale) + [f"Reduced χ² = {float(chi2):.3f} is outside acceptable range."]
         elif chi2 is not None and chi2_class == "acceptable":
             rationale = list(rationale) + [f"Reduced χ² = {float(chi2):.3f} is only marginally acceptable."]
+
+    detail = _detail_metrics_from_fit(
+        parsed,
+        dmax_nm=dmax_nm,
+        q_min_fit_nm=q_min_fit_nm,
+        q_max_fit_nm=q_max_fit_nm,
+        arrays=arrays,
+        chi2=chi2,
+        chi2_good_min=t.chi2_good_min,
+    )
+
     user_tips = build_sizes_user_tips(
         sizes_quality_class=sizes_class,
         modality_class=modality,
@@ -1017,6 +1335,9 @@ def analyze_dr_quality(
     )
     if s_tip:
         user_tips = list(user_tips) + [s_tip]
+    for tip in detail.get("detail_tips") or []:
+        if tip and tip not in user_tips:
+            user_tips.append(tip)
 
     return {
         "d_avg_nm": moments.get("d_avg_nm"),
@@ -1028,13 +1349,19 @@ def analyze_dr_quality(
         "rg_guinier_nm": rg_guinier_nm,
         "dmax_nm": dmax_nm,
         "q_min_fit_nm": q_min_fit_nm,
+        "q_max_fit_nm": detail["q_max_fit_nm"],
         "total_estimate": parsed.get("total_estimate"),
         "chi2": chi2,
         "chi2_class": chi2_class,
         "shannon_s_min": s_min,
+        "shannon_s_max": detail["shannon_s_max"],
+        "n_shannon": detail["n_shannon"],
         "shannon_class": s_class,
         "shannon_ok": s_ok,
         "shannon_tip": s_tip,
+        "wiggle_index": detail["wiggle_index"],
+        "wiggle_class": detail["wiggle_class"],
+        "detail_reliability_class": detail["detail_reliability_class"],
         "sizes_quality_class": sizes_class,
         "overall_status": overall_status_from_class(sizes_class),
         "quality_rationale": rationale,
@@ -1054,3 +1381,94 @@ def write_quality_passport_yaml(path: str, doc: Dict[str, Any]) -> None:
             default_flow_style=False,
             allow_unicode=True,
         )
+
+
+def detail_indicators_from_gnom_out(gnom_path: Optional[str]) -> Dict[str, Any]:
+    """
+    Informational Shannon / wiggle / detail-reliability fields from a GNOM ``.out``.
+
+    Prefer a sibling ``*_fit_distances_quality.yml`` when present; otherwise compute
+    from the parsed ``.out``. Never gates modeling — indicator only.
+    """
+    empty: Dict[str, Any] = {
+        "detail_reliability_class": "unknown",
+        "wiggle_index": None,
+        "wiggle_class": "unknown",
+        "n_shannon": None,
+        "shannon_s_max": None,
+    }
+    if not gnom_path:
+        return empty
+    path = str(gnom_path)
+    if not os.path.isfile(path):
+        return empty
+
+    # Sibling quality passport written by fit_distances, if available.
+    parent = os.path.dirname(path)
+    base = os.path.splitext(os.path.basename(path))[0]
+    for cand in (
+        os.path.join(parent, f"{base}_fit_distances_quality.yml"),
+        os.path.join(parent, "..", f"{base}_fit_distances_quality.yml"),
+    ):
+        cand = os.path.normpath(cand)
+        if os.path.isfile(cand):
+            try:
+                import yaml
+
+                with open(cand, "r", encoding="utf-8") as fp:
+                    doc = yaml.safe_load(fp) or {}
+                if isinstance(doc, dict):
+                    out = dict(empty)
+                    for key in empty:
+                        if key in doc:
+                            out[key] = doc.get(key)
+                    return out
+            except Exception:
+                pass
+
+    try:
+        from autosaxs.core.gnom import parse_gnom_out
+
+        parsed = parse_gnom_out(path)
+        quality = analyze_pr_quality(
+            parsed,
+            atsas_fit_ok=True,
+            rg_guinier_nm=None,
+        )
+    except Exception:
+        return empty
+    return {
+        "detail_reliability_class": quality.get("detail_reliability_class") or "unknown",
+        "wiggle_index": quality.get("wiggle_index"),
+        "wiggle_class": quality.get("wiggle_class") or "unknown",
+        "n_shannon": quality.get("n_shannon"),
+        "shannon_s_max": quality.get("shannon_s_max"),
+    }
+
+
+def detail_indicators_markdown(ind: Dict[str, Any]) -> str:
+    """Short report lines for modeling skills (indicator only)."""
+    lines = ["\n#### GNOM detail reliability (indicator)\n"]
+    det = ind.get("detail_reliability_class") or "unknown"
+    lines.append(f"- **Detail reliability:** {det}")
+    n_s = ind.get("n_shannon")
+    if n_s is not None:
+        try:
+            lines.append(f"\n- **n_shannon:** {float(n_s):.2f}")
+        except (TypeError, ValueError):
+            pass
+    s_max = ind.get("shannon_s_max")
+    if s_max is not None:
+        try:
+            lines.append(f"\n- **Shannon s_max:** {float(s_max):.3f}")
+        except (TypeError, ValueError):
+            pass
+    wig = ind.get("wiggle_index")
+    if wig is not None:
+        try:
+            lines.append(
+                f"\n- **Wiggle index:** {float(wig):.3f} ({ind.get('wiggle_class', 'unknown')})"
+            )
+        except (TypeError, ValueError):
+            pass
+    return "".join(lines) + "\n"

@@ -36,7 +36,11 @@ from .optimize import (
     _guinier_from_profile,
     _optimize_rg_nm,
 )
-from autosaxs.skill.gnom_fit_common import resolve_first_last
+from autosaxs.skill.gnom_fit_common import (
+    N_SHANNON_CAP_FIT_DISTANCES,
+    resolve_first_last,
+    suggest_q_max_nm,
+)
 from .quality_io import _assess_and_write_pr_quality
 from autosaxs.core.atsas_gnom import normalize_force_zero
 from .runners import (
@@ -76,9 +80,9 @@ def fit_distances(
     - `output_dir` (str, default `.`): Directory where the outputs are written (one subdirectory per input profile).
     - `rg_nm` (float | None, default `None`): Expected Rg in nm, usually passed from Guinier analysis. If omitted, in-process Guinier analysis (`fit_guinier`) is run for an Rg span, then 1D Rg optimization in `[0, 1.5 × rg_max]` (30 s max) takes place.
     - `first` (int | None, default `None`): DATGNOM `--first` (1-based point index). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
-    - `last` (int | None, default `None`): DATGNOM `--last`. If omitted, taken from `q_max` when set; otherwise `--last` is not passed to DATGNOM.
+    - `last` (int | None, default `None`): DATGNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
     - `q_min` (float | None, default `None`): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
-    - `q_max` (float | None, default `None`): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`.
+    - `q_max` (float | None, default `None`): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`. When both `last` and `q_max` are omitted, a silent safer default is applied.
     - `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`. Unused when `dmax_nm` is set (GNOM refine).
     - `dmax_nm` (float | None, default `None`): When set, skip DATGNOM search and run monodisperse GNOM (`--rmax`) with this Dmax (nm). Still writes the Dmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
     - `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted, GNOM chooses automatically. Ignored when `dmax_nm` is unset.
@@ -114,9 +118,14 @@ def fit_distances(
     - `total_estimate`: GNOM Total Estimate of the selected fit.
     - `delta_rg_pct`: \|Rg_Guinier − Rg_P(r)\| / Rg_Guinier × 100.
     - `shannon_s_min`: Minimum Shannon sampling value.
+    - `shannon_s_max`: Maximum Shannon sampling value ``(q_max · D_max) / π``.
+    - `n_shannon`: Number of Shannon channels in the fitted q-window.
     - `shannon_class`: Shannon classification.
     - `shannon_ok`: Boolean indicating acceptable Shannon sampling.
     - `shannon_tip`: Shannon interpretation guide.
+    - `wiggle_index`: Real-space high-frequency wiggle index (~0 clean, ~1 borderline, ≥2 high).
+    - `wiggle_class`: ``low`` / ``acceptable`` / ``high`` / ``unknown``.
+    - `detail_reliability_class`: Combined ``RELIABLE`` / ``SUSPICIOUS`` / ``unknown`` (indicator only).
     - `pr_quality_class`: `high_quality` \| `acceptable` \| `failed`.
     - `overall_status`: `HIGH QUALITY` \| `ACCEPTABLE` \| `FAILED` (quality passport label).
     - `quality_rationale`: List explaining the quality assessment.
@@ -282,6 +291,38 @@ def _fit_distances_paths(
             fallback_q_min = float(guinier_info["q_min"])
         except (TypeError, ValueError):
             fallback_q_min = None
+
+    # Silent safer q_max when the user did not set last / q_max.
+    if user_last is None and user_q_max is None:
+        d_est: Optional[float] = None
+        if user_dmax_nm is not None:
+            try:
+                d_est = float(user_dmax_nm)
+            except (TypeError, ValueError):
+                d_est = None
+        if d_est is None or not (np.isfinite(d_est) and d_est > 0):
+            if rg_guinier_nm_val is not None and np.isfinite(rg_guinier_nm_val) and rg_guinier_nm_val > 0:
+                d_est = 3.0 * float(rg_guinier_nm_val)
+        q_max_default, q_max_caps = suggest_q_max_nm(
+            q_nm,
+            I,
+            sigma,
+            d_est_nm=d_est,
+            n_cap=N_SHANNON_CAP_FIT_DISTANCES,
+        )
+        user_q_max = q_max_default
+        if event_bus:
+            bind = ",".join(str(x) for x in (q_max_caps.get("binding") or []))
+            event_bus.publish(
+                EventType.MESSAGE,
+                {
+                    "text": (
+                        f"fit_distances: default q_max={q_max_default:.4g} nm⁻¹ "
+                        f"(caps binding: {bind or 'q_file_max'})"
+                    ),
+                },
+            )
+
     first_pt, last_pt = resolve_first_last(
         q_nm,
         first=user_first,
@@ -414,6 +455,7 @@ def _fit_distances_paths(
             rg_guinier_nm=rg_guinier_nm_val,
             q_nm=q_nm,
             first_pt=first_pt,
+            last_pt=last_pt,
             suspicious=bool(best.get("suspicious")),
             event_bus=event_bus,
             dmax_validation=dmax_validation,
@@ -623,6 +665,7 @@ def _fit_distances_paths(
         rg_guinier_nm=rg_guinier_nm_val,
         q_nm=q_nm,
         first_pt=first_pt,
+        last_pt=last_pt,
         suspicious=bool(best.get("suspicious")),
         event_bus=event_bus,
         dmax_validation=dmax_validation,
