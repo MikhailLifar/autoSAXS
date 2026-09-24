@@ -61,15 +61,23 @@ class PolydisperseCoordinator(QObject):
         output_root: Path,
         tiff_path: str = "",
         watch_mode: LiveviewWatchMode = LiveviewWatchMode.FLAT,
+        stem: str = "",
+        sample_id: str = "",
     ) -> None:
         self._presenter.set_context(
             profile_path=profile_path,
             output_root=output_root,
             tiff_path=tiff_path,
             watch_mode=watch_mode,
+            stem=stem,
         )
         if self._modeling is not None:
-            self._modeling.push_dr_context(profile_path=profile_path, output_root=output_root)
+            self._modeling.push_dr_context(
+                profile_path=profile_path,
+                output_root=output_root,
+                stem=stem or getattr(self._presenter, "sample_stem", "") or "",
+                sample_id=sample_id or tiff_path or "",
+            )
 
     def sync_params_to_state(self) -> None:
         self._config.sync_params_to_state()
@@ -227,7 +235,8 @@ class PolydisperseCoordinator(QObject):
         root = self.output_root
         if root is None:
             root = Path(self._state.watchdir).expanduser().resolve()
-        self._modeling.build_dr_context(profile_path=prof, output_root=root)
+        stem = getattr(self._presenter, "sample_stem", "") or ""
+        self._modeling.build_dr_context(profile_path=prof, output_root=root, stem=stem)
         try:
             self._window.bind_state(self._state)
         except Exception:
@@ -237,6 +246,7 @@ class PolydisperseCoordinator(QObject):
         self._modeling.start_dr(
             profile_path=prof,
             output_root=root,
+            stem=stem,
             parent_widget=parent,
         )
 

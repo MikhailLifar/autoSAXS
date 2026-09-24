@@ -308,10 +308,8 @@ class LiveviewMainWindow(QMainWindow):
         if not buffer_dat and self._state.buffer_dat_path is not None:
             buffer_dat = str(self._state.buffer_dat_path.resolve())
         if not sample_dat:
-            # Prefer last integrated / boarded averaged curve when middle context is empty.
-            lip = self._state.last_integrated_dat_path
-            if lip is not None and lip.is_file():
-                sample_dat = str(lip.resolve())
+            # Current middle sample has no curve — do not borrow session last_*.
+            pass
         if not sample_dat or not buffer_dat:
             QMessageBox.warning(
                 self,

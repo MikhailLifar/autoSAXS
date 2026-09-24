@@ -61,6 +61,7 @@ Non-negotiable: **no science compute in the UI thread** except GNOM adjust / siz
 | Auto-process step choice | `plan_for` (+ optional `completed`) | `pipeline/plan.py` |
 | Middle layout + paint | `sync_middle_view` | `services/history/middle_from_stem.py` |
 | Right analysis presentation | `present_right` | `services/history/right_artifacts.py` |
+| Modeling mini-apps (shape / DR) | `ModelingChildManager` → `ModelingContext` | `modeling_children.py`, `guisaxs_skills/modeling/` |
 | Revision settle | `RevisionSettler.observe` → stable snap | `ingest/settle.py` |
 | Revision acceptance | `RevisionIngress.accept` | `ingest/ingress.py` |
 | Queue / skill run | `LiveviewJobExecutor` (+ `manual_jobs`, `artifact_enrichment`) | `pipeline/` |
@@ -73,7 +74,19 @@ SampleStore + Session.state → plan_for → Job → Executor → SkillRunner
   (executor re-calls plan_for(completed=…) on the *current* auto job only)
 SampleStore + Session.state → sync_middle_view → Middle UI
 present_right(source=live|disk) → presenters._ingest_* → Right UI
+ModelingChildManager → ModelingContext (sample_id + family/<stem>) → child apps
 ```
+
+### 1.4.1 Session vs sample-tied UI
+
+| Area | Tied to | Rule |
+|------|---------|------|
+| Left: calib / buffer / mask | **Session** | Not rewritten when history selection changes. |
+| Arming / shape / mixture mode | **Session preference** | Config for next runs; do not use to load another sample’s artifacts. |
+| Center selection | **`SampleStore.current`** | Sole sample identity for sample-tied views. |
+| Right analysis plots + modeling apps | **Current sample** | Discover / paint / IPC only for that stem. No usable profile (e.g. `averaged_proxy/` only) ⇒ **empty** views — never `last_*`, sticky prior profile, or newest sibling under a shared family dir. |
+
+Calibrant frames, the session buffer curve, and mask previews are not analysis profile defaults.
 
 ### 1.5 Session mutation surface
 
@@ -135,9 +148,12 @@ guisaxs_skills/liveview/
 ├── session/               # state, api (LiveviewSession), samples, session/history persistence
 ├── pipeline/              # plan, jobs (CompletedWork), executor facade, manual_jobs, artifact_enrichment
 ├── ingest/                # ingress, watchers, stability, classify
+├── modeling_children.py   # shape/DR child processes + ModelingContext
 ├── services/history/      # sync_middle_view, present_right, right_artifacts
 └── ui/                    # panels, wizards, widgets
 ```
+
+Modeling apps live under `guisaxs_skills/modeling/` (entries `guisaxs-shape` / `guisaxs-dr`).
 
 ### 2.2 Key symbols
 
@@ -151,7 +167,8 @@ guisaxs_skills/liveview/
 | `LiveviewJobExecutor` | Qt facade: tick, queues, skill steps; mutates current job via Job API only |
 | `_manual_jobs` / `_artifacts` | Semantic collaborators behind the facade |
 | `sync_middle_view` | Sole middle sync |
-| `present_right` | Sole right presentation entry (`LIVE` / `DISK`) |
+| `present_right` | Sole right presentation entry (`LIVE` / `DISK`); current-stem discovery only |
+| `ModelingChildManager` | Owns shape/DR children; `ModelingContext` for current sample |
 
 ### 2.3 Skills invocation
 
@@ -173,9 +190,11 @@ guisaxs_skills/liveview/
 | Calibrate | Left shows success; later integrate | Manual skill; outcomes write calib facts |
 | Buffer set | Dual layout | `session.set_buffer` → `buffer_changed` → middle sync |
 | Stop / Resume | Auto queue held / released | `session.stop` / `resume` |
-| History `<`/`>` | Middle + right for that stem | `sync_middle` + `present_right(DISK)` |
+| History `<`/`>` | Middle + right for that stem | `sync_middle` + `present_right(DISK)`; empty profile ⇒ empty right |
+| Select calibrant (proxy only) | Right analysis empty | No usable profile; no foreign-stem fallback |
 | Arm analysis | Current job’s remaining steps grow analysis | Session arming; executor replans current via `plan_for(completed=…)` |
 | Live skill finish | Right panes update | `present_right(LIVE)` → `ingest_skill_result` → `_ingest_*` |
+| Open shape/DR modeling | Child shows current sample paths | `ModelingChildManager` pushes `ModelingContext` (`family/<stem>`) |
 
 ---
 

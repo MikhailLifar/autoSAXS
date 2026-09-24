@@ -175,6 +175,7 @@ guisaxs_skills/
     ├── controller/         # LiveviewController + handlers (history, ingest, session, …)
     ├── pipeline/           # plan_for, LiveviewJobExecutor, jobs, queue
     ├── ingest/             # settle, watchers, stability, sample_revision, curve_classify
+    ├── modeling_children.py # shape/DR child QProcess + ModelingContext for current sample
     ├── session/            # state, sample, sample_store, persistence, output_paths, workdir
     ├── services/           # artifacts, calibration, history (sync_middle_view), skills
     └── ui/
@@ -182,6 +183,8 @@ guisaxs_skills/
         ├── wizards/        # calibration, buffer, mask, fit, subtraction, GNOM adjust
         └── widgets/        # plots, viewer_3d
 ```
+
+Sibling package for modeling apps: `guisaxs_skills/modeling/` (also launched as `guisaxs-shape` / `guisaxs-dr`).
 
 **Key modules:**
 
@@ -200,7 +203,9 @@ guisaxs_skills/
 | `liveview/session/state.py` | Session fact bag |
 | `liveview/session/sample.py` / `sample_store.py` | `Sample` identity + history/boarding store |
 | `liveview/services/history/middle_from_stem.py` | `sync_middle_view` — middle layout + content |
-| `liveview/services/history/right_artifacts.py` | `present_right` — right analysis live/disk entry |
+| `liveview/services/history/right_artifacts.py` | `present_right` — right analysis live/disk entry; sample-tied profile for current stem only |
+| `liveview/modeling_children.py` | Owns shape/DR child processes; builds `ModelingContext` for current sample |
+| `guisaxs_skills/modeling/` | Shape/DR mini-apps + IPC (`ModelingContext`, run-params YAML) |
 | `liveview/ingest/settle.py` | `RevisionSettler` — shared readiness before ingress |
 | `liveview/ingest/ingress.py` | `RevisionIngress` — single front door for settled revisions |
 | `liveview/ingest/sample_revision.py` | On-disk sample revision (frame or `.dat`) |
@@ -208,6 +213,8 @@ guisaxs_skills/
 | `liveview/ingest/dir_tree_observer.py` | TREE mode: hierarchical mtime/ctime/ino scan + prune |
 
 **Liveview:** Session API (`LiveviewSession`) + SampleStore + `plan_for` + middle sync + `present_right` + settle + `RevisionIngress`. See `docs/liveview_architecture.md`, `docs/liveview_session_sample_plan.md`, and `docs/guisaxs_liveview_spec.md`. Sample change identity is `FileStatSnapshot` in `liveview/ingest/stability.py`.
+
+**Column ownership:** left (calib / buffer / mask / arming prefs) is **session**-owned. Anything that refers to a sample (middle paint for the selected file, right Guinier/GNOM/shape, modeling mini-apps) follows **`SampleStore.current` only**. No usable analysis profile for that sample (e.g. calibrant with only `averaged_proxy/`) ⇒ empty sample views — never borrow `last_*`, a sticky prior profile, or the newest sibling under a shared modeling family dir.
 
 ### `guisaxs_liveview/`
 
@@ -332,4 +339,4 @@ Headless GUI tests: `xvfb-run -a python -m pytest tests/test_guisaxs_liveview.py
 
 ---
 
-*Last structured pass: 2026-09-16. Update this file when you touch architecture or discover a better "start here" path.*
+*Last structured pass: 2026-09-24. Update this file when you touch architecture or discover a better "start here" path.*

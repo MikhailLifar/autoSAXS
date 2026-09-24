@@ -61,32 +61,74 @@ class PolydisperseArtifactBundle:
     stem: str = ""
 
 
-def _resolve_profile(
+def resolve_analysis_profile(
     *,
     watchdir: Path,
     stem: str,
     tiff_path: str,
     watch_mode: LiveviewWatchMode,
 ) -> tuple[Path, str]:
+    """
+    Analysis root + usable profile for **this** stem only.
+
+    Never consults session ``last_*``. Proxy / calibrant curves yield ``profile_path=""``.
+    """
     from ...ingest.curve_classify import usable_analysis_curve_path
+    from ...session.output_paths import averaged_dir
 
     if is_dat_path(tiff_path or ""):
         root = watchdir.expanduser().resolve()
     else:
         root = tiff_output_root(watchdir=watchdir, tiff_path=tiff_path, mode=watch_mode)
     sub = subtracted_dat_path(root=root, stem=stem)
-    integ = integrated_dat_path(root=root, stem=stem, integrator_ready=True)
+    # Prefer real averaged/; never treat averaged_proxy/ as an analysis default.
+    integ_real = averaged_dir(root) / f"int_{stem}.dat"
+    integ_fallback = integrated_dat_path(root=root, stem=stem, integrator_ready=True)
     candidates: list[Path] = []
     if is_dat_path(tiff_path or "") and Path(tiff_path).is_file():
         candidates.append(Path(tiff_path).expanduser().resolve())
     candidates.append(sub)
-    candidates.append(integ)
+    candidates.append(integ_real)
+    if integ_fallback != integ_real:
+        candidates.append(integ_fallback)
     profile_path = ""
     for cand in candidates:
         profile_path = usable_analysis_curve_path(cand)
         if profile_path:
             break
     return root, profile_path
+
+
+# Back-compat alias for older call sites / tests.
+_resolve_profile = resolve_analysis_profile
+
+
+def _stem_has_shape_artifacts(root: Path, stem: str, mode: MonodisperseShapeMode) -> bool:
+    st = (stem or "").strip()
+    if not st or mode == MonodisperseShapeMode.NONE:
+        return False
+    if mode == MonodisperseShapeMode.DAMMIF:
+        dam = dammif_dir(root) / st
+        return dam.is_dir() and (
+            any(dam.glob("dammif-*.cif")) or (dam / "dammif_fits.yml").is_file()
+        )
+    if mode == MonodisperseShapeMode.BODIES:
+        fb = model_bodies_dir(root) / st
+        return fb.is_dir() and (
+            (fb / "bodies_fits.yml").is_file() or any(fb.glob("*.fir"))
+        )
+    if mode == MonodisperseShapeMode.DENSS:
+        dens = denss_dir(root) / st
+        return dens.is_dir() and (
+            any(dens.glob("*.mrc"))
+            or any(dens.glob("*_denss_input.dat"))
+            or any(
+                p.is_dir() and any(p.glob("*_avg.mrc"))
+                for p in dens.iterdir()
+                if p.is_dir()
+            )
+        )
+    return False
 
 
 def infer_shape_mode_from_disk(root: Path, stem: str) -> Optional[MonodisperseShapeMode]:
@@ -123,7 +165,7 @@ def discover_monodisperse_artifacts(
     shape_mode: MonodisperseShapeMode = MonodisperseShapeMode.NONE,
 ) -> MonodisperseArtifactBundle:
     root = analysis_output_root(watchdir=watchdir, sample_path=tiff_path, mode=watch_mode)
-    _, profile_path = _resolve_profile(
+    _, profile_path = resolve_analysis_profile(
         watchdir=watchdir, stem=stem, tiff_path=tiff_path, watch_mode=watch_mode
     )
     bundle = MonodisperseArtifactBundle(
@@ -165,7 +207,8 @@ def discover_monodisperse_artifacts(
         if inferred is not None:
             mode = inferred
             bundle.inferred_shape_mode = inferred
-    if mode != MonodisperseShapeMode.NONE:
+    # Only paint shape when **this stem** has artifacts (session mode alone is not enough).
+    if mode != MonodisperseShapeMode.NONE and _stem_has_shape_artifacts(root, stem, mode):
         bundle.shape_mode = mode.value
     return bundle
 
@@ -179,7 +222,7 @@ def discover_polydisperse_artifacts(
     mixture_mode: PolydisperseMixtureMode = PolydisperseMixtureMode.NONE,
 ) -> PolydisperseArtifactBundle:
     root = analysis_output_root(watchdir=watchdir, sample_path=tiff_path, mode=watch_mode)
-    _, profile_path = _resolve_profile(
+    _, profile_path = resolve_analysis_profile(
         watchdir=watchdir, stem=stem, tiff_path=tiff_path, watch_mode=watch_mode
     )
     bundle = PolydisperseArtifactBundle(

@@ -467,8 +467,9 @@ class LiveviewRightPanel(QWidget):
                     mode=self._state.watch_mode,
                 )
             self._mono.set_context(
-                profile_path=bundle.profile_path,
+                profile_path=str(getattr(bundle, "profile_path", "") or ""),
                 output_root=root,
+                stem=str(getattr(bundle, "stem", "") or ""),
             )
         self._mono.apply_bundle(bundle)
 
@@ -484,8 +485,9 @@ class LiveviewRightPanel(QWidget):
                     mode=self._state.watch_mode,
                 )
             self._poly.set_context(
-                profile_path=bundle.profile_path,
+                profile_path=str(getattr(bundle, "profile_path", "") or ""),
                 output_root=root,
+                stem=str(getattr(bundle, "stem", "") or ""),
             )
         self._poly.apply_bundle(bundle)
 

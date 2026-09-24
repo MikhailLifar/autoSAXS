@@ -13,7 +13,8 @@ Product/UX contracts: [`guisaxs_liveview_spec.md`](guisaxs_liveview_spec.md). Ag
 | **Planner** | `pipeline/plan.py` | `plan_for(session, sample, completed=?) → PipelinePlan` — **only** place that chooses integrate_proxy / integrate / subtract / analysis / report. |
 | **Job** | `pipeline/jobs.py` | Owns `CompletedWork` (phases, step names, skill results) for one run; executor mutates only via Job API. |
 | **Middle sync** | `services/history/middle_from_stem.py` | `sync_middle_view` — layout + disk paint. |
-| **Right present** | `services/history/right_artifacts.py` | `present_right` — live skill result or disk discover → presenters. |
+| **Right present** | `services/history/right_artifacts.py` | `present_right` — live skill result or disk discover → presenters. Discovers for **current sample stem** only; `averaged_proxy/` is not an analysis profile. |
+| **Modeling children** | `modeling_children.py` + `guisaxs_skills/modeling/` | Shape/DR mini-apps; `ModelingContext` keyed by current sample (`sample_id`, `family/<stem>`). |
 | **Revision settle** | `ingest/settle.py` | `RevisionSettler` — one owner of readiness; only stable snaps reach ingress. |
 | **Revision ingress** | `ingest/ingress.py` | `RevisionIngress.accept` — single front door for settled revisions (watcher/poll/tree/manual). |
 
@@ -23,7 +24,21 @@ UI → LiveviewSession
 SampleStore + Session.state → plan_for → Job → Executor
 SampleStore + Session.state → sync_middle_view → Middle UI
 present_right(LIVE|DISK) → Right UI
+ModelingChildManager → ModelingContext → shape/DR child
 ```
+
+## Column ownership (session vs sample)
+
+| Area | Tied to | Rule |
+|------|---------|------|
+| Left: calibration, buffer, mask | **Session** | Independent of history selection. Soft hints (e.g. empty buffer ← `last_integrated`) stay session UX. |
+| Arming / shape / mixture mode (right chrome) | **Session preference** | How to run *next*; must **not** pull another sample’s disk results into the view. |
+| Center history selection | **`SampleStore.current`** | Sole identity for anything “about a sample.” |
+| Middle paint for selected file | **Current sample** | Via `sync_middle_view` (buffer curve itself is still the session buffer). |
+| Right Guinier / GNOM / shape / sizes / mixture views | **Current sample** | Only that stem’s artifacts under the analysis root; else **empty**. |
+| Modeling mini-apps (shape / DR) | **Current sample** | Push/replace whole `ModelingContext`; empty profile ⇒ blank PathFields, no sibling-dir load. |
+
+**Invariant:** “No usable analysis profile for this sample” means empty sample-tied views — never session `last_*`, sticky prior profile, or newest sibling under a shared `dammif/` / `mixture/` family. Calibrant TIFF, buffer `.dat`, and mask are **not** sample analysis curves.
 
 ## Types
 

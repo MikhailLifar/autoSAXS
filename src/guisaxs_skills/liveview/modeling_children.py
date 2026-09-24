@@ -43,17 +43,23 @@ class ModelingChildManager(QObject):
         profile_path: str,
         gnom_path: str,
         output_root: Path,
+        stem: str = "",
+        sample_id: str = "",
         parent_widget: Optional[QWidget] = None,
     ) -> None:
         self._shape_push = {
             "profile_path": profile_path,
             "gnom_path": gnom_path,
             "output_root": Path(output_root),
+            "stem": stem,
+            "sample_id": sample_id,
         }
         ctx = self.build_shape_context(
             profile_path=profile_path,
             gnom_path=gnom_path,
             output_root=output_root,
+            stem=stem,
+            sample_id=sample_id,
         )
         if self._shape is not None and self._shape.is_running():
             self._shape.send_context(ctx)
@@ -75,13 +81,22 @@ class ModelingChildManager(QObject):
         *,
         profile_path: str,
         output_root: Path,
+        stem: str = "",
+        sample_id: str = "",
         parent_widget: Optional[QWidget] = None,
     ) -> None:
         self._dr_push = {
             "profile_path": profile_path,
             "output_root": Path(output_root),
+            "stem": stem,
+            "sample_id": sample_id,
         }
-        ctx = self.build_dr_context(profile_path=profile_path, output_root=output_root)
+        ctx = self.build_dr_context(
+            profile_path=profile_path,
+            output_root=output_root,
+            stem=stem,
+            sample_id=sample_id,
+        )
         if self._dr is not None and self._dr.is_running():
             self._dr.send_context(ctx)
             self._dr.send_focus()
@@ -119,11 +134,15 @@ class ModelingChildManager(QObject):
         profile_path: str,
         gnom_path: str,
         output_root: Path,
+        stem: str = "",
+        sample_id: str = "",
     ) -> None:
         self._shape_push = {
             "profile_path": profile_path,
             "gnom_path": gnom_path,
             "output_root": Path(output_root),
+            "stem": stem,
+            "sample_id": sample_id,
         }
         if self._shape is None or not self._shape.is_running():
             return
@@ -132,18 +151,34 @@ class ModelingChildManager(QObject):
                 profile_path=profile_path,
                 gnom_path=gnom_path,
                 output_root=output_root,
+                stem=stem,
+                sample_id=sample_id,
             )
         )
 
-    def push_dr_context(self, *, profile_path: str, output_root: Path) -> None:
+    def push_dr_context(
+        self,
+        *,
+        profile_path: str,
+        output_root: Path,
+        stem: str = "",
+        sample_id: str = "",
+    ) -> None:
         self._dr_push = {
             "profile_path": profile_path,
             "output_root": Path(output_root),
+            "stem": stem,
+            "sample_id": sample_id,
         }
         if self._dr is None or not self._dr.is_running():
             return
         self._dr.send_context(
-            self.build_dr_context(profile_path=profile_path, output_root=output_root)
+            self.build_dr_context(
+                profile_path=profile_path,
+                output_root=output_root,
+                stem=stem,
+                sample_id=sample_id,
+            )
         )
 
     def _retry_shape_context(self) -> None:
@@ -154,6 +189,8 @@ class ModelingChildManager(QObject):
             profile_path=str(args.get("profile_path") or ""),
             gnom_path=str(args.get("gnom_path") or ""),
             output_root=Path(args["output_root"]),
+            stem=str(args.get("stem") or ""),
+            sample_id=str(args.get("sample_id") or ""),
         )
 
     def _retry_dr_context(self) -> None:
@@ -163,6 +200,8 @@ class ModelingChildManager(QObject):
         self.push_dr_context(
             profile_path=str(args.get("profile_path") or ""),
             output_root=Path(args["output_root"]),
+            stem=str(args.get("stem") or ""),
+            sample_id=str(args.get("sample_id") or ""),
         )
 
     def build_shape_context(
@@ -171,20 +210,24 @@ class ModelingChildManager(QObject):
         profile_path: str,
         gnom_path: str,
         output_root: Path,
+        stem: str = "",
+        sample_id: str = "",
     ) -> ModelingContext:
         from .ingest.curve_classify import usable_analysis_curve_path
-
-        profile_path = usable_analysis_curve_path(profile_path)
-        mode = self._state.monodisperse_shape_mode
-        mode_s = str(getattr(mode, "value", mode) or "none").lower()
-        root = output_root.expanduser().resolve()
         from ..modeling.run_params import (
             apply_disk_params_to_session_state,
             infer_n_runs_from_disk,
             infer_shape_mode_from_disk,
+            profile_sample_stem,
             read_run_params,
-            resolve_sample_modeling_dir,
+            sample_modeling_dir_for_family,
         )
+
+        profile_path = usable_analysis_curve_path(profile_path)
+        st = (stem or profile_sample_stem(profile_path) or "").strip()
+        mode = self._state.monodisperse_shape_mode
+        mode_s = str(getattr(mode, "value", mode) or "none").lower()
+        root = output_root.expanduser().resolve()
 
         if mode_s not in ("bodies", "dammif", "denss"):
             for cand_mode, family in (
@@ -192,7 +235,11 @@ class ModelingChildManager(QObject):
                 ("bodies", model_bodies_dir(root)),
                 ("denss", denss_dir(root)),
             ):
-                if infer_shape_mode_from_disk(family, profile_path=profile_path) == cand_mode:
+                if (
+                    st
+                    and infer_shape_mode_from_disk(family, profile_path=profile_path, stem=st)
+                    == cand_mode
+                ):
                     mode_s = cand_mode
                     break
         if mode_s == "bodies":
@@ -201,9 +248,12 @@ class ModelingChildManager(QObject):
             family = denss_dir(root)
         else:
             family = dammif_dir(root)
-        # Dir that holds artifacts when present; otherwise family/<stem> for new runs.
-        out = resolve_sample_modeling_dir(family, profile_path=profile_path)
-        apply_disk_params_to_session_state(self._state, output_dir=out, profile_path=profile_path)
+        # Always family/<stem> when stem known — never newest-sibling under family.
+        out = sample_modeling_dir_for_family(family, profile_path=profile_path, stem=st)
+        if st:
+            apply_disk_params_to_session_state(
+                self._state, output_dir=out, profile_path=profile_path, stem=st
+            )
         opts: Dict[str, Any] = {
             "n_runs": int(self._state.model_dam_n_runs or 1),
             "mode": str(self._state.model_density_mode or "pilot"),
@@ -212,8 +262,7 @@ class ModelingChildManager(QObject):
         }
         if self._state.model_bodies_shapes:
             opts["shapes"] = list(self._state.model_bodies_shapes)
-        # Prefer last-run skill params on disk over session defaults.
-        disk = read_run_params(out, profile_path=profile_path)
+        disk = read_run_params(out, profile_path=profile_path, stem=st) if st else {}
         if disk:
             if "n_runs" in disk:
                 try:
@@ -231,8 +280,8 @@ class ModelingChildManager(QObject):
                     pass
             if isinstance(disk.get("shapes"), list):
                 opts["shapes"] = [str(s) for s in disk["shapes"]]
-        elif mode_s in ("none", "dammif"):
-            n_legacy = infer_n_runs_from_disk(out, profile_path=profile_path)
+        elif st and mode_s in ("none", "dammif"):
+            n_legacy = infer_n_runs_from_disk(out, profile_path=profile_path, stem=st)
             if n_legacy is not None:
                 opts["n_runs"] = n_legacy
         if "n_runs" in opts:
@@ -240,39 +289,54 @@ class ModelingChildManager(QObject):
                 self._state.model_dam_n_runs = int(opts["n_runs"])
             except (TypeError, ValueError):
                 pass
+        gnom = str(gnom_path or "").strip()
+        if gnom and not Path(gnom).is_file():
+            gnom = ""
         return ModelingContext(
             profile_path=str(profile_path or ""),
-            gnom_path=str(gnom_path or ""),
+            gnom_path=gnom,
             output_dir=str(out.resolve()),
             mode=mode_s if mode_s in ("bodies", "dammif", "denss") else "none",
             options=opts,
             require_gnom_for_dam=True,
+            sample_id=str(sample_id or ""),
         )
 
-    def build_dr_context(self, *, profile_path: str, output_root: Path) -> ModelingContext:
+    def build_dr_context(
+        self,
+        *,
+        profile_path: str,
+        output_root: Path,
+        stem: str = "",
+        sample_id: str = "",
+    ) -> ModelingContext:
         from .ingest.curve_classify import usable_analysis_curve_path
+        from ..modeling.run_params import (
+            apply_disk_params_to_session_state,
+            profile_sample_stem,
+            read_run_params,
+            sample_modeling_dir_for_family,
+        )
 
         profile_path = usable_analysis_curve_path(profile_path)
+        st = (stem or profile_sample_stem(profile_path) or "").strip()
         mode = self._state.polydisperse_mixture_mode
         mode_s = str(getattr(mode, "value", mode) or "none").lower()
         family = mixture_dir(output_root.expanduser().resolve())
-        from ..modeling.run_params import (
-            apply_disk_params_to_session_state,
-            read_run_params,
-            resolve_sample_modeling_dir,
-        )
-
-        out = resolve_sample_modeling_dir(family, profile_path=profile_path)
-        apply_disk_params_to_session_state(self._state, output_dir=out, profile_path=profile_path)
+        out = sample_modeling_dir_for_family(family, profile_path=profile_path, stem=st)
+        if st:
+            apply_disk_params_to_session_state(
+                self._state, output_dir=out, profile_path=profile_path, stem=st
+            )
         opts = dict(self._state.model_mixture_options or {})
-        disk = read_run_params(out, profile_path=profile_path)
+        disk = read_run_params(out, profile_path=profile_path, stem=st) if st else {}
         if disk:
             for key in ("max_nph", "r_max_nm", "poly_max_nm", "q_min", "q_max"):
                 if key in disk and disk[key] is not None:
                     opts[key] = disk[key]
             if mode_s == "none" and str(disk.get("skill") or "") == "model_mixture":
                 mode_s = "mixture"
-        elif (out / "mixture_results.csv").is_file() and mode_s == "none":
+        elif st and (out / "mixture_results.csv").is_file() and mode_s == "none":
             mode_s = "mixture"
         self._state.model_mixture_options = dict(opts)
         return ModelingContext(
@@ -280,6 +344,7 @@ class ModelingChildManager(QObject):
             output_dir=str(out.resolve()),
             mode="mixture" if mode_s == "mixture" else "none",
             options=opts,
+            sample_id=str(sample_id or ""),
         )
 
     def _on_shape_confirmed(self, msg: dict) -> None:

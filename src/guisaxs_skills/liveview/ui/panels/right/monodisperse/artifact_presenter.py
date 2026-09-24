@@ -38,6 +38,7 @@ class MonodisperseArtifactPresenter:
         self._state = state
         self._wizard = wizard
         self._profile_path: str = ""
+        self._sample_stem: str = ""
         self._output_root: Optional[Path] = None
         self._last_guinier_results: str = ""
         self._last_gnom_out: str = ""
@@ -51,10 +52,15 @@ class MonodisperseArtifactPresenter:
         output_root: Path,
         tiff_path: str = "",
         watch_mode: LiveviewWatchMode = LiveviewWatchMode.FLAT,
+        stem: str = "",
     ) -> None:
         from .....ingest.curve_classify import usable_analysis_curve_path
 
         self._profile_path = usable_analysis_curve_path(profile_path)
+        # Always rewrite stem on context push (including "") so prior sample identity cannot stick.
+        self._sample_stem = (stem or "").strip()
+        if not self._sample_stem and self._profile_path:
+            self._sample_stem = profile_sample_stem(self._profile_path)
         if output_root is not None:
             self._output_root = output_root.expanduser().resolve()
         else:
@@ -79,6 +85,8 @@ class MonodisperseArtifactPresenter:
         self._last_gnom_out = ""
         self._last_fit_distances_subdir = ""
         self._last_gnom_result = {}
+        self._profile_path = ""
+        self._sample_stem = ""
 
     def _artifact_bases(self) -> list[Path]:
         bases: list[Path] = []
@@ -96,13 +104,10 @@ class MonodisperseArtifactPresenter:
         return out
 
     def _effective_profile_path(self) -> str:
+        """Profile bound to the current sample context only (no session last_* fallback)."""
         from .....ingest.curve_classify import usable_analysis_curve_path
 
-        prof = usable_analysis_curve_path(self._profile_path)
-        if prof:
-            return prof
-        p = self._state.preferred_profile_path()
-        return usable_analysis_curve_path(p) if p is not None else ""
+        return usable_analysis_curve_path(self._profile_path)
 
     def _resolve_result_path(self, val: object) -> str:
         return resolve_artifact_path(val, bases=self._artifact_bases())
@@ -123,9 +128,7 @@ class MonodisperseArtifactPresenter:
         if not isinstance(result, dict):
             return
         self._sync_output_root_from_result(result)
-        prof = self._effective_profile_path()
-        if not self._profile_path and prof:
-            self._profile_path = prof
+        # Live ingest paints for the currently bound sample context only.
         sn = (skill_name or result.get("skill_name") or "").strip()
         if sn == "fit_guinier" or self._looks_like_fit_guinier(result):
             self._ingest_guinier(result)
@@ -423,12 +426,14 @@ class MonodisperseArtifactPresenter:
         root = self._output_root
         if root is None:
             root = self._state.watchdir.expanduser().resolve()
-        prof = self._effective_profile_path()
+        stem = (self._sample_stem or "").strip()
+        if not stem:
+            prof = self._effective_profile_path()
+            if prof:
+                stem = profile_sample_stem(prof)
         loaded = False
-        if prof:
-            stem = profile_sample_stem(prof)
-            if stem:
-                loaded = self._load_shape_artifacts_for_mode(root=root, stem=stem, mode=mode)
+        if stem:
+            loaded = self._load_shape_artifacts_for_mode(root=root, stem=stem, mode=mode)
         if not loaded:
             # clear_view wiped status; restore mode placeholder.
             pane._update_mode_ui()
@@ -558,8 +563,9 @@ class MonodisperseArtifactPresenter:
         if root is None:
             root = self._state.watchdir.expanduser().resolve()
         self.set_context(
-            profile_path=bundle.profile_path or self._profile_path,
+            profile_path=str(bundle.profile_path or ""),
             output_root=root,
+            stem=str(getattr(bundle, "stem", "") or ""),
         )
         if bundle.guinier:
             self._ingest_guinier(bundle.guinier)
@@ -584,7 +590,8 @@ class MonodisperseArtifactPresenter:
                 apply_disk_params_to_session_state(
                     self._state,
                     output_dir=family / bundle.stem,
-                    profile_path=bundle.profile_path or self._profile_path,
+                    profile_path=str(bundle.profile_path or ""),
+                    stem=str(bundle.stem or ""),
                 )
                 self._wizard.bind_state(self._state)
             except Exception:
@@ -612,8 +619,25 @@ class MonodisperseArtifactPresenter:
 
     def gnom_out_for_dammif(self) -> str:
         """Resolved DATGNOM .out path for manual DAMMIF (discovered under fit_distances/<stem>/)."""
+        if self._last_gnom_out and os.path.isfile(self._last_gnom_out):
+            return self._last_gnom_out
         prof = self._effective_profile_path()
         root = self._output_root or self._state.watchdir
+        stem = (self._sample_stem or "").strip()
+        if not stem and prof:
+            stem = profile_sample_stem(prof)
+        if stem:
+            from .....session.output_paths import fit_distances_dir
+
+            fd = fit_distances_dir(root) / stem
+            for cand in (
+                fd / "gnom_best.out",
+                fd / f"{stem}_gnom.out",
+                fd / f"{stem}.out",
+                fd / "datgnom_best.out",
+            ):
+                if cand.is_file():
+                    return str(cand.resolve())
         if not prof:
             return ""
         return discover_gnom_out_path(
@@ -626,6 +650,10 @@ class MonodisperseArtifactPresenter:
     @property
     def profile_path(self) -> str:
         return self._profile_path
+
+    @property
+    def sample_stem(self) -> str:
+        return self._sample_stem
 
     @property
     def output_root(self) -> Optional[Path]:

@@ -65,18 +65,23 @@ class MonodisperseCoordinator(QObject):
         output_root: Path,
         tiff_path: str = "",
         watch_mode: LiveviewWatchMode = LiveviewWatchMode.FLAT,
+        stem: str = "",
+        sample_id: str = "",
     ) -> None:
         self._presenter.set_context(
             profile_path=profile_path,
             output_root=output_root,
             tiff_path=tiff_path,
             watch_mode=watch_mode,
+            stem=stem,
         )
         if self._modeling is not None:
             self._modeling.push_shape_context(
                 profile_path=profile_path,
                 gnom_path=self.gnom_out_for_dammif() or "",
                 output_root=output_root,
+                stem=stem or getattr(self._presenter, "sample_stem", "") or "",
+                sample_id=sample_id or tiff_path or "",
             )
 
     def sync_params_to_state(self) -> None:
@@ -257,9 +262,13 @@ class MonodisperseCoordinator(QObject):
         root = self.output_root
         if root is None:
             root = Path(self._state.watchdir).expanduser().resolve()
+        stem = getattr(self._presenter, "sample_stem", "") or ""
         # Disk-backed params (n_runs, …) win over stale slim-pane defaults.
         self._modeling.build_shape_context(
-            profile_path=prof, gnom_path=gnom, output_root=root
+            profile_path=prof,
+            gnom_path=gnom,
+            output_root=root,
+            stem=stem,
         )
         try:
             self._wizard.bind_state(self._state)
@@ -271,6 +280,7 @@ class MonodisperseCoordinator(QObject):
             profile_path=prof,
             gnom_path=gnom,
             output_root=root,
+            stem=stem,
             parent_widget=parent,
         )
 
@@ -313,6 +323,7 @@ class MonodisperseCoordinator(QObject):
             profile_path=self.profile_path or "",
             gnom_path=self.gnom_out_for_dammif() or "",
             output_root=root,
+            stem=getattr(self._presenter, "sample_stem", "") or "",
         )
 
     def load_from_disk(

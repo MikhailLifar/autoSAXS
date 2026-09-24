@@ -87,6 +87,8 @@ def resolve_sample_modeling_dir(
     to the directory that actually holds skill artifacts.
 
     Skills use ``per_sample_subdir="always"`` under the family dir.
+    When stem cannot be derived, returns ``family_or_sample`` unchanged —
+    never invents another sample via newest-sibling.
     """
     base = Path(family_or_sample).expanduser()
     st = (stem or profile_sample_stem(profile_path) or "").strip()
@@ -113,17 +115,7 @@ def resolve_sample_modeling_dir(
     if st:
         return _prefer_stem_under(base)
 
-    if base.is_dir() and _has_any_modeling_artifacts(base):
-        return base
-    # No stem: pick newest child sample dir with artifacts.
-    if base.is_dir():
-        children = sorted(
-            (p for p in base.iterdir() if p.is_dir() and _has_any_modeling_artifacts(p)),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if children:
-            return children[0]
+    # No stem: stay put (create-ready family path). Do not pick newest child.
     return base
 
 
@@ -149,11 +141,12 @@ def skill_batch_output_dir(sample_or_family: str | Path, *, profile_path: str = 
 def sample_modeling_dir_for_family(
     family_dir: str | Path,
     *,
-    profile_path: str,
+    profile_path: str = "",
+    stem: str = "",
 ) -> Path:
-    """``family/<stem>`` for this profile (create-ready path, not necessarily existing)."""
+    """``family/<stem>`` for this sample (create-ready path, not necessarily existing)."""
     family = Path(family_dir).expanduser()
-    st = profile_sample_stem(profile_path)
+    st = (stem or profile_sample_stem(profile_path) or "").strip()
     if not st:
         return family
     return family / st
@@ -206,9 +199,11 @@ def conventional_sample_modeling_dir(
     return sample_modeling_dir_for_family(root / family, profile_path=profile_path)
 
 
-def read_run_params(output_dir: str | Path, *, profile_path: str = "") -> Dict[str, Any]:
+def read_run_params(
+    output_dir: str | Path, *, profile_path: str = "", stem: str = ""
+) -> Dict[str, Any]:
     """Load ``*_run_params.yml`` from a sample dir (or resolve stem under a family dir)."""
-    sd = resolve_sample_modeling_dir(output_dir, profile_path=profile_path)
+    sd = resolve_sample_modeling_dir(output_dir, profile_path=profile_path, stem=stem)
     if not sd.is_dir():
         return {}
     try:
@@ -228,12 +223,14 @@ def read_run_params(output_dir: str | Path, *, profile_path: str = "") -> Dict[s
     return {}
 
 
-def infer_shape_mode_from_disk(output_dir: str | Path, *, profile_path: str = "") -> Optional[str]:
+def infer_shape_mode_from_disk(
+    output_dir: str | Path, *, profile_path: str = "", stem: str = ""
+) -> Optional[str]:
     """Infer BODIES / DAMMIF / DENSS from artifacts or run-params."""
-    sd = resolve_sample_modeling_dir(output_dir, profile_path=profile_path)
+    sd = resolve_sample_modeling_dir(output_dir, profile_path=profile_path, stem=stem)
     if not sd.is_dir():
         return None
-    params = read_run_params(sd, profile_path=profile_path)
+    params = read_run_params(sd, profile_path=profile_path, stem=stem)
     skill = str(params.get("skill") or "").strip().lower()
     if skill == "model_dam":
         return "dammif"
@@ -250,12 +247,14 @@ def infer_shape_mode_from_disk(output_dir: str | Path, *, profile_path: str = ""
     return None
 
 
-def infer_n_runs_from_disk(output_dir: str | Path, *, profile_path: str = "") -> Optional[int]:
+def infer_n_runs_from_disk(
+    output_dir: str | Path, *, profile_path: str = "", stem: str = ""
+) -> Optional[int]:
     """``n_runs`` from run-params or by counting DAMMIF replica CIFs."""
-    sd = resolve_sample_modeling_dir(output_dir, profile_path=profile_path)
+    sd = resolve_sample_modeling_dir(output_dir, profile_path=profile_path, stem=stem)
     if not sd.is_dir():
         return None
-    params = read_run_params(sd, profile_path=profile_path)
+    params = read_run_params(sd, profile_path=profile_path, stem=stem)
     if "n_runs" in params:
         try:
             return max(1, int(params["n_runs"]))
@@ -265,15 +264,17 @@ def infer_n_runs_from_disk(output_dir: str | Path, *, profile_path: str = "") ->
     return n if n >= 1 else None
 
 
-def apply_disk_params_to_session_state(state: Any, *, output_dir: str | Path, profile_path: str = "") -> None:
+def apply_disk_params_to_session_state(
+    state: Any, *, output_dir: str | Path, profile_path: str = "", stem: str = ""
+) -> None:
     """
     Copy skill ``*_run_params.yml`` (or CIF-count fallback) into liveview session fields.
 
     Keeps slim-pane controls and the next modeling-app launch aligned with disk.
     """
-    sd = resolve_sample_modeling_dir(output_dir, profile_path=profile_path)
-    params = read_run_params(sd, profile_path=profile_path)
-    mode = infer_shape_mode_from_disk(sd, profile_path=profile_path)
+    sd = resolve_sample_modeling_dir(output_dir, profile_path=profile_path, stem=stem)
+    params = read_run_params(sd, profile_path=profile_path, stem=stem)
+    mode = infer_shape_mode_from_disk(sd, profile_path=profile_path, stem=stem)
 
     if mode == "dammif" or (params and str(params.get("skill") or "") == "model_dam"):
         n = None
@@ -283,7 +284,7 @@ def apply_disk_params_to_session_state(state: Any, *, output_dir: str | Path, pr
             except (TypeError, ValueError):
                 n = None
         if n is None:
-            n = infer_n_runs_from_disk(sd, profile_path=profile_path)
+            n = infer_n_runs_from_disk(sd, profile_path=profile_path, stem=stem)
         if n is not None:
             try:
                 state.model_dam_n_runs = int(n)

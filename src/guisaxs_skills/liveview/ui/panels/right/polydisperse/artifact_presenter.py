@@ -31,6 +31,7 @@ class PolydisperseArtifactPresenter:
         self._state = state
         self._window = window
         self._profile_path: str = ""
+        self._sample_stem: str = ""
         self._output_root: Optional[Path] = None
         self._last_guinier_results: str = ""
         self._last_gnom_out: str = ""
@@ -47,10 +48,16 @@ class PolydisperseArtifactPresenter:
         output_root: Path,
         tiff_path: str = "",
         watch_mode: LiveviewWatchMode = LiveviewWatchMode.FLAT,
+        stem: str = "",
     ) -> None:
         from .....ingest.curve_classify import usable_analysis_curve_path
+        from .....pipeline.polydisperse_pipeline import profile_sample_stem
 
         self._profile_path = usable_analysis_curve_path(profile_path)
+        # Always rewrite stem on context push (including "") so prior sample identity cannot stick.
+        self._sample_stem = (stem or "").strip()
+        if not self._sample_stem and self._profile_path:
+            self._sample_stem = profile_sample_stem(self._profile_path)
         if output_root is not None:
             self._output_root = output_root.expanduser().resolve()
         else:
@@ -76,6 +83,8 @@ class PolydisperseArtifactPresenter:
         self._last_sizes_summary = ""
         self._last_mixture_summary = ""
         self._last_sizes_result = {}
+        self._profile_path = ""
+        self._sample_stem = ""
 
     def _artifact_bases(self) -> list[Path]:
         bases: list[Path] = []
@@ -93,13 +102,10 @@ class PolydisperseArtifactPresenter:
         return out
 
     def _effective_profile_path(self) -> str:
+        """Profile bound to the current sample context only (no session last_* fallback)."""
         from .....ingest.curve_classify import usable_analysis_curve_path
 
-        prof = usable_analysis_curve_path(self._profile_path)
-        if prof:
-            return prof
-        p = self._state.preferred_profile_path()
-        return usable_analysis_curve_path(p) if p is not None else ""
+        return usable_analysis_curve_path(self._profile_path)
 
     def _resolve_result_path(self, val: object) -> str:
         return resolve_artifact_path(val, bases=self._artifact_bases())
@@ -120,9 +126,6 @@ class PolydisperseArtifactPresenter:
         if not isinstance(result, dict):
             return
         self._sync_output_root_from_result(result)
-        prof = self._effective_profile_path()
-        if not self._profile_path and prof:
-            self._profile_path = prof
         sn = (skill_name or result.get("skill_name") or "").strip()
         if sn == "fit_guinier" or self._looks_like_fit_guinier(result):
             self._ingest_guinier(result)
@@ -418,8 +421,9 @@ class PolydisperseArtifactPresenter:
         if root is None:
             root = self._state.watchdir.expanduser().resolve()
         self.set_context(
-            profile_path=bundle.profile_path or self._profile_path,
+            profile_path=str(bundle.profile_path or ""),
             output_root=root,
+            stem=str(getattr(bundle, "stem", "") or ""),
         )
         if bundle.guinier:
             self._ingest_guinier(bundle.guinier)
@@ -442,6 +446,10 @@ class PolydisperseArtifactPresenter:
     @property
     def profile_path(self) -> str:
         return self._profile_path
+
+    @property
+    def sample_stem(self) -> str:
+        return self._sample_stem
 
     @property
     def output_root(self) -> Optional[Path]:

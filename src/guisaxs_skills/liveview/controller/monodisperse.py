@@ -45,8 +45,9 @@ class LiveviewMonodisperseHandler:
         return cur.path if cur is not None else ""
 
     def _resolve_profile_path(self) -> Optional[str]:
-        """Presenter → history .dat → session last_* (works for curve intake)."""
+        """Usable analysis profile for the **current** history sample only."""
         from ..ingest.curve_classify import usable_analysis_curve_path
+        from ..services.history.right_artifacts import resolve_analysis_profile
 
         right = self._c.right
         if right is not None:
@@ -55,18 +56,24 @@ class LiveviewMonodisperseHandler:
                 return cand
 
         sample = self._current_sample_path()
-        if sample and is_dat_path(sample):
+        if not sample:
+            return None
+        if is_dat_path(sample):
             cand = usable_analysis_curve_path(sample)
             if cand:
                 return cand
 
-        boarding = self._c.samples.boarding_for(sample) if sample else None
-        p = self._c.state.preferred_profile_path(boarding=boarding)
-        if p is not None:
-            cand = usable_analysis_curve_path(p)
-            if cand:
-                return cand
-        return None
+        cur = self._c.samples.current()
+        stem = (cur.stem if cur is not None else "") or ""
+        if not stem:
+            return None
+        _, profile = resolve_analysis_profile(
+            watchdir=self._c.state.watchdir,
+            stem=stem,
+            tiff_path=sample,
+            watch_mode=self._c.state.watch_mode,
+        )
+        return profile or None
 
     def _profile_root_and_tiff(self) -> tuple[Optional[str], Optional[Path], str]:
         sample_path = self._current_sample_path()
@@ -88,11 +95,15 @@ class LiveviewMonodisperseHandler:
             )
         tiff_path = sample_path if sample_path and not is_dat_path(sample_path) else ""
         if right is not None:
+            cur = self._c.samples.current()
+            stem = (cur.stem if cur is not None else "") or ""
             right.monodisperse_coordinator.set_context(
                 profile_path=prof,
                 output_root=root,
                 tiff_path=tiff_path or sample_path,
                 watch_mode=self._c.state.watch_mode,
+                stem=stem,
+                sample_id=sample_path or "",
             )
         return prof, root, tiff_path or sample_path
 

@@ -123,6 +123,8 @@ Three columns (horizontal splitter):
 - Buffer / subtract config.
 - Groups unused for current intake are hidden; coaching pulses relevant controls.
 
+**Session-owned:** left setup does **not** follow history selection. Soft hints (e.g. empty buffer field ← last integrated curve) are session UX, not sample-tied views.
+
 ### 6.2 Middle — live stage
 
 - History nav (`<` / `>` / Process) when session history non-empty.
@@ -131,15 +133,18 @@ Three columns (horizontal splitter):
 - Drop target for TIFF/`.dat`.
 - Queue status.
 
-Content + layout: `history.sync_middle` only.
+Content + layout: `history.sync_middle` only. Paint for the **currently selected** sample; the buffer curve shown in dual layout is the session buffer (not another sample’s curve).
 
 ### 6.3 Right — intake, analysis, log
 
 - Intake toggles.
 - Monodisperse / polydisperse analysis openers (separate windows).
 - Live log.
+- Shape / DR modeling mini-apps (child processes) receive context for the **current** sample only.
 
 Analysis windows start **disarmed** on cold start; arming while open enables analysis steps in `plan_for` for the **current** auto job’s remaining phases and for subsequent samples. Closing the window disarms.
+
+**Sample-tied:** right Guinier / GNOM / shape (and modeling PathFields) show only artifacts for `SampleStore.current`. Calibrant / `averaged_proxy/`-only curves are not analysis profiles — those panes stay empty rather than borrowing another sample. See [`liveview_session_sample_plan.md`](liveview_session_sample_plan.md) column ownership.
 
 ---
 
