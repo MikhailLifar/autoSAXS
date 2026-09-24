@@ -97,8 +97,8 @@ Session owns `auto_processing` (default Auto; **in-memory only** — not restore
 
 ### 5.1 Watch rules
 
-- **2D:** TIFF watch (flat top-level or tree recursive) + optional root `.dat` aux watch.
-- **1D / Sub:** `.dat` under watchdir with path filters (`averaged/` or `subtracted/` as appropriate; not `averaged_proxy/`).
+- **2D:** TIFF watch (flat top-level or tree recursive) + optional root `.dat` aux watch (Option A → 1D/Sub).
+- **1D / Sub:** `.dat` under watchdir with path filters (`averaged/` or `subtracted/` as appropriate; not `averaged_proxy/`), **plus** TIFF detection so a new `.tif` can Option A switch back to 2D (same as a drop).
 - Stability before enqueue; FIFO; single worker; large queues allowed.
 - Per-path revision: same path with new `FileStatSnapshot` re-queues.
 

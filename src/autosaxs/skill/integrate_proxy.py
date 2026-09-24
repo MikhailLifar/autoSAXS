@@ -335,9 +335,14 @@ def _integrate_proxy_paths(
     if isinstance(mask_path, str):
         if not os.path.isfile(mask_path):
             raise FileNotFoundError("integrate_proxy requires input_paths['mask'] to be an existing file")
+        from autosaxs.core.detector_shape import require_mask_matches_frame
+
+        require_mask_matches_frame(
+            frame_path=image,
+            mask_path=mask_path,
+            context="integrate_proxy",
+        )
         mask_data = IntegratorExtended.read_mask(mask_path)
-        if mask_data.shape != img_data.shape:
-            raise ValueError("integrate_proxy mask shape must match image shape")
         valid_mask = ~mask_data
 
     base = os.path.splitext(os.path.basename(image))[0]

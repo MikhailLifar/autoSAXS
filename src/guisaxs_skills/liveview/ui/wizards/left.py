@@ -319,6 +319,14 @@ class CalibrationWizardDialog(QDialog):
         f.set_text((path or "").strip())
         self.refresh_mask_overlay()
 
+    def clear_mask_path_silent(self) -> None:
+        """Empty mask PathField without emitting ``mask_path_edited`` (shape-mismatch clear)."""
+        f = self._mask_field()
+        if f is None:
+            return
+        f.set_text("")  # PathField.set_text does not emit path_changed
+        self.refresh_mask_overlay("")
+
     def refresh_mask_overlay(self, mask_path: Optional[str] = None) -> None:
         """Overlay the given mask (or form mask path) on the calibrant TIFF viewer."""
         if getattr(self, "_viewer", None) is None:
@@ -444,12 +452,20 @@ class CalibrationWizardDialog(QDialog):
         path = f.text().strip() if f is not None else ""
         if not path:
             self._viewer.clear()
+            self._notify_calibrant_shape_check()
             return
         try:
             self._viewer.show_tiff(path)
             self.refresh_mask_overlay()
         except Exception:
             self._viewer.clear()
+        self._notify_calibrant_shape_check()
+
+    def _notify_calibrant_shape_check(self) -> None:
+        parent = self.parent()
+        fn = getattr(parent, "on_calibrant_image_shape_changed", None)
+        if callable(fn):
+            fn()
 
     def _is_left_click_in_axes(self, ev: object) -> bool:
         if getattr(ev, "inaxes", None) is None:

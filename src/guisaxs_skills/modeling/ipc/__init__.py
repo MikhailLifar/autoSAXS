@@ -49,6 +49,7 @@ class ModelingIpcChild(QObject):
     context_received = pyqtSignal(object)  # ModelingContext
     focus_requested = pyqtSignal()
     shutdown_requested = pyqtSignal()
+    confirm_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -98,6 +99,8 @@ class ModelingIpcChild(QObject):
             self.focus_requested.emit()
         elif t == "shutdown":
             self.shutdown_requested.emit()
+        elif t == "confirm":
+            self.confirm_requested.emit()
 
 
 class ModelingChildHandle(QObject):
@@ -131,6 +134,10 @@ class ModelingChildHandle(QObject):
 
     def send_focus(self) -> None:
         self._write(encode_message("focus"))
+
+    def send_confirm(self) -> None:
+        """Ask the child to run Confirm (same as clicking Confirm in the mini-app)."""
+        self._write(encode_message("confirm"))
 
     def send_shutdown(self) -> None:
         self._write(encode_message("shutdown"))

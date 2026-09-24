@@ -290,6 +290,19 @@ class LiveviewController(QObject):
         if self._right is not None:
             self._right.log_panel.append_app(text)
 
+    def show_toast(self, text: str) -> None:
+        """Non-blocking user notice (ingest rejects, shape mismatches). Also logs."""
+        msg = (text or "").strip()
+        if not msg:
+            return
+        self.append_app_log(msg)
+        parent = self._parent_widget
+        if parent is None:
+            return
+        from guisaxs_skills.ui.toast import Toast
+
+        Toast(text=msg, parent=parent).show_near_bottom()
+
     def on_monodisperse_wizard_open(self) -> None:
         self.history.refresh_right_outputs()
 

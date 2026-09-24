@@ -60,16 +60,16 @@ SAXS / small-angle x-ray scattering: integrate 2D SAXS images to 1D curves (q, I
   - a directory (expands to `*.tif`, non-recursive)
   - a glob expression
   - a comma-separated list of file paths (e.g. from multi-file drag & drop)
-- `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`).
+- `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`). Geometry only.
 - `output_dir` (str, default `.`): Directory where integrated curves are written.
-- `mask` (str | None, default `None`): Optional mask override (`.txt` / `.npy` / `.msk`). When set, does not rewrite `integrator_dir`. If `auto_mask.npy` is present in `integrator_dir` (written by `calibrate`), the run uses `auto_mask | override`; otherwise the override replaces the stored effective mask as-is.
+- `mask` (str | None, default `None`): Optional mask for this run (`.txt` / `.npy` / `.msk`). When set, it is used **as-is** as the effective mask (no OR with auto). When omitted, `integrate` requires `{parent_of_integrator_dir}/effective_mask.npy` (written by `calibrate`) and fails hard if it is missing. Mask shape must match each image (raises ``ValueError`` on mismatch).
 - `npt` (int, default `1000`): Number of points in the output q grid.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 - `validation_png` (bool, default `False`): If `True`, write a PNG next to each integrated curve showing the source image (log-intensity) with integrator-masked pixels highlighted in semi-transparent red.
 
 ### Short parameter list
 
-- mask: Optional mask override for this integrate run.
+- mask: Optional full mask replacement for this integrate run (else sibling `effective_mask.npy`).
 - npt: Number of integrated points, default: 1000
 - validation_png: Show validation image
 

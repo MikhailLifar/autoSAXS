@@ -380,9 +380,22 @@ class TreeDirObserver(QObject):
         self._fast_timer.start()
 
     def stop(self) -> None:
+        """Stop timers; if we were running, one final slow scan so recent TIFFs emit.
+
+        Intake flips / 2D→curve auto-switch call ``stop`` while the periodic scan
+        may not have seen a just-dropped file yet. Emitting here closes that race;
+        settler still owns stability → ingress after TREE is down.
+        """
+        was_running = self._running
         self._running = False
         self._slow_timer.stop()
         self._fast_timer.stop()
+        if was_running and self._engine.baselined:
+            try:
+                self._engine.expire_hot_dirs(hot_idle_s=self._cfg.hot_idle_s)
+                self._emit_changed(self._engine.slow_scan())
+            except Exception:
+                pass
         try:
             self._cache.save(self._cache_path)
         except Exception:

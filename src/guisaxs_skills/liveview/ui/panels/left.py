@@ -30,6 +30,7 @@ from ..wizards.left import BufferWizardDialog, CalibrationWizardDialog
 from ..wizards.mask import MaskWizardDialog
 from ....logic.session_state import SessionPathHints
 from ....ui.preview_panel import PreviewPanel
+from ....ui.toast import Toast
 
 
 def pick_calibration_curve_image_path(result: Dict[str, Any]) -> str:
@@ -397,6 +398,48 @@ class LiveviewLeftPanel(QWidget):
     def shared_mask_wizard(self) -> MaskWizardDialog | None:
         return self._mask_wizard
 
+    def _toast(self, text: str) -> None:
+        msg = (text or "").strip()
+        if not msg:
+            return
+        parent = self.window() or self
+        Toast(text=msg, parent=parent).show_near_bottom()
+
+    def _clear_mask_path_field(self, *, reason: str = "") -> None:
+        """Empty mask PathField + clear session override (no previous-path stash)."""
+        if reason:
+            self._toast(reason)
+        if self._cal_wizard is not None:
+            self._cal_wizard.clear_mask_path_silent()
+        self._session.set_mask_path(None, clear_preview=True)
+        self._update_mask_preview_file()
+        self._refresh_mask_preview_from_state()
+        if self._cal_wizard is not None:
+            applied = applied_mask_path(self._state)
+            self._cal_wizard.refresh_mask_overlay(str(applied) if applied else "")
+        self.refresh_attention_coach()
+
+    def _mask_compatible_with_calibrant(self, mask_path: Path) -> Optional[str]:
+        """Return rejection message if mask cannot apply to current calibrant, else None."""
+        cal = ""
+        if self._cal_wizard is not None:
+            cal = self._cal_wizard.calibrant_image_path()
+        if not cal or not os.path.isfile(cal):
+            cal = self._calibrant_path_for_mask_preview()
+        if not cal or not os.path.isfile(cal):
+            return None
+        from autosaxs.core.detector_shape import require_mask_matches_frame
+
+        try:
+            require_mask_matches_frame(
+                frame_path=cal,
+                mask_path=str(mask_path),
+                context="Mask",
+            )
+        except Exception as e:
+            return str(e)
+        return None
+
     def open_shared_mask_wizard(self) -> None:
         self._open_mask_wizard()
 
@@ -418,6 +461,10 @@ class LiveviewLeftPanel(QWidget):
         except OSError:
             pass
         if not p.is_file():
+            return
+        bad = self._mask_compatible_with_calibrant(p)
+        if bad:
+            self._clear_mask_path_field(reason=bad)
             return
         # New saved file becomes the applied mask (do not overwrite effective_mask.npy).
         self._session.set_mask_path(p)
@@ -445,10 +492,34 @@ class LiveviewLeftPanel(QWidget):
             return
         if not p.is_file():
             return
+        bad = self._mask_compatible_with_calibrant(p)
+        if bad:
+            self._clear_mask_path_field(reason=bad)
+            return
         self._session.set_mask_path(p)
         self._update_mask_preview_file()
         self._refresh_mask_preview_from_state()
         self.refresh_attention_coach()
+
+    def on_calibrant_image_shape_changed(self) -> None:
+        """Calibrant PathField changed: drop mask field if shapes no longer match."""
+        if self._cal_wizard is None:
+            return
+        mask_text = self._cal_wizard.mask_path_text()
+        if not mask_text:
+            return
+        p = Path(mask_text).expanduser()
+        try:
+            p = p.resolve() if p.is_absolute() else (self._state.watchdir / p).resolve()
+        except OSError:
+            self._clear_mask_path_field()
+            return
+        if not p.is_file():
+            self._clear_mask_path_field()
+            return
+        bad = self._mask_compatible_with_calibrant(p)
+        if bad:
+            self._clear_mask_path_field(reason=bad)
 
     def _on_mask_reset(self) -> None:
         """Drop session override; if calibrated, re-point to sibling effective_mask.npy."""

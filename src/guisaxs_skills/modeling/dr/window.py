@@ -102,6 +102,7 @@ class DrModelingWindow(QMainWindow):
                 except (TypeError, ValueError):
                     pass
         self._apply_run_params_from_disk()
+        self._update_controls_visibility()
         self._try_load_existing_artifacts()
         self._update_confirm_enabled()
 
@@ -278,13 +279,15 @@ class DrModelingWindow(QMainWindow):
         self._q_max.setDecimals(5)
         self._q_max.setSpecialValueText("(full)")
         self._q_max.setValue(0.0)
-        form = QFormLayout()
+        self._mixture_params = QWidget()
+        form = QFormLayout(self._mixture_params)
+        form.setContentsMargins(0, 0, 0, 0)
         form.addRow("max_nph", self._sp_max_nph)
         form.addRow("r_max (nm)", self._sp_r_max)
         form.addRow("poly_max (nm)", self._sp_poly_max)
         form.addRow("q_min (nm⁻¹)", self._q_min)
         form.addRow("q_max (nm⁻¹)", self._q_max)
-        ctrl.addLayout(form)
+        ctrl.addWidget(self._mixture_params)
         self._status = QLabel("—")
         self._status.setWordWrap(True)
         ctrl.addWidget(self._status)
@@ -307,12 +310,18 @@ class DrModelingWindow(QMainWindow):
         self._rb_mixture.toggled.connect(lambda *_: self._on_mode_changed())
         self._pf_profile.path_changed.connect(self._on_profile_path_changed)
         self._pf_outdir.path_changed.connect(self._on_outdir_path_changed)
+        self._update_controls_visibility()
 
     def _mode(self) -> str:
         return "mixture" if self._rb_mixture.isChecked() else "none"
 
+    def _update_controls_visibility(self) -> None:
+        """Hide MIXTURE-only params when mode is None (same idea as shape app)."""
+        self._mixture_params.setVisible(self._mode() == "mixture")
+
     def _on_mode_changed(self) -> None:
         self._sync_outdir_to_mode(self._mode())
+        self._update_controls_visibility()
         self._update_confirm_enabled()
         self._try_load_existing_artifacts()
 

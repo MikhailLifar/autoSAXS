@@ -59,9 +59,9 @@ SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance
 - `output_dir` (str, default `.`): Directory where the outputs are written (one subdirectory per input profile).
 - `rg_nm` (float | None, default `None`): Expected Rg in nm, usually passed from Guinier analysis. If omitted, in-process Guinier analysis (`fit_guinier`) is run for an Rg span, then 1D Rg optimization in `[0, 1.5 × rg_max]` (30 s max) takes place.
 - `first` (int | None, default `None`): DATGNOM `--first` (1-based point index). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
-- `last` (int | None, default `None`): DATGNOM `--last`. If omitted, taken from `q_max` when set; otherwise `--last` is not passed to DATGNOM.
+- `last` (int | None, default `None`): DATGNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
 - `q_min` (float | None, default `None`): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
-- `q_max` (float | None, default `None`): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`.
+- `q_max` (float | None, default `None`): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`. When both `last` and `q_max` are omitted, a silent safer default is applied.
 - `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`. Unused when `dmax_nm` is set (GNOM refine).
 - `dmax_nm` (float | None, default `None`): When set, skip DATGNOM search and run monodisperse GNOM (`--rmax`) with this Dmax (nm). Still writes the Dmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
 - `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted, GNOM chooses automatically. Ignored when `dmax_nm` is unset.
@@ -75,8 +75,8 @@ SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance
 `dict[str, str | list[str]]` with:
 
 - `output_subdir`: The per-sample output directory used for this profile.
-- `gnom_out_paths`: List of DATGNOM `.out` paths written for this profile (typically a single “best” `.out`).
-- `best_gnom_out_path`: Path to the selected “best” DATGNOM `.out`.
+- `gnom_out_paths`: List of GNOM/DATGNOM `.out` paths written for this profile (typically a single stable ``gnom_best.out``).
+- `best_gnom_out_path`: Path to the selected best `.out` (always ``gnom_best.out`` under the sample dir — auto DATGNOM and manual refine share this name so re-runs overwrite).
 - `fit_distances_log_path`: Path to the extended run log YAML (`{base}_fit_distances_log.yml`) — candidates, ensemble rows, quality, failures.
 - `fit_params_path`: Path to a YAML file containing the fit parameters used for the final run.
 - `best_symlink_out_path`: Best-effort symlink path to the selected `.out` (may be missing on some filesystems).
@@ -97,9 +97,14 @@ SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance
 - `total_estimate`: GNOM Total Estimate of the selected fit.
 - `delta_rg_pct`: \|Rg_Guinier − Rg_P(r)\| / Rg_Guinier × 100.
 - `shannon_s_min`: Minimum Shannon sampling value.
+- `shannon_s_max`: Maximum Shannon sampling value ``(q_max · D_max) / π``.
+- `n_shannon`: Number of Shannon channels in the fitted q-window.
 - `shannon_class`: Shannon classification.
 - `shannon_ok`: Boolean indicating acceptable Shannon sampling.
 - `shannon_tip`: Shannon interpretation guide.
+- `wiggle_index`: Real-space high-frequency wiggle index (~0 clean, ~1 borderline, ≥2 high).
+- `wiggle_class`: ``low`` / ``acceptable`` / ``high`` / ``unknown``.
+- `detail_reliability_class`: Combined ``RELIABLE`` / ``SUSPICIOUS`` / ``unknown`` (indicator only).
 - `pr_quality_class`: `high_quality` \| `acceptable` \| `failed`.
 - `overall_status`: `HIGH QUALITY` \| `ACCEPTABLE` \| `FAILED` (quality passport label).
 - `quality_rationale`: List explaining the quality assessment.

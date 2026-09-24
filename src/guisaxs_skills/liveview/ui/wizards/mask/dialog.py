@@ -35,6 +35,7 @@ from .....logic.smart_defaults import (
     find_mask_near,
 )
 from .....ui.path_field import PathField
+from .....ui.toast import Toast
 from ...widgets.plots import mpl_navigation_toolbar
 from .canvas import MaskCanvas
 from .histogram import IntensityHistogramPanel
@@ -485,6 +486,19 @@ class MaskWizardDialog(QDialog):
         if self._ctx_shape is None:
             return
         if tuple(base.shape) != self._ctx_shape:
+            Toast(
+                text=(
+                    f"Mask shape {int(base.shape[0])}×{int(base.shape[1])} does not match "
+                    f"image shape {self._ctx_shape[0]}×{self._ctx_shape[1]}"
+                ),
+                parent=self,
+            ).show_near_bottom()
+            self._mask_field.set_text("")
+            self._ctx_mask_path = ""
+            self._model.base_mask = None
+            if self._ctx_shape is not None:
+                self._ensure_default_threshold_applied()
+                self._canvas.refresh_overlays()
             return
         self._model.sync_context(
             self._ctx_shape,

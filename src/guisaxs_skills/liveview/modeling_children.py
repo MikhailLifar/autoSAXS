@@ -37,6 +37,10 @@ class ModelingChildManager(QObject):
         self._shape_push: Optional[Dict[str, Any]] = None
         self._dr_push: Optional[Dict[str, Any]] = None
 
+    def shape_child(self) -> Optional[ModelingChildHandle]:
+        """Active guisaxs-shape handle (tests / diagnostics)."""
+        return self._shape
+
     def start_shape(
         self,
         *,

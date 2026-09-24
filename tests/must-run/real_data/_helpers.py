@@ -1,37 +1,15 @@
 """
-Validation tests for real-data skill pipelines under ``validation/``.
+Shared helpers for commit-gate real-data skill pipelines under ``validation/``.
 
-Covered stages:
-  - calibrate → integrate → subtract (curve metrics vs reference .chi / sub_*.dat)
-  - monodisperse: fit-guinier → analyze-kratky → fit-distances (DATGNOM smoke + pinned
-    GNOM refine) → model-dam (ihs27 only, last)
+Pytest entry points live under ``light/`` and ``heavy/``. This module owns runners,
+comparators, and path constants only.
 
-Prerequisites:
-  - Run scripts/setup_validation_data.py once to create validation/ and copy/rename data.
-  - validation/ must contain raw/*_calib.tif, raw/*_buffer.tif, raw/*_sample.tif,
-    reference/*.chi, reference_subtracted/sub_*.dat, config.conf (skill-keyed YAML),
-    a mask file (e.g. mask*.msk), and reference_mono/ (Guinier/Kratky/GNOM goldens for
-    ihs27–ihs31; synced from the protocol 2d tree by setup when available).
-
-Metric (integrated): int_{q0}^{qmax} 2 * |I1(q) - I2(q)| / (|I1(q)|*|I2(q)| + eps)
-
-Metric (subtracted): (1/(q_max-q_0)) * int_{q_0}^{q_max} |I_ref - I_sub| / (|I_ref| + |I_sub| + eps) dq
-
-Chi2 (integrated and subtracted): :func:`chi2_average_sigma` on a common q grid;
-sigma_ref = 3% * |I_ref|; pipeline sigma from file or 3% * |I_pipe| if absent.
-
-Subtracted curves: ``reference_subtracted/sub_*.dat`` and ``metrics_subtracted.csv`` are used only
-as a regression baseline against the pipeline output for the configured ``sub`` method (e.g.
-``point_match``). The reference files are not a perfect ground truth; when the subtraction
-algorithm changes intentionally, refresh the CSV (by running this test once) so future runs
-guard against accidental drift rather than enforcing agreement with an older heuristic.
-
-Monodisperse GNOM: DATGNOM smoke runs on every subtracted sample; pinned refine (dmax/alpha/
-force_zero + q_min/q_max from reference_mono/manifest.yml) runs for protocol keys with
-mode=refine. Total Estimate is not used as a pass/fail metric. model_dam runs last and only
-for ihs27, feeding the just-produced refined ``.out`` (artifact smoke only; DAMMIF Rg is not
-gated — too stochastic for regression).
+Prerequisites: run ``scripts/setup_validation_data.py`` (optional ``PROTOCOL_MONO_2D``,
+``PROTOCOL_POLY``) so ``validation/`` has IHS raw/reference trees and, when available,
+``reference_mono/`` / ``reference_poly/`` plus ``poly/`` inputs.
 """
+from __future__ import annotations
+
 import os
 import sys
 import glob
@@ -39,15 +17,14 @@ import re
 import csv
 import shutil
 from typing import Any, Dict, List, Optional
-import pytest
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import yaml
 
-# Add src/ to path when running as script (src layout)
-_REPOS = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# tests/must-run/real_data -> repo root is three levels up
+_REPOS = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _SRC = os.path.join(_REPOS, "src")
 for _p in (_SRC, _REPOS):
     if _p not in sys.path:
@@ -69,6 +46,7 @@ from autosaxs.skill.calibrate import calibrate
 from autosaxs.skill.config import merge_skill_params
 from autosaxs.skill.fit_distances import fit_distances
 from autosaxs.skill.fit_guinier import fit_guinier
+from autosaxs.skill.fit_sizes import fit_sizes
 from autosaxs.skill.integrate import integrate
 from autosaxs.skill.model_dam import model_dam
 from autosaxs.skill.subtract import subtract
@@ -107,12 +85,29 @@ METRICS_MONO_KRATKY_CSV = os.path.join(VALIDATION_DIR, "metrics_mono_kratky.csv"
 METRICS_MONO_FD_REFINE_CSV = os.path.join(VALIDATION_DIR, "metrics_mono_fit_distances_refine.csv")
 SUCCESS_MONO_TXT = os.path.join(VALIDATION_DIR, "success_mono.txt")
 
+# Polydisperse (Pt_NPs) — separate from IHS raw/
+POLY_DIR = os.path.join(VALIDATION_DIR, "poly")
+POLY_RAW_DIR = os.path.join(POLY_DIR, "raw")
+POLY_CONFIG_PATH = os.path.join(POLY_DIR, "config.conf")
+POLY_AVERAGED_DIR = os.path.join(POLY_DIR, "averaged")
+POLY_SUBTRACTED_DIR = os.path.join(POLY_DIR, "subtracted")
+POLY_GUINIER_DIR = os.path.join(POLY_DIR, "guinier_poly")
+POLY_FIT_SIZES_DIR = os.path.join(POLY_DIR, "fit_sizes")
+REFERENCE_POLY_DIR = os.path.join(VALIDATION_DIR, "reference_poly")
+REFERENCE_POLY_MANIFEST = os.path.join(REFERENCE_POLY_DIR, "manifest.yml")
+METRICS_POLY_GUINIER_CSV = os.path.join(VALIDATION_DIR, "metrics_poly_guinier.csv")
+METRICS_POLY_FIT_SIZES_CSV = os.path.join(VALIDATION_DIR, "metrics_poly_fit_sizes.csv")
+SUCCESS_POLY_TXT = os.path.join(VALIDATION_DIR, "success_poly.txt")
+
 # Relative tolerances vs protocol goldens (E2E regenerated curves may differ slightly).
 MONO_RG_REL_TOL = 0.10
 MONO_KRATKY_PEAK_REL_TOL = 0.15
 MONO_PR_RG_REL_TOL = 0.10
 MONO_PR_DIST_METRIC_MAX = 0.25
 MONO_DAM_N_RUNS = 3
+POLY_RG_REL_TOL = 0.15
+POLY_RMAX_REL_TOL = 0.15
+POLY_DR_DIST_METRIC_MAX = 0.30
 
 SUB_DAT_PATTERN = re.compile(r"^sub_\d+\.dat$")
 PROTOCOL_KEY_FROM_STEM = re.compile(r"^(ihs\d+)")
@@ -121,12 +116,6 @@ _VALIDATION_MISSING_MSG = (
     f"Validation directory not found: {VALIDATION_DIR}. "
     "Run: python scripts/setup_validation_data.py"
 )
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _require_validation_dir_fixture():
-    if not os.path.isdir(VALIDATION_DIR):
-        raise FileNotFoundError(_VALIDATION_MISSING_MSG)
 
 def _reset_validation_plots_dir():
     """
@@ -590,7 +579,7 @@ def _guinier_results_path_for_stem(stem: str) -> str:
 
 
 def _reset_mono_output_dirs() -> None:
-    for d in (MONO_GUINIER_DIR, MONO_KRATKY_DIR, MONO_FD_SMOKE_DIR, MONO_FD_REFINE_DIR, MONO_DAM_DIR):
+    for d in (MONO_GUINIER_DIR, MONO_KRATKY_DIR, MONO_FD_SMOKE_DIR, MONO_FD_REFINE_DIR):
         if os.path.isdir(d):
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
@@ -598,14 +587,13 @@ def _reset_mono_output_dirs() -> None:
 
 def run_monodisperse_skills() -> Dict[str, Any]:
     """
-    E2E monodisperse stage on regenerated subtracted curves.
+    Light E2E monodisperse stage on regenerated subtracted curves.
 
     Order: Guinier → Kratky → DATGNOM smoke (all samples) → pinned GNOM refine
-    (protocol refine keys) → model_dam (ihs27 only, last).
+    (protocol refine keys). Heavy ``model_dam`` is a separate stage.
     """
     manifest = _load_mono_manifest()
     samples_meta: Dict[str, Any] = manifest.get("samples") or {}
-    model_dam_key = str(manifest.get("model_dam_key") or "ihs27")
 
     run_calibration_integration_subtraction()
     _reset_mono_output_dirs()
@@ -695,12 +683,72 @@ def run_monodisperse_skills() -> Dict[str, Any]:
             raise RuntimeError(f"Pinned refine produced no .out for {key}")
         refine_out_by_key[key] = out_ref
 
-    # --- model_dam last (ihs27 only), feed just-produced refine .out ---
-    dam_out: Dict[str, Any] = {}
-    if model_dam_key not in refine_out_by_key:
-        raise RuntimeError(f"model_dam key {model_dam_key} missing from refine outputs")
-    sub_dam = sub_by_key[model_dam_key]
-    gnom_dam = _as_scalar(refine_out_by_key[model_dam_key].get("best_gnom_out_path"))
+    return {
+        "manifest": manifest,
+        "sub_paths": sub_paths,
+        "guinier_by_stem": guinier_by_stem,
+        "kratky_by_stem": kratky_by_stem,
+        "smoke_out_by_stem": smoke_out_by_stem,
+        "refine_out_by_key": refine_out_by_key,
+        "sub_by_key": sub_by_key,
+    }
+
+
+def run_model_dam_heavy(*, model_dam_key: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Heavy stage: ``model_dam`` smoke for one protocol key (default ihs27).
+
+    Requires light mono refine outputs under ``fit_distances_refine/`` (or re-runs
+    light monodisperse if missing).
+    """
+    manifest = _load_mono_manifest()
+    key = str(model_dam_key or manifest.get("model_dam_key") or "ihs27")
+    samples_meta: Dict[str, Any] = manifest.get("samples") or {}
+    meta = samples_meta.get(key)
+    if not meta or str(meta.get("mode") or "") != "refine":
+        raise RuntimeError(f"model_dam key {key} missing refine metadata in mono manifest")
+
+    # Prefer existing light refine .out; otherwise run light chain once.
+    refine_glob = glob.glob(os.path.join(MONO_FD_REFINE_DIR, "**", "gnom_best.out"), recursive=True)
+    sub_paths = []
+    if os.path.isdir(SUBTRACTED_DIR):
+        sub_paths = sorted(glob.glob(os.path.join(SUBTRACTED_DIR, "sub_*_sample.dat")))
+    need_light = not refine_glob or not sub_paths
+    if need_light:
+        light = run_monodisperse_skills()
+        refine_out = light["refine_out_by_key"].get(key) or {}
+        sub_dam = light["sub_by_key"].get(key)
+        gnom_dam = _as_scalar(refine_out.get("best_gnom_out_path"))
+    else:
+        sub_by_key: Dict[str, str] = {}
+        for sub in sub_paths:
+            pk = _protocol_key_from_sub_path(sub)
+            if pk:
+                sub_by_key[pk] = sub
+        sub_dam = sub_by_key.get(key)
+        # Match refine out for this key: stem folder under refine dir
+        gnom_dam = None
+        if sub_dam:
+            stem = _sample_stem_from_sub_path(sub_dam)
+            cand = os.path.join(MONO_FD_REFINE_DIR, stem, "gnom_best.out")
+            if os.path.isfile(cand):
+                gnom_dam = cand
+            else:
+                # fit_distances may write flat or nested; search
+                for p in refine_glob:
+                    if key in p or stem in p:
+                        gnom_dam = p
+                        break
+        if not gnom_dam and refine_glob:
+            gnom_dam = refine_glob[0]
+
+    if not sub_dam or not gnom_dam or not os.path.isfile(str(gnom_dam)):
+        raise RuntimeError(f"Cannot locate sub curve / refine .out for model_dam key {key}")
+
+    if os.path.isdir(MONO_DAM_DIR):
+        shutil.rmtree(MONO_DAM_DIR)
+    os.makedirs(MONO_DAM_DIR, exist_ok=True)
+
     dam_out = model_dam(
         sub_dam,
         output_dir=MONO_DAM_DIR,
@@ -711,26 +759,15 @@ def run_monodisperse_skills() -> Dict[str, Any]:
     )
     best_cif = _as_scalar(dam_out.get("best_cif_path"))
     if not best_cif or not os.path.lexists(str(best_cif)):
-        raise RuntimeError("model_dam did not produce best.cif for ihs27")
-
-    return {
-        "manifest": manifest,
-        "sub_paths": sub_paths,
-        "guinier_by_stem": guinier_by_stem,
-        "kratky_by_stem": kratky_by_stem,
-        "smoke_out_by_stem": smoke_out_by_stem,
-        "refine_out_by_key": refine_out_by_key,
-        "sub_by_key": sub_by_key,
-        "dam_out": dam_out,
-        "model_dam_key": model_dam_key,
-    }
+        raise RuntimeError(f"model_dam did not produce best.cif for {key}")
+    return {"model_dam_key": key, "dam_out": dam_out, "sub_path": sub_dam, "gnom_path": gnom_dam}
 
 
 def compare_monodisperse_to_reference(run_state: Dict[str, Any]):
     """
     Compare protocol-keyed mono outputs to reference_mono goldens.
 
-    Returns (ok_flags_dict, metric_row_groups).
+    Returns (ok, failures, metric_row_groups).
     """
     manifest = run_state["manifest"]
     samples_meta: Dict[str, Any] = manifest.get("samples") or {}
@@ -738,7 +775,6 @@ def compare_monodisperse_to_reference(run_state: Dict[str, Any]):
     kratky_by_stem = run_state["kratky_by_stem"]
     refine_out_by_key = run_state["refine_out_by_key"]
     sub_by_key = run_state["sub_by_key"]
-    dam_out = run_state["dam_out"]
 
     guinier_rows = []
     kratky_rows = []
@@ -821,13 +857,6 @@ def compare_monodisperse_to_reference(run_state: Dict[str, Any]):
                 f"{key} refine p(r) metric={dist_metric:.3f} > {MONO_PR_DIST_METRIC_MAX}"
             )
 
-    # model_dam: smoke only (DAMMIF Rg is too stochastic for regression / relative-error gates)
-    dam_yml = _as_scalar(dam_out.get("output_subdir"))
-    fits_path = os.path.join(str(dam_yml or ""), "dammif_fits.yml") if dam_yml else ""
-    if not os.path.isfile(fits_path):
-        failures.append(f"model_dam: missing {fits_path}")
-
-    # Smoke sanity: every sample produced an .out (already enforced in run); count for reporting
     n_smoke = len(run_state["smoke_out_by_stem"])
     if n_smoke < 1:
         failures.append("DATGNOM smoke: no samples")
@@ -840,122 +869,235 @@ def compare_monodisperse_to_reference(run_state: Dict[str, Any]):
     }
 
 
-def test_calib_integration_validation():
-    """Pytest entry: run calibrate+integrate and compare to reference .chi."""
-    _reset_validation_plots_dir()
-    _reset_validation_plots_subdir("integrated")
-    old_int = _read_metrics_csv(METRICS_INTEGRATED_CSV)
-    old_int_chi2 = _read_metrics_csv(METRICS_INTEGRATED_CHI2_CSV)
-    run_calibration_integration_subtraction(run_subtraction=False)
-    results_int, metrics_rows, chi2_rows = compare_and_plot_integrated()
-    assert len(results_int) > 0, "No pipeline outputs could be matched to reference .chi files"
-    ok = _compare_metrics(old_int, metrics_rows, label="Integrated")
-    ok_chi2 = _compare_metrics(old_int_chi2, chi2_rows, label="Integrated chi2")
-    _write_metrics_csv(METRICS_INTEGRATED_CSV, metrics_rows)
-    _write_metrics_csv(METRICS_INTEGRATED_CHI2_CSV, chi2_rows)
-    with open(SUCCESS_TXT, "w") as f:
-        f.write("SUCCESS\n" if ok and ok_chi2 else "FAIL\n")
-    print(f"VALIDATION: {'SUCCESS' if ok and ok_chi2 else 'FAIL'} (integrated)")
-    assert ok and ok_chi2, "Integrated metric regression detected (>1% increase)."
-
-
-def test_calib_integration_subtraction_validation():
-    """Pytest entry: run calibrate+integrate+subtract and compare to reference sub_*.dat."""
-    _reset_validation_plots_dir()
-    _reset_validation_plots_subdir("subtracted")
-    old_sub = _read_metrics_csv(METRICS_SUBTRACTED_CSV)
-    old_sub_chi2 = _read_metrics_csv(METRICS_SUBTRACTED_CHI2_CSV)
-    run_calibration_integration_subtraction()
-    results_sub, metrics_rows, chi2_rows = compare_and_plot_subtracted()
-    assert len(results_sub) > 0, "No pipeline subtracted outputs could be matched to reference sub_*.dat"
-    ok = _compare_metrics(old_sub, metrics_rows, label="Subtracted")
-    ok_chi2 = _compare_metrics(old_sub_chi2, chi2_rows, label="Subtracted chi2")
-    _write_metrics_csv(METRICS_SUBTRACTED_CSV, metrics_rows)
-    _write_metrics_csv(METRICS_SUBTRACTED_CHI2_CSV, chi2_rows)
-    with open(SUCCESS_TXT, "w") as f:
-        f.write("SUCCESS\n" if ok and ok_chi2 else "FAIL\n")
-    print(f"VALIDATION: {'SUCCESS' if ok and ok_chi2 else 'FAIL'} (subtracted)")
-    assert ok and ok_chi2, "Subtracted metric regression detected (>1% increase)."
-
-
-def test_monodisperse_pipeline_validation():
-    """Pytest entry: full E2E monodisperse chain; model_dam last (ihs27 only)."""
-    if not os.path.isdir(REFERENCE_MONO_DIR):
-        raise FileNotFoundError(
-            f"Missing {REFERENCE_MONO_DIR}. Run setup_validation_data.py with PROTOCOL_MONO_2D set."
-        )
-
-    old_g = _read_metrics_csv(METRICS_MONO_GUINIER_CSV)
-    old_k = _read_metrics_csv(METRICS_MONO_KRATKY_CSV)
-    old_r = _read_metrics_csv(METRICS_MONO_FD_REFINE_CSV)
-
-    run_state = run_monodisperse_skills()
-    ok_cmp, failures, rows = compare_monodisperse_to_reference(run_state)
-
-    ok_reg = True
-    ok_reg = _compare_metrics(old_g, rows["guinier"], label="Mono Guinier") and ok_reg
-    ok_reg = _compare_metrics(old_k, rows["kratky"], label="Mono Kratky") and ok_reg
-    ok_reg = _compare_metrics(old_r, rows["refine"], label="Mono fit_distances refine") and ok_reg
-
-    _write_metrics_csv(METRICS_MONO_GUINIER_CSV, rows["guinier"])
-    _write_metrics_csv(METRICS_MONO_KRATKY_CSV, rows["kratky"])
-    _write_metrics_csv(METRICS_MONO_FD_REFINE_CSV, rows["refine"])
-
-    ok_all = ok_cmp and ok_reg
-    with open(SUCCESS_MONO_TXT, "w") as f:
-        f.write("SUCCESS\n" if ok_all else "FAIL\n")
-    print(f"VALIDATION MONO: {'SUCCESS' if ok_all else 'FAIL'}")
-    print(f"  samples smoked (DATGNOM): {len(run_state['smoke_out_by_stem'])}")
-    print(f"  refine keys: {sorted(run_state['refine_out_by_key'])}")
-    print(f"  model_dam key: {run_state['model_dam_key']}")
-    for msg in failures:
-        print(f"  FAIL: {msg}")
-    assert ok_all, "Monodisperse validation failed:\n" + "\n".join(failures)
-
-
-if __name__ == "__main__":
+def require_validation_dir() -> None:
     if not os.path.isdir(VALIDATION_DIR):
         raise FileNotFoundError(_VALIDATION_MISSING_MSG)
-    _reset_validation_plots_dir()
-    _reset_validation_plots_subdir("integrated")
-    _reset_validation_plots_subdir("subtracted")
 
-    old_int = _read_metrics_csv(METRICS_INTEGRATED_CSV)
-    old_sub = _read_metrics_csv(METRICS_SUBTRACTED_CSV)
-    old_int_chi2 = _read_metrics_csv(METRICS_INTEGRATED_CHI2_CSV)
-    old_sub_chi2 = _read_metrics_csv(METRICS_SUBTRACTED_CHI2_CSV)
 
-    run_calibration_integration_subtraction()
-    results_int, int_rows, int_chi2_rows = compare_and_plot_integrated()
-    results_sub, sub_rows, sub_chi2_rows = compare_and_plot_subtracted()
+def _load_poly_manifest() -> Dict[str, Any]:
+    if not os.path.isfile(REFERENCE_POLY_MANIFEST):
+        raise FileNotFoundError(
+            f"Missing {REFERENCE_POLY_MANIFEST}. "
+            "Sync with scripts/setup_validation_data.py (PROTOCOL_POLY)."
+        )
+    with open(REFERENCE_POLY_MANIFEST, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
 
-    ok_int = _compare_metrics(old_int, int_rows, label="Integrated")
-    ok_sub = _compare_metrics(old_sub, sub_rows, label="Subtracted")
-    ok_int_chi2 = _compare_metrics(old_int_chi2, int_chi2_rows, label="Integrated chi2")
-    ok_sub_chi2 = _compare_metrics(old_sub_chi2, sub_chi2_rows, label="Subtracted chi2")
-    ok_all = ok_int and ok_sub and ok_int_chi2 and ok_sub_chi2
 
-    _write_metrics_csv(METRICS_INTEGRATED_CSV, int_rows)
-    _write_metrics_csv(METRICS_SUBTRACTED_CSV, sub_rows)
-    _write_metrics_csv(METRICS_INTEGRATED_CHI2_CSV, int_chi2_rows)
-    _write_metrics_csv(METRICS_SUBTRACTED_CHI2_CSV, sub_chi2_rows)
-    with open(SUCCESS_TXT, "w") as f:
-        f.write("SUCCESS\n" if ok_all else "FAIL\n")
-    print(f"VALIDATION: {'SUCCESS' if ok_all else 'FAIL'}")
+def _poly_mask_path() -> str:
+    for name in ("mask-Pt-NPs.txt", "mask.txt"):
+        p = os.path.join(POLY_DIR, name)
+        if os.path.isfile(p):
+            return p
+    paths = sorted(
+        p for p in glob.glob(os.path.join(POLY_DIR, "mask*")) if os.path.isfile(p)
+    )
+    if not paths:
+        raise FileNotFoundError(f"No mask under {POLY_DIR}")
+    return paths[0]
 
-    print(f"Integrated: compared {len(results_int)} curves. Plots in {OUTPUT_DIR_INTEGRATED_LOG} (log) and {OUTPUT_DIR_INTEGRATED_LINEAR} (linear)")
-    for base, ref_base, metric, *_ in results_int:
-        print(f"  {base} vs {ref_base}.chi  metric = {metric:.6f}")
-    print(f"Integrated chi2: compared {len(results_int)} curves.")
-    for row in int_chi2_rows:
-        print(f"  {row['generated']} vs {row['reference']}  chi2 = {row['metric']:.6f}")
-    print(f"Subtracted: compared {len(results_sub)} curves. Plots in {OUTPUT_DIR_SUBTRACTED}")
-    for base, ref_name, metric, *_ in results_sub:
-        print(f"  {base} vs {ref_name}  metric = {metric:.6f}")
-    print(f"Subtracted chi2: compared {len(results_sub)} curves.")
-    for row in sub_chi2_rows:
-        print(f"  {row['generated']} vs {row['reference']}  chi2 = {row['metric']:.6f}")
 
-    if not ok_all:
-        raise SystemExit(1)
+def _poly_calib_tif() -> str:
+    paths = sorted(glob.glob(os.path.join(POLY_RAW_DIR, "*calib*.tif")))
+    if not paths:
+        paths = sorted(glob.glob(os.path.join(POLY_RAW_DIR, "AgBh*.tif")))
+    if not paths:
+        raise FileNotFoundError(f"No calibration TIFF in {POLY_RAW_DIR}")
+    return paths[0]
+
+
+def run_polydisperse_pipeline() -> Dict[str, Any]:
+    """
+    Light polydisperse: calib → integrate → subtract → Guinier → fit_sizes (no MIXTURE).
+
+    Uses ``validation/poly/`` inputs and compares later via ``compare_polydisperse_to_reference``.
+    """
+    manifest = _load_poly_manifest()
+    samples_meta: Dict[str, Any] = manifest.get("samples") or {}
+    if not os.path.isdir(POLY_RAW_DIR):
+        raise FileNotFoundError(
+            f"Missing {POLY_RAW_DIR}. Run setup_validation_data.py with PROTOCOL_POLY."
+        )
+    config_path = POLY_CONFIG_PATH if os.path.isfile(POLY_CONFIG_PATH) else CONFIG_PATH
+
+    calib_image = _poly_calib_tif()
+    mask_path = _poly_mask_path()
+    out_cal = calibrate(
+        calib_image,
+        POLY_DIR,
+        config_path=config_path,
+        mask=mask_path,
+        mask_mode="from_file",
+        use_cache=False,
+    )
+    integrator_dir = out_cal["integrator_dir"]
+
+    buffer_paths = sorted(glob.glob(os.path.join(POLY_RAW_DIR, "*buffer*.tif")))
+    sample_paths = sorted(
+        p
+        for p in glob.glob(os.path.join(POLY_RAW_DIR, "Pt_NPs_*.tif"))
+        if "buffer" not in os.path.basename(p).lower()
+        and "calib" not in os.path.basename(p).lower()
+        and "AgBh" not in os.path.basename(p)
+    )
+    os.makedirs(POLY_AVERAGED_DIR, exist_ok=True)
+    if buffer_paths:
+        integrate(buffer_paths, integrator_dir, POLY_AVERAGED_DIR, config_path=config_path, use_cache=False)
+    if sample_paths:
+        integrate(sample_paths, integrator_dir, POLY_AVERAGED_DIR, config_path=config_path, use_cache=False)
+
+    buffer_1d = sorted(glob.glob(os.path.join(POLY_AVERAGED_DIR, "int_*buffer*.dat")))
+    sample_1d = sorted(
+        p
+        for p in glob.glob(os.path.join(POLY_AVERAGED_DIR, "int_Pt_NPs_*.dat"))
+        if "buffer" not in os.path.basename(p).lower()
+    )
+    if not sample_1d or not buffer_1d:
+        raise RuntimeError(f"Poly integrate produced no curves under {POLY_AVERAGED_DIR}")
+
+    # Single shared buffer for all Pt_NPs samples
+    buffer_path = buffer_1d[0]
+    os.makedirs(POLY_SUBTRACTED_DIR, exist_ok=True)
+    sub_merged = merge_skill_params("subtract", config_path=config_path)
+    q_sub_min = sub_merged.get("q_min")
+    q_sub_max = sub_merged.get("q_max")
+    # Prefer protocol subtract window from manifest when present
+    man_sub = manifest.get("subtract") or {}
+    if man_sub.get("q_min") is not None:
+        q_sub_min = man_sub["q_min"]
+    if man_sub.get("q_max") is not None:
+        q_sub_max = man_sub["q_max"]
+    if q_sub_min is None or q_sub_max is None:
+        raise RuntimeError("poly subtract q_min/q_max missing from config/manifest")
+
+    sub_by_key: Dict[str, str] = {}
+    for sample_path in sample_1d:
+        out_sub = subtract(
+            sample_path,
+            buffer_path,
+            POLY_SUBTRACTED_DIR,
+            q_min=float(q_sub_min),
+            q_max=float(q_sub_max),
+            config_path=config_path,
+            use_cache=False,
+        )
+        sub_path = _as_scalar(out_sub.get("subtracted_1d"))
+        if not sub_path or not os.path.isfile(str(sub_path)):
+            raise RuntimeError(f"subtract failed for {sample_path}")
+        # Map to protocol key Pt_NPs_30 etc.
+        base = os.path.splitext(os.path.basename(str(sub_path)))[0]
+        for key in samples_meta:
+            if key in base:
+                sub_by_key[key] = str(sub_path)
+                break
+
+    for d in (POLY_GUINIER_DIR, POLY_FIT_SIZES_DIR):
+        if os.path.isdir(d):
+            shutil.rmtree(d)
+        os.makedirs(d, exist_ok=True)
+
+    guinier_by_key: Dict[str, Dict[str, Any]] = {}
+    sizes_out_by_key: Dict[str, Dict[str, Any]] = {}
+    for key, meta in samples_meta.items():
+        sub = sub_by_key.get(key)
+        if not sub:
+            raise RuntimeError(f"No subtracted curve for poly key {key}")
+        out_g = fit_guinier(sub, output_dir=POLY_GUINIER_DIR, use_cache=False)
+        g_path = _as_scalar(out_g.get("results_path"))
+        if not g_path or not os.path.isfile(str(g_path)):
+            raise RuntimeError(f"Poly Guinier failed for {key}: missing results")
+        parsed_g = parse_guinier_results_txt(str(g_path))
+        if not parsed_g.get("rg"):
+            raise RuntimeError(f"Poly Guinier failed for {key}: {g_path}")
+        guinier_by_key[key] = parsed_g
+
+        kwargs: Dict[str, Any] = {
+            "output_dir": POLY_FIT_SIZES_DIR,
+            "shape": str(meta.get("shape") or "spheres"),
+            "use_cache": False,
+            "minimal": True,
+        }
+        if meta.get("q_min") is not None:
+            kwargs["q_min"] = float(meta["q_min"])
+        if meta.get("q_max") is not None:
+            kwargs["q_max"] = float(meta["q_max"])
+        if str(meta.get("mode") or "") == "refine":
+            kwargs["rmax_nm"] = float(meta["rmax_nm"])
+            if meta.get("alpha") is not None:
+                kwargs["alpha"] = float(meta["alpha"])
+            kwargs["force_zero_rmin"] = str(meta.get("force_zero_rmin") or "N")
+            kwargs["force_zero_rmax"] = str(meta.get("force_zero_rmax") or "N")
+        out_sz = fit_sizes(sub, **kwargs)
+        best = _as_scalar(out_sz.get("best_gnom_out_path"))
+        if not best or not os.path.isfile(str(best)):
+            raise RuntimeError(f"fit_sizes produced no .out for {key}")
+        sizes_out_by_key[key] = out_sz
+
+    return {
+        "manifest": manifest,
+        "sub_by_key": sub_by_key,
+        "guinier_by_key": guinier_by_key,
+        "sizes_out_by_key": sizes_out_by_key,
+    }
+
+
+def compare_polydisperse_to_reference(run_state: Dict[str, Any]):
+    """Compare poly Guinier Rg and fit_sizes D(R)/rmax to reference_poly goldens."""
+    samples_meta: Dict[str, Any] = (run_state["manifest"].get("samples") or {})
+    guinier_by_key = run_state["guinier_by_key"]
+    sizes_out_by_key = run_state["sizes_out_by_key"]
+    failures: List[str] = []
+    guinier_rows = []
+    sizes_rows = []
+
+    for key, meta in samples_meta.items():
+        ref_g_path = os.path.join(REFERENCE_POLY_DIR, meta["guinier_results"])
+        ref_g = parse_guinier_results_txt(ref_g_path)
+        pipe_g = guinier_by_key[key]
+        rg_err = _rel_err(pipe_g["rg"], ref_g["rg"])
+        guinier_rows.append(
+            {
+                "reference": f"{key}:{os.path.basename(ref_g_path)}",
+                "generated": key,
+                "metric": float(rg_err),
+            }
+        )
+        if rg_err > POLY_RG_REL_TOL:
+            failures.append(f"{key} Guinier Rg rel_err={rg_err:.3f} > {POLY_RG_REL_TOL}")
+
+        out_sz = sizes_out_by_key[key]
+        best = _as_scalar(out_sz.get("best_gnom_out_path"))
+        ref_out_path = os.path.join(REFERENCE_POLY_DIR, meta["best_out_path"])
+        parsed_ref = parse_gnom_out(ref_out_path)
+        parsed_pipe = parse_gnom_out(str(best))
+        # Prefer rmax from passport / distribution extent
+        rmax_ref = parsed_ref.get("real_space_rmax")
+        rmax_pipe = parsed_pipe.get("real_space_rmax")
+        # Fall back to manifest pinned rmax when refining
+        if rmax_ref is None and meta.get("rmax_nm") is not None:
+            rmax_ref = float(meta["rmax_nm"])
+        if rmax_pipe is None and meta.get("rmax_nm") is not None and str(meta.get("mode")) == "refine":
+            rmax_pipe = float(meta["rmax_nm"])
+        dist_metric = _pr_distribution_metric(parsed_ref, parsed_pipe)
+        metric = float(dist_metric) if np.isfinite(dist_metric) else float("nan")
+        if rmax_ref is not None and rmax_pipe is not None:
+            rmax_err = _rel_err(float(rmax_pipe), float(rmax_ref))
+            if not np.isfinite(metric):
+                metric = float(rmax_err)
+            if rmax_err > POLY_RMAX_REL_TOL:
+                failures.append(f"{key} fit_sizes rmax rel_err={rmax_err:.3f} > {POLY_RMAX_REL_TOL}")
+        sizes_rows.append(
+            {
+                "reference": f"{key}:{os.path.basename(ref_out_path)}",
+                "generated": os.path.basename(str(best)),
+                "metric": metric if np.isfinite(metric) else 0.0,
+            }
+        )
+        if np.isfinite(dist_metric) and dist_metric > POLY_DR_DIST_METRIC_MAX:
+            failures.append(
+                f"{key} fit_sizes D(R) metric={dist_metric:.3f} > {POLY_DR_DIST_METRIC_MAX}"
+            )
+
+    ok = len(failures) == 0
+    return ok, failures, {"guinier": guinier_rows, "fit_sizes": sizes_rows}
 

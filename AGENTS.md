@@ -113,7 +113,7 @@ autosaxs/
 | report_individual | `skill/report_individual.py` | Per-sample PDF from fragments |
 | report_summary | `skill/report_summary.py` | Pipeline summary PDF |
 
-**Adding a skill:** register in `_SKILL_IMPORTS` (`skill/__init__.py`), add to `SKILL_ORDER`, extend `tests/test_skills_real_data.py` when the skill belongs on the real-data path, otherwise add a focused case in `tests/test_skill.py` (edges / skills not yet on that path).
+**Adding a skill:** register in `_SKILL_IMPORTS` (`skill/__init__.py`), add to `SKILL_ORDER`, extend `tests/must-run/real_data/` when the skill belongs on the real-data path, otherwise add a focused case in `tests/must-run/skills/test_contracts.py` (edges / skills not yet on that path).
 
 ### `autosaxs/core/` — primitives
 
@@ -122,6 +122,7 @@ autosaxs/
 | `path_expression.py` | Typed path/glob/comma-list expansion (`Dat`, `Tiff`, `Mask`, …) |
 | `utils.py` | `read_saxs`, `write_saxs`, `load_config`, detector helpers, `LATEST_STEPS_PATH` |
 | `integrator.py` | `IntegratorExtended` (pyFAI wrapper; geometry in `integrator/`, masks alongside as `effective_mask.npy` / `auto_mask.npy`) |
+| `detector_shape.py` | Frame/mask `(H,W)` helpers; `require_mask_matches_frame` (skills + liveview gates) |
 | `guinier.py` | Pure Guinier math |
 | `gnom.py` | GNOM `.out` parsing, candidate scoring |
 | `pddf.py` | p(r) from BODIES/DAMMIF shapes |
@@ -207,7 +208,7 @@ Sibling package for modeling apps: `guisaxs_skills/modeling/` (also launched as 
 | `liveview/modeling_children.py` | Owns shape/DR child processes; builds `ModelingContext` for current sample |
 | `guisaxs_skills/modeling/` | Shape/DR mini-apps + IPC (`ModelingContext`, run-params YAML) |
 | `liveview/ingest/settle.py` | `RevisionSettler` — shared readiness before ingress |
-| `liveview/ingest/ingress.py` | `RevisionIngress` — single front door for settled revisions |
+| `liveview/ingest/ingress.py` | `RevisionIngress` — single front door; admit gate rejects unreadable TIFF / mask≠frame (toast, no enqueue) |
 | `liveview/ingest/sample_revision.py` | On-disk sample revision (frame or `.dat`) |
 | `liveview/ingest/watcher.py` | FLAT mode: watchdog + known-path baseline |
 | `liveview/ingest/dir_tree_observer.py` | TREE mode: hierarchical mtime/ctime/ino scan + prune |
@@ -227,12 +228,12 @@ Help assets live in `autosaxs/resources/help/guisaxs_liveview/`.
 
 | Task | Start here |
 |------|------------|
-| Add/modify a processing step | `autosaxs/skill/`, `skill/__init__.py`, `tests/test_skills_real_data.py` (+ `tests/test_skill.py` for edges) |
+| Add/modify a processing step | `autosaxs/skill/`, `skill/__init__.py`, `tests/must-run/real_data/` (+ `tests/must-run/skills/test_contracts.py` for edges) |
 | CLI argument parsing | `autosaxs/cli/cli.py` (`_add_skill_subparser`) |
 | Path expansion rules | `autosaxs/core/path_expression.py`, `skill/common.py` |
 | Caching (`.cache` YAML) | `autosaxs/skill/skill_wrap.py`, `docs/skills_paradigm.md` §2.1 |
 | Config merge precedence | `autosaxs/skill/config.py`, `resources/config_base.conf` |
-| Subtraction algorithm | `autosaxs/skill/subtract.py`, `tests/test_skills_real_data.py` |
+| Subtraction algorithm | `autosaxs/skill/subtract.py`, `tests/must-run/real_data/light/` |
 | Guinier / GNOM / ATSAS fits | `skill/fit_guinier/`, `fit_distances.py`, `fit_sizes.py`, `gnom_fit_common.py` |
 | Report assembly | `autosaxs/core/report_fragments.py`, `skill/report_*.py` |
 | GUI skill metadata | `guisaxs_skills/logic/skill_catalog.py` |
@@ -283,14 +284,26 @@ No parallel APIs or duplicated literals.
 
 ### Tests
 
+Commit gate (mere minutes; orchestrated by `helpers/run_tests.sh`):
+
 | Location | What |
 |----------|------|
-| `tests/test_skills_real_data.py` | **Primary** — E2E scientific correctness vs `validation/` (calib→integrate→subtract→monodisperse) |
-| `tests/test_skill.py` | Gaps only — cache/config/CLI, skills not on the real-data path, validation/branch edges |
-| `tests/test_guisaxs_liveview.py` | Liveview GUI (needs xvfb + `[gui]`) |
-| `tests/guisaxs-liveview/` | Liveview unit tests (session, smart_defaults, …) |
+| `tests/must-run/skills/` | Contracts / CLI / edge cases (`test_contracts.py`, `test_cli_doctor.py`) |
+| `tests/must-run/real_data/light/` | Scientific light: calib→integrate→subtract; mono (no DAM); poly Pt_NPs vs `reference_poly` (no MIXTURE) |
+| `tests/must-run/real_data/heavy/` | `model_dam` smoke (ihs27) — **only after light green** |
+| `tests/must-run/guisaxs_liveview/light/` | Liveview unit / plan / session (fast) |
+| `tests/must-run/guisaxs_liveview/pipeline/` | One golden mono watchdir path (no DAM) + light misuse |
 
-Run all (CI order): `helpers/run_tests.sh`.
+Out of commit gate:
+
+| Location | What |
+|----------|------|
+| `tests/optional/guisaxs_liveview/` | Exhaustive GUI by subsystem — **agent runs only on significant changes** to that subsystem (see README there) |
+| `tests/development/` | Explorative algorithm benches (former `tests/optional/`) |
+
+Fixtures: `scripts/setup_validation_data.py` (`PROTOCOL_MONO_2D`, `PROTOCOL_POLY`).
+
+Run commit gate: `helpers/run_tests.sh`.
 
 ### Docs & specs
 
@@ -328,7 +341,7 @@ cd /home/mikl/KurchatovCoop/autosaxs
 /home/mikl/.conda/envs/dev_autosaxs/bin/python -m guisaxs_liveview     # liveview
 ```
 
-Headless GUI tests: `xvfb-run -a python -m pytest tests/test_guisaxs_liveview.py`
+Headless GUI tests: `xvfb-run -a python -m pytest tests/must-run/guisaxs_liveview/light tests/must-run/guisaxs_liveview/pipeline --import-mode=importlib`
 
 ---
 

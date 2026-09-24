@@ -578,7 +578,7 @@ class MonodisperseArtifactPresenter:
             self._wizard.shape_pane.set_shape_mode(mode)
             self._load_shape_artifacts_for_mode(root=root, stem=bundle.stem, mode=mode)
             try:
-                from .....modeling.run_params import apply_disk_params_to_session_state
+                from guisaxs_skills.modeling.run_params import apply_disk_params_to_session_state
                 from .....session.output_paths import dammif_dir, denss_dir, model_bodies_dir
 
                 if mode == "dammif":

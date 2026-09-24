@@ -187,6 +187,7 @@ Modeling apps live under `guisaxs_skills/modeling/` (entries `guisaxs-shape` / `
 | Cold start | Restored calib/buffer/intake; files not auto-queued | `LiveviewSession` loads YAML; watchers baseline; `sync_middle` |
 | New frame | Queue advances; plots update | Backend → settle → `RevisionIngress.accept` → `plan_for` → skills |
 | Drop `.dat` | May auto-switch from 2D | Classify → `session.set_intake` → manual revision via ingress |
+| Drop / watch `.tif` while 1D/Sub | Option A → 2D | TIFF detector stays on in curve intake → `_on_tiff_while_curve` → same drop path |
 | Calibrate | Left shows success; later integrate | Manual skill; outcomes write calib facts |
 | Buffer set | Dual layout | `session.set_buffer` → `buffer_changed` → middle sync |
 | Stop / Resume | Auto queue held / released | `session.stop` / `resume` |

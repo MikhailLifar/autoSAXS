@@ -845,6 +845,9 @@ class Image2DPlot(FigureCanvas):
         # If multi-frame, show first.
         if a.ndim > 2:
             a = a.reshape((-1,) + a.shape[-2:])[0]
+        if a.ndim != 2 or int(a.shape[0]) < 1 or int(a.shape[1]) < 1:
+            self.clear()
+            return
         # Store shape in raw array coordinates (H, W).
         try:
             self._last_image_shape = (int(a.shape[0]), int(a.shape[1]))
@@ -852,34 +855,40 @@ class Image2DPlot(FigureCanvas):
         except Exception:
             self._last_image_shape = None
             self._last_tiff_path = ""
-        a = np.asarray(a, dtype=float)
-        a = np.log1p(np.maximum(a, 0.0))
-
-        self._remove_colorbar()
-        self._ax.clear()
-
-        short, _f = contracted_path_label(path)
-        self._ax.set_title(short)
-        self._ax.set_xlabel("x (px)")
-        self._ax.set_ylabel("y (px)")
-        im = self._ax.imshow(
-            a,
-            cmap="viridis",
-            origin="lower",
-            aspect="equal",  # never stretch pixels
-            interpolation="nearest",
-        )
-        # Dedicated colorbar axes (avoid repeated fig.colorbar(ax=...) shrinking the image axes).
+            self.clear()
+            return
         try:
-            divider = make_axes_locatable(self._ax)
-            self._cax = divider.append_axes("right", size="5%", pad=0.05)
-            self._cbar = self._fig.colorbar(im, cax=self._cax)
-            self._cbar.set_label("log(1 + I)")
+            a = np.asarray(a, dtype=float)
+            a = np.log1p(np.maximum(a, 0.0))
+
+            self._remove_colorbar()
+            self._ax.clear()
+
+            short, _f = contracted_path_label(path)
+            self._ax.set_title(short)
+            self._ax.set_xlabel("x (px)")
+            self._ax.set_ylabel("y (px)")
+            im = self._ax.imshow(
+                a,
+                cmap="viridis",
+                origin="lower",
+                aspect="equal",  # never stretch pixels
+                interpolation="nearest",
+            )
+            # Dedicated colorbar axes (avoid repeated fig.colorbar(ax=...) shrinking the image axes).
+            try:
+                divider = make_axes_locatable(self._ax)
+                self._cax = divider.append_axes("right", size="5%", pad=0.05)
+                self._cbar = self._fig.colorbar(im, cax=self._cax)
+                self._cbar.set_label("log(1 + I)")
+            except Exception:
+                self._cbar = None
+                self._cax = None
+            self.draw_idle()
+            self.setCursor(Qt.PointingHandCursor)
         except Exception:
-            self._cbar = None
-            self._cax = None
-        self.draw_idle()
-        self.setCursor(Qt.PointingHandCursor)
+            self.clear()
+            return
 
 
 class DropTiffImageCanvas(Image2DPlot):

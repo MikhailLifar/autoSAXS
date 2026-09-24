@@ -258,11 +258,11 @@ class PolydisperseCoordinator(QObject):
         root = self.output_root
         if root is None:
             return
-        from .....session.output_paths import mixture_dir
-        from .....modeling.run_params import (
+        from guisaxs_skills.modeling.run_params import (
             apply_disk_params_to_session_state,
             resolve_sample_modeling_dir,
         )
+        from .....session.output_paths import mixture_dir
 
         md = resolve_sample_modeling_dir(
             mixture_dir(root), profile_path=self.profile_path or ""

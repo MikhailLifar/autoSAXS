@@ -60,7 +60,7 @@ SAXS / small-angle x-ray scattering: calibrate detector geometry using calibrant
 
 Notes:
 
-- Automatic mask always includes the beam-stop disk and all negative-intensity pixels (plus optional IQR outliers).
+- Automatic mask always includes the beam-stop disk and all negative-intensity pixels. Local IQR outlier masking is off by default; enable via `mask_config.calc_abnormal_mask` in config.
 - `integrator/` stores geometry only. Both `effective_mask.npy` and `auto_mask.npy` are always written next to it (even when no user mask was provided). Later `integrate --mask` replaces the effective mask entirely (no further OR).
 
 ### Short parameter list
@@ -78,7 +78,7 @@ Notes:
 - `integrator_dir`: Directory containing calibrated geometry (used by `integrate`).
 - `effective_mask_path`: Path to `effective_mask.npy` alongside `integrator/`.
 - `auto_mask_path`: Path to `auto_mask.npy` alongside `integrator/`.
-- `refined_path`: Path to the refined detector geometry YAML.
+- `refined_path`: Path to the refined detector geometry YAML (PONI params plus Fit2D `center_y_px` / `center_x_px`).
 - `calibration_plots_dir`: Directory containing calibration plots.
 - `calibration_curve_plot_path`: Path to the calibrantion q/I curve plot (PNG).
 - `calibration_curve_dat_path`: Path to the calibrantion q/I curve (`.dat`, same format as integrated 1D curves).
@@ -123,7 +123,7 @@ SAXS / small-angle x-ray scattering: integrate 2D SAXS images to 1D curves (q, I
   - a comma-separated list of file paths (e.g. from multi-file drag & drop)
 - `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`). Geometry only.
 - `output_dir` (str, default `.`): Directory where integrated curves are written.
-- `mask` (str | None, default `None`): Optional mask for this run (`.txt` / `.npy` / `.msk`). When set, it is used **as-is** as the effective mask (no OR with auto). When omitted, `integrate` requires `{parent_of_integrator_dir}/effective_mask.npy` (written by `calibrate`) and fails hard if it is missing.
+- `mask` (str | None, default `None`): Optional mask for this run (`.txt` / `.npy` / `.msk`). When set, it is used **as-is** as the effective mask (no OR with auto). When omitted, `integrate` requires `{parent_of_integrator_dir}/effective_mask.npy` (written by `calibrate`) and fails hard if it is missing. Mask shape must match each image (raises ``ValueError`` on mismatch).
 - `npt` (int, default `1000`): Number of points in the output q grid.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 - `validation_png` (bool, default `False`): If `True`, write a PNG next to each integrated curve showing the source image (log-intensity) with integrator-masked pixels highlighted in semi-transparent red.
@@ -531,9 +531,9 @@ SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance
 - `output_dir` (str, default `.`): Directory where the outputs are written (one subdirectory per input profile).
 - `rg_nm` (float | None, default `None`): Expected Rg in nm, usually passed from Guinier analysis. If omitted, in-process Guinier analysis (`fit_guinier`) is run for an Rg span, then 1D Rg optimization in `[0, 1.5 × rg_max]` (30 s max) takes place.
 - `first` (int | None, default `None`): DATGNOM `--first` (1-based point index). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
-- `last` (int | None, default `None`): DATGNOM `--last`. If omitted, taken from `q_max` when set; otherwise `--last` is not passed to DATGNOM.
+- `last` (int | None, default `None`): DATGNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
 - `q_min` (float | None, default `None`): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
-- `q_max` (float | None, default `None`): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`.
+- `q_max` (float | None, default `None`): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`. When both `last` and `q_max` are omitted, a silent safer default is applied.
 - `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`. Unused when `dmax_nm` is set (GNOM refine).
 - `dmax_nm` (float | None, default `None`): When set, skip DATGNOM search and run monodisperse GNOM (`--rmax`) with this Dmax (nm). Still writes the Dmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
 - `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted, GNOM chooses automatically. Ignored when `dmax_nm` is unset.
@@ -547,8 +547,8 @@ SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance
 `dict[str, str | list[str]]` with:
 
 - `output_subdir`: The per-sample output directory used for this profile.
-- `gnom_out_paths`: List of DATGNOM `.out` paths written for this profile (typically a single “best” `.out`).
-- `best_gnom_out_path`: Path to the selected “best” DATGNOM `.out`.
+- `gnom_out_paths`: List of GNOM/DATGNOM `.out` paths written for this profile (typically a single stable ``gnom_best.out``).
+- `best_gnom_out_path`: Path to the selected best `.out` (always ``gnom_best.out`` under the sample dir — auto DATGNOM and manual refine share this name so re-runs overwrite).
 - `fit_distances_log_path`: Path to the extended run log YAML (`{base}_fit_distances_log.yml`) — candidates, ensemble rows, quality, failures.
 - `fit_params_path`: Path to a YAML file containing the fit parameters used for the final run.
 - `best_symlink_out_path`: Best-effort symlink path to the selected `.out` (may be missing on some filesystems).
@@ -569,9 +569,14 @@ SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance
 - `total_estimate`: GNOM Total Estimate of the selected fit.
 - `delta_rg_pct`: \|Rg_Guinier − Rg_P(r)\| / Rg_Guinier × 100.
 - `shannon_s_min`: Minimum Shannon sampling value.
+- `shannon_s_max`: Maximum Shannon sampling value ``(q_max · D_max) / π``.
+- `n_shannon`: Number of Shannon channels in the fitted q-window.
 - `shannon_class`: Shannon classification.
 - `shannon_ok`: Boolean indicating acceptable Shannon sampling.
 - `shannon_tip`: Shannon interpretation guide.
+- `wiggle_index`: Real-space high-frequency wiggle index (~0 clean, ~1 borderline, ≥2 high).
+- `wiggle_class`: ``low`` / ``acceptable`` / ``high`` / ``unknown``.
+- `detail_reliability_class`: Combined ``RELIABLE`` / ``SUSPICIOUS`` / ``unknown`` (indicator only).
 - `pr_quality_class`: `high_quality` \| `acceptable` \| `failed`.
 - `overall_status`: `HIGH QUALITY` \| `ACCEPTABLE` \| `FAILED` (quality passport label).
 - `quality_rationale`: List explaining the quality assessment.
@@ -616,9 +621,9 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtai
 - `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, optimized in `[ε, 3 × rg_max]` from in-process `fit_guinier` (30 s max). When set, skip Rmax search but still write the Rmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
 - `rad56_nm` (float | None): GNOM `--rad56` for `shape=rods` (nm cylinder radius), deprecated. Ignored for spheres.
 - `first` (int | None): GNOM `--first` (1-based). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
-- `last` (int | None): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise not passed to GNOM.
+- `last` (int | None): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
 - `q_min` (float | None): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
-- `q_max` (float | None): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`.
+- `q_max` (float | None): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`. When both `last` and `q_max` are omitted, a silent safer default is applied.
 - `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
 - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
 - `force_zero_rmin` (str | None): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
@@ -667,9 +672,14 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtai
 - `q_min_fit_nm`: Low-q bound (nm⁻¹) used in the GNOM fit.
 - `total_estimate`: GNOM Total Estimate of the selected fit.
 - `shannon_s_min`: Minimum Shannon sampling value.
+- `shannon_s_max`: Maximum Shannon sampling value ``(q_max · R_max) / π``.
+- `n_shannon`: Number of Shannon channels in the fitted q-window.
 - `shannon_class`: Shannon classification.
 - `shannon_ok`: `"true"` / `"false"` / `""` — acceptable Shannon sampling.
 - `shannon_tip`: Shannon interpretation guide.
+- `wiggle_index`: Real-space high-frequency wiggle index (~0 clean, ~1 borderline, ≥2 high).
+- `wiggle_class`: ``low`` / ``acceptable`` / ``high`` / ``unknown``.
+- `detail_reliability_class`: Combined ``RELIABLE`` / ``SUSPICIOUS`` / ``unknown`` (indicator only).
 - `parametric_family`: Best-fit parametric family name (e.g. `normal`, `gamma`).
 - `parametric_R0_nm`: Parametric model center (nm).
 - `parametric_width_nm`: Parametric model width (nm).

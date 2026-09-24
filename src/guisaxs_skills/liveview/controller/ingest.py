@@ -19,6 +19,7 @@ from ..ingest.sample_revision import (
     make_revision,
 )
 from ..ingest.watcher import DirectoryWatcher, WatcherConfig
+from ..services.calibration.masks import applied_mask_path
 from ..session.state import LiveviewIntakeMode, LiveviewWatchMode
 
 if TYPE_CHECKING:
@@ -39,6 +40,8 @@ class LiveviewIngestHandler:
             current_intake=lambda: controller.state.intake_mode,
             frame_2d_boarding=LiveviewIntakeMode.FRAME_2D,
             acknowledge_stat=self._acknowledge_sample_stat,
+            admit_revision=self._admit_revision_reason,
+            on_reject=self._on_revision_rejected,
         )
         self._settler = RevisionSettler(
             on_stable=self._on_settled,
@@ -132,34 +135,23 @@ class LiveviewIngestHandler:
                 return True
             return False
 
-        # Curve intake: watchdir root + averaged/ or subtracted/ (not only the subdir).
+        # Curve intake: .dat under root + averaged/ or subtracted/, plus TIFF detection
+        # for Option A switch back to 2D (mirror aux .dat while intake is 2D).
         if intake == LiveviewIntakeMode.CURVE_1D:
-            self._stop_tiff_watchers()
-            (wd / "averaged").mkdir(parents=True, exist_ok=True)
-            self._watcher.restart_at(
+            self._apply_curve_intake_watchers(
                 wd,
-                cfg=WatcherConfig(
-                    recursive=True,
-                    patterns=("*.dat",),
-                    allow_dat=True,
-                    path_ok=lambda p: _dat_under_watchdir_ok(p, allow_dirs=("averaged",)),
-                ),
+                allow_dirs=("averaged",),
+                mkdir_name="averaged",
+                _dat_under_watchdir_ok=_dat_under_watchdir_ok,
             )
-            self._poll_watcher.start()
             return
         if intake == LiveviewIntakeMode.CURVE_SUB:
-            self._stop_tiff_watchers()
-            (wd / "subtracted").mkdir(parents=True, exist_ok=True)
-            self._watcher.restart_at(
+            self._apply_curve_intake_watchers(
                 wd,
-                cfg=WatcherConfig(
-                    recursive=True,
-                    patterns=("*.dat",),
-                    allow_dat=True,
-                    path_ok=lambda p: _dat_under_watchdir_ok(p, allow_dirs=("subtracted",)),
-                ),
+                allow_dirs=("subtracted",),
+                mkdir_name="subtracted",
+                _dat_under_watchdir_ok=_dat_under_watchdir_ok,
             )
-            self._poll_watcher.start()
             return
 
         # FRAME_2D: TIFF watch as today, plus root *.dat (auto-switch like a drop).
@@ -172,6 +164,11 @@ class LiveviewIngestHandler:
                 self._poll_watcher.stop()
             except Exception:
                 pass
+            if hasattr(self, "_tiff_option_a_watcher"):
+                try:
+                    self._tiff_option_a_watcher.stop()
+                except Exception:
+                    pass
             self._tree_observer.restart_at(wd)
             self._ensure_dat_root_watcher_2d(wd, _dat_under_watchdir_ok)
             return
@@ -181,6 +178,11 @@ class LiveviewIngestHandler:
         except Exception:
             pass
         self._tree_observer.clear()
+        if hasattr(self, "_tiff_option_a_watcher"):
+            try:
+                self._tiff_option_a_watcher.stop()
+            except Exception:
+                pass
         try:
             self._watcher.restart_at(
                 wd,
@@ -190,6 +192,75 @@ class LiveviewIngestHandler:
             self._watcher.start()
         self._poll_watcher.start()
         self._ensure_dat_root_watcher_2d(wd, _dat_under_watchdir_ok)
+
+    def _apply_curve_intake_watchers(
+        self,
+        wd: Path,
+        *,
+        allow_dirs: tuple[str, ...],
+        mkdir_name: str,
+        _dat_under_watchdir_ok,
+    ) -> None:
+        """``.dat`` watch for curve boarding + TIFF watch for Option A → 2D."""
+        (wd / mkdir_name).mkdir(parents=True, exist_ok=True)
+        if hasattr(self, "_dat_root_watcher"):
+            try:
+                self._dat_root_watcher.stop()
+            except Exception:
+                pass
+
+        if self._c.state.watch_mode == LiveviewWatchMode.TREE:
+            # Final-scan stop then restart: flush TIFFs dropped under 2D, keep TREE
+            # so a later .tif can Option-A switch back to 2D.
+            try:
+                self._tree_observer.stop()
+            except Exception:
+                pass
+            try:
+                self._tree_observer.start()
+            except Exception:
+                pass
+            if hasattr(self, "_tiff_option_a_watcher"):
+                try:
+                    self._tiff_option_a_watcher.stop()
+                except Exception:
+                    pass
+        else:
+            try:
+                self._tree_observer.stop()
+            except Exception:
+                pass
+            self._tree_observer.clear()
+            self._ensure_tiff_option_a_watcher_flat(wd)
+
+        self._watcher.restart_at(
+            wd,
+            cfg=WatcherConfig(
+                recursive=True,
+                patterns=("*.dat",),
+                allow_dat=True,
+                path_ok=lambda p: _dat_under_watchdir_ok(p, allow_dirs=allow_dirs),
+            ),
+        )
+        self._poll_watcher.start()
+
+    def _ensure_tiff_option_a_watcher_flat(self, wd: Path) -> None:
+        """FLAT aux: top-level TIFFs while intake is 1D/Sub (Option A → 2D)."""
+        cfg = WatcherConfig(
+            recursive=False,
+            patterns=("*.tif", "*.tiff"),
+            allow_dat=False,
+        )
+        if not hasattr(self, "_tiff_option_a_watcher"):
+            self._tiff_option_a_watcher = DirectoryWatcher(
+                directory=wd,
+                cfg=cfg,
+                on_revision=self._observe_detected,
+            )
+        try:
+            self._tiff_option_a_watcher.restart_at(wd, cfg=cfg)
+        except Exception:
+            self._tiff_option_a_watcher.start()
 
     def _ensure_dat_root_watcher_2d(self, wd: Path, path_ok_fn) -> None:
         """Aux watcher: *.dat in watchdir root (and averaged/subtracted if recursive were on)."""
@@ -225,10 +296,26 @@ class LiveviewIngestHandler:
                 self._dat_root_watcher.stop()
             except Exception:
                 pass
+        if hasattr(self, "_tiff_option_a_watcher"):
+            try:
+                self._tiff_option_a_watcher.stop()
+            except Exception:
+                pass
 
     def _on_dat_while_2d(self, revision: SampleRevision) -> None:
         """Incoming .dat while intake is 2D: same as a middle-column drop (may auto-switch)."""
         if self._c.state.intake_mode != LiveviewIntakeMode.FRAME_2D:
+            return
+        if self._c.executor.is_owned_output(revision.path):
+            return
+        self._ingest_one_dropped(Path(revision.path))
+
+    def _on_tiff_while_curve(self, revision: SampleRevision) -> None:
+        """Incoming .tif while intake is 1D/Sub: Option A → 2D (same as a middle drop)."""
+        if self._c.state.intake_mode not in (
+            LiveviewIntakeMode.CURVE_1D,
+            LiveviewIntakeMode.CURVE_SUB,
+        ):
             return
         if self._c.executor.is_owned_output(revision.path):
             return
@@ -359,6 +446,41 @@ class LiveviewIngestHandler:
                 return
         self._c.executor.enqueue_revision(revision)
 
+    def _admit_revision_reason(self, revision: SampleRevision) -> Optional[str]:
+        """
+        Pre-enqueue gate for 2D frames.
+
+        - Unreadable / non-2D TIFF → reject (toast).
+        - Applied mask set and shape ≠ frame → reject (toast).
+        - No mask → shape-vs-mask check inactive.
+        """
+        path = revision.path
+        if not is_tiff_path(path):
+            return None
+        name = Path(path).name
+        from autosaxs.core.detector_shape import frame_shape_hw, mask_shape_hw
+
+        try:
+            fh = frame_shape_hw(path)
+        except Exception:
+            return f"Invalid TIFF (cannot read): {name}"
+        mask = applied_mask_path(self._c.state)
+        if mask is None:
+            return None
+        try:
+            mh = mask_shape_hw(str(mask))
+        except Exception:
+            return f"Invalid mask (cannot read): {mask.name}"
+        if fh != mh:
+            return (
+                f"TIFF shape {fh[0]}×{fh[1]} does not match mask "
+                f"{mh[0]}×{mh[1]}: {name}"
+            )
+        return None
+
+    def _on_revision_rejected(self, reason: str) -> None:
+        self._c.show_toast(reason)
+
     def _acknowledge_sample_stat(self, path: str, snap=None) -> None:
         try:
             self._settler.discard(path)
@@ -388,7 +510,13 @@ class LiveviewIngestHandler:
         self._settler.observe(revision)
 
     def _on_settled(self, revision: SampleRevision) -> None:
-        """Stable revision → ingress (or 2D→curve auto-switch for root ``.dat``)."""
+        """Stable revision → ingress (or Option A intake auto-switch)."""
+        if is_tiff_path(revision.path) and self._c.state.intake_mode in (
+            LiveviewIntakeMode.CURVE_1D,
+            LiveviewIntakeMode.CURVE_SUB,
+        ):
+            self._on_tiff_while_curve(revision)
+            return
         if (
             is_sample_dat_path(revision.path)
             and self._c.state.intake_mode == LiveviewIntakeMode.FRAME_2D

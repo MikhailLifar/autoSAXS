@@ -114,6 +114,9 @@ def run_modeling_window(
         ipc.context_received.connect(win.apply_context)
         ipc.focus_requested.connect(lambda: (win.show(), win.raise_(), win.activateWindow()))
         ipc.shutdown_requested.connect(app.quit)
+        confirm = getattr(win, "_on_confirm", None)
+        if callable(confirm):
+            ipc.confirm_requested.connect(confirm)
         ipc.send_ready()
 
     win.show()

@@ -63,9 +63,9 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtai
 - `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, optimized in `[ε, 3 × rg_max]` from in-process `fit_guinier` (30 s max). When set, skip Rmax search but still write the Rmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
 - `rad56_nm` (float | None): GNOM `--rad56` for `shape=rods` (nm cylinder radius), deprecated. Ignored for spheres.
 - `first` (int | None): GNOM `--first` (1-based). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
-- `last` (int | None): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise not passed to GNOM.
+- `last` (int | None): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
 - `q_min` (float | None): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
-- `q_max` (float | None): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`.
+- `q_max` (float | None): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`. When both `last` and `q_max` are omitted, a silent safer default is applied.
 - `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
 - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
 - `force_zero_rmin` (str | None): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
@@ -114,9 +114,14 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtai
 - `q_min_fit_nm`: Low-q bound (nm⁻¹) used in the GNOM fit.
 - `total_estimate`: GNOM Total Estimate of the selected fit.
 - `shannon_s_min`: Minimum Shannon sampling value.
+- `shannon_s_max`: Maximum Shannon sampling value ``(q_max · R_max) / π``.
+- `n_shannon`: Number of Shannon channels in the fitted q-window.
 - `shannon_class`: Shannon classification.
 - `shannon_ok`: `"true"` / `"false"` / `""` — acceptable Shannon sampling.
 - `shannon_tip`: Shannon interpretation guide.
+- `wiggle_index`: Real-space high-frequency wiggle index (~0 clean, ~1 borderline, ≥2 high).
+- `wiggle_class`: ``low`` / ``acceptable`` / ``high`` / ``unknown``.
+- `detail_reliability_class`: Combined ``RELIABLE`` / ``SUSPICIOUS`` / ``unknown`` (indicator only).
 - `parametric_family`: Best-fit parametric family name (e.g. `normal`, `gamma`).
 - `parametric_R0_nm`: Parametric model center (nm).
 - `parametric_width_nm`: Parametric model width (nm).

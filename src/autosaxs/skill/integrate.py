@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 
+from autosaxs.core.detector_shape import require_mask_matches_frame
 from autosaxs.core.integrator import IntegratorExtended
 from autosaxs.core.utils import write_saxs
 
@@ -120,7 +121,7 @@ def integrate(
       - a comma-separated list of file paths (e.g. from multi-file drag & drop)
     - `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`). Geometry only.
     - `output_dir` (str, default `.`): Directory where integrated curves are written.
-    - `mask` (str | None, default `None`): Optional mask for this run (`.txt` / `.npy` / `.msk`). When set, it is used **as-is** as the effective mask (no OR with auto). When omitted, `integrate` requires `{parent_of_integrator_dir}/effective_mask.npy` (written by `calibrate`) and fails hard if it is missing.
+    - `mask` (str | None, default `None`): Optional mask for this run (`.txt` / `.npy` / `.msk`). When set, it is used **as-is** as the effective mask (no OR with auto). When omitted, `integrate` requires `{parent_of_integrator_dir}/effective_mask.npy` (written by `calibrate`) and fails hard if it is missing. Mask shape must match each image (raises ``ValueError`` on mismatch).
     - `npt` (int, default `1000`): Number of points in the output q grid.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
     - `validation_png` (bool, default `False`): If `True`, write a PNG next to each integrated curve showing the source image (log-intensity) with integrator-masked pixels highlighted in semi-transparent red.
@@ -243,6 +244,11 @@ def _integrate_paths(
         if event_bus:
             event_bus.publish(EventType.MESSAGE, {"text": f"Integration {idx + 1}/{len(images)}…"})
         data = read_from_tiff(im_path)
+        require_mask_matches_frame(
+            frame_path=im_path,
+            mask_path=mask_path,
+            context="integrate",
+        )
         base = os.path.splitext(os.path.basename(im_path))[0]
         dest = os.path.join(output_dir, f"int_{base}.dat")
         _q, _I, _sigma = integrate_2d_to_1d(

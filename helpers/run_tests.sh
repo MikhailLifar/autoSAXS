@@ -24,19 +24,27 @@ step() {
   echo "==> $*"
 }
 
-step "Run unit/skill tests"
-"${PY}" -m pytest "${REPO_DIR}/tests/test_skill.py" -q --tb=short
+PYTEST_OPTS=(-q --tb=short --import-mode=importlib)
 
-step "Run real-data tests"
-"${PY}" -m pytest "${REPO_DIR}/tests/test_skills_real_data.py" -q --tb=short
+step "Commit gate: skill contracts / CLI"
+"${PY}" -m pytest "${REPO_DIR}/tests/must-run/skills" "${PYTEST_OPTS[@]}"
+
+step "Commit gate: real-data light"
+"${PY}" -m pytest "${REPO_DIR}/tests/must-run/real_data/light" "${PYTEST_OPTS[@]}"
+
+step "Commit gate: real-data heavy (model_dam; only after light)"
+"${PY}" -m pytest "${REPO_DIR}/tests/must-run/real_data/heavy" "${PYTEST_OPTS[@]}"
 
 step "Install autosaxs with GUI extra (needed for guisaxs-liveview tests)"
 "${PIP}" install -e "${REPO_DIR}[gui]"
 
-step "Run GUI tests headless (xvfb-run required)"
+step "Commit gate: liveview light (headless)"
 cd "${REPO_DIR}"
-xvfb-run -a "${PY}" -m pytest tests/test_guisaxs_liveview.py -v --tb=short
+xvfb-run -a "${PY}" -m pytest tests/must-run/guisaxs_liveview/light -v --tb=short --import-mode=importlib
+
+step "Commit gate: liveview pipeline (headless; no DAM)"
+xvfb-run -a "${PY}" -m pytest tests/must-run/guisaxs_liveview/pipeline -v --tb=short --import-mode=importlib
 
 step "Tests OK"
 echo "run_tests.sh finished at $(date -Is)"
-
+echo "Note: tests/optional/ and tests/development/ are NOT part of the commit gate."

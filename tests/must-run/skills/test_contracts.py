@@ -1,13 +1,13 @@
 """
 Unit / contract tests for autosaxs skills — cases NOT covered by real-data E2E.
 
-Primary scientific correctness lives in ``tests/test_skills_real_data.py``
-(calibrate → integrate → subtract → monodisperse Guinier/Kratky/distances/DAM).
+Primary scientific correctness lives under ``tests/must-run/real_data/``
+(calibrate → integrate → subtract → monodisperse / polydisperse light; model_dam heavy).
 
 This module keeps:
   - cache / config / CLI plumbing
-  - skills absent from the real-data suite (plot, plot_2d, integrate_proxy, fit_sizes,
-    model_mixture, model_bodies)
+  - skills absent from the real-data suite (plot, plot_2d, integrate_proxy,
+    model_mixture, model_bodies) and mocked fit_sizes edges
   - edge cases and branching for skills that real-data already exercises on the happy path
     (validation errors, omitted-GNOM → fit_distances, Rg optimization, failure paths,
     deprecated aliases)
@@ -22,8 +22,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-# Add src/ to path when run as script (src layout)
-_REPOS = Path(__file__).resolve().parent.parent
+# tests/must-run/skills -> repo root is three levels up
+_REPOS = Path(__file__).resolve().parents[3]
 _SRC = _REPOS / "src"
 import sys
 for _p in (_SRC, _REPOS):
