@@ -28,9 +28,11 @@ the <b>adaptive</b> result is the one used downstream when it succeeds.</li>
 <p>In liveview you may override <b>first</b> / <b>last</b> (1-based point indices) for a fixed-interval
 fit; that suspends auto-processing until you resume.</p>
 
-<p><b>How to read the UI.</b> Quality / classification / Rg summarize the selected interval. A
-“chaotic” or poor class means the low-<i>q</i> region is unreliable for Rg even if a number is shown —
-treat GNOM and shape steps with caution.</p>
+<p><b>How to read the UI.</b> Fit quality / low-q classification / Rg summarize the selected interval.
+Fit quality is one of: good, acceptable, weak in Guinier region, weak, degenerate.
+Low-q classification is one of: linear, upturn, downturn, chaotic.
+A “chaotic” or poor fit-quality means the low-<i>q</i> region is unreliable for Rg even if a number is
+shown — treat GNOM and shape steps with caution.</p>
 
 <p><b>Engines.</b> Custom adaptive search (+ optional ATSAS AUTORG for comparison).</p>
 <p class="nav-top"><a href="subtract.html">← Buffer subtraction</a> ·

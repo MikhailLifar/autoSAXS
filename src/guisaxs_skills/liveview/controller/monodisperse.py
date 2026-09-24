@@ -9,7 +9,6 @@ from PyQt5.QtWidgets import QMessageBox
 from ..ingest.sample_revision import is_dat_path
 from ..pipeline.monodisperse_pipeline import MonodispersePipelineParts, build_monodisperse_steps
 from ..session.output_paths import analysis_output_root
-from ..session.state import MonodisperseShapeMode
 from ...logic.runner_qprocess import RunOutcome
 
 if TYPE_CHECKING:
@@ -47,20 +46,26 @@ class LiveviewMonodisperseHandler:
 
     def _resolve_profile_path(self) -> Optional[str]:
         """Presenter → history .dat → session last_* (works for curve intake)."""
+        from ..ingest.curve_classify import usable_analysis_curve_path
+
         right = self._c.right
         if right is not None:
-            cand = (right.monodisperse_coordinator.profile_path or "").strip()
-            if cand and os.path.isfile(cand):
-                return str(Path(cand).expanduser().resolve())
+            cand = usable_analysis_curve_path(right.monodisperse_coordinator.profile_path)
+            if cand:
+                return cand
 
         sample = self._current_sample_path()
-        if sample and is_dat_path(sample) and os.path.isfile(sample):
-            return str(Path(sample).expanduser().resolve())
+        if sample and is_dat_path(sample):
+            cand = usable_analysis_curve_path(sample)
+            if cand:
+                return cand
 
         boarding = self._c.samples.boarding_for(sample) if sample else None
         p = self._c.state.preferred_profile_path(boarding=boarding)
-        if p is not None and p.is_file():
-            return str(p.resolve())
+        if p is not None:
+            cand = usable_analysis_curve_path(p)
+            if cand:
+                return cand
         return None
 
     def _profile_root_and_tiff(self) -> tuple[Optional[str], Optional[Path], str]:
@@ -182,50 +187,15 @@ class LiveviewMonodisperseHandler:
         self._c.executor.enqueue_job(job)
 
     def on_shape_rerun(self) -> None:
-        prof, root = self._profile_and_root()
-        if not prof or root is None:
-            parent = self._c.parent_widget
-            if parent is not None:
-                QMessageBox.warning(parent, "Monodisperse", "No profile curve available for the current file.")
-            return
-        mode = self._c.state.monodisperse_shape_mode
-        if mode == MonodisperseShapeMode.NONE:
-            return
-        right = self._c.right
-        if right is not None:
-            right.monodisperse_coordinator.sync_params_to_state()
-        gnom_out = ""
-        if mode == MonodisperseShapeMode.DAMMIF:
-            if right is not None:
-                gnom_out = (right.monodisperse_coordinator.gnom_out_for_dammif() or "").strip()
-            if not gnom_out:
-                parent = self._c.parent_widget
-                if parent is not None:
-                    QMessageBox.warning(
-                        parent,
-                        "Monodisperse",
-                        "No usable GNOM .out found. Run fit_distances first, then re-run DAMMIF.",
-                    )
-                return
-        # DENSS: GNOM is optional (Dmax hint only).
-        if mode == MonodisperseShapeMode.DENSS and right is not None:
-            gnom_out = (right.monodisperse_coordinator.gnom_out_for_dammif() or "").strip()
-        steps = build_monodisperse_steps(
-            prof,
-            output_root=root,
-            state=self._c.state,
-            parts=MonodispersePipelineParts.SHAPE_ONLY,
-            load_yaml=self._c.executor._load_yaml_options,
-            gnom_out_path=gnom_out or None,
-        )
-        if not steps:
-            return
-        job = self._c.executor.build_monodisperse_manual_job(
-            profile_abs=prof,
-            steps=steps,
-            output_root=root,
-        )
-        self._c.executor.enqueue_job(job)
+        """Modeling is Confirm-only in guisaxs-shape (not liveview SkillRunner)."""
+        parent = self._c.parent_widget
+        if parent is not None:
+            QMessageBox.information(
+                parent,
+                "Monodisperse",
+                "Shape modeling runs in the Shape Modeling app.\n"
+                "Use Start modeling in the monodisperse window, then Confirm.",
+            )
 
     def update_profile_from_artifacts(self, result: dict) -> None:
         if not self._c.state.monodisperse_armed:

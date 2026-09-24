@@ -34,10 +34,15 @@ class MonodispersePlotClickRouter:
         self._dat_dlg: Optional[DatCurveViewerDialog] = None
         self._fir_dlg: Optional[_MonodisperseFirViewerDialog] = None
         self._gnom_open: Optional[Callable[[], None]] = None
+        self._guinier_open: Optional[Callable[[], None]] = None
 
     def set_gnom_open_handler(self, handler: Optional[Callable[[], None]]) -> None:
         """When set, clicks on P(r) / I(q) GNOM plots open the adjust wizard."""
         self._gnom_open = handler
+
+    def set_guinier_open_handler(self, handler: Optional[Callable[[], None]]) -> None:
+        """When set, clicks on the Guinier preview open the adjust wizard."""
+        self._guinier_open = handler
 
     def wire(self, plot) -> None:
         plot.mpl_connect("button_press_event", lambda ev, p=plot: self._on_click(ev, p))
@@ -55,6 +60,10 @@ class MonodispersePlotClickRouter:
 
     def open_path(self, path: str, *, viewer: Optional[str] = None) -> None:
         suf = Path(path).suffix.lower()
+        if viewer == "guinier":
+            if self._guinier_open is not None:
+                self._guinier_open()
+                return
         if viewer in ("gnom_iq", "gnom_pr") or (viewer is None and suf == ".out"):
             if self._gnom_open is not None:
                 self._gnom_open()

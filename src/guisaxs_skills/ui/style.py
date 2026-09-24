@@ -8,6 +8,8 @@ COLOR_MUTED_TEXT = "#728195"
 COLOR_REQUIRED_STAR = "#ff4d4f"
 # Same red as required-field star — poor fit / data-quality hints in analysis panes.
 COLOR_QUALITY_POOR = COLOR_REQUIRED_STAR
+# Caution / mid-tier quality (readable amber on light UI backgrounds).
+COLOR_QUALITY_WARN = "#b45309"
 
 _SELECTABLE_LABELS_FILTER_ATTR = "_autosaxs_selectable_labels_filter"
 

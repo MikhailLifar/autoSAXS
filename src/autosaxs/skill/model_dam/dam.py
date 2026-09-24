@@ -678,6 +678,19 @@ def _model_dam_paths(
         },
         write_summary_yaml=bool(summary_refs_d),
     )
+    run_params_path = os.path.join(output_dir, "model_dam_run_params.yml")
+    with open(run_params_path, "w", encoding="utf-8") as fp:
+        yaml.dump(
+            {
+                "skill": "model_dam",
+                "n_runs": int(n_runs),
+                "dammif_mode": str(mode_atsas),
+                "profile": profile,
+                "gnom_path": str(gnom_path),
+            },
+            fp,
+            default_flow_style=False,
+        )
     out: Dict[str, Union[str, List[str], float, None]] = {
         "output_subdir": output_dir,
         "best_cif_path": best_cif_path,

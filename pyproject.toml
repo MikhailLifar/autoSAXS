@@ -52,6 +52,8 @@ Documentation = "https://github.com/MikhailLifar/autoSAXS#readme"
 autosaxs = "autosaxs.cli:main"
 guisaxs-skills = "guisaxs_skills.__main__:main"
 guisaxs-liveview = "guisaxs_liveview.__main__:main"
+guisaxs-shape = "guisaxs_shape.__main__:main"
+guisaxs-dr = "guisaxs_dr.__main__:main"
 
 [project.optional-dependencies]
 dev = ["build", "import-linter", "pip", "twine"]
@@ -60,7 +62,7 @@ llm = ["httpx", "openai", "requests"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["autosaxs*", "guisaxs_skills*", "guisaxs_liveview*"]
+include = ["autosaxs*", "guisaxs_skills*", "guisaxs_liveview*", "guisaxs_shape*", "guisaxs_dr*"]
 
 [tool.setuptools.package-data]
 autosaxs = [

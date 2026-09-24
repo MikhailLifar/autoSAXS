@@ -37,12 +37,14 @@ class PolydisperseWindowWidget(QWidget):
         grid.setVerticalSpacing(10)
         guinier_box = _pane_group("Guinier", self.guinier_pane)
         guinier_box.setMinimumWidth(268)
+        # Right side: GNOM D(R) on top spanning both cols; MIXTURE preview+launch at far right bottom (1/3).
         grid.addWidget(guinier_box, 0, 0, 2, 1)
-        grid.addWidget(_pane_group("GNOM D(R)", self.sizes_pane), 0, 1, 1, 1)
-        grid.addWidget(_pane_group("D(R)", self.mixture_pane), 1, 1, 1, 1)
+        grid.addWidget(_pane_group("GNOM D(R)", self.sizes_pane), 0, 1, 1, 2)
+        grid.addWidget(_pane_group("D(R)", self.mixture_pane), 1, 2, 1, 1)
         grid.setColumnStretch(0, 2)
-        grid.setColumnStretch(1, 4)
-        grid.setRowStretch(0, 1)
+        grid.setColumnStretch(1, 4)  # empty/left 2/3 of remaining width under GNOM D(R)
+        grid.setColumnStretch(2, 2)  # D(R) modeling = 1/3 of remaining
+        grid.setRowStretch(0, 2)
         grid.setRowStretch(1, 1)
 
         lay = QVBoxLayout(self)

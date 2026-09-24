@@ -134,19 +134,18 @@ class LiveviewSessionState:
         boarding: Optional[LiveviewIntakeMode] = None,
     ) -> Optional[Path]:
         """Preferred analysis profile from last_* hints and boarding/buffer."""
+        from ..ingest.curve_classify import usable_analysis_curve_path
+
         prefer_sub = boarding == LiveviewIntakeMode.CURVE_SUB or self.buffer_ready()
+        ordered: list[Optional[Path]]
         if prefer_sub:
-            ls = self.last_subtracted_dat_path
-            if ls is not None and ls.is_file():
-                return ls
-            li = self.last_integrated_dat_path
-            if li is not None and li.is_file():
-                return li
-            return None
-        li = self.last_integrated_dat_path
-        if li is not None and li.is_file():
-            return li
-        ls = self.last_subtracted_dat_path
-        if ls is not None and ls.is_file():
-            return ls
+            ordered = [self.last_subtracted_dat_path, self.last_integrated_dat_path]
+        else:
+            ordered = [self.last_integrated_dat_path, self.last_subtracted_dat_path]
+        for cand in ordered:
+            if cand is None:
+                continue
+            usable = usable_analysis_curve_path(cand)
+            if usable:
+                return Path(usable)
         return None

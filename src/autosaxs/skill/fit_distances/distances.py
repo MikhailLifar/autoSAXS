@@ -44,7 +44,6 @@ from autosaxs.skill.gnom_fit_common import (
 from .quality_io import _assess_and_write_pr_quality
 from autosaxs.core.atsas_gnom import normalize_force_zero
 from .runners import (
-    DATGNOM_BEST_OUT,
     GNOM_BEST_OUT,
     _run_datgnom_once,
     _run_dmax_close_fit_ensemble,
@@ -96,8 +95,8 @@ def fit_distances(
     `dict[str, str | list[str]]` with:
 
     - `output_subdir`: The per-sample output directory used for this profile.
-    - `gnom_out_paths`: List of DATGNOM `.out` paths written for this profile (typically a single “best” `.out`).
-    - `best_gnom_out_path`: Path to the selected “best” DATGNOM `.out`.
+    - `gnom_out_paths`: List of GNOM/DATGNOM `.out` paths written for this profile (typically a single stable ``gnom_best.out``).
+    - `best_gnom_out_path`: Path to the selected best `.out` (always ``gnom_best.out`` under the sample dir — auto DATGNOM and manual refine share this name so re-runs overwrite).
     - `fit_distances_log_path`: Path to the extended run log YAML (`{base}_fit_distances_log.yml`) — candidates, ensemble rows, quality, failures.
     - `fit_params_path`: Path to a YAML file containing the fit parameters used for the final run.
     - `best_symlink_out_path`: Best-effort symlink path to the selected `.out` (may be missing on some filesystems).
@@ -553,7 +552,7 @@ def _fit_distances_paths(
             },
         )
 
-    out_path_final = os.path.join(output_dir, DATGNOM_BEST_OUT)
+    out_path_final = os.path.join(output_dir, GNOM_BEST_OUT)
     ok, rc, stderr, out_text = _run_datgnom_once(
         atsas_dat_path=atsas_dat_path,
         output_dir=output_dir,

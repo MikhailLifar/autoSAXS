@@ -23,8 +23,34 @@ def _path_parts_lower(path: str) -> Tuple[str, ...]:
     return tuple(str(p).lower() for p in parts)
 
 
+def is_averaged_proxy_path(path: str) -> bool:
+    """True when ``path`` lives under an ``averaged_proxy/`` directory (quick-look / calibrant curves)."""
+    return "averaged_proxy" in _path_parts_lower(path or "")
+
+
+def usable_analysis_curve_path(path: str | Path | None) -> str:
+    """
+    Absolute ``.dat`` path suitable as an analysis/modeling input, or empty.
+
+    Rejects missing files and anything under ``averaged_proxy/`` so calibrant /
+    proxy-integrate curves are not offered as modeling defaults.
+    """
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    try:
+        p = Path(raw).expanduser().resolve()
+    except Exception:
+        p = Path(os.path.abspath(raw))
+    if not p.is_file():
+        return ""
+    if is_averaged_proxy_path(str(p)):
+        return ""
+    return str(p)
+
+
 def _is_proxy_path(path: str) -> bool:
-    return "averaged_proxy" in _path_parts_lower(path)
+    return is_averaged_proxy_path(path)
 
 
 def _read_meta(path: str) -> Dict[str, Any]:

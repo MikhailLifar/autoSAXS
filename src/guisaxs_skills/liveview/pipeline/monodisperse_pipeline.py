@@ -294,8 +294,8 @@ def build_monodisperse_steps(
     """
     Build monodisperse JobSteps for auto or manual runs.
 
-    FULL includes shape when ``state.monodisperse_shape_mode`` is not NONE.
-    Manual GUINIER_AND_DISTANCES / DISTANCES_ONLY never append shape.
+    Modeling (BODIES/DAMMIF/DENSS) is Confirm-only in ``guisaxs-shape`` and is
+    never appended here.
     """
     prof = str(Path(profile_abs).expanduser().resolve())
     root = output_root.expanduser().resolve()
@@ -356,23 +356,5 @@ def build_monodisperse_steps(
         )
         steps.append(JobStep(name="fit_distances", request=RunRequest("fit_distances", [prof], d_opts)))
 
-    want_shape = parts in (MonodispersePipelineParts.SHAPE_ONLY, MonodispersePipelineParts.FULL)
-    if want_shape:
-        mode = state.monodisperse_shape_mode
-        if mode != MonodisperseShapeMode.NONE:
-            chained = parts == MonodispersePipelineParts.FULL and any(
-                s.name == "fit_distances" for s in steps
-            )
-            step = shape_step(
-                prof,
-                state=state,
-                output_root=root,
-                shape_mode=str(mode.value),
-                gnom_out_path=gnom_out_path,
-                gnom_from_distances_placeholder=chained
-                and mode in (MonodisperseShapeMode.DAMMIF, MonodisperseShapeMode.DENSS),
-            )
-            if step is not None:
-                steps.append(step)
-
+    # SHAPE_ONLY / FULL shape steps removed — modeling runs only in guisaxs-shape.
     return steps

@@ -18,13 +18,11 @@ from autosaxs.core.guinier import (  # noqa: F401
     ADAPTIVE_I_START_Q_MAX_NM,
     ADAPTIVE_N_MIN,
     _adaptive_i_start_allowed,
-    _classification_guinier,
     _enumerate_adaptive_candidates,
     _fit_guinier_interval_raw,
     _guinier_fit_n_points,
-    _quality_class_from_selection,
     _select_adaptive_candidate,
-    _validation_r2_or_nan,
+    evaluate_guinier_fit,
     find_guinier_region,
     get_guinier_candidates,
     run_adaptive_guinier,
@@ -279,25 +277,15 @@ def run_fixed_interval_guinier(
     rg = float(fit["rg"])
     i0 = float(fit["i0"])
     interval_r2 = float(fit.get("interval_r2", fit.get("r_squared", 0.0)))
-    val_r2 = _validation_r2_or_nan(q, I, rg, i0)
-    val_r2_out: Optional[float]
-    if isinstance(val_r2, float) and np.isnan(val_r2):
-        val_r2_out = None
-    else:
-        val_r2_out = float(val_r2)
-    classification = _classification_guinier(q, I, rg, i0)
-    quality_class = _quality_class_from_selection(
-        "interval_r2",
-        float(val_r2) if not np.isnan(val_r2) else float("nan"),
-        interval_r2,
-        degenerate=False,
-    )
+    scored = evaluate_guinier_fit(q, I, rg=rg, i0=i0, interval_r2=interval_r2)
+    val_r2_out = scored["validation_r2"]
     interval = (float(fit["q_min"]), float(fit["q_max"]))
+    qrg = float(fit["q_max"]) * rg
     interval_result = {
         "Rg": rg,
         "I0": i0,
         "n_points": int(fit["n_points"]),
-        "fit_quality": interval_r2,
+        "fit_quality": scored["fit_quality"],
         "guinier_interval": interval,
         "interval_r2": interval_r2,
         "validation_r2": val_r2_out,
@@ -305,17 +293,20 @@ def run_fixed_interval_guinier(
         "sigma_i0": fit.get("sigma_i0"),
         "first_point_1based": first,
         "last_point_1based": last,
+        "qrg": qrg,
+        "quality_class": scored["quality_class"],
+        "classification": scored["classification"],
     }
     out["interval"] = interval_result
     out["chosen"] = "interval"
     out["chosen_Rg"] = rg
     out["chosen_I0"] = i0
-    out["chosen_quality"] = interval_r2
+    out["chosen_quality"] = scored["fit_quality"]
     out["chosen_n_points"] = int(fit["n_points"])
     out["chosen_interval"] = interval
     out["chosen_validation_r2"] = val_r2_out
-    out["classification"] = classification
-    out["quality_class"] = quality_class
+    out["classification"] = scored["classification"]
+    out["quality_class"] = scored["quality_class"]
     out["rg_min"] = rg
     out["rg_max"] = rg
     return out

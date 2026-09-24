@@ -110,6 +110,10 @@ class LiveviewMainWindow(QMainWindow):
             self._left.shutdown_ui()
         except Exception:
             pass
+        try:
+            self._right.shutdown_modeling_children()
+        except Exception:
+            pass
         self._controller.shutdown()
         super().closeEvent(event)
 

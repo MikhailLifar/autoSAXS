@@ -619,6 +619,26 @@ def _model_density_paths(
         write_summary_yaml=True,
     )
 
+    import yaml
+
+    run_params_path = os.path.join(output_dir, "model_density_run_params.yml")
+    with open(run_params_path, "w", encoding="utf-8") as fp:
+        yaml.dump(
+            {
+                "skill": "model_density",
+                "mode": str(protocol),
+                "denss_mode": str(denss_tok).lower()
+                if str(denss_tok).upper() in ("FAST", "SLOW", "MEMBRANE")
+                else str(denss_tok),
+                "n_maps": int(n_maps),
+                "n_jobs": int(n_jobs),
+                "profile": profile,
+                "gnom_path": gnom_path or "",
+            },
+            fp,
+            default_flow_style=False,
+        )
+
     return {
         "output_subdir": output_dir,
         "density_map_path": density_map_path,

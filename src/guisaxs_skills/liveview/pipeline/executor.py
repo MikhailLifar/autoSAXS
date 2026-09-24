@@ -571,6 +571,16 @@ class LiveviewJobExecutor(QObject):
             self._finish_job(ok=False)
             return
         self._pending_step_name = step.name
+        skill = str(req.skill_name or "").strip()
+        from ...modeling.skills import MODELING_SKILLS
+
+        if skill in MODELING_SKILLS:
+            self.error.emit(
+                f"Liveview refused modeling skill {skill!r} "
+                "(run Confirm in guisaxs-shape / guisaxs-dr instead)."
+            )
+            self._finish_job(ok=False)
+            return
         self.skill_started.emit(req.skill_name)
         self._runner.start(req)
 

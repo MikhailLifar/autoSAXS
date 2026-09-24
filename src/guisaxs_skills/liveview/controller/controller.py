@@ -157,6 +157,11 @@ class LiveviewController(QObject):
     def shutdown(self) -> None:
         self.persist_session_settings()
         self.persist_history()
+        try:
+            if self._right is not None:
+                self._right.shutdown_modeling_children()
+        except Exception:
+            pass
         self.ingest.stop_all()
         try:
             self._executor.stop()

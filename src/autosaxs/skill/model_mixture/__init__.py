@@ -395,6 +395,22 @@ def _model_mixture_paths(
         "".join(md_parts),
         summary_references=summary_refs,
     )
+    run_params_path = os.path.join(dest_dir, "model_mixture_run_params.yml")
+    with open(run_params_path, "w", encoding="utf-8") as fp:
+        yaml.dump(
+            {
+                "skill": "model_mixture",
+                "max_nph": int(mixture_params["max_nph"]),
+                "maxit": int(mixture_params["maxit"]),
+                "r_min_nm": _angstrom_to_nm(mixture_params["r_min"]),
+                "r_max_nm": _angstrom_to_nm(mixture_params["r_max"]),
+                "poly_min_nm": _angstrom_to_nm(mixture_params["poly_min"]),
+                "poly_max_nm": _angstrom_to_nm(mixture_params["poly_max"]),
+                "profile": str(profile),
+            },
+            fp,
+            default_flow_style=False,
+        )
     return {
         "output_subdir": result["output_subdir"],
         "comparison_path": result.get("comparison_path", ""),

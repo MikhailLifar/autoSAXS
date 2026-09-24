@@ -22,6 +22,7 @@ from ...icons import monodisperse_analysis_icon, polydisperse_analysis_icon
 from ...log_panel import LiveviewLogPanel
 from .config_restore import RightPanelConfigRestore
 from .form_helpers import discover_fit_skill_meta
+from ....modeling_children import ModelingChildManager
 from .monodisperse.coordinator import MonodisperseCoordinator
 from .monodisperse.wizard import MonodisperseWizardWidget
 from .polydisperse.coordinator import PolydisperseCoordinator
@@ -68,15 +69,21 @@ class LiveviewRightPanel(QWidget):
 
         self._mono_wizard_widget = MonodisperseWizardWidget()
         self._mono_dialog: Optional[MonodisperseWizardDialog] = None
-        self._mono = MonodisperseCoordinator(state=self._state, wizard=self._mono_wizard_widget)
+        self._modeling = ModelingChildManager(state=self._state, parent=self)
+        self._mono = MonodisperseCoordinator(
+            state=self._state, wizard=self._mono_wizard_widget, modeling=self._modeling
+        )
         self._mono_wizard_widget.bind_state(self._state)
         self._wire_monodisperse_coordinator()
 
         self._poly_window_widget = PolydisperseWindowWidget()
         self._poly_dialog: Optional[PolydisperseAnalysisWindow] = None
-        self._poly = PolydisperseCoordinator(state=self._state, window=self._poly_window_widget)
+        self._poly = PolydisperseCoordinator(
+            state=self._state, window=self._poly_window_widget, modeling=self._modeling
+        )
         self._poly_window_widget.bind_state(self._state)
         self._wire_polydisperse_coordinator()
+        self._modeling.preview_refresh_requested.connect(self._on_modeling_preview_refresh)
 
         self._btn_mono = QToolButton()
         self._btn_mono.setIcon(monodisperse_analysis_icon())
@@ -84,8 +91,9 @@ class LiveviewRightPanel(QWidget):
         self._btn_mono.setCheckable(True)
         self._btn_mono.setAutoRaise(True)
         self._btn_mono.setToolTip(
-            "Monodisperse analysis (Guinier → GNOM → shape).\n"
-            "Opens the window and arms that chain for new samples while open."
+            "Monodisperse analysis (Guinier → GNOM).\n"
+            "Shape modeling: Start modeling → guisaxs-shape (Confirm).\n"
+            "Opens the window and arms Guinier/GNOM for new samples while open."
         )
         self._btn_mono.clicked.connect(self._on_mono_button)
 
@@ -95,8 +103,9 @@ class LiveviewRightPanel(QWidget):
         self._btn_poly.setCheckable(True)
         self._btn_poly.setAutoRaise(True)
         self._btn_poly.setToolTip(
-            "Polydisperse analysis (Guinier → D(R) → optional mixture).\n"
-            "Opens the window and arms that chain for new samples while open."
+            "Polydisperse analysis (Guinier → D(R)).\n"
+            "Mixture modeling: Start modeling → guisaxs-dr (Confirm).\n"
+            "Opens the window and arms Guinier/D(R) for new samples while open."
         )
         self._btn_poly.clicked.connect(self._on_poly_button)
 
@@ -218,6 +227,13 @@ class LiveviewRightPanel(QWidget):
         self._poly.mixture_rerun_requested.connect(self.polydisperse_mixture_rerun.emit)
         self._poly.resume_auto_processing_requested.connect(self.polydisperse_resume_queue.emit)
         self._poly.stop_auto_processing_requested.connect(self.polydisperse_stop_queue.emit)
+
+    def _on_modeling_preview_refresh(self, which: str) -> None:
+        w = str(which or "").lower()
+        if w == "shape":
+            self._mono.refresh_shape_preview_from_disk()
+        elif w == "dr":
+            self._poly.refresh_mixture_preview_from_disk()
 
     @property
     def monodisperse_coordinator(self) -> MonodisperseCoordinator:
@@ -359,6 +375,13 @@ class LiveviewRightPanel(QWidget):
 
     def force_analysis_disarmed(self) -> None:
         self.close_analysis_windows()
+
+    def shutdown_modeling_children(self) -> None:
+        """Gracefully stop guisaxs-shape / guisaxs-dr before liveview teardown."""
+        try:
+            self._modeling.shutdown()
+        except Exception:
+            pass
 
     def sync_modeling_ui_to_session_state(
         self, *, queue_paused: bool | None = None, processing_idle: bool | None = None

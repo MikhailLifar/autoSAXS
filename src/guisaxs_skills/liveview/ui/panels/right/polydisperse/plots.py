@@ -11,7 +11,7 @@ from PyQt5.QtCore import Qt
 from autosaxs.core.gnom import distribution_arrays, parse_gnom_out
 
 from ..distribution_ylim import clamp_distribution_ylim
-from ..gnom_overlays import resolve_force_zero_off_path, same_gnom_path
+from ..gnom_overlays import same_gnom_path
 
 
 class _BaseMplPlot(FigureCanvas):
@@ -74,18 +74,13 @@ class DrPlot(_BaseMplPlot):
         self,
         gnom_out_path: str,
         *,
-        close_fits: bool = True,
-        force_zero_off: bool = True,
         overlay_gnom_out: str | None = None,
     ) -> None:
         """
         Plot D(R) from a GNOM ``.out``.
 
-        - ``close_fits``: faint Rmax±10% ensemble overlays (auto pane default).
-        - ``force_zero_off``: thin black force-zero-off overlay from ``ensemble/``.
-        - ``overlay_gnom_out``: optional second ``.out`` (e.g. disk best) drawn faintly
-          under the primary curve; its sibling ``ensemble/`` supplies force-zero-off /
-          close-fits when the primary path has none (adjust-wizard preview temp outs).
+        At most two distribution curves: the primary ``.out`` and an optional
+        ``overlay_gnom_out`` (e.g. disk best under an in-memory preview).
         """
         if not gnom_out_path or not os.path.isfile(gnom_out_path):
             self._show_status("No GNOM .out")
@@ -110,18 +105,10 @@ class DrPlot(_BaseMplPlot):
         self._click_viewer = "gnom_dr"
         self._ax.clear()
 
-        primary_dir = os.path.dirname(os.path.abspath(gnom_out_path))
         overlay_path = (overlay_gnom_out or "").strip()
         if overlay_path and same_gnom_path(overlay_path, gnom_out_path):
             overlay_path = ""
-        ens_dirs: list[str] = []
-        if close_fits or force_zero_off:
-            ens_dirs.append(os.path.join(primary_dir, "ensemble"))
         if overlay_path and os.path.isfile(overlay_path):
-            odir = os.path.dirname(os.path.abspath(overlay_path))
-            o_ens = os.path.join(odir, "ensemble")
-            if o_ens not in ens_dirs:
-                ens_dirs.append(o_ens)
             try:
                 ov_arr = distribution_arrays(parse_gnom_out(overlay_path).get("distribution"))
             except Exception:
@@ -129,44 +116,6 @@ class DrPlot(_BaseMplPlot):
             if ov_arr is not None:
                 rr, pp, _ee = ov_arr
                 self._ax.plot(rr, pp, color="C1", lw=1.0, alpha=0.55, zorder=1, label="best (disk)")
-
-        if close_fits:
-            for ens_dir in ens_dirs:
-                close_dir = os.path.join(ens_dir, "close_fits")
-                close_labeled = False
-                if not os.path.isdir(close_dir):
-                    continue
-                for name in sorted(os.listdir(close_dir)):
-                    if not name.endswith(".out"):
-                        continue
-                    cf_path = os.path.join(close_dir, name)
-                    try:
-                        cf_arr = distribution_arrays(parse_gnom_out(cf_path).get("distribution"))
-                    except Exception:
-                        continue
-                    if cf_arr is None:
-                        continue
-                    rr, pp, _ee = cf_arr
-                    label = "close fits (Rmax±10%)" if not close_labeled else None
-                    self._ax.plot(rr, pp, color="0.65", lw=0.8, alpha=0.5, zorder=1, label=label)
-                    close_labeled = True
-
-        if force_zero_off:
-            for ens_dir in ens_dirs:
-                fz_path = resolve_force_zero_off_path(ens_dir)
-                if not fz_path or same_gnom_path(fz_path, gnom_out_path):
-                    continue
-                if overlay_path and same_gnom_path(fz_path, overlay_path):
-                    continue
-                try:
-                    fz_arr = distribution_arrays(parse_gnom_out(fz_path).get("distribution"))
-                except Exception:
-                    continue
-                if fz_arr is None:
-                    continue
-                rr, pp, _ee = fz_arr
-                self._ax.plot(rr, pp, color="k", lw=0.8, alpha=1.0, zorder=1, label="force-zero-off")
-                break
 
         if err is not None:
             e = np.asarray(err, dtype=float)

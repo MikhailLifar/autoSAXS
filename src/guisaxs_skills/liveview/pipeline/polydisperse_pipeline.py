@@ -116,8 +116,7 @@ def build_polydisperse_steps(
     """
     Build polydisperse JobSteps for auto or manual runs.
 
-    FULL includes mixture when ``state.polydisperse_mixture_mode`` is MIXTURE.
-    Manual GUINIER_ONLY / SIZES_ONLY never append mixture.
+    MIXTURE modeling is Confirm-only in ``guisaxs-dr`` and is never appended here.
     """
     prof = str(Path(profile_abs).expanduser().resolve())
     root = output_root.expanduser().resolve()
@@ -162,11 +161,5 @@ def build_polydisperse_steps(
         )
         steps.append(JobStep(name="fit_sizes", request=RunRequest("fit_sizes", [prof], s_opts)))
 
-    if parts == PolydispersePipelineParts.MIXTURE_ONLY or (
-        parts == PolydispersePipelineParts.FULL
-        and state.polydisperse_mixture_mode == PolydisperseMixtureMode.MIXTURE
-    ):
-        m_opts = model_mixture_opts(state=state, output_root=root)
-        steps.append(JobStep(name="model_mixture", request=RunRequest("model_mixture", [prof], m_opts)))
-
+    # MIXTURE_ONLY / FULL mixture steps removed — modeling runs only in guisaxs-dr.
     return steps

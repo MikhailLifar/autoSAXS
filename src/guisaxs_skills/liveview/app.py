@@ -7,6 +7,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from ..ui.style import apply_style
+from ..ui.qt_app import install_sigint_quit
 from .session.workdir import default_watchdir, select_watchdir
 from .window import LiveviewMainWindow
 
@@ -31,6 +32,7 @@ def _warn_unusable_cwd(cwd: str) -> None:
 def run_liveview_app() -> None:
     app = QApplication(sys.argv)
     apply_style(app)
+    install_sigint_quit(app)
 
     cwd = os.getcwd()
     watchdir = default_watchdir()

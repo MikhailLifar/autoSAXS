@@ -38,12 +38,14 @@ class MonodisperseWizardWidget(QWidget):
         grid.setVerticalSpacing(10)
         guinier_box = _pane_group("Guinier", self.guinier_pane)
         guinier_box.setMinimumWidth(268)
+        # Right side: P(r) on top spanning both cols; Shape preview+launch at far right bottom (1/3).
         grid.addWidget(guinier_box, 0, 0, 2, 1)
-        grid.addWidget(_pane_group("P(r)", self.gnom_pane), 0, 1, 1, 1)
-        grid.addWidget(_pane_group("Shape", self.shape_pane), 1, 1, 1, 1)
+        grid.addWidget(_pane_group("P(r)", self.gnom_pane), 0, 1, 1, 2)
+        grid.addWidget(_pane_group("Shape", self.shape_pane), 1, 2, 1, 1)
         grid.setColumnStretch(0, 2)
-        grid.setColumnStretch(1, 4)
-        grid.setRowStretch(0, 1)
+        grid.setColumnStretch(1, 4)  # empty/left 2/3 of remaining width under P(r)
+        grid.setColumnStretch(2, 2)  # Shape = 1/3 of remaining
+        grid.setRowStretch(0, 2)
         grid.setRowStretch(1, 1)
 
         lay = QVBoxLayout(self)
@@ -117,7 +119,7 @@ class MonodisperseWizardWidget(QWidget):
 
     def summary_lines(self) -> tuple[str, str]:
         """Short status for the right-panel summary (like calibration preview area)."""
-        rg = self.guinier_pane._lbl_rg.text()  # noqa: SLF001
+        rg = self.guinier_pane.summary_rg()
         gnom = self.gnom_pane._lbl_diagnostics.text()  # noqa: SLF001
         shape = self.shape_pane.shape_mode()
         status = f"Rg (Guinier): {rg}\nGNOM: {gnom}\nShape: {shape}"

@@ -88,6 +88,7 @@ class GnomPane(QWidget):
                 quality,
                 guinier_handoff=guinier_handoff,
                 poor_color=COLOR_QUALITY_POOR,
+                compact=True,
             )
             self._lbl_diagnostics.setTextFormat(Qt.RichText)
             self._lbl_diagnostics.setText(body)

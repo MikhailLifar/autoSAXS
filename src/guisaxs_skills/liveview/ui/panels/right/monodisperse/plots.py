@@ -12,7 +12,7 @@ from PyQt5.QtCore import Qt
 from autosaxs.core.gnom import distribution_arrays, parse_gnom_out
 
 from ..distribution_ylim import clamp_distribution_ylim
-from ..gnom_overlays import resolve_force_zero_off_path, same_gnom_path
+from ..gnom_overlays import same_gnom_path
 
 
 class _BaseMplPlot(FigureCanvas):
@@ -49,6 +49,10 @@ class _BaseMplPlot(FigureCanvas):
 class GuinierCurvePlot(_BaseMplPlot):
     def __init__(self, *, figsize=(2.14, 1.61)) -> None:
         super().__init__(figsize=figsize)
+        self._last_profile: Optional[str] = None
+        self._last_data: Optional[dict] = None
+        self._last_q = None
+        self._last_I = None
 
     def plot_from_profile_and_results(self, profile_path: str, results_txt_path: str) -> None:
         if not results_txt_path or not os.path.isfile(results_txt_path):
@@ -64,6 +68,8 @@ class GuinierCurvePlot(_BaseMplPlot):
         if not isinstance(data, dict) or not data:
             self._show_status("Invalid Guinier results")
             return
+        data = dict(data)
+        data["_results_path"] = results_txt_path
         # Prefer the profile that was actually fit (avoids I0 mismatch vs preferred_profile).
         fit_prof = str(data.get("input_file") or "").strip()
         if fit_prof:
@@ -109,6 +115,10 @@ class GuinierCurvePlot(_BaseMplPlot):
         if not isinstance(data, dict):
             self._show_status("Invalid Guinier data")
             return
+        self._last_profile = profile_path
+        self._last_data = dict(data)
+        self._last_q = q
+        self._last_I = I
         rg = data.get("rg")
         if rg is None:
             rg = data.get("Rg")
@@ -178,8 +188,17 @@ class GuinierCurvePlot(_BaseMplPlot):
         else:
             q_line = q
         y_fit_line = np.log(float(i0)) - (float(rg) ** 2 / 3.0) * (q_line ** 2)
-        self._click_path = None
-        self._click_viewer = None
+        # Prefer results path when available so analysis-pane clicks open the adjust wizard.
+        results_hint = str(data.get("_results_path") or "").strip()
+        if results_hint and os.path.isfile(results_hint):
+            self._click_path = results_hint
+        elif profile_path and os.path.isfile(profile_path):
+            self._click_path = profile_path
+        else:
+            self._click_path = None
+        # Inside adjust wizard use guinier_fit; analysis pane uses guinier (opens wizard).
+        viewer = str(data.get("_click_viewer") or "guinier").strip() or "guinier"
+        self._click_viewer = viewer if self._click_path else None
         self._ax.clear()
         self._ax.scatter(x[~band], y[~band], s=8, alpha=0.35, c="0.6", label="out")
         self._ax.scatter(x[band], y[band], s=10, alpha=0.9, c="C0", label="fit region")
@@ -203,7 +222,18 @@ class GuinierCurvePlot(_BaseMplPlot):
         self._ax.grid(True, alpha=0.2)
         self._fig.tight_layout()
         self.draw_idle()
-        self.setCursor(Qt.ArrowCursor)
+        self.setCursor(Qt.PointingHandCursor if self._click_path else Qt.ArrowCursor)
+
+    def replay_last(self, other: "GuinierCurvePlot") -> bool:
+        if not self._last_data:
+            return False
+        other.plot_from_profile_and_data(
+            self._last_profile or "",
+            dict(self._last_data),
+            q=self._last_q,
+            I=self._last_I,
+        )
+        return True
 
 
 class GnomFitPlot(_BaseMplPlot):
@@ -229,18 +259,13 @@ class PrPlot(_BaseMplPlot):
         self,
         gnom_out_path: str,
         *,
-        close_fits: bool = True,
-        force_zero_off: bool = True,
         overlay_gnom_out: str | None = None,
     ) -> None:
         """
         Plot P(r) from a GNOM ``.out``.
 
-        - ``close_fits``: faint Dmax±10% ensemble overlays (auto pane default).
-        - ``force_zero_off``: thin black force-zero-off overlay from ``ensemble/``.
-        - ``overlay_gnom_out``: optional second ``.out`` (e.g. disk best) drawn faintly
-          under the primary curve; its sibling ``ensemble/`` supplies force-zero-off /
-          close-fits when the primary path has none (adjust-wizard preview temp outs).
+        At most two distribution curves: the primary ``.out`` and an optional
+        ``overlay_gnom_out`` (e.g. disk best under an in-memory preview).
         """
         if not gnom_out_path or not os.path.isfile(gnom_out_path):
             self._show_status("No GNOM .out")
@@ -265,18 +290,10 @@ class PrPlot(_BaseMplPlot):
         self._click_viewer = "gnom_pr"
         self._ax.clear()
 
-        primary_dir = os.path.dirname(os.path.abspath(gnom_out_path))
         overlay_path = (overlay_gnom_out or "").strip()
         if overlay_path and same_gnom_path(overlay_path, gnom_out_path):
             overlay_path = ""
-        ens_dirs: list[str] = []
-        if close_fits or force_zero_off:
-            ens_dirs.append(os.path.join(primary_dir, "ensemble"))
         if overlay_path and os.path.isfile(overlay_path):
-            odir = os.path.dirname(os.path.abspath(overlay_path))
-            o_ens = os.path.join(odir, "ensemble")
-            if o_ens not in ens_dirs:
-                ens_dirs.append(o_ens)
             try:
                 ov_arr = distribution_arrays(parse_gnom_out(overlay_path).get("distribution"))
             except Exception:
@@ -284,47 +301,6 @@ class PrPlot(_BaseMplPlot):
             if ov_arr is not None:
                 rr, pp, _ee = ov_arr
                 self._ax.plot(rr, pp, color="C1", lw=1.0, alpha=0.55, zorder=1, label="best (disk)")
-
-        if close_fits:
-            for ens_dir in ens_dirs:
-                close_dir = os.path.join(ens_dir, "close_fits")
-                close_labeled = False
-                if not os.path.isdir(close_dir):
-                    continue
-                for name in sorted(os.listdir(close_dir)):
-                    if not name.endswith(".out"):
-                        continue
-                    cf_path = os.path.join(close_dir, name)
-                    try:
-                        cf_arr = distribution_arrays(parse_gnom_out(cf_path).get("distribution"))
-                    except Exception:
-                        continue
-                    if cf_arr is None:
-                        continue
-                    rr, pp, _ee = cf_arr
-                    label = "close fits (Dmax±10%)" if not close_labeled else None
-                    self._ax.plot(rr, pp, color="0.65", lw=0.8, alpha=0.5, zorder=1, label=label)
-                    close_labeled = True
-
-        if force_zero_off:
-            fz_drawn = False
-            for ens_dir in ens_dirs:
-                fz_path = resolve_force_zero_off_path(ens_dir)
-                if not fz_path or same_gnom_path(fz_path, gnom_out_path):
-                    continue
-                if overlay_path and same_gnom_path(fz_path, overlay_path):
-                    continue
-                try:
-                    fz_arr = distribution_arrays(parse_gnom_out(fz_path).get("distribution"))
-                except Exception:
-                    continue
-                if fz_arr is None:
-                    continue
-                rr, pp, _ee = fz_arr
-                label = "force-zero-off" if not fz_drawn else None
-                self._ax.plot(rr, pp, color="k", lw=0.8, alpha=1.0, zorder=1, label=label)
-                fz_drawn = True
-                break  # one overlay only
 
         if err is not None:
             e = np.asarray(err, dtype=float)
@@ -348,6 +324,112 @@ class PrPlot(_BaseMplPlot):
         handles, _labels = self._ax.get_legend_handles_labels()
         if handles:
             self._ax.legend(fontsize=7, loc="best")
+        self._fig.tight_layout()
+        clamp_distribution_ylim(self._ax)
+        self.draw_idle()
+        self.setCursor(Qt.PointingHandCursor)
+
+    def plot_gnom_and_model(
+        self,
+        gnom_out_path: str | None,
+        model_pr_dat: str | None,
+        *,
+        gnom_label: str = "GNOM",
+        model_label: str = "model",
+        match_form: bool = True,
+    ) -> None:
+        """
+        Overlay GNOM ``.out`` P(r) with a model ``*_pr.dat`` (r nm, p).
+
+        When ``match_form`` is True and both curves exist, each is renormalized to
+        unit integral so the comparison shows shape (DAM Monte Carlo p(r) is already
+        a PDF; GNOM P(r) carries an I(q)-tied absolute scale).
+        """
+        gnom_path = (gnom_out_path or "").strip()
+        model_path = (model_pr_dat or "").strip()
+        has_gnom = bool(gnom_path) and os.path.isfile(gnom_path)
+        has_model = bool(model_path) and os.path.isfile(model_path)
+        if not has_gnom and not has_model:
+            self._show_status("No P(r) to compare")
+            return
+
+        self._ax.clear()
+        self._click_path = gnom_path if has_gnom else model_path
+        self._click_viewer = "gnom_pr"
+
+        def _unit_integral(r: np.ndarray, p: np.ndarray) -> np.ndarray:
+            area = float(np.trapezoid(p, r))
+            if area > 0.0 and np.isfinite(area):
+                return p / area
+            return p
+
+        gnom_scaled = False
+        if has_gnom:
+            try:
+                arrays = distribution_arrays(parse_gnom_out(gnom_path).get("distribution"))
+            except Exception:
+                arrays = None
+            if arrays is not None:
+                r, pr, err = arrays
+                r = np.asarray(r, dtype=float)
+                pr = np.asarray(pr, dtype=float)
+                m = np.isfinite(r) & np.isfinite(pr)
+                if m.any():
+                    rr = r[m]
+                    pp = pr[m]
+                    scale = 1.0
+                    if match_form and has_model:
+                        area = float(np.trapezoid(pp, rr))
+                        if area > 0.0 and np.isfinite(area):
+                            scale = 1.0 / area
+                            gnom_scaled = True
+                            pp = pp * scale
+                    if err is not None:
+                        e = np.asarray(err, dtype=float)
+                        me = m & np.isfinite(e)
+                        if me.any():
+                            ee = e[me] * scale
+                            self._ax.fill_between(
+                                r[me],
+                                pr[me] * scale - ee,
+                                pr[me] * scale + ee,
+                                color="C0",
+                                alpha=0.25,
+                                linewidth=0,
+                                zorder=2,
+                            )
+                    glab = f"{gnom_label} (unit ∫)" if gnom_scaled else gnom_label
+                    self._ax.plot(rr, pp, "C0-", lw=1.4, zorder=3, label=glab)
+
+        if has_model:
+            try:
+                data = np.loadtxt(model_path, comments="#")
+                if data.ndim == 1:
+                    data = data.reshape(1, -1)
+                rr = np.asarray(data[:, 0], dtype=float)
+                pp = np.asarray(data[:, 1], dtype=float)
+                mm = np.isfinite(rr) & np.isfinite(pp)
+                if mm.any():
+                    rrm = rr[mm]
+                    ppm = pp[mm]
+                    if match_form and has_gnom:
+                        ppm = _unit_integral(rrm, ppm)
+                        mlab = f"{model_label} (unit ∫)"
+                    else:
+                        mlab = model_label
+                    self._ax.plot(rrm, ppm, "C1-", lw=1.4, zorder=4, label=mlab)
+            except Exception:
+                pass
+
+        self._ax.set_xlabel("r (nm)")
+        self._ax.set_ylabel("P(r)" + ("  [form; unit ∫]" if match_form and has_gnom and has_model else ""))
+        self._ax.grid(True, alpha=0.2)
+        handles, _labels = self._ax.get_legend_handles_labels()
+        if handles:
+            self._ax.legend(fontsize=7, loc="best")
+        if not handles:
+            self._show_status("P(r) parse error")
+            return
         self._fig.tight_layout()
         clamp_distribution_ylim(self._ax)
         self.draw_idle()

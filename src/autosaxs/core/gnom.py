@@ -27,6 +27,8 @@ def parse_gnom_out(source: Union[str, os.PathLike]) -> Dict[str, Any]:
       (σ of the distribution) when present and finite; otherwise ``None``.
       Interpret as p(r) for DATGNOM and D(R) for polydisperse GNOM runs.
     - ``current_alpha``: regularization parameter ``Current ALPHA`` from the .out, if present.
+    - ``force_zero_rmin`` / ``force_zero_rmax``: ``Y``/``N`` from GNOM ``Force 0.0 at r = rmin/rmax``
+      lines when present.
     """
     if isinstance(source, os.PathLike) or (isinstance(source, str) and os.path.isfile(source)):
         with open(source, "r", errors="replace") as f:
@@ -94,6 +96,17 @@ def parse_gnom_out(source: Union[str, os.PathLike]) -> Dict[str, Any]:
             flags=re.IGNORECASE,
         )
         return _parse_scientific_float(m)
+
+    def parse_force_zero_flag(text: str, *, which: str) -> Optional[str]:
+        """Return ``Y``/``N`` for ``Force 0.0 at r = rmin|rmax`` (GNOM 5.x config block)."""
+        m = re.search(
+            rf"Force\s+0\.0\s+at\s+r\s*=\s*{which}\s*:\s*(yes|no)\b",
+            text or "",
+            flags=re.IGNORECASE,
+        )
+        if not m:
+            return None
+        return "Y" if m.group(1).lower().startswith("y") else "N"
 
     def numeric_blocks(
         lines: List[str],
@@ -246,6 +259,8 @@ def parse_gnom_out(source: Union[str, os.PathLike]) -> Dict[str, Any]:
         "real_space_rg": parse_real_space_rg(out_text),
         "real_space_i0": parse_real_space_i0(out_text),
         "current_alpha": parse_current_alpha(out_text),
+        "force_zero_rmin": parse_force_zero_flag(out_text, which="rmin"),
+        "force_zero_rmax": parse_force_zero_flag(out_text, which="rmax"),
         "iq_table": parse_iq_table(out_text),
         "distribution": parse_distribution(out_text),
     }

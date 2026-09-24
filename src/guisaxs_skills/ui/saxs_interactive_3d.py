@@ -1158,7 +1158,7 @@ class SaxsInteractive3DWidget(QWidget):
         title: Optional[str] = None,
     ) -> bool:
         """Scatter beads colored by occupancy; hide beads below ``threshold``."""
-        from ..liveview.services.dam_models import read_cif_xyz_occupancy
+        from guisaxs_skills.modeling.catalogs.dam_models import read_cif_xyz_occupancy
 
         p = Path(path)
         if not p.is_file():
@@ -1525,7 +1525,7 @@ class Interactive3DViewerDialog(QDialog):
         self._load_overlap_view()
 
     def _load_overlap_view(self) -> bool:
-        from ..liveview.services.dam_models import prepare_overlap_items
+        from guisaxs_skills.modeling.catalogs.dam_models import prepare_overlap_items
 
         catalog = self._catalog
         if catalog is None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import os
 import tempfile
 from pathlib import Path
@@ -32,9 +31,12 @@ from autosaxs.core.utils import ensure_q_nm, load_saxs_1d_any, write_saxs_atsas_
 
 from ....ui.style import COLOR_QUALITY_POOR
 from ....ui.widgets.spin_sliders import AlphaSpinSlider, LengthNmSpinSlider
-from ..panels.right.monodisperse.format_display import format_gnom_passport_html
+from ..panels.right.gnom_residuals_plot import GnomResidualsPlot
+from ..panels.right.monodisperse.format_display import format_gnom_passport_rows
 from ..panels.right.monodisperse.plots import GnomFitPlot, PrPlot
+from ..panels.right.passport_table import PassportTableWidget
 from .adjust_confirm import AdjustConfirmController
+from .adjust_plot_viewers import AdjustPlotClickRouter
 from .q_fit_bounds import first_last_from_q_values, make_q_max_spin, make_q_min_spin, q_bounds_from_params
 
 _PREVIEW_DEBOUNCE_MS = 100
@@ -44,8 +46,8 @@ class GnomAdjustWizardDialog(QDialog):
     """
     Interactive GNOM refine wizard.
 
-    Left: P(r) (top) and I(q) fit (bottom).
-    Right: q-min/q-max/Dmax/alpha/boundary checkboxes, Restore auto, passport.
+    Left: P(r) (top); I(q) fit + residuals (bottom split).
+    Right: q-min/q-max/Dmax/alpha/boundary checkboxes, Restore auto, passport table.
     """
 
     params_changed = pyqtSignal()
@@ -88,9 +90,10 @@ class GnomAdjustWizardDialog(QDialog):
         self._block_params = False
 
         self._pr_plot = PrPlot(figsize=(4.2, 2.8))
-        self._fit_plot = GnomFitPlot(figsize=(4.2, 2.8))
-        for p in (self._pr_plot, self._fit_plot):
-            p.setMinimumHeight(160)
+        self._fit_plot = GnomFitPlot(figsize=(3.2, 2.4))
+        self._resid_plot = GnomResidualsPlot(figsize=(3.2, 2.4))
+        for p in (self._pr_plot, self._fit_plot, self._resid_plot):
+            p.setMinimumHeight(140)
             p.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         left = QVBoxLayout()
@@ -99,12 +102,31 @@ class GnomAdjustWizardDialog(QDialog):
         pr_lay = QVBoxLayout(pr_box)
         pr_lay.setContentsMargins(6, 8, 6, 6)
         pr_lay.addWidget(self._pr_plot, 1)
+
+        bottom = QHBoxLayout()
+        bottom.setSpacing(8)
         iq_box = QGroupBox("I(q) fit")
         iq_lay = QVBoxLayout(iq_box)
         iq_lay.setContentsMargins(6, 8, 6, 6)
         iq_lay.addWidget(self._fit_plot, 1)
-        left.addWidget(pr_box, 1)
-        left.addWidget(iq_box, 1)
+        resid_box = QGroupBox("Residuals")
+        resid_lay = QVBoxLayout(resid_box)
+        resid_lay.setContentsMargins(6, 8, 6, 6)
+        resid_lay.addWidget(self._resid_plot, 1)
+        bottom.addWidget(iq_box, 1)
+        bottom.addWidget(resid_box, 1)
+
+        left.addWidget(pr_box, 3)
+        left.addLayout(bottom, 2)
+
+        self._plot_clicks = AdjustPlotClickRouter(
+            self,
+            make_dist_plot=lambda: PrPlot(figsize=(5.0, 3.5)),
+            make_fit_plot=lambda: GnomFitPlot(figsize=(5.0, 3.5)),
+            dist_title="P(r)",
+        )
+        for p in (self._pr_plot, self._fit_plot, self._resid_plot):
+            self._plot_clicks.wire(p)
 
         self._q_min = make_q_min_spin()
         self._q_max = make_q_max_spin()
@@ -128,11 +150,7 @@ class GnomAdjustWizardDialog(QDialog):
         )
         self._lbl_passport_title = QLabel("Passport")
         self._lbl_passport_title.setContentsMargins(0, 0, 0, 0)
-        self._lbl_passport = QLabel("—")
-        self._lbl_passport.setWordWrap(True)
-        self._lbl_passport.setTextFormat(Qt.RichText)
-        self._lbl_passport.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        self._lbl_passport.setContentsMargins(0, 0, 0, 0)
+        self._passport_table = PassportTableWidget()
 
         form = QFormLayout()
         form.addRow("q-min (nm⁻¹)", self._q_min)
@@ -142,9 +160,9 @@ class GnomAdjustWizardDialog(QDialog):
 
         passport_col = QVBoxLayout()
         passport_col.setContentsMargins(0, 0, 0, 0)
-        passport_col.setSpacing(0)
+        passport_col.setSpacing(4)
         passport_col.addWidget(self._lbl_passport_title, 0, Qt.AlignTop)
-        passport_col.addWidget(self._lbl_passport, 1)
+        passport_col.addWidget(self._passport_table, 1)
 
         right = QVBoxLayout()
         right.setSpacing(8)
@@ -165,7 +183,8 @@ class GnomAdjustWizardDialog(QDialog):
         lay.addWidget(
             QLabel(
                 "Adjust GNOM parameters for the current curve. "
-                "Plots and passport update live; press Confirm to write parameters and re-run fit_distances."
+                "Plots and passport update live; press Confirm to write parameters and re-run fit_distances. "
+                "Click a plot to open an enlarged viewer."
             )
         )
         lay.addLayout(body, 1)
@@ -196,10 +215,9 @@ class GnomAdjustWizardDialog(QDialog):
             disk_best = None
         self._pr_plot.plot_from_gnom_out(
             path,
-            close_fits=True,
-            force_zero_off=True,
             overlay_gnom_out=disk_best,
         )
+        self._resid_plot.plot_from_gnom_out(path)
 
     def set_context(
         self,
@@ -249,12 +267,11 @@ class GnomAdjustWizardDialog(QDialog):
             self._fit_plot.plot_from_dat_and_gnom_out(self._profile_path, gnom_out_path)
             self._plot_pr_adjust(gnom_out_path)
         if passport_html:
+            # Legacy HTML from coordinator — convert via quality when possible.
+            self._passport_table.set_message("—")
             self.set_passport(html_text=passport_html)
         elif passport_text:
-            # Plain text from pane — show without per-row markup until preview refreshes.
-            self._lbl_passport.setTextFormat(Qt.PlainText)
-            self._lbl_passport.setText(passport_text)
-            self._lbl_passport.setStyleSheet("")
+            self.set_passport(text=passport_text)
         self._confirm.set_committed(self.gnom_params())
         # Refresh I(q)/P(r) for the loaded q-min/q-max (disk .out may differ).
         self._run_preview()
@@ -339,23 +356,25 @@ class GnomAdjustWizardDialog(QDialog):
         return out
 
     def set_passport(self, *, text: str = "", poor: bool = False, html_text: str = "") -> None:
-        _ = poor
-        if html_text:
-            self._lbl_passport.setTextFormat(Qt.RichText)
-            self._lbl_passport.setText(html_text)
-            self._lbl_passport.setStyleSheet("")
-            return
-        self._lbl_passport.setTextFormat(Qt.PlainText)
-        self._lbl_passport.setText(text or "—")
-        self._lbl_passport.setStyleSheet("")
+        _ = html_text  # legacy callers; prefer set_passport_from_quality
+        if text:
+            self._passport_table.set_message(text, poor=poor, poor_color=COLOR_QUALITY_POOR)
+        elif html_text:
+            # Fall back: strip tags roughly for a single message cell.
+            plain = html_text
+            for tag in ("<br/>", "<br>", "</span>", "<span"):
+                plain = plain.replace(tag, " " if tag.startswith("<br") else "")
+            # Keep a readable error when only html_text is supplied.
+            import re
+
+            plain = re.sub(r"<[^>]+>", "", plain).strip() or "—"
+            self._passport_table.set_message(plain, poor=poor or COLOR_QUALITY_POOR in html_text)
+        else:
+            self._passport_table.set_rows([])
 
     def set_passport_from_quality(self, quality: Mapping[str, Any]) -> None:
-        html_body = format_gnom_passport_html(
-            quality,
-            guinier_handoff=self._guinier_handoff,
-            poor_color=COLOR_QUALITY_POOR,
-        )
-        self.set_passport(html_text=html_body)
+        rows = format_gnom_passport_rows(quality, guinier_handoff=self._guinier_handoff)
+        self._passport_table.set_rows(rows, poor_color=COLOR_QUALITY_POOR)
 
     def show_from_gnom_out(self, gnom_out_path: str) -> None:
         if gnom_out_path and os.path.isfile(gnom_out_path):
@@ -422,8 +441,7 @@ class GnomAdjustWizardDialog(QDialog):
                 q_max=params.get("q_max"),
             )
         except (TypeError, ValueError, RuntimeError) as exc:
-            msg = html.escape(f"Invalid q-min/q-max: {exc}")
-            self.set_passport(html_text=f'<span style="color:{COLOR_QUALITY_POOR}">{msg}</span>')
+            self.set_passport(text=f"Invalid q-min/q-max: {exc}", poor=True)
             return
         alpha = params.get("alpha")
         out_path = (self._preview_tmp or "") + ".out"
@@ -439,8 +457,8 @@ class GnomAdjustWizardDialog(QDialog):
             force_zero_rmax=params.get("force_zero_rmax", "Y"),
         )
         if not ok or not out_text:
-            msg = html.escape(f"GNOM preview failed: {stderr or 'unknown error'}")
-            self.set_passport(html_text=f'<span style="color:{COLOR_QUALITY_POOR}">{msg}</span>')
+            msg = f"GNOM preview failed: {stderr or 'unknown error'}"
+            self.set_passport(text=msg, poor=True)
             return
         try:
             self._fit_plot.plot_from_dat_and_gnom_out(self._profile_path, out_path)
@@ -464,12 +482,7 @@ class GnomAdjustWizardDialog(QDialog):
             )
             self.set_passport_from_quality(quality)
         except Exception as exc:
-            self.set_passport(
-                html_text=(
-                    f'<span style="color:{COLOR_QUALITY_POOR}">'
-                    f"{html.escape(f'Passport update failed: {exc}')}</span>"
-                )
-            )
+            self.set_passport(text=f"Passport update failed: {exc}", poor=True)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if not self._confirm.confirm_close_if_dirty():

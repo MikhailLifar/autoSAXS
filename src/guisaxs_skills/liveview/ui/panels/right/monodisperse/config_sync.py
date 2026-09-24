@@ -29,13 +29,24 @@ class MonodisperseConfigSync:
 
     def sync_params_to_state(self) -> None:
         wp = dict(self._state.monodisperse_wizard_params or {})
-        g_first, g_last = self._wizard.guinier_pane.first_last()
+        # Guinier first/last live in session (Confirm / ingest); keep pane cache in sync.
+        g_first = wp.get("guinier_first")
+        g_last = wp.get("guinier_last")
+        if g_first is None or g_last is None:
+            try:
+                g_first, g_last = self._wizard.guinier_pane.first_last()
+            except Exception:
+                g_first, g_last = None, None
         if g_first is None or g_last is None:
             wp.pop("guinier_first", None)
             wp.pop("guinier_last", None)
         else:
-            wp["guinier_first"] = g_first
-            wp["guinier_last"] = g_last
+            wp["guinier_first"] = int(g_first)
+            wp["guinier_last"] = int(g_last)
+            try:
+                self._wizard.guinier_pane.set_range(int(g_first), int(g_last))
+            except Exception:
+                pass
         # Committed GNOM refine params (Confirm) already live in monodisperse_wizard_params.
         gnom = self._gnom_params_from_ui()
         if gnom:
@@ -73,7 +84,7 @@ class MonodisperseConfigSync:
             out.pop("last", None)
         return out
 
-    def persist_confs(self) -> None:
+    def persist_confs(self, *, write_refine: bool = True) -> None:
         wd = self._state.watchdir
         gdir = guinier_mono_dir(wd)
         gdir.mkdir(parents=True, exist_ok=True)
@@ -111,11 +122,12 @@ class MonodisperseConfigSync:
             self._state.fit_distances_conf_path = dpath
         except OSError:
             pass
-        try:
-            if refine_opts:
-                refine_path.write_text(yaml.safe_dump(refine_opts, sort_keys=True), encoding="utf-8")
-        except OSError:
-            pass
+        if write_refine:
+            try:
+                if refine_opts:
+                    refine_path.write_text(yaml.safe_dump(refine_opts, sort_keys=True), encoding="utf-8")
+            except OSError:
+                pass
 
     def store_gnom_working(self, params: Mapping[str, Any]) -> None:
         wp = dict(self._state.monodisperse_wizard_params or {})
@@ -189,9 +201,21 @@ class MonodisperseConfigSync:
         self._state.model_density_n_maps = n_maps
 
     def store_guinier_interval(self, first: int, last: int) -> None:
-        """Persist Guinier spins without touching DATGNOM first/last."""
+        """Persist Guinier first/last without touching DATGNOM first/last."""
         wp = dict(self._state.monodisperse_wizard_params or {})
         wp["guinier_first"] = int(first)
         wp["guinier_last"] = int(last)
+        self._state.monodisperse_wizard_params = wp
+        try:
+            self._wizard.guinier_pane.set_range(int(first), int(last))
+        except Exception:
+            pass
+        self.persist_confs()
+
+    def store_guinier_auto_snapshot(self, first: int, last: int) -> None:
+        wp = dict(self._state.monodisperse_wizard_params or {})
+        wp["guinier_auto"] = {"first": int(first), "last": int(last)}
+        wp.setdefault("guinier_first", int(first))
+        wp.setdefault("guinier_last", int(last))
         self._state.monodisperse_wizard_params = wp
         self.persist_confs()

@@ -30,13 +30,23 @@ class PolydisperseConfigSync:
 
     def sync_params_to_state(self) -> None:
         wp = dict(self._state.polydisperse_window_params or {})
-        g_first, g_last = self._window.guinier_pane.first_last()
+        g_first = wp.get("guinier_first")
+        g_last = wp.get("guinier_last")
+        if g_first is None or g_last is None:
+            try:
+                g_first, g_last = self._window.guinier_pane.first_last()
+            except Exception:
+                g_first, g_last = None, None
         if g_first is None or g_last is None:
             wp.pop("guinier_first", None)
             wp.pop("guinier_last", None)
         else:
-            wp["guinier_first"] = g_first
-            wp["guinier_last"] = g_last
+            wp["guinier_first"] = int(g_first)
+            wp["guinier_last"] = int(g_last)
+            try:
+                self._window.guinier_pane.set_range(int(g_first), int(g_last))
+            except Exception:
+                pass
         sizes = self._sizes_params_from_ui()
         if sizes:
             for k in _SIZES_CONF_KEYS:
@@ -69,7 +79,7 @@ class PolydisperseConfigSync:
             out.pop("last", None)
         return out
 
-    def persist_confs(self) -> None:
+    def persist_confs(self, *, write_refine: bool = True) -> None:
         wd = self._state.watchdir
         gdir = guinier_poly_dir(wd)
         gdir.mkdir(parents=True, exist_ok=True)
@@ -115,11 +125,12 @@ class PolydisperseConfigSync:
             self._state.fit_sizes_conf_path = spath
         except OSError:
             pass
-        try:
-            if any(k in refine_opts for k in _SIZES_REFINE_KEYS):
-                refine_path.write_text(yaml.safe_dump(refine_opts, sort_keys=True), encoding="utf-8")
-        except OSError:
-            pass
+        if write_refine:
+            try:
+                if any(k in refine_opts for k in _SIZES_REFINE_KEYS):
+                    refine_path.write_text(yaml.safe_dump(refine_opts, sort_keys=True), encoding="utf-8")
+            except OSError:
+                pass
         try:
             mpath.write_text(yaml.safe_dump({"model_mixture": mix}, sort_keys=True), encoding="utf-8")
             self._state.model_mixture_config_path = mpath
@@ -173,4 +184,8 @@ class PolydisperseConfigSync:
         wp["guinier_first"] = int(first)
         wp["guinier_last"] = int(last)
         self._state.polydisperse_window_params = wp
+        try:
+            self._window.guinier_pane.set_range(int(first), int(last))
+        except Exception:
+            pass
         self.persist_confs()

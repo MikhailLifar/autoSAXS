@@ -49,8 +49,15 @@ def clear_ensemble_dir(sample_output_dir: str) -> None:
 
 
 def cleanup_legacy_best_outs(output_dir: str, *, keep: str) -> None:
+    """Remove competing top-level best ``.out`` files so a re-run never leaves orphans."""
     keep_abs = os.path.abspath(keep)
-    for pat in ("gnom_system_*_rmax_*.out", "gnom_rmax_*.out"):
+    patterns = (
+        "gnom_best.out",
+        "gnom_system_*_rmax_*.out",
+        "gnom_rmax_*.out",
+        "gnom_eval_*",
+    )
+    for pat in patterns:
         for p in glob.glob(os.path.join(output_dir, pat)):
             if os.path.abspath(p) == keep_abs:
                 continue

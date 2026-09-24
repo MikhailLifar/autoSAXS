@@ -82,7 +82,7 @@ class SizesPane(QWidget):
     ) -> None:
         self._lbl_diagnostics.setStyleSheet("")
         if quality is not None:
-            body = format_sizes_passport_html(quality, poor_color=COLOR_QUALITY_POOR)
+            body = format_sizes_passport_html(quality, poor_color=COLOR_QUALITY_POOR, compact=True)
             self._lbl_diagnostics.setTextFormat(Qt.RichText)
             self._lbl_diagnostics.setText(body)
             return

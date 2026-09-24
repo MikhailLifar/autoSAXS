@@ -151,13 +151,23 @@ def _fit_guinier_paths(
         ch_int = guinier_results.get("chosen_interval")
         chosen_result = guinier_results.get(guinier_results["chosen"]) or {}
         val_r2 = guinier_results.get("chosen_validation_r2")
+        q_min_ch = ch_int[0] if ch_int else None
+        q_max_ch = ch_int[1] if ch_int else None
+        rg_ch = guinier_results.get("chosen_Rg")
+        qrg_ch = chosen_result.get("qrg")
+        if qrg_ch is None and q_max_ch is not None and rg_ch is not None:
+            try:
+                qrg_ch = float(q_max_ch) * float(rg_ch)
+            except (TypeError, ValueError):
+                qrg_ch = None
         guinier_region = {
-            "rg": guinier_results.get("chosen_Rg"),
+            "rg": rg_ch,
             "rg_min": guinier_results.get("rg_min"),
             "rg_max": guinier_results.get("rg_max"),
             "i0": guinier_results.get("chosen_I0"),
-            "q_min": ch_int[0] if ch_int else None,
-            "q_max": ch_int[1] if ch_int else None,
+            "q_min": q_min_ch,
+            "q_max": q_max_ch,
+            "qrg": qrg_ch,
             "n_points": guinier_results.get("chosen_n_points"),
             "fit_quality": guinier_results.get("chosen_quality"),
             "interval_r2": chosen_result.get("interval_r2"),
@@ -248,6 +258,9 @@ def _fit_guinier_paths(
             qmn, qmx = guinier_region.get("q_min"), guinier_region.get("q_max")
             if qmn is not None and qmx is not None:
                 f.write(f"  q range = [{qmn:.5g}, {qmx:.5g}] nm^-1\n")
+            qrg = guinier_region.get("qrg")
+            if qrg is not None:
+                f.write(f"  qRg = {float(qrg):.4f}\n")
             if guinier_region.get("n_points") is not None:
                 f.write(f"  n points = {guinier_region['n_points']}\n")
             fp = guinier_region.get("first_point_1based")
@@ -272,13 +285,13 @@ def _fit_guinier_paths(
                 f.write(f"  validation R^2 (on [q_max/2, q_max]) = {val_r2:.4f}\n")
             qcls = guinier_region.get("quality_class")
             if qcls is not None:
-                f.write(f"  quality class = {qcls}\n")
+                f.write(f"  fit quality = {qcls}\n")
             sm = guinier_region.get("selection_mode")
             if sm is not None:
                 f.write(f"  selection mode = {sm}\n")
             cl = guinier_region.get("classification")
             if cl is not None:
-                f.write(f"  classification ([0, q_max/2]) = {cl}\n")
+                f.write(f"  low-q classification ([0, q_max/2]) = {cl}\n")
             f.write(f"  Guinier plot = {guinier_plot_path}\n")
         else:
             f.write("  No valid Guinier result chosen.\n")
@@ -375,10 +388,10 @@ def _fit_guinier_paths(
         # Quality passport (same fields as results.txt / liveview Guinier pane).
         qcls = guinier_region.get("quality_class")
         if qcls is not None:
-            md_lines.append(f"Quality class: **{qcls}**.\n")
+            md_lines.append(f"Fit quality: **{qcls}**.\n")
         cl = guinier_region.get("classification")
         if cl is not None:
-            md_lines.append(f"Classification: **{cl}**.\n")
+            md_lines.append(f"Low-q classification: **{cl}**.\n")
         ir2 = guinier_region.get("interval_r2")
         if ir2 is not None:
             try:
@@ -388,9 +401,9 @@ def _fit_guinier_paths(
         fq = guinier_region.get("fit_quality")
         if fq is not None:
             try:
-                md_lines.append(f"Fit quality: **{float(fq):.4f}**.\n")
+                md_lines.append(f"Selection metric: **{float(fq):.4f}**.\n")
             except (TypeError, ValueError):
-                md_lines.append(f"Fit quality: **{fq}**.\n")
+                md_lines.append(f"Selection metric: **{fq}**.\n")
         val_r2 = guinier_region.get("validation_r2")
         if val_r2 is not None:
             try:

@@ -32,6 +32,7 @@ class MixturePane(QWidget):
     params_changed = pyqtSignal()
     fit_selection_changed = pyqtSignal(str)
     rerun_mixture_requested = pyqtSignal()
+    start_modeling_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -47,9 +48,12 @@ class MixturePane(QWidget):
         self._rerun = QPushButton("Re-run D(R)")
         self._rerun.clicked.connect(self.rerun_mixture_requested.emit)
         mode_row.addWidget(self._rerun)
+        self._start = QPushButton("Start modeling")
+        self._start.clicked.connect(self.start_modeling_requested.emit)
+        mode_row.addWidget(self._start)
 
         self._hint = QLabel(
-            "Select MIXTURE for automatic D(R) parametric fit; Re-run D(R) for a manual re-run"
+            "Open Start modeling for MIXTURE (Confirm runs in a separate app)."
         )
         self._hint.setWordWrap(True)
         self._hint.setAlignment(Qt.AlignTop | Qt.AlignLeft)
@@ -118,8 +122,14 @@ class MixturePane(QWidget):
         body = QHBoxLayout(self._body)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(10)
-        body.addLayout(plots_row, 3)
-        body.addLayout(ctrl, 1)
+        # Slim liveview chrome: D(R) preview only; full controls live in guisaxs-dr.
+        body.addWidget(dist_box, 1)
+        iq_box.setVisible(False)
+        for w in (self._fit_combo, self._sp_max_nph, self._sp_r_max, self._sp_poly_max, self._q_min, self._q_max):
+            w.setVisible(False)
+        self._rb_none.setVisible(False)
+        self._rb_mixture.setVisible(False)
+        self._rerun.setVisible(False)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -127,6 +137,12 @@ class MixturePane(QWidget):
         lay.addLayout(mode_row)
         lay.addWidget(self._hint, 0)
         lay.addWidget(self._body, 1)
+        # Keep ctrl widgets in a hidden layout so APIs still work.
+        self._hidden_ctrl = QWidget()
+        self._hidden_ctrl.setVisible(False)
+        hc = QVBoxLayout(self._hidden_ctrl)
+        hc.addLayout(ctrl)
+        lay.addWidget(self._hidden_ctrl)
 
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
@@ -168,14 +184,11 @@ class MixturePane(QWidget):
         self.mode_changed.emit(self.mixture_mode())
 
     def _update_mode_ui(self) -> None:
-        enabled = self.mixture_mode() == "mixture"
-        self._hint.setVisible(not enabled)
-        self._body.setVisible(enabled)
-        self._rerun.setEnabled(enabled)
+        self._hint.setVisible(True)
+        self._body.setVisible(True)
+        self._rerun.setEnabled(self.mixture_mode() == "mixture")
         for w in self._param_widgets():
-            w.setEnabled(enabled)
-        if not enabled:
-            self.clear_view()
+            w.setEnabled(self.mixture_mode() == "mixture")
 
     def mixture_mode(self) -> str:
         return "mixture" if self._rb_mixture.isChecked() else "none"

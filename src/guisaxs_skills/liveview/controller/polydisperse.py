@@ -9,7 +9,6 @@ from PyQt5.QtWidgets import QMessageBox
 from ..pipeline.polydisperse_pipeline import PolydispersePipelineParts, build_polydisperse_steps
 from ..ingest.sample_revision import is_dat_path
 from ..session.output_paths import analysis_output_root
-from ..session.state import PolydisperseMixtureMode
 from ...logic.runner_qprocess import RunOutcome
 
 if TYPE_CHECKING:
@@ -46,20 +45,26 @@ class LiveviewPolydisperseHandler:
         return cur.path if cur is not None else ""
 
     def _resolve_profile_path(self) -> Optional[str]:
+        from ..ingest.curve_classify import usable_analysis_curve_path
+
         right = self._c.right
         if right is not None:
-            cand = (right.polydisperse_coordinator.profile_path or "").strip()
-            if cand and os.path.isfile(cand):
-                return str(Path(cand).expanduser().resolve())
+            cand = usable_analysis_curve_path(right.polydisperse_coordinator.profile_path)
+            if cand:
+                return cand
 
         sample = self._current_sample_path()
-        if sample and is_dat_path(sample) and os.path.isfile(sample):
-            return str(Path(sample).expanduser().resolve())
+        if sample and is_dat_path(sample):
+            cand = usable_analysis_curve_path(sample)
+            if cand:
+                return cand
 
         boarding = self._c.samples.boarding_for(sample) if sample else None
         p = self._c.state.preferred_profile_path(boarding=boarding)
-        if p is not None and p.is_file():
-            return str(p.resolve())
+        if p is not None:
+            cand = usable_analysis_curve_path(p)
+            if cand:
+                return cand
         return None
 
     def _profile_root_and_tiff(self) -> tuple[Optional[str], Optional[Path], str]:
@@ -159,27 +164,15 @@ class LiveviewPolydisperseHandler:
         self._c.executor.enqueue_job(job)
 
     def on_mixture_rerun(self) -> None:
-        prof, root = self._profile_and_root()
-        if not prof or root is None:
-            return
-        if self._c.state.polydisperse_mixture_mode == PolydisperseMixtureMode.NONE:
-            return
-        right = self._c.right
-        if right is not None:
-            right.polydisperse_coordinator.sync_params_to_state()
-        steps = build_polydisperse_steps(
-            prof,
-            output_root=root,
-            state=self._c.state,
-            parts=PolydispersePipelineParts.MIXTURE_ONLY,
-            load_yaml=self._c.executor._load_yaml_options,
-        )
-        if not steps:
-            return
-        job = self._c.executor.build_polydisperse_manual_job(
-            profile_abs=prof, steps=steps, output_root=root
-        )
-        self._c.executor.enqueue_job(job)
+        """Modeling is Confirm-only in guisaxs-dr (not liveview SkillRunner)."""
+        parent = self._c.parent_widget
+        if parent is not None:
+            QMessageBox.information(
+                parent,
+                "Polydisperse",
+                "Distribution modeling runs in the Distribution Modeling app.\n"
+                "Use Start modeling in the polydisperse window, then Confirm.",
+            )
 
     def update_profile_from_artifacts(self, result: dict) -> None:
         if not self._c.state.polydisperse_armed:

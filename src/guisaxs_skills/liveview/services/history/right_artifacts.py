@@ -68,18 +68,24 @@ def _resolve_profile(
     tiff_path: str,
     watch_mode: LiveviewWatchMode,
 ) -> tuple[Path, str]:
+    from ...ingest.curve_classify import usable_analysis_curve_path
+
     if is_dat_path(tiff_path or ""):
         root = watchdir.expanduser().resolve()
     else:
         root = tiff_output_root(watchdir=watchdir, tiff_path=tiff_path, mode=watch_mode)
     sub = subtracted_dat_path(root=root, stem=stem)
     integ = integrated_dat_path(root=root, stem=stem, integrator_ready=True)
+    candidates: list[Path] = []
     if is_dat_path(tiff_path or "") and Path(tiff_path).is_file():
-        boarded = Path(tiff_path).expanduser().resolve()
-        prof = boarded if boarded.is_file() else (sub if sub.is_file() else integ)
-    else:
-        prof = sub if sub.is_file() else integ
-    profile_path = str(prof.resolve()) if prof.is_file() else ""
+        candidates.append(Path(tiff_path).expanduser().resolve())
+    candidates.append(sub)
+    candidates.append(integ)
+    profile_path = ""
+    for cand in candidates:
+        profile_path = usable_analysis_curve_path(cand)
+        if profile_path:
+            break
     return root, profile_path
 
 
@@ -133,10 +139,19 @@ def discover_monodisperse_artifacts(
             bundle.guinier = {"results_path": str(txt)}
             break
     fd = fit_distances_dir(root) / stem
-    gnom_out = fd / f"{stem}.out"
-    if not gnom_out.is_file():
+    gnom_out = None
+    for cand in (
+        fd / "gnom_best.out",
+        fd / f"{stem}_gnom.out",
+        fd / f"{stem}.out",
+        fd / "datgnom_best.out",  # legacy auto-path name
+    ):
+        if cand.is_file():
+            gnom_out = cand
+            break
+    if gnom_out is None:
         outs = sorted(fd.glob("*.out"), key=lambda p: p.stat().st_mtime, reverse=True)
-        gnom_out = outs[0] if outs else gnom_out
+        gnom_out = outs[0] if outs else fd / "gnom_best.out"
     if gnom_out.is_file():
         bundle.gnom = {
             "best_gnom_out_path": str(gnom_out),

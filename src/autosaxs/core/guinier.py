@@ -49,7 +49,7 @@ def parse_guinier_results_txt(results_path: Optional[str]) -> Dict[str, Any]:
     Parse ``fit_guinier`` ``*_results.txt`` (chosen block + method comparison).
 
     Returns a dict with chosen fields when present, e.g. ``rg``, ``i0``, ``q_min``,
-    ``q_max``, ``first_point_1based``, ``last_point_1based``, ``classification``,
+    ``q_max``, ``qrg``, ``first_point_1based``, ``last_point_1based``, ``classification``,
     ``selection_mode``, ``source``, plus ``methods`` mapping method name → details.
     Empty dict if the path is missing or unreadable.
     """
@@ -113,6 +113,10 @@ def parse_guinier_results_txt(results_path: Optional[str]) -> Dict[str, Any]:
                 out["q_min"] = float(m.group(1))
                 out["q_max"] = float(m.group(2))
                 continue
+            m = re.match(r"\s*qRg\s*=\s*([\d.+\-eE]+)", line)
+            if m:
+                out["qrg"] = float(m.group(1))
+                continue
             m = re.match(r"\s*n points\s*=\s*(\d+)", line)
             if m:
                 out["n_points"] = int(m.group(1))
@@ -145,8 +149,13 @@ def parse_guinier_results_txt(results_path: Optional[str]) -> Dict[str, Any]:
             if m:
                 out["validation_r2"] = float(m.group(1))
                 continue
-            m = re.match(r"\s*quality class\s*=\s*(.+)", line)
+            m = re.match(r"\s*(?:fit )?quality class\s*=\s*(.+)", line)
             if m:
+                out["quality_class"] = m.group(1).strip()
+                continue
+            m = re.match(r"\s*fit quality\s*=\s*(.+)", line)
+            if m:
+                # Prefer explicit fit-quality line when present (new wording).
                 out["quality_class"] = m.group(1).strip()
                 continue
             m = re.match(r"\s*selection mode\s*=\s*(.+)", line)
@@ -154,6 +163,10 @@ def parse_guinier_results_txt(results_path: Optional[str]) -> Dict[str, Any]:
                 out["selection_mode"] = m.group(1).strip()
                 continue
             m = re.match(r"\s*classification\s*\([^)]*\)\s*=\s*(.+)", line)
+            if m:
+                out["classification"] = m.group(1).strip()
+                continue
+            m = re.match(r"\s*low-q classification\s*\([^)]*\)\s*=\s*(.+)", line)
             if m:
                 out["classification"] = m.group(1).strip()
                 continue
@@ -202,6 +215,21 @@ def parse_guinier_results_txt(results_path: Optional[str]) -> Dict[str, Any]:
 
     if out.get("q_min") is not None and out.get("q_max") is not None:
         out["guinier_interval"] = (out["q_min"], out["q_max"])
+    if out.get("qrg") is None and out.get("q_max") is not None and out.get("rg") is not None:
+        try:
+            out["qrg"] = float(out["q_max"]) * float(out["rg"])
+        except (TypeError, ValueError):
+            pass
+    # Normalize legacy quality_class tokens from older results.txt files.
+    qc = out.get("quality_class")
+    if isinstance(qc, str):
+        _legacy = {
+            "validated_strong": "good",
+            "validated": "acceptable",
+            "interval_only": "weak in Guinier region",
+            "qrg limit violated": "weak in Guinier region",
+        }
+        out["quality_class"] = _legacy.get(qc.strip().lower(), qc)
     return out
 
 
@@ -655,22 +683,75 @@ def _select_adaptive_candidate(
     return max(candidates, key=key_combined), "best_available"
 
 
-def _quality_class_from_selection(
-    selection_mode: str,
+def _quality_class_from_metrics(
     validation_r2: float,
     interval_r2: float,
     *,
     degenerate: bool = False,
 ) -> str:
+    """
+    Score a Guinier fit from its metrics (not from how the interval was chosen).
+
+    Agreed passport ``fit quality`` labels:
+
+    - ``good``: validated (validation R² ≥ 0.5) and val ≥ 0.85
+    - ``acceptable``: validated and 0.5 ≤ val < 0.85
+    - ``weak in Guinier region``: not validated; interval R² ≥ 0.85
+    - ``weak``: not validated; interval R² < 0.85
+    - ``degenerate``: adaptive fallback with no normal candidates
+
+    Validation R² below 0.5 does not count as validated (same as missing validation).
+    """
     if degenerate:
         return "degenerate"
-    if selection_mode == "validation_r2":
-        if not np.isnan(validation_r2) and validation_r2 >= ADAPTIVE_VALIDATED_STRONG_R2:
-            return "validated_strong"
-        return "validated"
-    if selection_mode == "interval_r2":
-        return "interval_only"
+    validated = (
+        not (isinstance(validation_r2, float) and np.isnan(validation_r2))
+        and float(validation_r2) >= ADAPTIVE_SELECTION_R2_MIN
+    )
+    if validated:
+        if float(validation_r2) >= ADAPTIVE_VALIDATED_STRONG_R2:
+            return "good"
+        return "acceptable"
+    if float(interval_r2) >= ADAPTIVE_VALIDATED_STRONG_R2:
+        return "weak in Guinier region"
     return "weak"
+
+
+def evaluate_guinier_fit(
+    q: np.ndarray,
+    I: np.ndarray,
+    *,
+    rg: float,
+    i0: float,
+    interval_r2: float,
+    degenerate: bool = False,
+) -> Dict[str, Any]:
+    """
+    Evaluate an already-chosen Guinier fit (auto or manual) with one owned path.
+
+    Computes ``validation_r2``, ``quality_class``, ``classification``, and
+    ``fit_quality``. Callers may still record ``selection_mode`` separately
+    (e.g. ``validation_r2`` vs ``fixed_interval``) without changing these scores.
+    """
+    rg_f = float(rg)
+    i0_f = float(i0)
+    ir2 = float(interval_r2)
+    val_r2 = _validation_r2_or_nan(q, I, rg_f, i0_f)
+    quality_class = _quality_class_from_metrics(val_r2, ir2, degenerate=degenerate)
+    classification = _classification_guinier(q, I, rg_f, i0_f)
+    if isinstance(val_r2, float) and np.isnan(val_r2):
+        val_out: Optional[float] = None
+        fit_quality = ir2
+    else:
+        val_out = float(val_r2)
+        fit_quality = float(val_r2)
+    return {
+        "validation_r2": val_out,
+        "quality_class": quality_class,
+        "classification": classification,
+        "fit_quality": fit_quality,
+        "interval_r2": ir2,
+    }
 
 
 def _degenerate_adaptive_fallback(
@@ -766,30 +847,27 @@ def run_adaptive_guinier(
 
     rg = chosen["rg"]
     i0 = chosen["i0"]
-    val_r2 = chosen.get("validation_r2", float("nan"))
-    interval_r2 = chosen.get("interval_r2", chosen.get("r_squared", 0.0))
-    if isinstance(val_r2, float) and np.isnan(val_r2):
-        val_r2_out: Optional[float] = None
-    else:
-        val_r2_out = float(val_r2)
-
-    if selection_mode == "validation_r2" and not np.isnan(val_r2):
-        fit_quality = float(val_r2)
-    else:
-        fit_quality = float(interval_r2)
-
-    quality_class = _quality_class_from_selection(
-        selection_mode, float(val_r2) if not np.isnan(val_r2) else float("nan"), float(interval_r2),
+    interval_r2 = float(chosen.get("interval_r2", chosen.get("r_squared", 0.0)))
+    scored = evaluate_guinier_fit(
+        q,
+        I,
+        rg=rg,
+        i0=i0,
+        interval_r2=interval_r2,
         degenerate=degenerate,
     )
-    classification = _classification_guinier(q, I, rg, i0)
+    val_r2_out = scored["validation_r2"]
+    fit_quality = float(scored["fit_quality"])
+    quality_class = str(scored["quality_class"])
+    classification = scored["classification"]
 
+    q_max = float(chosen["q_max"])
     return {
         "Rg": rg,
         "I0": i0,
         "n_points": chosen["n_points"],
         "fit_quality": fit_quality,
-        "guinier_interval": (chosen["q_min"], chosen["q_max"]),
+        "guinier_interval": (chosen["q_min"], q_max),
         "interval_r2": float(interval_r2),
         "validation_r2": val_r2_out,
         "sigma_rg": chosen.get("sigma_rg"),
@@ -801,6 +879,7 @@ def run_adaptive_guinier(
         "classification": classification,
         "n_candidates": len(candidates),
         "i_start": chosen.get("i_start"),
+        "qrg": q_max * float(rg),
     }
 
 

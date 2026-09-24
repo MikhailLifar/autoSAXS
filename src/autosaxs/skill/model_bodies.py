@@ -408,6 +408,20 @@ def _model_bodies_paths(
     with open(fit_params_path, "w") as fp:
         yaml.dump(fit_params_doc, fp, default_flow_style=False)
 
+    run_params_path = os.path.join(output_dir, "model_bodies_run_params.yml")
+    with open(run_params_path, "w", encoding="utf-8") as fp:
+        yaml.dump(
+            {
+                "skill": "model_bodies",
+                "shapes": list(shapes_requested) if shapes_requested else list(BODIES_SHAPES_LIST),
+                "first": int(first_pt),
+                "last": int(last_pt) if last_pt is not None else None,
+                "profile": profile,
+            },
+            fp,
+            default_flow_style=False,
+        )
+
     if fits_data:
         fits_yml = {s: {**p, "chi2": float(c)} for s, p, c, _q, _i in fits_data}
         with open(bodies_fits_yml, "w") as f:

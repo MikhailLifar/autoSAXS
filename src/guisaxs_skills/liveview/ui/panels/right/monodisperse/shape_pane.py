@@ -67,6 +67,7 @@ class ShapePane(QWidget):
     n_runs_changed = pyqtSignal(int)
     denss_settings_changed = pyqtSignal()
     rerun_shape_requested = pyqtSignal()
+    start_modeling_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -84,9 +85,12 @@ class ShapePane(QWidget):
         self._rerun = QPushButton("Re-run shape")
         self._rerun.clicked.connect(self.rerun_shape_requested.emit)
         mode_row.addWidget(self._rerun)
+        self._start = QPushButton("Start modeling")
+        self._start.clicked.connect(self.start_modeling_requested.emit)
+        mode_row.addWidget(self._start)
 
         self._hint = QLabel(
-            "Select BODIES, DAMMIF or DENSS for automatic shape recovery; Re-run shape for a manual re-run"
+            "Open Start modeling for BODIES / DAMMIF / DENSS (Confirm runs in a separate app)."
         )
         self._hint.setWordWrap(True)
         self._hint.setAlignment(Qt.AlignTop | Qt.AlignLeft)
@@ -185,9 +189,16 @@ class ShapePane(QWidget):
         self._fit_box = fit_box
         self._view_box = view_box
         self._ctrl_box = ctrl_box
-        body.addWidget(fit_box, 2)
-        body.addWidget(view_box, 2)
-        body.addWidget(ctrl_box, 1)
+        # Slim liveview chrome: 3D preview only; full controls live in guisaxs-shape.
+        body.addWidget(view_box, 1)
+        fit_box.setVisible(False)
+        ctrl_box.setVisible(False)
+        for i in range(mode_row.count()):
+            w = mode_row.itemAt(i).widget()
+            if w is self._rerun:
+                w.setVisible(False)
+            elif w in (self._rb_none, self._rb_bodies, self._rb_dammif, self._rb_denss):
+                w.setVisible(False)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -215,14 +226,21 @@ class ShapePane(QWidget):
 
     def set_shape_mode(self, mode: str) -> None:
         m = (mode or "none").strip().lower()
-        if m == "dammif":
-            self._rb_dammif.setChecked(True)
-        elif m == "bodies":
-            self._rb_bodies.setChecked(True)
-        elif m == "denss":
-            self._rb_denss.setChecked(True)
-        else:
-            self._rb_none.setChecked(True)
+        radios = (self._rb_none, self._rb_bodies, self._rb_dammif, self._rb_denss)
+        for rb in radios:
+            rb.blockSignals(True)
+        try:
+            if m == "dammif":
+                self._rb_dammif.setChecked(True)
+            elif m == "bodies":
+                self._rb_bodies.setChecked(True)
+            elif m == "denss":
+                self._rb_denss.setChecked(True)
+            else:
+                self._rb_none.setChecked(True)
+        finally:
+            for rb in radios:
+                rb.blockSignals(False)
         self._update_mode_ui()
 
     def selected_shapes(self) -> List[str]:
@@ -343,42 +361,10 @@ class ShapePane(QWidget):
         self.set_status("—")
 
     def _update_mode_ui(self) -> None:
-        mode = self.shape_mode()
-        active = mode != "none"
-        self._hint.setVisible(not active)
-        self._body.setVisible(active)
-        bodies = mode == "bodies"
-        dammif = mode == "dammif"
-        denss = mode == "denss"
-        self._lbl_models.setVisible(bodies)
-        self._shapes.setVisible(bodies)
-        self._lbl_n_runs.setVisible(dammif)
-        self._btn_dammif_info.setVisible(dammif)
-        self._n_runs.setVisible(dammif)
-        for w in (
-            self._lbl_denss_protocol,
-            self._btn_denss_info,
-            self._denss_protocol,
-            self._lbl_denss_mode,
-            self._denss_mode,
-            self._lbl_denss_n_maps,
-            self._denss_n_maps,
-        ):
-            w.setVisible(denss)
-        show_n_maps = denss and self.denss_protocol() != "pilot"
-        self._lbl_denss_n_maps.setVisible(show_n_maps)
-        self._denss_n_maps.setVisible(show_n_maps)
+        # Preview always visible; engine controls live in guisaxs-shape.
+        self._hint.setVisible(True)
+        self._body.setVisible(True)
         self._apply_enabled_state()
-        if mode == "none":
-            self.clear_view()
-        elif mode == "dammif":
-            self.set_status("DAMMIF after GNOM · Re-run shape to apply n_runs.")
-        elif mode == "denss":
-            self.set_status(
-                f"DENSS ({self.denss_protocol()}) · Re-run shape to apply protocol settings."
-            )
-        else:
-            self.set_status("BODIES after GNOM · Re-run shape to re-execute on the current profile.")
 
     @property
     def viewer(self) -> LiveviewViewer3D:

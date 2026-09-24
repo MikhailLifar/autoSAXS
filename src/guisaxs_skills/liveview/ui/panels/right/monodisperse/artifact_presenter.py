@@ -29,7 +29,7 @@ from .....services.artifacts import (
 )
 from .....services.dam_models import build_dam_model_catalog
 from .....services.denss_models import build_denss_model_catalog
-from .format_display import format_display_number, scalar_value
+from .format_display import scalar_value
 from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
 
 
@@ -52,7 +52,9 @@ class MonodisperseArtifactPresenter:
         tiff_path: str = "",
         watch_mode: LiveviewWatchMode = LiveviewWatchMode.FLAT,
     ) -> None:
-        self._profile_path = (profile_path or "").strip()
+        from .....ingest.curve_classify import usable_analysis_curve_path
+
+        self._profile_path = usable_analysis_curve_path(profile_path)
         if output_root is not None:
             self._output_root = output_root.expanduser().resolve()
         else:
@@ -94,13 +96,13 @@ class MonodisperseArtifactPresenter:
         return out
 
     def _effective_profile_path(self) -> str:
-        prof = (self._profile_path or "").strip()
-        if prof and os.path.isfile(prof):
+        from .....ingest.curve_classify import usable_analysis_curve_path
+
+        prof = usable_analysis_curve_path(self._profile_path)
+        if prof:
             return prof
         p = self._state.preferred_profile_path()
-        if p is not None and p.is_file():
-            return str(p.resolve())
-        return ""
+        return usable_analysis_curve_path(p) if p is not None else ""
 
     def _resolve_result_path(self, val: object) -> str:
         return resolve_artifact_path(val, bases=self._artifact_bases())
@@ -165,18 +167,6 @@ class MonodisperseArtifactPresenter:
         if prof and results_path:
             self._wizard.guinier_pane.show_guinier(prof, results_path)
         try:
-            rg = data.get("rg")
-            interval = data.get("interval_r2")
-            if interval is None:
-                interval = data.get("fit_quality")
-            if isinstance(interval, (int, float)) and not isinstance(interval, bool):
-                interval = format_display_number(interval)
-            self._wizard.guinier_pane.set_diagnostics(
-                quality_class=str(data.get("quality_class") or ""),
-                classification=str(data.get("classification") or ""),
-                rg_nm=f"{format_display_number(rg)} nm" if rg is not None else "",
-                interval_r2=str(interval or ""),
-            )
             fp = data.get("first_point_1based")
             lp = data.get("last_point_1based")
             if fp is None or lp is None:
@@ -191,7 +181,12 @@ class MonodisperseArtifactPresenter:
                 wp = dict(self._state.monodisperse_wizard_params or {})
                 wp["guinier_first"] = int(fp)
                 wp["guinier_last"] = int(lp)
+                # Snapshot auto interval when this was not a fixed-interval refine.
+                sel = str(data.get("selection_mode") or "").strip().lower()
+                if sel != "fixed_interval":
+                    wp["guinier_auto"] = {"first": int(fp), "last": int(lp)}
                 self._state.monodisperse_wizard_params = wp
+            self._wizard.guinier_pane.set_diagnostics(result=data)
         except Exception:
             pass
 
@@ -246,10 +241,12 @@ class MonodisperseArtifactPresenter:
 
     def _update_gnom_params_from_result(self, result: dict, *, gnom_out_path: str) -> None:
         """Seed working GNOM params; refresh auto snapshot after DATGNOM (not refine) runs."""
+        from autosaxs.core.atsas_gnom import normalize_force_zero
         from autosaxs.core.gnom import parse_gnom_out
 
         snap: dict = {}
         alpha = None
+        parsed: dict = {}
         try:
             parsed = parse_gnom_out(Path(gnom_out_path).read_text(errors="replace"))
             alpha = parsed.get("current_alpha")
@@ -298,18 +295,22 @@ class MonodisperseArtifactPresenter:
             except (TypeError, ValueError):
                 pass
         is_refined = str(result.get("refined") or "").strip().lower() in ("true", "1", "yes")
+        # Live skill results always include ``refined``; disk discovery omits it.
+        live_skill_result = "refined" in result
         wp = dict(self._state.monodisperse_wizard_params or {})
-        if not is_refined:
-            # Auto DATGNOM always forces P(0)=P(Dmax)=0.
-            snap["force_zero_rmin"] = "Y"
-            snap["force_zero_rmax"] = "Y"
-        else:
-            # Refine path: keep the user's confirmed boundary conditions.
-            for k in ("force_zero_rmin", "force_zero_rmax"):
-                if wp.get(k) is not None:
-                    snap[k] = wp[k]
-                else:
-                    snap[k] = "Y"
+
+        def _resolve_force_zero(key: str) -> str:
+            parsed_val = parsed.get(key)
+            if parsed_val is not None:
+                return normalize_force_zero(parsed_val)
+            if wp.get(key) is not None and (is_refined or not live_skill_result):
+                # Refine live, or disk reload: keep session / refine.conf value.
+                return normalize_force_zero(wp.get(key))
+            # Live auto DATGNOM always forces P(0)=P(Dmax)=0.
+            return "Y"
+
+        snap["force_zero_rmin"] = _resolve_force_zero("force_zero_rmin")
+        snap["force_zero_rmax"] = _resolve_force_zero("force_zero_rmax")
         rg = scalar_value(result.get("rg_guinier_nm"))
         if rg is not None and rg not in ("", None):
             try:
@@ -343,8 +344,10 @@ class MonodisperseArtifactPresenter:
         try:
             from .config_sync import MonodisperseConfigSync
 
-            # Persist refine params (incl. force_zero) without rebuilding the whole wizard sync.
-            MonodisperseConfigSync(state=self._state, wizard=self._wizard).persist_confs()
+            # Auto ingest must not rewrite refine.conf (would reset boundary conditions to Y).
+            MonodisperseConfigSync(state=self._state, wizard=self._wizard).persist_confs(
+                write_refine=is_refined
+            )
         except Exception:
             pass
 
@@ -410,7 +413,10 @@ class MonodisperseArtifactPresenter:
     def refresh_shape_view_for_current_mode(self) -> None:
         """Clear shared shape previews, then reload disk artifacts for the active mode (if any)."""
         pane = self._wizard.shape_pane
-        mode = pane.shape_mode()
+        mode_state = self._state.monodisperse_shape_mode
+        mode = str(getattr(mode_state, "value", mode_state) or pane.shape_mode() or "none").lower()
+        if mode != pane.shape_mode():
+            pane.set_shape_mode(mode)
         pane.clear_view()
         if mode == "none":
             return
@@ -565,6 +571,24 @@ class MonodisperseArtifactPresenter:
         if mode:
             self._wizard.shape_pane.set_shape_mode(mode)
             self._load_shape_artifacts_for_mode(root=root, stem=bundle.stem, mode=mode)
+            try:
+                from .....modeling.run_params import apply_disk_params_to_session_state
+                from .....session.output_paths import dammif_dir, denss_dir, model_bodies_dir
+
+                if mode == "dammif":
+                    family = dammif_dir(root)
+                elif mode == "bodies":
+                    family = model_bodies_dir(root)
+                else:
+                    family = denss_dir(root)
+                apply_disk_params_to_session_state(
+                    self._state,
+                    output_dir=family / bundle.stem,
+                    profile_path=bundle.profile_path or self._profile_path,
+                )
+                self._wizard.bind_state(self._state)
+            except Exception:
+                pass
 
     @property
     def last_guinier_handoff(self) -> Dict[str, Any]:

@@ -97,10 +97,15 @@ class PolydispersePlotClickRouter:
         self._mix_iq_dlg: Optional[_PolyMixtureIqViewerDialog] = None
         self._mix_dist_dlg: Optional[_PolyMixtureDistViewerDialog] = None
         self._sizes_open: Optional[Callable[[], None]] = None
+        self._guinier_open: Optional[Callable[[], None]] = None
 
     def set_sizes_open_handler(self, handler: Optional[Callable[[], None]]) -> None:
         """When set, clicks on sizes I(q) / D(R) GNOM plots open the adjust wizard."""
         self._sizes_open = handler
+
+    def set_guinier_open_handler(self, handler: Optional[Callable[[], None]]) -> None:
+        """When set, clicks on the Guinier preview open the adjust wizard."""
+        self._guinier_open = handler
 
     def wire(self, plot) -> None:
         plot.mpl_connect("button_press_event", lambda ev, p=plot: self._on_click(ev, p))
@@ -136,6 +141,10 @@ class PolydispersePlotClickRouter:
 
     def open_path(self, path: str, *, viewer: Optional[str] = None) -> None:
         suf = Path(path).suffix.lower()
+        if viewer == "guinier":
+            if self._guinier_open is not None:
+                self._guinier_open()
+                return
         if viewer in ("gnom_iq", "gnom_dr") or (viewer is None and suf == ".out"):
             if self._sizes_open is not None:
                 self._sizes_open()

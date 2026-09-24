@@ -21,9 +21,10 @@ from ..deps import EventBus, EventType
 _CLOSE_FIT_RMAX_FACTORS = (0.90, 0.95, 1.00, 1.05, 1.10)
 _FORCE_ZERO_OFF_RMAX_FACTOR = 1.5
 
-# Stable artifact names (no Rg/Dmax in the filename — re-runs overwrite).
-DATGNOM_BEST_OUT = "datgnom_best.out"
+# One stable best-out name for both DATGNOM (auto) and GNOM (manual refine).
+# Dual names (``datgnom_best.out`` vs ``gnom_best.out``) left orphans across re-runs.
 GNOM_BEST_OUT = "gnom_best.out"
+DATGNOM_BEST_OUT = GNOM_BEST_OUT  # deprecated alias — same path so re-runs overwrite
 FORCE_ZERO_OFF_OUT = "gnom_force_zero_off.out"
 
 
@@ -49,9 +50,22 @@ def clear_ensemble_dir(sample_output_dir: str) -> None:
 
 
 def cleanup_legacy_best_outs(output_dir: str, *, keep: str) -> None:
-    """Remove older Rg/Dmax-stamped best ``.out`` files that would accumulate across runs."""
+    """
+    Remove competing top-level best ``.out`` files from prior runs.
+
+    Auto DATGNOM and manual GNOM used different filenames historically; a re-run
+    must not leave the other engine's best (or Rg/Dmax-stamped / eval temps) behind.
+    Does not touch ``ensemble/`` (that tree is wiped separately when regenerated).
+    """
     keep_abs = os.path.abspath(keep)
-    for pat in ("datgnom_rg_*.out", "gnom_rmax_*.out"):
+    patterns = (
+        "datgnom_best.out",
+        "gnom_best.out",
+        "datgnom_rg_*.out",
+        "gnom_rmax_*.out",
+        "datgnom_eval_*",
+    )
+    for pat in patterns:
         for p in glob.glob(os.path.join(output_dir, pat)):
             if os.path.abspath(p) == keep_abs:
                 continue
