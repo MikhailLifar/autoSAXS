@@ -120,7 +120,7 @@ Analysis steps append only if `session.analysis_enabled()`. Auto/Manual does **n
 
 `CompletedWork` (owned by `Job.completed`) tracks finished coarse phases (`INTEGRATE` / `SUBTRACT` / `REPORT`), finished analysis step names, and skill `results` so mid-job arming can append later analysis without re-running finished work, and cancel-requeue can resume with placeholders intact. The executor never keeps a parallel progress store — it only calls `Job.mark_step_done` / `with_remaining_steps` / `as_retry`.
 
-Shape / mixture arming is the same path: session facts change → next `plan_for(..., completed=job.completed)` on the current auto job. There is no post-job followup enqueue. Modeling (`model_dam` / `model_bodies` / `model_density` / `model_mixture`) stays **out** of the liveview executor; when the shape or DR mini-app is open, `ModelingChildManager` auto-sends Confirm after each successful context push (and after child ready on start).
+Shape / mixture arming is the same path: session facts change → next `plan_for(..., completed=job.completed)` on the current auto job. There is no post-job followup enqueue. Modeling skills (`model_dam` / `model_bodies` / `model_density` / `model_mixture`) stay **out** of SkillRunner. When the shape or DR mini-app is open **and Auto**, the pipeline appends a synthetic `confirm_shape` / `confirm_dr` step after distances / sizes; the executor emits `modeling_confirm_requested` → `ModelingChildManager.request_confirm_*`. Context push (history browse / path sync) never Confirm.
 
 ### 1.7 Middle layout (intake × buffer)
 
@@ -195,13 +195,13 @@ Modeling apps live under `guisaxs_skills/modeling/` (entries `guisaxs-shape` / `
 | Select calibrant (proxy only) | Right analysis empty | No usable profile; no foreign-stem fallback |
 | Arm analysis | Current job’s remaining steps grow analysis | Session arming; executor replans current via `plan_for(completed=…)` |
 | Live skill finish | Right panes update | `present_right(LIVE)` → `ingest_skill_result` → `_ingest_*` |
-| Open shape/DR modeling | Child shows current sample paths; auto-Confirm when idle | `ModelingChildManager` pushes `ModelingContext` (`family/<stem>`) then `send_confirm` |
+| Open shape/DR modeling | Child shows current sample paths; Confirm only via pipeline step or user click | `ModelingChildManager` pushes `ModelingContext` (`family/<stem>`); `confirm_shape` / `confirm_dr` after analysis |
 
 ---
 
 ## 4. Perspective: remaining architecture improvements
 
-**Done (do not re-open):** unused `MiddleViewHint` / `ProcessingMode` removed; Session API for intake/stop/buffer/mask/arming; middle paint only via `sync_middle_view`; right entry via `present_right`; ingest via `RevisionIngress`; executor collaborators (`manual_jobs`, `artifact_enrichment`); phase-boundary replan (`plan_for(..., completed=)` on current auto job only); `Job.completed` as sole progress owner; post-job shape/mixture followups deleted (arming is replan-only; Confirm-while-open for shape **and** DR via `ModelingChildManager.send_confirm`).
+**Done (do not re-open):** unused `MiddleViewHint` / `ProcessingMode` removed; Session API for intake/stop/buffer/mask/arming; middle paint only via `sync_middle_view`; right entry via `present_right`; ingest via `RevisionIngress`; executor collaborators (`manual_jobs`, `artifact_enrichment`); phase-boundary replan (`plan_for(..., completed=)` on current auto job only); `Job.completed` as sole progress owner; post-job shape/mixture followups deleted (arming is replan-only); modeling Confirm is pipeline-owned (`confirm_shape` / `confirm_dr` → `ModelingChildManager.request_confirm_*`), never context-push.
 
 **Still worth doing when touching the area:**
 

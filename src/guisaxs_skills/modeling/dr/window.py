@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (
 from ...liveview.ui.panels.right.polydisperse.plots import MixtureDistPlot, MixtureFitPlot
 from ...ui.passport_table import PassportTableWidget
 from ...ui.path_field import PathField
+from ...ui.in_progress_overlay import InProgressOverlay
 from ...ui.run_status_bar import RunStatusBar
 from ..auto_mode import ModelingAutoMode
 from ..context import ModelingContext
@@ -204,13 +205,18 @@ class DrModelingWindow(QMainWindow):
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
-        root = QHBoxLayout(central)
+        outer = QVBoxLayout(central)
+        outer.setSpacing(8)
+        outer.setContentsMargins(8, 8, 8, 8)
+
+        content = QHBoxLayout()
 
         left = QVBoxLayout()
         dist_box = QGroupBox("D(R)")
         dist_lay = QVBoxLayout(dist_box)
         self._dist = MixtureDistPlot()
         dist_lay.addWidget(self._dist, 1)
+        self._busy_overlay = InProgressOverlay(self._dist)
         left.addWidget(dist_box, 3)
 
         bottom = QHBoxLayout()
@@ -282,12 +288,7 @@ class DrModelingWindow(QMainWindow):
         ctrl.addWidget(self._confirm)
 
         self._auto_btn = QPushButton("Start auto-processing")
-        auto_row = QHBoxLayout()
-        auto_row.setContentsMargins(0, 0, 0, 0)
-        auto_row.addStretch(1)
-        auto_row.addWidget(self._auto_btn, 0)
-        ctrl.addLayout(auto_row)
-
+        self._auto_btn.setMaximumWidth(240)
         self._auto_mode = ModelingAutoMode(
             self, auto_btn=self._auto_btn, confirm_btn=self._confirm
         )
@@ -300,8 +301,15 @@ class DrModelingWindow(QMainWindow):
         right.addWidget(ctrl_box, 2)
         right.addWidget(pass_box, 1)
 
-        root.addLayout(left, 3)
-        root.addLayout(right, 1)
+        content.addLayout(left, 3)
+        content.addLayout(right, 1)
+        outer.addLayout(content, 1)
+
+        auto_row = QHBoxLayout()
+        auto_row.setContentsMargins(0, 0, 0, 0)
+        auto_row.addStretch(1)
+        auto_row.addWidget(self._auto_btn, 0)
+        outer.addLayout(auto_row, 0)
 
         self._pf_profile.path_changed.connect(self._on_profile_path_changed)
         self._pf_profile.path_changed.connect(self._auto_mode.on_control_changed)
@@ -407,10 +415,12 @@ class DrModelingWindow(QMainWindow):
         self._confirm.setEnabled(False)
         self._progress_buf = ProgressStderrBuffer()
         self._status.set_running(True, text="Running model_mixture…")
+        self._busy_overlay.set_active(True)
         self._runtime.start("model_mixture", [str(Path(prof).resolve())], opts)
 
     def _on_started(self, skill: str) -> None:
         self._status.set_running(True, text=f"Running {skill}…")
+        self._busy_overlay.set_active(True)
         self._passport.set_message(f"Running {skill}…")
 
     def _on_stderr(self, chunk: str) -> None:
@@ -431,11 +441,13 @@ class DrModelingWindow(QMainWindow):
             self._status.set_running(
                 False, text=f"Failed (exit {getattr(outcome, 'exit_code', '?')})"
             )
+            self._busy_overlay.set_active(False)
             self._passport.set_message(self._status.text(), poor=True)
             self._update_confirm_enabled()
             notify_ready_for_context_if_deferred(self, self._ipc)
             return
         self._status.set_running(False, text="Done.")
+        self._busy_overlay.set_active(False)
         self._ingest_result(result)
         self._update_confirm_enabled()
         notify_ready_for_context_if_deferred(self, self._ipc)

@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ..monodisperse.format_display import format_display_number
+from ......ui.in_progress_overlay import InProgressOverlay
 from ......ui.style import apply_quality_hint_style
 from .plots import MixtureDistPlot, MixtureFitPlot
 
@@ -73,6 +74,7 @@ class MixturePane(QWidget):
         dist_lay = QVBoxLayout(dist_box)
         dist_lay.setContentsMargins(6, 8, 6, 6)
         dist_lay.addWidget(self._dist_plot, 1)
+        self._busy_overlay = InProgressOverlay(self._dist_plot)
         plots_row.addWidget(iq_box, 1)
         plots_row.addWidget(dist_box, 1)
 
@@ -263,6 +265,10 @@ class MixturePane(QWidget):
             w.setEnabled(enabled)
         self._rb_none.setEnabled(not running)
         self._rb_mixture.setEnabled(not running)
+
+    def set_modeling_busy(self, busy: bool) -> None:
+        """Confirm job in Progress — overlay on the D(R) preview (owned by ModelingChildManager)."""
+        self._busy_overlay.set_active(bool(busy))
 
     def set_rerun_enabled(self, enabled: bool) -> None:
         self._rerun.setEnabled(bool(enabled) and self.mixture_mode() == "mixture")

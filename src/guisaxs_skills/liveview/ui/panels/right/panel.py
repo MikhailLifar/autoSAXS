@@ -84,6 +84,7 @@ class LiveviewRightPanel(QWidget):
         self._poly_window_widget.bind_state(self._state)
         self._wire_polydisperse_coordinator()
         self._modeling.preview_refresh_requested.connect(self._on_modeling_preview_refresh)
+        self._modeling.modeling_busy_changed.connect(self.set_modeling_preview_busy)
 
         self._btn_mono = QToolButton()
         self._btn_mono.setIcon(monodisperse_analysis_icon())
@@ -234,6 +235,23 @@ class LiveviewRightPanel(QWidget):
             self._mono.refresh_shape_preview_from_disk()
         elif w == "dr":
             self._poly.refresh_mixture_preview_from_disk()
+
+    def request_modeling_confirm(self, which: str) -> None:
+        """Pipeline Confirm step — forwards to ModelingChildManager."""
+        w = str(which or "").strip().lower()
+        if w == "shape":
+            self._modeling.request_confirm_shape()
+        elif w == "dr":
+            self._modeling.request_confirm_dr()
+
+    def set_modeling_preview_busy(self, which: str, busy: bool) -> None:
+        """Show/hide In-progress on the slim shape / D(R) preview."""
+        w = str(which or "").strip().lower()
+        on = bool(busy)
+        if w == "shape":
+            self._mono_wizard_widget.shape_pane.set_modeling_busy(on)
+        elif w == "dr":
+            self._poly_window_widget.mixture_pane.set_modeling_busy(on)
 
     @property
     def monodisperse_coordinator(self) -> MonodisperseCoordinator:

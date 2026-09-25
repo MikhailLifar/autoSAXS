@@ -205,8 +205,8 @@ Sibling package for modeling apps: `guisaxs_skills/modeling/` (also launched as 
 | `liveview/session/sample.py` / `sample_store.py` | `Sample` identity + history/boarding store |
 | `liveview/services/history/middle_from_stem.py` | `sync_middle_view` — middle layout + content |
 | `liveview/services/history/right_artifacts.py` | `present_right` — right analysis live/disk entry; sample-tied profile for current stem only |
-| `liveview/modeling_children.py` | Owns shape/DR child processes; builds `ModelingContext` for current sample |
-| `guisaxs_skills/modeling/` | Shape/DR mini-apps + IPC (`ModelingContext`, run-params YAML); local Auto/Manual + coach in `auto_mode.py` (not liveview `session.auto_processing`); shape UI is DAMMIF-only |
+| `liveview/modeling_children.py` | Owns shape/DR children + `ModelingContext`; Confirm only via `request_confirm_*` (pipeline `confirm_shape` / `confirm_dr`), never context push |
+| `guisaxs_skills/modeling/` | Shape/DR mini-apps + IPC (`ModelingContext`, run-params YAML); local Auto/Manual + coach in `auto_mode.py` (not liveview `session.auto_processing`); shape UI is DAMMIF-only; Confirm from pipeline step or user click |
 | `liveview/ingest/settle.py` | `RevisionSettler` — shared readiness before ingress |
 | `liveview/ingest/ingress.py` | `RevisionIngress` — single front door; admit gate rejects unreadable TIFF / mask≠frame (toast, no enqueue) |
 | `liveview/ingest/sample_revision.py` | On-disk sample revision (frame or `.dat`) |

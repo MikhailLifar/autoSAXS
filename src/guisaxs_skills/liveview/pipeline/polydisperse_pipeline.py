@@ -10,6 +10,7 @@ from ...core.models import RunRequest
 from ..session.output_paths import fit_sizes_dir, guinier_poly_dir, mixture_dir
 from ..session.state import LiveviewSessionState, PolydisperseMixtureMode
 from .jobs import JobStep
+from .modeling_confirm import confirm_dr_step
 from .monodisperse_pipeline import (
     FIT_GUINIER_POLY_STEP,
     coerce_opt_int,
@@ -116,11 +117,14 @@ def build_polydisperse_steps(
     """
     Build polydisperse JobSteps for auto or manual runs.
 
-    MIXTURE modeling is Confirm-only in ``guisaxs-dr`` and is never appended here.
+    MIXTURE skills stay out of SkillRunner; after sizes we append a synthetic
+    ``confirm_dr`` step so the open guisaxs-dr child Confirm runs only on the
+    real analysis path (not history browse / context push).
     """
     prof = str(Path(profile_abs).expanduser().resolve())
     root = output_root.expanduser().resolve()
     steps: List[JobStep] = []
+    ran_sizes = False
 
     if parts in (PolydispersePipelineParts.GUINIER_ONLY, PolydispersePipelineParts.FULL):
         g_opts = guinier_opts(
@@ -160,6 +164,9 @@ def build_polydisperse_steps(
             refine=(parts == PolydispersePipelineParts.SIZES_ONLY),
         )
         steps.append(JobStep(name="fit_sizes", request=RunRequest("fit_sizes", [prof], s_opts)))
+        ran_sizes = True
 
-    # MIXTURE_ONLY / FULL mixture steps removed — modeling runs only in guisaxs-dr.
+    # MIXTURE_ONLY / FULL mixture skill steps removed — modeling runs only in guisaxs-dr.
+    if ran_sizes:
+        steps.append(confirm_dr_step())
     return steps

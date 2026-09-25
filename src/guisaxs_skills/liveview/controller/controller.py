@@ -203,6 +203,13 @@ class LiveviewController(QObject):
         executor.skill_started.connect(self.skill_started.emit)
         executor.skill_finished.connect(self.outcomes.on_finished)
         executor.skill_finished.connect(self.skill_finished.emit)
+        executor.modeling_confirm_requested.connect(self._on_modeling_confirm_requested)
+
+    def _on_modeling_confirm_requested(self, which: str) -> None:
+        """Pipeline Confirm step → modeling child (no-op if child closed / Manual)."""
+        right = self._right
+        if right is not None:
+            right.request_modeling_confirm(which)
 
     # --- delegated public API (window wiring) ---
 

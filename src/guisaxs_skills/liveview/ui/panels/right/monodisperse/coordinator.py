@@ -281,10 +281,11 @@ class MonodisperseCoordinator(QObject):
             gnom_path=gnom,
             output_root=root,
             stem=stem,
+            sample_id=prof or stem,
             parent_widget=parent,
         )
         # Child may already show on-disk models; mirror that into the slim preview
-        # (Confirm / finished_run also refresh — including when auto-Confirm is quiet-skipped).
+        # (Confirm / finished_run also refresh — pipeline confirm_shape when Auto).
         self.refresh_shape_preview_from_disk()
 
     def refresh_shape_preview_from_disk(self) -> None:
@@ -327,6 +328,8 @@ class MonodisperseCoordinator(QObject):
             gnom_path=self.gnom_out_for_dammif() or "",
             output_root=root,
             stem=getattr(self._presenter, "sample_stem", "") or "",
+            sample_id=str(getattr(self._presenter, "sample_id", "") or "")
+            or (self.profile_path or ""),
         )
 
     def load_from_disk(

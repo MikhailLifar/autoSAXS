@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
 
 from ....widgets.viewer_3d import LiveviewViewer3D
 from .....session.state import DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES
+from ......ui.in_progress_overlay import InProgressOverlay
 from ......ui.style import apply_quality_hint_style
 from .plots import ShapeFitPlot
 
@@ -112,6 +113,7 @@ class ShapePane(QWidget):
         self._viewer = LiveviewViewer3D()
         self._viewer.setMinimumHeight(120)
         view_lay.addWidget(self._viewer, 1)
+        self._busy_overlay = InProgressOverlay(self._viewer)
         ctrl_box = QGroupBox("Controls")
         ctrl_lay = QVBoxLayout(ctrl_box)
         ctrl_lay.setContentsMargins(6, 8, 6, 6)
@@ -262,6 +264,10 @@ class ShapePane(QWidget):
         # Global busy: lock Re-run and mode-specific controls; keep mode radios enabled.
         self._running = bool(running)
         self._apply_enabled_state()
+
+    def set_modeling_busy(self, busy: bool) -> None:
+        """Confirm job in Progress — overlay on the 3D preview (owned by ModelingChildManager)."""
+        self._busy_overlay.set_active(bool(busy))
 
     def set_rerun_enabled(self, enabled: bool) -> None:
         self._rerun_allowed = bool(enabled)

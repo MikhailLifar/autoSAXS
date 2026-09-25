@@ -22,6 +22,7 @@ from ..session.state import (
 )
 from ..services.artifacts import discover_gnom_out_path
 from .jobs import JobStep
+from .modeling_confirm import confirm_shape_step
 
 YamlOptionsLoader = Callable[[Optional[Path]], dict]
 
@@ -294,12 +295,14 @@ def build_monodisperse_steps(
     """
     Build monodisperse JobSteps for auto or manual runs.
 
-    Modeling (BODIES/DAMMIF/DENSS) is Confirm-only in ``guisaxs-shape`` and is
-    never appended here.
+    Modeling skills stay out of SkillRunner; after distances we append a
+    synthetic ``confirm_shape`` step so the open guisaxs-shape child Confirm
+    runs only on the real analysis path (not history browse / context push).
     """
     prof = str(Path(profile_abs).expanduser().resolve())
     root = output_root.expanduser().resolve()
     steps: List[JobStep] = []
+    ran_distances = False
 
     if parts in (MonodispersePipelineParts.GUINIER_AND_DISTANCES, MonodispersePipelineParts.FULL):
         use_placeholders = guinier_handoff is None
@@ -344,6 +347,7 @@ def build_monodisperse_steps(
             )
         )
         steps.append(JobStep(name="fit_distances", request=RunRequest("fit_distances", [prof], d_opts)))
+        ran_distances = True
 
     if parts == MonodispersePipelineParts.DISTANCES_ONLY:
         d_opts = fit_distances_opts(
@@ -355,6 +359,9 @@ def build_monodisperse_steps(
             refine=True,
         )
         steps.append(JobStep(name="fit_distances", request=RunRequest("fit_distances", [prof], d_opts)))
+        ran_distances = True
 
-    # SHAPE_ONLY / FULL shape steps removed — modeling runs only in guisaxs-shape.
+    # SHAPE_ONLY / FULL shape skill steps removed — modeling runs only in guisaxs-shape.
+    if ran_distances:
+        steps.append(confirm_shape_step())
     return steps

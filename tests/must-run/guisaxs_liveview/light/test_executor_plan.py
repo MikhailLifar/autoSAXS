@@ -193,7 +193,12 @@ def test_monodisperse_guinier_opts_fixed_interval_from_spinboxes(tmp_path: Path)
         guinier_interval_first=8,
         guinier_interval_last=32,
     )
-    assert [s.name for s in steps] == ["fit_guinier", "analyze_kratky", "fit_distances"]
+    assert [s.name for s in steps] == [
+        "fit_guinier",
+        "analyze_kratky",
+        "fit_distances",
+        "confirm_shape",
+    ]
     g_opts = steps[0].request.options
     k_opts = steps[1].request.options
     d_opts = steps[2].request.options
@@ -237,6 +242,8 @@ def test_analysis_steps_both_armed_separate_guinier(tmp_path: Path):
     assert FIT_GUINIER_POLY_STEP in names
     assert "fit_distances" in names
     assert "fit_sizes" in names
+    assert "confirm_shape" in names
+    assert "confirm_dr" in names
     g_mono = next(s for s in steps if s.name == FIT_GUINIER_MONO_STEP)
     g_poly = next(s for s in steps if s.name == FIT_GUINIER_POLY_STEP)
     assert "guinier_mono" in str(g_mono.request.options.get("output_dir", "")).replace("\\", "/")
@@ -274,12 +281,12 @@ def test_polydisperse_steps_full_defaults(tmp_path: Path):
         parts=PolydispersePipelineParts.FULL,
         load_yaml=ex._load_yaml_options,  # noqa: SLF001
     )
-    assert [s.name for s in steps] == [FIT_GUINIER_POLY_STEP, "fit_sizes"]
+    assert [s.name for s in steps] == [FIT_GUINIER_POLY_STEP, "fit_sizes", "confirm_dr"]
     s_opts = steps[1].request.options
     assert s_opts["shape"] == "spheres"
     assert s_opts["first"] == 1
 
-    # MIXTURE is Confirm-only in guisaxs-dr — never appended to the auto/manual step DAG.
+    # MIXTURE skill stays Confirm-only in guisaxs-dr; pipeline only adds confirm_dr.
     state.polydisperse_mixture_mode = PolydisperseMixtureMode.MIXTURE
     steps2 = build_polydisperse_steps(
         str(prof),
@@ -288,7 +295,7 @@ def test_polydisperse_steps_full_defaults(tmp_path: Path):
         parts=PolydispersePipelineParts.FULL,
         load_yaml=ex._load_yaml_options,  # noqa: SLF001
     )
-    assert [s.name for s in steps2] == [FIT_GUINIER_POLY_STEP, "fit_sizes"]
+    assert [s.name for s in steps2] == [FIT_GUINIER_POLY_STEP, "fit_sizes", "confirm_dr"]
 
 
 def test_polydisperse_mixture_opts_include_explicit_bounds(tmp_path: Path):

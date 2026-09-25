@@ -32,6 +32,10 @@ from ..session.state import (
 )
 from ..services.artifacts import merge_fit_distances_quality_fields
 from .jobs import Job, JobStep, PlaceholderError, is_manual_job, resolve_request_placeholders
+from .modeling_confirm import (
+    CONFIRM_SHAPE_STEP,
+    is_modeling_confirm_step,
+)
 from .monodisperse_pipeline import (
     FIT_GUINIER_MONO_STEP,
     FIT_GUINIER_POLY_STEP,
@@ -76,6 +80,8 @@ class LiveviewJobExecutor(QObject):
     sample_revision_pending = pyqtSignal(object)  # SampleRevision — queued for plan/run
     skill_started = pyqtSignal(str)
     skill_finished = pyqtSignal(object)  # RunOutcome
+    # Synthetic pipeline Confirm for open modeling children ("shape" | "dr").
+    modeling_confirm_requested = pyqtSignal(str)
 
     def __init__(
         self,
@@ -571,6 +577,11 @@ class LiveviewJobExecutor(QObject):
             self._finish_job(ok=False)
             return
         self._pending_step_name = step.name
+        if is_modeling_confirm_step(step.name):
+            which = "shape" if step.name == CONFIRM_SHAPE_STEP else "dr"
+            self.modeling_confirm_requested.emit(which)
+            self._complete_modeling_confirm_step(step.name)
+            return
         skill = str(req.skill_name or "").strip()
         from ...modeling.skills import MODELING_SKILLS
 
@@ -583,6 +594,18 @@ class LiveviewJobExecutor(QObject):
             return
         self.skill_started.emit(req.skill_name)
         self._runner.start(req)
+
+    def _complete_modeling_confirm_step(self, step_name: str) -> None:
+        """Fire-and-forget Confirm: mark done and advance (child may still be busy)."""
+        if self._current_job is None:
+            return
+        self._pending_step_name = None
+        self._current_job = self._current_job.mark_step_done(step_name, result={})
+        if is_manual_job(self._current_job):
+            self._job_step_idx += 1
+        else:
+            if not self._replan_current_job():
+                self._finish_job(ok=False)
 
     def _enrich_fit_distances_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
         return _artifacts.enrich_fit_distances_result(result, watchdir=self._state.watchdir)

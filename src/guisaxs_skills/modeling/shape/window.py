@@ -25,6 +25,7 @@ from ...liveview.ui.panels.right.monodisperse.plots import PrPlot, ShapeFitPlot
 from ...liveview.ui.widgets.viewer_3d import LiveviewViewer3D
 from ...ui.passport_table import PassportTableWidget
 from ...ui.path_field import PathField
+from ...ui.in_progress_overlay import InProgressOverlay
 from ...ui.run_status_bar import RunStatusBar
 from ..auto_mode import ModelingAutoMode
 from ..catalogs.dam_models import build_dam_model_catalog
@@ -141,8 +142,12 @@ class ShapeModelingWindow(QMainWindow):
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
-        root = QHBoxLayout(central)
-        root.setSpacing(10)
+        outer = QVBoxLayout(central)
+        outer.setSpacing(10)
+        outer.setContentsMargins(8, 8, 8, 8)
+
+        content = QHBoxLayout()
+        content.setSpacing(10)
 
         # Left: I(q), delta, P(r)
         left = QVBoxLayout()
@@ -170,6 +175,7 @@ class ShapeModelingWindow(QMainWindow):
         self._viewer = LiveviewViewer3D()
         self._viewer.set_open_folder_button_visible(False)
         mid_lay.addWidget(self._viewer, 1)
+        self._busy_overlay = InProgressOverlay(self._viewer)
         self._status = RunStatusBar()
         mid_lay.addWidget(self._status)
 
@@ -199,18 +205,13 @@ class ShapeModelingWindow(QMainWindow):
         self._confirm.clicked.connect(lambda: self._on_confirm(quiet=False))
         ctrl.addWidget(self._confirm)
 
-        self._auto_btn = QPushButton("Start auto-processing")
-        auto_row = QHBoxLayout()
-        auto_row.setContentsMargins(0, 0, 0, 0)
-        auto_row.addStretch(1)
-        auto_row.addWidget(self._auto_btn, 0)
-        ctrl.addLayout(auto_row)
-
         self._open_folder_btn = QPushButton("Open model folder…")
         self._open_folder_btn.setEnabled(False)
         self._open_folder_btn.clicked.connect(self._viewer.open_model_folder)
         ctrl.addWidget(self._open_folder_btn)
 
+        self._auto_btn = QPushButton("Start auto-processing")
+        self._auto_btn.setMaximumWidth(240)
         self._auto_mode = ModelingAutoMode(
             self, auto_btn=self._auto_btn, confirm_btn=self._confirm
         )
@@ -223,9 +224,17 @@ class ShapeModelingWindow(QMainWindow):
         right.addWidget(ctrl_box, 2)
         right.addWidget(pass_box, 1)
 
-        root.addLayout(left, 2)
-        root.addWidget(mid_box, 5)
-        root.addLayout(right, 2)
+        content.addLayout(left, 2)
+        content.addWidget(mid_box, 5)
+        content.addLayout(right, 2)
+        outer.addLayout(content, 1)
+
+        # Window-bottom auto toggle (same corner pattern as liveview mono/poly wizards).
+        auto_row = QHBoxLayout()
+        auto_row.setContentsMargins(0, 0, 0, 0)
+        auto_row.addStretch(1)
+        auto_row.addWidget(self._auto_btn, 0)
+        outer.addLayout(auto_row, 0)
 
         self._pf_profile.path_changed.connect(self._on_profile_path_changed)
         self._pf_profile.path_changed.connect(self._auto_mode.on_control_changed)
@@ -273,6 +282,7 @@ class ShapeModelingWindow(QMainWindow):
         self._status.set_running(running, text=text)
         # Viewer hint is idle-only companion under the 3D plot.
         self._viewer.set_hint_visible(not running)
+        self._busy_overlay.set_active(bool(running))
 
     def _profile(self) -> str:
         return (self._pf_profile.text() or "").strip()

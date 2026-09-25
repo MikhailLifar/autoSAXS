@@ -10,6 +10,8 @@ COLOR_REQUIRED_STAR = "#ff4d4f"
 COLOR_QUALITY_POOR = COLOR_REQUIRED_STAR
 # Caution / mid-tier quality (readable amber on light UI backgrounds).
 COLOR_QUALITY_WARN = "#b45309"
+# Primary accent (Highlight / AttentionPulse / in-progress sweep).
+COLOR_ACCENT = "#4c8dff"
 
 _SELECTABLE_LABELS_FILTER_ATTR = "_autosaxs_selectable_labels_filter"
 _SPIN_ARROW = QColor("#e7eef6")

@@ -247,6 +247,7 @@ class PolydisperseCoordinator(QObject):
             profile_path=prof,
             output_root=root,
             stem=stem,
+            sample_id=prof or stem,
             parent_widget=parent,
         )
         self.refresh_mixture_preview_from_disk()
