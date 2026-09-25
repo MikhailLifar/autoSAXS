@@ -68,6 +68,7 @@ class ModelingChildManager(QObject):
         if self._shape is not None and self._shape.is_running():
             self._shape.send_context(ctx)
             self._shape.send_focus()
+            self._shape.send_confirm()
             return
         self._shape = start_modeling_child(
             app="shape",
@@ -79,6 +80,8 @@ class ModelingChildManager(QObject):
         self._shape.finished_run.connect(lambda _m: self.preview_refresh_requested.emit("shape"))
         self._shape.ready_for_context.connect(self._retry_shape_context)
         self._shape.process_exited.connect(lambda _c: setattr(self, "_shape", None))
+        # After child's ready → launch sends context; then auto-Confirm.
+        self._shape.ready.connect(self._auto_confirm_shape)
 
     def start_dr(
         self,
@@ -104,6 +107,7 @@ class ModelingChildManager(QObject):
         if self._dr is not None and self._dr.is_running():
             self._dr.send_context(ctx)
             self._dr.send_focus()
+            self._dr.send_confirm()
             return
         self._dr = start_modeling_child(
             app="dr",
@@ -115,6 +119,7 @@ class ModelingChildManager(QObject):
         self._dr.finished_run.connect(lambda _m: self.preview_refresh_requested.emit("dr"))
         self._dr.ready_for_context.connect(self._retry_dr_context)
         self._dr.process_exited.connect(lambda _c: setattr(self, "_dr", None))
+        self._dr.ready.connect(self._auto_confirm_dr)
 
     def shutdown(self) -> None:
         """Stop supervised modeling children before liveview tears down Qt objects."""
@@ -159,6 +164,7 @@ class ModelingChildManager(QObject):
                 sample_id=sample_id,
             )
         )
+        self._shape.send_confirm()
 
     def push_dr_context(
         self,
@@ -184,6 +190,15 @@ class ModelingChildManager(QObject):
                 sample_id=sample_id,
             )
         )
+        self._dr.send_confirm()
+
+    def _auto_confirm_shape(self) -> None:
+        if self._shape is not None and self._shape.is_running():
+            self._shape.send_confirm()
+
+    def _auto_confirm_dr(self) -> None:
+        if self._dr is not None and self._dr.is_running():
+            self._dr.send_confirm()
 
     def _retry_shape_context(self) -> None:
         args = self._shape_push
@@ -300,7 +315,7 @@ class ModelingChildManager(QObject):
             profile_path=str(profile_path or ""),
             gnom_path=gnom,
             output_dir=str(out.resolve()),
-            mode=mode_s if mode_s in ("bodies", "dammif", "denss") else "none",
+            mode=mode_s if mode_s in ("bodies", "dammif", "denss") else "dammif",
             options=opts,
             require_gnom_for_dam=True,
             sample_id=str(sample_id or ""),
@@ -346,7 +361,7 @@ class ModelingChildManager(QObject):
         return ModelingContext(
             profile_path=str(profile_path or ""),
             output_dir=str(out.resolve()),
-            mode="mixture" if mode_s == "mixture" else "none",
+            mode="mixture",
             options=opts,
             sample_id=str(sample_id or ""),
         )

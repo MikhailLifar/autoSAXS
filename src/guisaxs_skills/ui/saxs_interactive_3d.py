@@ -379,8 +379,9 @@ class SaxsInteractive3DWidget(QWidget):
     def _apply_scaled_axes_chrome(self) -> None:
         """Show Å tick labels and grid so model size can be read from the plot."""
         compact = self._embedded
-        label_fs = 7 if compact else 10
-        tick_fs = 6 if compact else 9
+        # Default sizes: compact (embedded thumbnail) vs full (dialog). +2pt vs prior.
+        label_fs = 9 if compact else 12
+        tick_fs = 8 if compact else 11
         dark = self._density_dark
         pane_alpha = 0.08 if dark else (0.12 if compact else 0.22)
         # Matplotlib rejects color=None; only pass colors for the dark (DENSS) theme.

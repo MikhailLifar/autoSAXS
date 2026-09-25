@@ -15,6 +15,7 @@ def run_shape_app(argv: Optional[list[str]] = None) -> int:
     return run_modeling_window(
         prog="guisaxs-shape",
         modes=["bodies", "dammif", "denss"],
+        default_mode="dammif",
         window_factory=factory,
         argv=argv,
     )

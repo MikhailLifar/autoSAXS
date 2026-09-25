@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
+from autosaxs.core.skill_progress import emit_skill_progress
 from ..deps import (
     EventBus,
     EventType,
@@ -429,6 +430,7 @@ def _model_density_paths(
     common = _common_denss_args(denss_mode=denss_tok, dmax_a=dmax_a, output_prefix=base)
 
     if protocol == "pilot":
+        emit_skill_progress("model_density", "pilot")
         _run_cmd(
             [denss_bin, "-f", staged, *common],
             cwd=output_dir,
@@ -442,6 +444,7 @@ def _model_density_paths(
             raise RuntimeError(f"model_density: denss pilot finished but {base}.mrc not found in {output_dir}")
 
     else:
+        emit_skill_progress("model_density", "averaging")
         _run_cmd(
             [
                 denss_all_bin,
@@ -471,12 +474,14 @@ def _model_density_paths(
             *[str(p) for p in sorted(Path(bundle_dir).glob("*_final.log"))],
         )
         density_map_path = avg_map_path
+        emit_skill_progress("model_density", "aligning")
         sigma_dest = os.path.join(bundle_dir, f"{base}_sigma.mrc")
         sigma_map_path = _write_sigma_map_from_aligned(
             bundle_dir, output_path=sigma_dest, event_bus=event_bus
         )
 
         if protocol == "refined":
+            emit_skill_progress("model_density", "refined")
             refine_prefix = f"{base}_refined"
             _run_cmd(
                 [
@@ -510,6 +515,7 @@ def _model_density_paths(
                     f"model_density: denss-refine finished but {refine_prefix}.mrc not found in {output_dir}"
                 )
 
+    emit_skill_progress("model_density", "finalizing")
     res_a = _parse_fsc_resolution_a(fsc_path)
     from autosaxs.core.report_fragments import write_skill_report_fragments
     from autosaxs.core.gnom_quality import detail_indicators_from_gnom_out, detail_indicators_markdown

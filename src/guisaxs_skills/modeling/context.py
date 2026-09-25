@@ -13,9 +13,9 @@ class ModelingContext:
     profile_path: str = ""
     gnom_path: str = ""
     output_dir: str = ""
-    # Shape: none | bodies | dammif | denss
-    # DR: none | mixture
-    mode: str = "none"
+    # Shape mini-app: bodies | dammif | denss (default dammif when empty/unknown).
+    # DR mini-app: mixture. Liveview slim panes may still use session "none" (= do not launch).
+    mode: str = "dammif"
     options: Dict[str, Any] = field(default_factory=dict)
     # When True, DAMMIF Confirm must use gnom_path (no profile-only fallback).
     require_gnom_for_dam: bool = False
@@ -35,7 +35,7 @@ class ModelingContext:
             profile_path=str(data.get("profile_path") or ""),
             gnom_path=str(data.get("gnom_path") or ""),
             output_dir=str(data.get("output_dir") or ""),
-            mode=str(data.get("mode") or "none").strip().lower() or "none",
+            mode=str(data.get("mode") or "").strip().lower(),
             options=dict(opts),
             require_gnom_for_dam=bool(data.get("require_gnom_for_dam", False)),
             sample_id=str(data.get("sample_id") or ""),

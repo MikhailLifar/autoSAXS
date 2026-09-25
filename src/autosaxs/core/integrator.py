@@ -54,6 +54,21 @@ class IntegratorExtended:
             raise RuntimeError(f"Unsupported file extension for mask: {ext}")
         return mask
 
+    @staticmethod
+    def write_mask(path, mask):
+        """Write a boolean mask; inverse of :meth:`read_mask` (``.msk`` flips axis 0)."""
+        _, ext = os.path.splitext(path)
+        arr = np.asarray(mask)
+        if ext == ".npy":
+            np.save(path, arr.astype(bool))
+        elif ext == ".txt":
+            np.savetxt(path, arr.astype(int), fmt="%d")
+        elif ext == ".msk":
+            data = np.flip(arr.astype(np.uint8), axis=0)
+            fabio.fit2dmaskimage.Fit2dMaskImage(data=data).write(path)
+        else:
+            raise RuntimeError(f"Unsupported file extension for mask: {ext}")
+
     @classmethod
     def sibling_effective_mask_path(cls, integrator_dir: str) -> str:
         """Hardcoded path: ``{parent_of_integrator}/effective_mask.npy``."""

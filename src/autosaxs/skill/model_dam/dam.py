@@ -17,6 +17,7 @@ from autosaxs.core.pddf import (
     save_pddf_dat,
     save_pddf_png,
 )
+from autosaxs.core.skill_progress import emit_skill_progress
 from ..deps import (
     EventBus,
     EventType,
@@ -364,6 +365,7 @@ def _run_damaver(
     os.makedirs(damaver_dir, exist_ok=True)
     if event_bus:
         event_bus.publish(EventType.MESSAGE, {"text": "model_dam: running DAMAVER…"})
+    emit_skill_progress("model_dam", "averaging")
     # Absolute paths so cwd can be damaver_dir for tidy outputs.
     cmd = [
         "damaver",
@@ -479,9 +481,11 @@ def _model_dam_paths(
         event_bus.publish(EventType.MESSAGE, {"text": f"DAMMIF fit ({mode_atsas}, n_runs={int(n_runs)})…"})
     base = _strip_sub_int_prefix(os.path.splitext(os.path.basename(gnom_path))[0])
     os.makedirs(output_dir, exist_ok=True)
-    for i in range(1, int(n_runs) + 1):
+    n = int(n_runs)
+    for i in range(1, n + 1):
         # `cwd=output_dir` means DAMMIF prefixes should be relative,
         # otherwise it may attempt to write to output_dir/output_dir/...
+        emit_skill_progress("model_dam", "dammif", run=f"{i}/{n}")
         dammif_prefix = f"dammif-{i}"
         proc = subprocess.run(
             # Autosaxs GNOM/DATGNOM .out files use q in nm^-1 and lengths in nm.
@@ -614,6 +618,7 @@ def _model_dam_paths(
         frequency_map_path, summary_path, _damaver_dir = _run_damaver(
             output_dir, particle_cifs, event_bus
         )
+        emit_skill_progress("model_dam", "aligning")
         best_target = _parse_damaver_most_probable(summary_path or "", particle_cifs)
         if best_target is None:
             best_target = _lowest_chi2_particle_cif(output_dir, particle_cifs)
@@ -623,6 +628,7 @@ def _model_dam_paths(
     if best_target is None:
         raise RuntimeError("model_dam: no particle CIF available to create best.cif symlink")
 
+    emit_skill_progress("model_dam", "finalizing")
     best_cif_path = _symlink_best_cif(output_dir, best_target)
 
     best_view_path = _write_best_model_view(

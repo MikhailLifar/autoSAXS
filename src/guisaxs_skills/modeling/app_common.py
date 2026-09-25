@@ -17,12 +17,20 @@ from .context import ModelingContext
 from .ipc import ModelingIpcChild
 
 
-def build_common_parser(prog: str, *, modes: list[str]) -> argparse.ArgumentParser:
+def build_common_parser(
+    prog: str,
+    *,
+    modes: list[str],
+    default_mode: Optional[str] = None,
+) -> argparse.ArgumentParser:
+    if not modes:
+        raise ValueError("build_common_parser: modes must be non-empty")
+    default = default_mode if default_mode in modes else modes[0]
     p = argparse.ArgumentParser(prog=prog)
     p.add_argument("--profile", default="", help="I(q) .dat path")
     p.add_argument("--gnom", default="", help="GNOM/DATGNOM .out path")
     p.add_argument("--output-dir", default="", dest="output_dir", help="Modeling output directory")
-    p.add_argument("--mode", default="none", choices=["none", *modes], help="Engine mode")
+    p.add_argument("--mode", default=default, choices=list(modes), help="Engine mode")
     p.add_argument(
         "--require-gnom-for-dam",
         action="store_true",
@@ -41,12 +49,13 @@ def build_common_parser(prog: str, *, modes: list[str]) -> argparse.ArgumentPars
     return p
 
 
-def context_from_args(ns: argparse.Namespace) -> ModelingContext:
+def context_from_args(ns: argparse.Namespace, *, default_mode: str) -> ModelingContext:
+    mode_cli = str(getattr(ns, "mode", "") or "").strip().lower() or default_mode
     ctx = ModelingContext(
         profile_path=str(getattr(ns, "profile", "") or ""),
         gnom_path=str(getattr(ns, "gnom", "") or ""),
         output_dir=str(getattr(ns, "output_dir", "") or ""),
-        mode=str(getattr(ns, "mode", "none") or "none").strip().lower() or "none",
+        mode=mode_cli,
         require_gnom_for_dam=bool(getattr(ns, "require_gnom_for_dam", False)),
     )
     path = str(getattr(ns, "context_file", "") or "").strip()
@@ -61,12 +70,14 @@ def context_from_args(ns: argparse.Namespace) -> ModelingContext:
         return ctx
     file_ctx = ModelingContext.from_dict(data)
     # File is SSOT from liveview; fill only missing argv fields if file omitted them.
+    file_mode = (file_ctx.mode or "").strip().lower()
+    if not file_mode or file_mode == "none":
+        file_mode = ctx.mode or default_mode
     return ModelingContext(
         profile_path=file_ctx.profile_path or ctx.profile_path,
         gnom_path=file_ctx.gnom_path or ctx.gnom_path,
         output_dir=file_ctx.output_dir or ctx.output_dir,
-        mode=(file_ctx.mode if file_ctx.mode and file_ctx.mode != "none" else ctx.mode)
-        or "none",
+        mode=file_mode,
         options=dict(file_ctx.options or {}),
         require_gnom_for_dam=bool(file_ctx.require_gnom_for_dam or ctx.require_gnom_for_dam),
         sample_id=file_ctx.sample_id or ctx.sample_id,
@@ -79,10 +90,14 @@ def run_modeling_window(
     modes: list[str],
     window_factory: Callable[[ModelingContext, Optional[ModelingIpcChild]], QMainWindow],
     argv: Optional[list[str]] = None,
+    default_mode: Optional[str] = None,
 ) -> int:
-    parser = build_common_parser(prog, modes=modes)
+    if not modes:
+        raise ValueError("run_modeling_window: modes must be non-empty")
+    default = default_mode if default_mode in modes else modes[0]
+    parser = build_common_parser(prog, modes=modes, default_mode=default)
     ns, _unknown = parser.parse_known_args(argv if argv is not None else sys.argv[1:])
-    ctx = context_from_args(ns)
+    ctx = context_from_args(ns, default_mode=default)
 
     app = QApplication(sys.argv if argv is None else [prog, *(argv or [])])
     apply_style(app)
@@ -114,9 +129,14 @@ def run_modeling_window(
         ipc.context_received.connect(win.apply_context)
         ipc.focus_requested.connect(lambda: (win.show(), win.raise_(), win.activateWindow()))
         ipc.shutdown_requested.connect(app.quit)
-        confirm = getattr(win, "_on_confirm", None)
-        if callable(confirm):
-            ipc.confirm_requested.connect(confirm)
+        # IPC Confirm: quiet skip when paths incomplete (no QMessageBox).
+        on_ipc = getattr(win, "_on_confirm_ipc", None)
+        if callable(on_ipc):
+            ipc.confirm_requested.connect(on_ipc)
+        else:
+            confirm = getattr(win, "_on_confirm", None)
+            if callable(confirm):
+                ipc.confirm_requested.connect(confirm)
         ipc.send_ready()
 
     win.show()

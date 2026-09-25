@@ -16,6 +16,7 @@ from autosaxs.core.pddf import (
     save_pddf_dat,
     save_pddf_png,
 )
+from autosaxs.core.skill_progress import emit_skill_progress
 from .deps import (
     EventBus,
     EventType,
@@ -302,6 +303,7 @@ def _model_bodies_paths(
         _write_bodies_invoke_log(output_dir, [_bodies_cmd(body=s) for s in shapes_requested])
 
     if shapes_requested is None:
+        emit_skill_progress("model_bodies", "bodies", run="all")
         proc = subprocess.run(
             _bodies_cmd(),
             cwd=output_dir,
@@ -315,7 +317,9 @@ def _model_bodies_paths(
         shapes_to_scan = list(BODIES_SHAPES_LIST)
     else:
         shapes_to_scan = list(shapes_requested)
-        for shape in shapes_requested:
+        n_shapes = len(shapes_requested)
+        for i, shape in enumerate(shapes_requested, start=1):
+            emit_skill_progress("model_bodies", "bodies", run=f"{i}/{n_shapes}", shape=shape)
             proc = subprocess.run(
                 _bodies_cmd(body=shape),
                 cwd=output_dir,
@@ -332,6 +336,7 @@ def _model_bodies_paths(
                     )
                 continue
 
+    emit_skill_progress("model_bodies", "finalizing")
     q_exp, I_exp, sigma_exp = _slice_exp_dat_columns(q_nm, I, sigma, first_pt, last_pt)
     fits_data = []
     to_plot = []

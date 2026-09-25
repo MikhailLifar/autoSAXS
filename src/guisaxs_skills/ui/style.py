@@ -118,6 +118,16 @@ def apply_style(app: QApplication) -> None:
         QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {{
             background: #1b2a3d;
         }}
+        QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+            image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpolygon points='0,5 4,0 8,5' fill='%23e7eef6'/%3E%3C/svg%3E");
+            width: 8px;
+            height: 5px;
+        }}
+        QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+            image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpolygon points='0,0 4,5 8,0' fill='%23e7eef6'/%3E%3C/svg%3E");
+            width: 8px;
+            height: 5px;
+        }}
 
         QCheckBox {{ color: #e7eef6; spacing: 6px; }}
 

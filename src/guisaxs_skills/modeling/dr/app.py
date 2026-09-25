@@ -15,6 +15,7 @@ def run_dr_app(argv: Optional[list[str]] = None) -> int:
     return run_modeling_window(
         prog="guisaxs-dr",
         modes=["mixture"],
+        default_mode="mixture",
         window_factory=factory,
         argv=argv,
     )

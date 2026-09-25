@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
+from autosaxs.core.integrator import IntegratorExtended
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import (
@@ -48,6 +48,18 @@ from .model import (
     load_tiff_shape,
     read_mask_bool,
 )
+
+_MASK_SAVE_FILTERS = (
+    "NumPy text mask (*.txt)",
+    "NumPy binary mask (*.npy)",
+    "Fit2D mask (*.msk)",
+)
+_MASK_SAVE_EXTS = (".txt", ".npy", ".msk")
+_FILTER_TO_EXT = {
+    "NumPy text mask (*.txt)": ".txt",
+    "NumPy binary mask (*.npy)": ".npy",
+    "Fit2D mask (*.msk)": ".msk",
+}
 
 
 class MaskWizardDialog(QDialog):
@@ -649,7 +661,8 @@ class MaskWizardDialog(QDialog):
         dlg.setViewMode(QFileDialog.Detail)
         dlg.setMinimumSize(980, 720)
         dlg.resize(1100, 760)
-        dlg.setNameFilter("NumPy text mask (*.txt)")
+        dlg.setNameFilters(list(_MASK_SAVE_FILTERS))
+        dlg.selectNameFilter(_MASK_SAVE_FILTERS[0])
         dlg.selectFile(Path(start).name)
         view = dlg.findChild(QTreeView)
         if view is not None and view.header() is not None:
@@ -668,8 +681,10 @@ class MaskWizardDialog(QDialog):
         if not raw:
             return None
         dp = Path(raw).expanduser()
-        if dp.suffix.lower() != ".txt":
-            dp = dp.with_suffix(".txt")
+        suf = dp.suffix.lower()
+        if suf not in _MASK_SAVE_EXTS:
+            ext = _FILTER_TO_EXT.get(dlg.selectedNameFilter(), ".txt")
+            dp = dp.with_suffix(ext)
         return dp.resolve()
 
     def _on_save(self) -> None:
@@ -699,7 +714,7 @@ class MaskWizardDialog(QDialog):
                 return
         try:
             dp.parent.mkdir(parents=True, exist_ok=True)
-            np.savetxt(str(dp), m.astype(int), fmt="%d")
+            IntegratorExtended.write_mask(str(dp), m)
         except Exception as e:
             QMessageBox.critical(self, "Mask", f"Failed to save mask:\n\n{e}")
             return

@@ -50,6 +50,7 @@ from ..run_params import (
     resolve_sample_modeling_dir,
     skill_batch_output_dir,
 )
+from ..progress_parse import ProgressStderrBuffer
 from ..runtime import ModelingRuntime
 
 try:
@@ -86,6 +87,8 @@ class ShapeModelingWindow(QMainWindow):
         self._runtime = ModelingRuntime(workdir=Path.cwd(), parent=self)
         self._runtime.started.connect(self._on_started)
         self._runtime.finished.connect(self._on_finished)
+        self._runtime.stderr.connect(self._on_stderr)
+        self._progress_buf = ProgressStderrBuffer()
         self._last_fir = ""
         self._last_model_pr = ""
         self._analysis_root: Optional[Path] = None
@@ -119,7 +122,9 @@ class ShapeModelingWindow(QMainWindow):
                 self._analysis_root = root
         else:
             self._pf_outdir.set_text("")
-        mode = (self._ctx.mode or "none").lower()
+        mode = (self._ctx.mode or "").lower()
+        if mode not in ("bodies", "dammif", "denss"):
+            mode = "dammif"
         self._set_mode_radio(mode)
         # Ensure PathField matches the mode's conventional family (ctx may be stale).
         self._sync_outdir_to_mode(mode)
@@ -165,7 +170,12 @@ class ShapeModelingWindow(QMainWindow):
             return
         params = read_run_params(out, profile_path=self._profile())
         inferred = infer_shape_mode_from_disk(out, profile_path=self._profile())
-        if inferred and self._mode() == "none":
+        ctx_mode = (self._ctx.mode or "").lower()
+        if (
+            inferred
+            and inferred in ("bodies", "dammif", "denss")
+            and ctx_mode not in ("bodies", "dammif", "denss")
+        ):
             self._set_mode_radio(inferred)
             self._update_controls_visibility()
         if "n_runs" in params:
@@ -237,12 +247,11 @@ class ShapeModelingWindow(QMainWindow):
         ctrl = QVBoxLayout(ctrl_box)
         mode_row = QHBoxLayout()
         self._grp = QButtonGroup(self)
-        self._rb_none = QRadioButton("None")
         self._rb_bodies = QRadioButton("BODIES")
         self._rb_dammif = QRadioButton("DAMMIF")
         self._rb_denss = QRadioButton("DENSS")
-        self._rb_none.setChecked(True)
-        for rb in (self._rb_none, self._rb_bodies, self._rb_dammif, self._rb_denss):
+        self._rb_dammif.setChecked(True)
+        for rb in (self._rb_bodies, self._rb_dammif, self._rb_denss):
             self._grp.addButton(rb)
             mode_row.addWidget(rb)
         mode_row.addStretch(1)
@@ -299,7 +308,7 @@ class ShapeModelingWindow(QMainWindow):
         self._status.setWordWrap(True)
         ctrl.addWidget(self._status)
         self._confirm = QPushButton("Confirm")
-        self._confirm.clicked.connect(self._on_confirm)
+        self._confirm.clicked.connect(lambda: self._on_confirm(quiet=False))
         ctrl.addWidget(self._confirm)
 
         pass_box = QGroupBox("Quality passport")
@@ -314,7 +323,7 @@ class ShapeModelingWindow(QMainWindow):
         root.addWidget(mid_box, 5)
         root.addLayout(right, 2)
 
-        for rb in (self._rb_none, self._rb_bodies, self._rb_dammif, self._rb_denss):
+        for rb in (self._rb_bodies, self._rb_dammif, self._rb_denss):
             rb.toggled.connect(lambda *_: self._on_mode_changed())
         self._pf_profile.path_changed.connect(self._on_profile_path_changed)
         self._pf_gnom.path_changed.connect(self._update_confirm_enabled)
@@ -325,21 +334,18 @@ class ShapeModelingWindow(QMainWindow):
     def _mode(self) -> str:
         if self._rb_bodies.isChecked():
             return "bodies"
-        if self._rb_dammif.isChecked():
-            return "dammif"
         if self._rb_denss.isChecked():
             return "denss"
-        return "none"
+        return "dammif"
 
     def _set_mode_radio(self, mode: str) -> None:
-        m = (mode or "none").lower()
+        m = (mode or "dammif").lower()
         mapping = {
-            "none": self._rb_none,
             "bodies": self._rb_bodies,
             "dammif": self._rb_dammif,
             "denss": self._rb_denss,
         }
-        rb = mapping.get(m, self._rb_none)
+        rb = mapping.get(m, self._rb_dammif)
         rb.setChecked(True)
 
     def _on_mode_changed(self) -> None:
@@ -363,7 +369,7 @@ class ShapeModelingWindow(QMainWindow):
 
     def _sync_outdir_to_mode(self, mode: str) -> None:
         """Point PathField at ``<analysis_root>/<family>/<stem>`` for the active engine."""
-        m = (mode or "none").lower()
+        m = (mode or "dammif").lower()
         if m not in ("bodies", "dammif", "denss"):
             return
         suggested = conventional_sample_modeling_dir(
@@ -418,10 +424,10 @@ class ShapeModelingWindow(QMainWindow):
         return str(resolve_sample_modeling_dir(raw, profile_path=self._profile()))
 
     def _update_confirm_enabled(self) -> None:
-        mode = self._mode()
-        if mode == "none" or self._runtime.is_running():
+        if self._runtime.is_running():
             self._confirm.setEnabled(False)
             return
+        mode = self._mode()
         out = self._outdir()
         if not out:
             self._confirm.setEnabled(False)
@@ -532,13 +538,18 @@ class ShapeModelingWindow(QMainWindow):
             out["n_jobs"] = 1
         return out
 
-    def _on_confirm(self) -> None:
-        mode = self._mode()
-        if mode == "none":
+    def _on_confirm_ipc(self) -> None:
+        self._on_confirm(quiet=True)
+
+    def _on_confirm(self, *, quiet: bool = False) -> None:
+        if self._runtime.is_running():
+            # Busy: ignore Confirm (freeze only on deferred context pushes).
             return
+        mode = self._mode()
         outdir = self._outdir()
         if not outdir:
-            QMessageBox.warning(self, "Confirm", "Set an output directory.")
+            if not quiet:
+                QMessageBox.warning(self, "Confirm", "Set an output directory.")
             return
         # apply_batch appends profile stem — pass the family dir, keep UI on sample dir.
         prof_for_batch = self._profile()
@@ -548,7 +559,8 @@ class ShapeModelingWindow(QMainWindow):
         try:
             self._runtime.set_workdir(Path(batch_outdir))
         except RuntimeError as exc:
-            QMessageBox.warning(self, "Confirm", str(exc))
+            if not quiet:
+                QMessageBox.warning(self, "Confirm", str(exc))
             return
 
         opts = self._options_for_confirm()
@@ -560,20 +572,24 @@ class ShapeModelingWindow(QMainWindow):
             gnom = self._gnom()
             if self._ctx.require_gnom_for_dam or (gnom and os.path.isfile(gnom)):
                 if not gnom or not os.path.isfile(gnom):
-                    QMessageBox.warning(self, "Confirm", "DAMMIF requires a GNOM .out path.")
+                    if not quiet:
+                        QMessageBox.warning(self, "Confirm", "DAMMIF requires a GNOM .out path.")
                     return
                 opts["gnom_path"] = str(Path(gnom).resolve())
             # model_dam still requires a profile positional for batch stem / I(q) plots
             prof = self._profile()
             if not prof or not os.path.isfile(prof):
-                # Derive nothing — skill needs profile; use gnom sibling guess fails.
-                QMessageBox.warning(self, "Confirm", "DAMMIF also needs the I(q) profile path for the skill.")
+                if not quiet:
+                    QMessageBox.warning(
+                        self, "Confirm", "DAMMIF also needs the I(q) profile path for the skill."
+                    )
                 return
             positional = [str(Path(prof).resolve())]
         else:
             prof = self._profile()
             if not prof or not os.path.isfile(prof):
-                QMessageBox.warning(self, "Confirm", "Set a valid I(q) profile.")
+                if not quiet:
+                    QMessageBox.warning(self, "Confirm", "Set a valid I(q) profile.")
                 return
             positional = [str(Path(prof).resolve())]
             gnom = self._gnom()
@@ -593,12 +609,18 @@ class ShapeModelingWindow(QMainWindow):
             self._ipc.send_busy(True)
 
         self._confirm.setEnabled(False)
+        self._progress_buf = ProgressStderrBuffer()
         self._status.setText(f"Running {skill}…")
         self._runtime.start(skill, positional, opts)
 
     def _on_started(self, skill: str) -> None:
         self._status.setText(f"Running {skill}…")
         self._passport.set_message(f"Running {skill}…")
+
+    def _on_stderr(self, chunk: str) -> None:
+        for status in self._progress_buf.feed(chunk):
+            self._status.setText(status)
+            self._passport.set_message(status)
 
     def _on_finished(self, outcome: object) -> None:
         if self._ipc is not None:
@@ -752,14 +774,11 @@ class ShapeModelingWindow(QMainWindow):
             return
         sd = Path(out)
         mode = self._mode()
-        if mode == "none":
-            inferred = infer_shape_mode_from_disk(sd, profile_path=self._profile())
-            if inferred:
-                self._set_mode_radio(inferred)
-                self._update_controls_visibility()
-                mode = inferred
-        if mode == "none":
-            return
+        inferred = infer_shape_mode_from_disk(sd, profile_path=self._profile())
+        if inferred and inferred in ("bodies", "dammif", "denss"):
+            self._set_mode_radio(inferred)
+            self._update_controls_visibility()
+            mode = inferred
         fir = ""
         loaded_3d = False
         if mode == "dammif":

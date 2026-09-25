@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Union
 import yaml
 
 from autosaxs.core.event_bus import EventBus, EventType
+from autosaxs.core.skill_progress import emit_skill_progress
 
 from ..config import merge_skill_params, resolve_optional_config_path
 from ..skill_wrap import apply_batch, require_atsas, run_with_cache
@@ -345,6 +346,7 @@ def _model_mixture_paths(
 
     if event_bus:
         event_bus.publish(EventType.MESSAGE, {"text": "MIXTURE fit…"})
+    emit_skill_progress("model_mixture", "mixture")
     result = _fit_mixtures(
         profile,
         output_dir=output_dir,
@@ -362,6 +364,7 @@ def _model_mixture_paths(
     )
     if result is None:
         raise RuntimeError("model_mixture failed")
+    emit_skill_progress("model_mixture", "finalizing")
     from autosaxs.core.report_fragments import write_skill_report_fragments
     from autosaxs.core.utils import _strip_sub_int_prefix as _strip_base
 

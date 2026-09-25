@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from PyQt5.QtWidgets import (
-    QButtonGroup,
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
@@ -16,7 +15,6 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QRadioButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -40,6 +38,7 @@ from ..run_params import (
     resolve_sample_modeling_dir,
     skill_batch_output_dir,
 )
+from ..progress_parse import ProgressStderrBuffer
 from ..runtime import ModelingRuntime
 
 
@@ -59,6 +58,8 @@ class DrModelingWindow(QMainWindow):
         self._runtime = ModelingRuntime(workdir=Path.cwd(), parent=self)
         self._runtime.started.connect(self._on_started)
         self._runtime.finished.connect(self._on_finished)
+        self._runtime.stderr.connect(self._on_stderr)
+        self._progress_buf = ProgressStderrBuffer()
         self._rows: List[Dict[str, Any]] = []
         self._analysis_root: Optional[Path] = None
         self._plot_clicks = ModelingPlotClickRouter(self)
@@ -82,12 +83,7 @@ class DrModelingWindow(QMainWindow):
                 self._analysis_root = root
         else:
             self._pf_outdir.set_text("")
-        mode = (self._ctx.mode or "none").lower()
-        if mode == "mixture":
-            self._rb_mixture.setChecked(True)
-        else:
-            self._rb_none.setChecked(True)
-        self._sync_outdir_to_mode(mode)
+        self._sync_outdir_to_mode("mixture")
         opts = self._ctx.options or {}
         for key, spin in (
             ("max_nph", self._sp_max_nph),
@@ -102,7 +98,6 @@ class DrModelingWindow(QMainWindow):
                 except (TypeError, ValueError):
                     pass
         self._apply_run_params_from_disk()
-        self._update_controls_visibility()
         self._try_load_existing_artifacts()
         self._update_confirm_enabled()
 
@@ -119,11 +114,6 @@ class DrModelingWindow(QMainWindow):
         params = read_run_params(out, profile_path=prof)
         if not params and not (Path(out) / "mixture_results.csv").is_file():
             return
-        if self._mode() == "none" and (
-            str(params.get("skill") or "") == "model_mixture"
-            or (Path(out) / "mixture_results.csv").is_file()
-        ):
-            self._rb_mixture.setChecked(True)
         if "max_nph" in params:
             try:
                 self._sp_max_nph.setValue(int(params["max_nph"]))
@@ -184,8 +174,6 @@ class DrModelingWindow(QMainWindow):
         csv = Path(out) / "mixture_results.csv"
         if not csv.is_file():
             return
-        if self._mode() == "none":
-            self._rb_mixture.setChecked(True)
         # Prefer BIC_log / best_label from run params / CSV via ingest.
         params = read_run_params(out, profile_path=prof)
         self._ingest_result(
@@ -238,16 +226,7 @@ class DrModelingWindow(QMainWindow):
         right = QVBoxLayout()
         ctrl_box = QGroupBox("Controls")
         ctrl = QVBoxLayout(ctrl_box)
-        mode_row = QHBoxLayout()
-        self._grp = QButtonGroup(self)
-        self._rb_none = QRadioButton("None")
-        self._rb_mixture = QRadioButton("MIXTURE")
-        self._rb_none.setChecked(True)
-        for rb in (self._rb_none, self._rb_mixture):
-            self._grp.addButton(rb)
-            mode_row.addWidget(rb)
-        mode_row.addStretch(1)
-        ctrl.addLayout(mode_row)
+        ctrl.addWidget(QLabel("MIXTURE"))
 
         ctrl.addWidget(QLabel("I(q) profile"))
         self._pf_profile = PathField(mode="file", expected_exts=(".dat",))
@@ -292,7 +271,7 @@ class DrModelingWindow(QMainWindow):
         self._status.setWordWrap(True)
         ctrl.addWidget(self._status)
         self._confirm = QPushButton("Confirm")
-        self._confirm.clicked.connect(self._on_confirm)
+        self._confirm.clicked.connect(lambda: self._on_confirm(quiet=False))
         ctrl.addWidget(self._confirm)
 
         pass_box = QGroupBox("Quality passport")
@@ -306,27 +285,14 @@ class DrModelingWindow(QMainWindow):
         root.addLayout(left, 3)
         root.addLayout(right, 1)
 
-        self._rb_none.toggled.connect(lambda *_: self._on_mode_changed())
-        self._rb_mixture.toggled.connect(lambda *_: self._on_mode_changed())
         self._pf_profile.path_changed.connect(self._on_profile_path_changed)
         self._pf_outdir.path_changed.connect(self._on_outdir_path_changed)
-        self._update_controls_visibility()
 
     def _mode(self) -> str:
-        return "mixture" if self._rb_mixture.isChecked() else "none"
-
-    def _update_controls_visibility(self) -> None:
-        """Hide MIXTURE-only params when mode is None (same idea as shape app)."""
-        self._mixture_params.setVisible(self._mode() == "mixture")
-
-    def _on_mode_changed(self) -> None:
-        self._sync_outdir_to_mode(self._mode())
-        self._update_controls_visibility()
-        self._update_confirm_enabled()
-        self._try_load_existing_artifacts()
+        return "mixture"
 
     def _on_profile_path_changed(self, *_a) -> None:
-        self._sync_outdir_to_mode(self._mode())
+        self._sync_outdir_to_mode("mixture")
         self._update_confirm_enabled()
 
     def _on_outdir_path_changed(self, *_a) -> None:
@@ -353,20 +319,25 @@ class DrModelingWindow(QMainWindow):
             self._pf_outdir.set_text(text)
 
     def _update_confirm_enabled(self) -> None:
-        if self._mode() != "mixture" or self._runtime.is_running():
+        if self._runtime.is_running():
             self._confirm.setEnabled(False)
             return
         prof = (self._pf_profile.text() or "").strip()
         out = (self._pf_outdir.text() or "").strip()
         self._confirm.setEnabled(bool(prof) and os.path.isfile(prof) and bool(out))
 
-    def _on_confirm(self) -> None:
-        if self._mode() != "mixture":
+    def _on_confirm_ipc(self) -> None:
+        self._on_confirm(quiet=True)
+
+    def _on_confirm(self, *, quiet: bool = False) -> None:
+        if self._runtime.is_running():
+            # Busy: ignore Confirm (freeze only on deferred context pushes).
             return
         prof = (self._pf_profile.text() or "").strip()
         outdir_raw = (self._pf_outdir.text() or "").strip()
         if not prof or not os.path.isfile(prof) or not outdir_raw:
-            QMessageBox.warning(self, "Confirm", "Set profile and output directory.")
+            if not quiet:
+                QMessageBox.warning(self, "Confirm", "Set profile and output directory.")
             return
         sample_out = resolve_sample_modeling_dir(outdir_raw, profile_path=prof)
         batch_outdir = skill_batch_output_dir(sample_out, profile_path=prof)
@@ -376,7 +347,8 @@ class DrModelingWindow(QMainWindow):
         try:
             self._runtime.set_workdir(Path(batch_outdir))
         except RuntimeError as exc:
-            QMessageBox.warning(self, "Confirm", str(exc))
+            if not quiet:
+                QMessageBox.warning(self, "Confirm", str(exc))
             return
         opts: Dict[str, Any] = {
             "output_dir": str(Path(batch_outdir).resolve()),
@@ -401,12 +373,18 @@ class DrModelingWindow(QMainWindow):
             self._ipc.send_busy(True)
 
         self._confirm.setEnabled(False)
+        self._progress_buf = ProgressStderrBuffer()
         self._status.setText("Running model_mixture…")
         self._runtime.start("model_mixture", [str(Path(prof).resolve())], opts)
 
     def _on_started(self, skill: str) -> None:
         self._status.setText(f"Running {skill}…")
         self._passport.set_message(f"Running {skill}…")
+
+    def _on_stderr(self, chunk: str) -> None:
+        for status in self._progress_buf.feed(chunk):
+            self._status.setText(status)
+            self._passport.set_message(status)
 
     def _on_finished(self, outcome: object) -> None:
         if self._ipc is not None:
