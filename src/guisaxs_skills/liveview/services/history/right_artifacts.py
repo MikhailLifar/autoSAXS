@@ -59,6 +59,7 @@ class PolydisperseArtifactBundle:
     sizes: Optional[Dict[str, Any]] = None
     mixture: Optional[Dict[str, Any]] = None
     stem: str = ""
+    inferred_mixture_mode: Optional[PolydisperseMixtureMode] = None
 
 
 def resolve_analysis_profile(
@@ -255,14 +256,19 @@ def discover_polydisperse_artifacts(
         if q_yml:
             payload["quality_passport_path"] = str(q_yml[0])
         bundle.sizes = payload
-    if mixture_mode == PolydisperseMixtureMode.MIXTURE:
-        mx = mixture_dir(root) / stem
-        if mx.is_dir():
-            csvs = list(mx.glob("mixture_results.csv"))
-            bundle.mixture = {
-                "output_subdir": str(mx),
-                "results_csv_path": str(csvs[0]) if csvs else "",
-            }
+    mode = mixture_mode
+    mx = mixture_dir(root) / stem
+    has_mix = mx.is_dir() and any(mx.glob("mixture_results.csv"))
+    # Mirror mono shape: when session mode is still NONE, paint from exclusive disk artifacts.
+    if mode == PolydisperseMixtureMode.NONE and has_mix:
+        mode = PolydisperseMixtureMode.MIXTURE
+        bundle.inferred_mixture_mode = PolydisperseMixtureMode.MIXTURE
+    if mode == PolydisperseMixtureMode.MIXTURE and has_mix:
+        csvs = list(mx.glob("mixture_results.csv"))
+        bundle.mixture = {
+            "output_subdir": str(mx),
+            "results_csv_path": str(csvs[0]) if csvs else "",
+        }
     return bundle
 
 
@@ -315,4 +321,9 @@ def present_right(
             watch_mode=watch_mode,
             mixture_mode=state.polydisperse_mixture_mode,
         )
+        if (
+            bundle_p.inferred_mixture_mode is not None
+            and state.polydisperse_mixture_mode == PolydisperseMixtureMode.NONE
+        ):
+            state.polydisperse_mixture_mode = bundle_p.inferred_mixture_mode
         right.apply_polydisperse_bundle(bundle_p)

@@ -249,9 +249,12 @@ class PolydisperseCoordinator(QObject):
             stem=stem,
             parent_widget=parent,
         )
+        self.refresh_mixture_preview_from_disk()
 
     def refresh_mixture_preview_from_disk(self) -> None:
-        # Confirm updates session state; slim pane radios stay "none" until synced.
+        # Session mode is SSOT after Confirm; promote from disk when still "none".
+        from .....session.state import PolydisperseMixtureMode
+
         mode = self._state.polydisperse_mixture_mode
         mode_s = str(getattr(mode, "value", mode) or "none")
         self._window.mixture_pane.set_mixture_mode(mode_s)
@@ -265,21 +268,30 @@ class PolydisperseCoordinator(QObject):
         from .....session.output_paths import mixture_dir
 
         md = resolve_sample_modeling_dir(
-            mixture_dir(root), profile_path=self.profile_path or ""
+            mixture_dir(root),
+            profile_path=self.profile_path or "",
+            stem=getattr(self._presenter, "sample_stem", "") or "",
         )
         apply_disk_params_to_session_state(
-            self._state, output_dir=md, profile_path=self.profile_path or ""
+            self._state,
+            output_dir=md,
+            profile_path=self.profile_path or "",
+            stem=getattr(self._presenter, "sample_stem", "") or "",
         )
         try:
             self._window.bind_state(self._state)
         except Exception:
             pass
         csv = md / "mixture_results.csv"
-        if csv.is_file():
-            self._presenter.ingest_skill_result(
-                {"results_csv_path": str(csv), "output_subdir": str(md)},
-                skill_name="model_mixture",
-            )
+        if not csv.is_file():
+            return
+        if mode_s == "none":
+            self._state.polydisperse_mixture_mode = PolydisperseMixtureMode.MIXTURE
+            self._window.mixture_pane.set_mixture_mode("mixture")
+        self._presenter.ingest_skill_result(
+            {"results_csv_path": str(csv), "output_subdir": str(md)},
+            skill_name="model_mixture",
+        )
 
     def _on_auto_toggle(self) -> None:
         if self._window.auto_processing_paused():

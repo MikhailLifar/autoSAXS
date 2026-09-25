@@ -283,9 +283,12 @@ class MonodisperseCoordinator(QObject):
             stem=stem,
             parent_widget=parent,
         )
+        # Child may already show on-disk models; mirror that into the slim preview
+        # (Confirm / finished_run also refresh — including when auto-Confirm is quiet-skipped).
+        self.refresh_shape_preview_from_disk()
 
     def refresh_shape_preview_from_disk(self) -> None:
-        # Confirm updates session state; slim pane radios stay "none" until synced.
+        # Session mode is SSOT after Confirm; refresh also disk-infers when still "none".
         mode = self._state.monodisperse_shape_mode
         mode_s = str(getattr(mode, "value", mode) or "none")
         self._wizard.shape_pane.set_shape_mode(mode_s)

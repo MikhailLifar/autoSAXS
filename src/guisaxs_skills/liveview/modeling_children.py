@@ -391,6 +391,9 @@ class ModelingChildManager(QObject):
             self._state.model_bodies_shapes = [str(s) for s in opts["shapes"]]
         # Arm upstream fast analysis only (no modeling in liveview plan).
         self._state.monodisperse_armed = True
+        # Session mode is SSOT after Confirm — sync slim pane + preview before any
+        # sync_params_to_state can clobber mode from stale "none" radios.
+        self.preview_refresh_requested.emit("shape")
 
     def _on_dr_confirmed(self, msg: dict) -> None:
         mode = str(msg.get("mode") or "none").lower()
@@ -401,3 +404,4 @@ class ModelingChildManager(QObject):
         opts = msg.get("options") if isinstance(msg.get("options"), dict) else {}
         self._state.model_mixture_options = dict(opts)
         self._state.polydisperse_armed = True
+        self.preview_refresh_requested.emit("dr")

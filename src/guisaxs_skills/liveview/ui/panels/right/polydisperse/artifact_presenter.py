@@ -430,6 +430,13 @@ class PolydisperseArtifactPresenter:
         if bundle.sizes:
             self._ingest_sizes(bundle.sizes)
         if bundle.mixture:
+            if self._state.polydisperse_mixture_mode == PolydisperseMixtureMode.NONE:
+                inferred = getattr(bundle, "inferred_mixture_mode", None)
+                if inferred is not None:
+                    self._state.polydisperse_mixture_mode = inferred
+                else:
+                    self._state.polydisperse_mixture_mode = PolydisperseMixtureMode.MIXTURE
+                self._window.mixture_pane.set_mixture_mode("mixture")
             self._ingest_mixture(bundle.mixture)
 
     def summary_text(self) -> tuple[str, str]:

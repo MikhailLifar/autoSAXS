@@ -416,13 +416,6 @@ class MonodisperseArtifactPresenter:
     def refresh_shape_view_for_current_mode(self) -> None:
         """Clear shared shape previews, then reload disk artifacts for the active mode (if any)."""
         pane = self._wizard.shape_pane
-        mode_state = self._state.monodisperse_shape_mode
-        mode = str(getattr(mode_state, "value", mode_state) or pane.shape_mode() or "none").lower()
-        if mode != pane.shape_mode():
-            pane.set_shape_mode(mode)
-        pane.clear_view()
-        if mode == "none":
-            return
         root = self._output_root
         if root is None:
             root = self._state.watchdir.expanduser().resolve()
@@ -431,6 +424,22 @@ class MonodisperseArtifactPresenter:
             prof = self._effective_profile_path()
             if prof:
                 stem = profile_sample_stem(prof)
+        mode_state = self._state.monodisperse_shape_mode
+        mode = str(getattr(mode_state, "value", mode_state) or pane.shape_mode() or "none").lower()
+        # Same disk inference as present_right: session/pane may still be "none" after
+        # auto-Confirm (slim radios never updated) or sync_params clobber from stale UI.
+        if mode == "none" and stem:
+            from .....services.history.right_artifacts import infer_shape_mode_from_disk
+
+            inferred = infer_shape_mode_from_disk(root, stem)
+            if inferred is not None:
+                mode = inferred.value
+                self._state.monodisperse_shape_mode = inferred
+        if mode != pane.shape_mode():
+            pane.set_shape_mode(mode)
+        pane.clear_view()
+        if mode == "none":
+            return
         loaded = False
         if stem:
             loaded = self._load_shape_artifacts_for_mode(root=root, stem=stem, mode=mode)
