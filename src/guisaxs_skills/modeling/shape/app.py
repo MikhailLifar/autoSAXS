@@ -14,7 +14,8 @@ def run_shape_app(argv: Optional[list[str]] = None) -> int:
 
     return run_modeling_window(
         prog="guisaxs-shape",
-        modes=["bodies", "dammif", "denss"],
+        # Accept legacy liveview --mode values; window UI is DAMMIF-only.
+        modes=["dammif", "bodies", "denss"],
         default_mode="dammif",
         window_factory=factory,
         argv=argv,

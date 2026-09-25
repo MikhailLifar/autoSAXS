@@ -47,6 +47,22 @@ class LiveviewViewer3D(QWidget):
         row.addStretch(1)
         lay.addLayout(row)
 
+    def model_folder(self) -> Optional[Path]:
+        """Directory opened by ``Open model folder…`` (if any)."""
+        return self._open_folder
+
+    def open_model_folder(self) -> None:
+        """Open the current model folder in the system file manager."""
+        self._on_open_folder()
+
+    def set_open_folder_button_visible(self, visible: bool) -> None:
+        """Hide the embedded open-folder chrome when a parent owns that button."""
+        self._open_btn.setVisible(bool(visible))
+
+    def set_hint_visible(self, visible: bool) -> None:
+        """Idle-only companion under the 3D plot (hidden while a run is active)."""
+        self._hint.setVisible(bool(visible))
+
     def clear(self) -> None:
         self._cif_path = None
         self._bodies_shape = None

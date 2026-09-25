@@ -10,6 +10,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
+from scipy.spatial import cKDTree
 
 from .utils import bodies_shape_to_dam_atoms
 
@@ -94,6 +95,41 @@ def _trim_pddf_tails(r: np.ndarray, p: np.ndarray) -> Tuple[np.ndarray, np.ndarr
     return r[mask], p[mask]
 
 
+def _bead_sphere_radius_ang(positions: np.ndarray) -> float:
+    """Bead radius a (Å) so touching neighbors have center separation ≈ 2a."""
+    tree = cKDTree(positions)
+    nn_dists, _ = tree.query(positions, k=2)
+    nn = np.asarray(nn_dists[:, 1], dtype=float)
+    nn = nn[np.isfinite(nn) & (nn > 0.0)]
+    if nn.size == 0:
+        raise ValueError("pddf: could not estimate bead nearest-neighbor spacing")
+    a = 0.5 * float(np.median(nn))
+    if not np.isfinite(a) or a <= 0.0:
+        raise ValueError("pddf: non-positive bead sphere radius")
+    return a
+
+
+def _sample_uniform_in_balls(
+    centers: np.ndarray,
+    radius: float,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Uniform points inside balls of given radius centered at ``centers`` (Å)."""
+    n = int(centers.shape[0])
+    u = rng.random(n)
+    r = float(radius) * np.power(u, 1.0 / 3.0)
+    dirs = rng.normal(size=(n, 3))
+    norms = np.linalg.norm(dirs, axis=1, keepdims=True)
+    # Extremely rare zero vectors from Normal(0,1); redraw those rows.
+    bad = norms.ravel() < 1e-15
+    while np.any(bad):
+        dirs[bad] = rng.normal(size=(int(np.count_nonzero(bad)), 3))
+        norms = np.linalg.norm(dirs, axis=1, keepdims=True)
+        bad = norms.ravel() < 1e-15
+    dirs = dirs / norms
+    return centers + r[:, None] * dirs
+
+
 def pddf_from_dam_atoms_montecarlo(
     atoms,
     *,
@@ -103,19 +139,22 @@ def pddf_from_dam_atoms_montecarlo(
     smooth_sigma_bins: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    GNOM-style p(r) from a bead/voxel DAM by Monte Carlo sampling of bead pairs.
+    Continuum p(r) for a bead DAM via volume Monte Carlo inside bead spheres.
 
-    Two beads are drawn uniformly at random (with replacement); p(r) is the PDF of
-    their separation distance. Bead coordinates are assumed to be in Å; r is returned in nm.
+    Each bead is treated as a ball of radius ``a = 0.5 * median(NN distance)`` (Å).
+    Cross-bead pairs (i ≠ j) are drawn; one uniform point is sampled in each bead's
+    ball; p(r) is the PDF of those inter-point distances. Coordinates are Å; r is
+    returned in nm.
 
-    The histogram is lightly Gaussian-smoothed (``smooth_sigma_bins``) to suppress Monte Carlo
-    and voxel-grid binning noise before normalization.
+    The histogram is lightly Gaussian-smoothed (``smooth_sigma_bins``) to suppress
+    Monte Carlo noise before normalization.
     """
     positions = np.asarray(atoms.get_positions(), dtype=float)
     n_beads = int(positions.shape[0])
     if n_beads < 2:
         raise ValueError("pddf: need at least two DAM beads")
 
+    a = _bead_sphere_radius_ang(positions)
     rng = np.random.default_rng(int(seed))
     target = int(n_pairs)
     chunks: list[np.ndarray] = []
@@ -127,13 +166,17 @@ def pddf_from_dam_atoms_montecarlo(
         mask = i != j
         if not np.any(mask):
             continue
-        d = np.linalg.norm(positions[i[mask]] - positions[j[mask]], axis=1)
+        i = i[mask]
+        j = j[mask]
+        u = _sample_uniform_in_balls(positions[i], a, rng)
+        v = _sample_uniform_in_balls(positions[j], a, rng)
+        d = np.linalg.norm(u - v, axis=1)
         chunks.append(d.astype(float, copy=False))
         collected += int(d.size)
 
     distances_ang = np.concatenate(chunks)[:target]
     if distances_ang.size == 0:
-        raise ValueError("pddf: Monte Carlo produced no bead pair distances")
+        raise ValueError("pddf: Monte Carlo produced no volume-pair distances")
 
     hist, edges = np.histogram(distances_ang, bins=int(n_bins))
     r_ang = 0.5 * (edges[:-1] + edges[1:])
@@ -160,7 +203,7 @@ def pddf_from_bodies_shape(
     seed: int = 0,
     smooth_sigma_bins: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """p(r) for a BODIES shape via its voxel DAM (same grid as 3D views) + Monte Carlo."""
+    """p(r) for a BODIES shape via its voxel DAM (same grid as 3D views) + volume MC."""
     atoms = bodies_shape_to_dam_atoms((shape_name, shape_params), grid_size=int(grid_size))
     return pddf_from_dam_atoms_montecarlo(
         atoms,
@@ -179,7 +222,7 @@ def pddf_from_dammif_atoms(
     seed: int = 0,
     smooth_sigma_bins: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """p(r) for a DAMMIF bead model via Monte Carlo sampling of bead pairs."""
+    """p(r) for a DAMMIF bead model via continuum volume Monte Carlo."""
     return pddf_from_dam_atoms_montecarlo(
         atoms,
         n_pairs=int(n_pairs),

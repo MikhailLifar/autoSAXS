@@ -24,6 +24,7 @@ from ...liveview.ui.panels.right.polydisperse.plots import MixtureDistPlot, Mixt
 from ...ui.passport_table import PassportTableWidget
 from ...ui.path_field import PathField
 from ...ui.run_status_bar import RunStatusBar
+from ..auto_mode import ModelingAutoMode
 from ..context import ModelingContext
 from ..freeze_ui import (
     enter_context_freeze,
@@ -68,37 +69,42 @@ class DrModelingWindow(QMainWindow):
         install_context_freeze(self)
         self.apply_context(ctx)
 
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._auto_mode.shutdown()
+        super().closeEvent(event)
+
     def apply_context(self, ctx: ModelingContext) -> None:
         if self._runtime.is_running():
             enter_context_freeze(self)
             return
         self._ctx = ctx if isinstance(ctx, ModelingContext) else ModelingContext.from_dict({})
-        self._pf_profile.set_text(str(self._ctx.profile_path or ""))
-        if self._ctx.output_dir:
-            resolved = resolve_sample_modeling_dir(
-                self._ctx.output_dir, profile_path=self._ctx.profile_path or ""
-            )
-            self._pf_outdir.set_text(str(resolved))
-            root = analysis_root_from_modeling_path(resolved)
-            if root is not None:
-                self._analysis_root = root
-        else:
-            self._pf_outdir.set_text("")
-        self._sync_outdir_to_mode("mixture")
-        opts = self._ctx.options or {}
-        for key, spin in (
-            ("max_nph", self._sp_max_nph),
-            ("r_max_nm", self._sp_r_max),
-            ("poly_max_nm", self._sp_poly_max),
-            ("q_min", self._q_min),
-            ("q_max", self._q_max),
-        ):
-            if key in opts and opts[key] is not None:
-                try:
-                    spin.setValue(float(opts[key]) if spin is not self._sp_max_nph else int(opts[key]))
-                except (TypeError, ValueError):
-                    pass
-        self._apply_run_params_from_disk()
+        with self._auto_mode.suppress_control_changes():
+            self._pf_profile.set_text(str(self._ctx.profile_path or ""))
+            if self._ctx.output_dir:
+                resolved = resolve_sample_modeling_dir(
+                    self._ctx.output_dir, profile_path=self._ctx.profile_path or ""
+                )
+                self._pf_outdir.set_text(str(resolved))
+                root = analysis_root_from_modeling_path(resolved)
+                if root is not None:
+                    self._analysis_root = root
+            else:
+                self._pf_outdir.set_text("")
+            self._sync_outdir_to_mode("mixture")
+            opts = self._ctx.options or {}
+            for key, spin in (
+                ("max_nph", self._sp_max_nph),
+                ("r_max_nm", self._sp_r_max),
+                ("poly_max_nm", self._sp_poly_max),
+                ("q_min", self._q_min),
+                ("q_max", self._q_max),
+            ):
+                if key in opts and opts[key] is not None:
+                    try:
+                        spin.setValue(float(opts[key]) if spin is not self._sp_max_nph else int(opts[key]))
+                    except (TypeError, ValueError):
+                        pass
+            self._apply_run_params_from_disk()
         self._try_load_existing_artifacts()
         self._update_confirm_enabled()
 
@@ -220,6 +226,9 @@ class DrModelingWindow(QMainWindow):
         bottom.addWidget(delta_box, 1)
         left.addLayout(bottom, 2)
 
+        self._status = RunStatusBar()
+        left.addWidget(self._status)
+
         self._fit.mpl_connect("button_press_event", lambda ev: self._enlarge_fit(ev))
         self._delta.mpl_connect("button_press_event", lambda ev: self._enlarge_delta(ev))
         self._dist.mpl_connect("button_press_event", lambda ev: self._enlarge_dist(ev))
@@ -268,11 +277,20 @@ class DrModelingWindow(QMainWindow):
         form.addRow("q_min (nm⁻¹)", self._q_min)
         form.addRow("q_max (nm⁻¹)", self._q_max)
         ctrl.addWidget(self._mixture_params)
-        self._status = RunStatusBar()
-        ctrl.addWidget(self._status)
         self._confirm = QPushButton("Confirm")
         self._confirm.clicked.connect(lambda: self._on_confirm(quiet=False))
         ctrl.addWidget(self._confirm)
+
+        self._auto_btn = QPushButton("Start auto-processing")
+        auto_row = QHBoxLayout()
+        auto_row.setContentsMargins(0, 0, 0, 0)
+        auto_row.addStretch(1)
+        auto_row.addWidget(self._auto_btn, 0)
+        ctrl.addLayout(auto_row)
+
+        self._auto_mode = ModelingAutoMode(
+            self, auto_btn=self._auto_btn, confirm_btn=self._confirm
+        )
 
         pass_box = QGroupBox("Quality passport")
         pass_lay = QVBoxLayout(pass_box)
@@ -286,7 +304,17 @@ class DrModelingWindow(QMainWindow):
         root.addLayout(right, 1)
 
         self._pf_profile.path_changed.connect(self._on_profile_path_changed)
+        self._pf_profile.path_changed.connect(self._auto_mode.on_control_changed)
         self._pf_outdir.path_changed.connect(self._on_outdir_path_changed)
+        self._pf_outdir.path_changed.connect(self._auto_mode.on_control_changed)
+        for spin in (
+            self._sp_max_nph,
+            self._sp_r_max,
+            self._sp_poly_max,
+            self._q_min,
+            self._q_max,
+        ):
+            spin.valueChanged.connect(self._auto_mode.on_control_changed)
 
     def _mode(self) -> str:
         return "mixture"
@@ -327,12 +355,16 @@ class DrModelingWindow(QMainWindow):
         self._confirm.setEnabled(bool(prof) and os.path.isfile(prof) and bool(out))
 
     def _on_confirm_ipc(self) -> None:
+        if not self._auto_mode.should_accept_ipc_confirm():
+            return
         self._on_confirm(quiet=True)
 
     def _on_confirm(self, *, quiet: bool = False) -> None:
         if self._runtime.is_running():
             # Busy: ignore Confirm (freeze only on deferred context pushes).
             return
+        if not quiet:
+            self._auto_mode.enter_auto()
         prof = (self._pf_profile.text() or "").strip()
         outdir_raw = (self._pf_outdir.text() or "").strip()
         if not prof or not os.path.isfile(prof) or not outdir_raw:
