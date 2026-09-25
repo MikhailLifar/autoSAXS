@@ -688,18 +688,13 @@ class MaskWizardDialog(QDialog):
         return dp.resolve()
 
     def _on_save(self) -> None:
-        img = self._image_field.text().strip()
-        if not img or not os.path.isfile(img):
-            QMessageBox.warning(self, "Mask", "Calibration image path is missing or not a file.")
-            return
-
         dp = self._browse_save_mask_path()
         if dp is None:
             return
 
         m = self._model.mask_for_save()
         if m is None:
-            QMessageBox.warning(self, "Mask", "No image is loaded; cannot compute mask.")
+            QMessageBox.warning(self, "Mask", "No mask to save (load an image or draw a mask first).")
             return
 
         if dp.exists():
@@ -722,12 +717,14 @@ class MaskWizardDialog(QDialog):
         self._saved_mask_path = str(dp)
         self._suppress_context_reload = True
         try:
-            try:
-                stored = ensure_tiff_in_calibration(self._watchdir, img)
-                self._image_field.set_text(stored)
-            except (OSError, FileNotFoundError) as e:
-                QMessageBox.warning(self, "Mask", str(e))
-                return
+            img = self._image_field.text().strip()
+            if img and os.path.isfile(img):
+                try:
+                    stored = ensure_tiff_in_calibration(self._watchdir, img)
+                    self._image_field.set_text(stored)
+                except (OSError, FileNotFoundError) as e:
+                    QMessageBox.warning(self, "Mask", str(e))
+                    return
             self._mask_field.set_text(self._saved_mask_path)
         finally:
             self._suppress_context_reload = False

@@ -31,6 +31,7 @@ from ...liveview.ui.panels.right.monodisperse.plots import PrPlot, ShapeFitPlot
 from ...liveview.ui.widgets.viewer_3d import LiveviewViewer3D
 from ...ui.passport_table import PassportTableWidget
 from ...ui.path_field import PathField
+from ...ui.run_status_bar import RunStatusBar
 from ..catalogs.dam_models import build_dam_model_catalog
 from ..catalogs.denss_models import build_denss_model_catalog
 from ..context import ModelingContext
@@ -304,8 +305,7 @@ class ShapeModelingWindow(QMainWindow):
         self._denss_n_maps.setValue(20)
         ctrl.addWidget(self._denss_n_maps)
 
-        self._status = QLabel("—")
-        self._status.setWordWrap(True)
+        self._status = RunStatusBar()
         ctrl.addWidget(self._status)
         self._confirm = QPushButton("Confirm")
         self._confirm.clicked.connect(lambda: self._on_confirm(quiet=False))
@@ -437,7 +437,10 @@ class ShapeModelingWindow(QMainWindow):
             ok = bool(gnom) and os.path.isfile(gnom)
             if self._ctx.require_gnom_for_dam and not ok:
                 self._confirm.setEnabled(False)
-                self._status.setText("DAMMIF requires a GNOM .out (run P(r) in liveview first).")
+                self._status.set_status(
+                    "DAMMIF requires a GNOM .out (run P(r) in liveview first).",
+                    running=False,
+                )
                 return
             if not ok:
                 # Standalone may omit gnom only if profile exists (skill fallback).
@@ -448,11 +451,21 @@ class ShapeModelingWindow(QMainWindow):
         prof = self._profile()
         self._confirm.setEnabled(bool(prof) and os.path.isfile(prof))
 
+    def _views_frozen(self) -> bool:
+        """True while a Confirm job runs or context freeze is deferred — do not retarget plots."""
+        return bool(self._runtime.is_running()) or bool(
+            getattr(self, "_context_push_deferred", False)
+        )
+
     def _on_gnom_path_edited(self, *_args) -> None:
+        if self._views_frozen():
+            return
         self._watch_gnom_path(self._gnom())
         self._refresh_pr_comparison()
 
     def _on_gnom_file_changed(self, path: str) -> None:
+        if self._views_frozen():
+            return
         # Editors often replace the file; re-add so further updates are seen.
         p = (path or "").strip()
         if p and os.path.isfile(p):
@@ -503,6 +516,8 @@ class ShapeModelingWindow(QMainWindow):
 
     def _refresh_pr_comparison(self) -> None:
         """Overlay GNOM P(r) with model-dam/bodies ``*_pr.dat`` when present."""
+        if self._views_frozen():
+            return
         gnom = self._gnom()
         model_pr = self._resolve_model_pr_dat()
         if model_pr:
@@ -610,16 +625,16 @@ class ShapeModelingWindow(QMainWindow):
 
         self._confirm.setEnabled(False)
         self._progress_buf = ProgressStderrBuffer()
-        self._status.setText(f"Running {skill}…")
+        self._status.set_running(True, text=f"Running {skill}…")
         self._runtime.start(skill, positional, opts)
 
     def _on_started(self, skill: str) -> None:
-        self._status.setText(f"Running {skill}…")
+        self._status.set_running(True, text=f"Running {skill}…")
         self._passport.set_message(f"Running {skill}…")
 
     def _on_stderr(self, chunk: str) -> None:
         for status in self._progress_buf.feed(chunk):
-            self._status.setText(status)
+            self._status.set_running(True, text=status)
             self._passport.set_message(status)
 
     def _on_finished(self, outcome: object) -> None:
@@ -632,12 +647,14 @@ class ShapeModelingWindow(QMainWindow):
         if self._ipc is not None:
             self._ipc.send_finished(success=success, result=result)
         if not success:
-            self._status.setText(f"Failed (exit {getattr(outcome, 'exit_code', '?')})")
+            self._status.set_running(
+                False, text=f"Failed (exit {getattr(outcome, 'exit_code', '?')})"
+            )
             self._passport.set_message(self._status.text(), poor=True)
             self._update_confirm_enabled()
             notify_ready_for_context_if_deferred(self, self._ipc)
             return
-        self._status.setText("Done.")
+        self._status.set_running(False, text="Done.")
         self._ingest_result(result)
         self._update_confirm_enabled()
         notify_ready_for_context_if_deferred(self, self._ipc)

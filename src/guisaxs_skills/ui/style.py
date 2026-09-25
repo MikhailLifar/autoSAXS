@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, QObject, Qt
-from PyQt5.QtGui import QColor, QFont, QPalette
-from PyQt5.QtWidgets import QApplication, QLabel, QStyleFactory
+from PyQt5.QtCore import QEvent, QObject, QPoint, QRect, Qt
+from PyQt5.QtGui import QColor, QFont, QPainter, QPalette, QPolygon
+from PyQt5.QtWidgets import QApplication, QLabel, QProxyStyle, QStyle, QStyleFactory
 
 COLOR_MUTED_TEXT = "#728195"
 COLOR_REQUIRED_STAR = "#ff4d4f"
@@ -12,6 +12,45 @@ COLOR_QUALITY_POOR = COLOR_REQUIRED_STAR
 COLOR_QUALITY_WARN = "#b45309"
 
 _SELECTABLE_LABELS_FILTER_ATTR = "_autosaxs_selectable_labels_filter"
+_SPIN_ARROW = QColor("#e7eef6")
+
+
+class _BrightSpinArrowStyle(QProxyStyle):
+    """Paint light spin-box chevrons; Fusion stylesheet ``::*-arrow`` images are ignored."""
+
+    def drawPrimitive(self, element, option, painter, widget=None):  # noqa: N802
+        if element in (QStyle.PE_IndicatorSpinUp, QStyle.PE_IndicatorSpinDown):
+            self._draw_spin_arrow(element == QStyle.PE_IndicatorSpinUp, option, painter)
+            return
+        super().drawPrimitive(element, option, painter, widget)
+
+    @staticmethod
+    def _draw_spin_arrow(up: bool, option, painter: QPainter) -> None:
+        r: QRect = option.rect
+        if r.width() < 4 or r.height() < 3:
+            return
+        cx = r.center().x()
+        cy = r.center().y()
+        half_w = max(3, min(4, r.width() // 2 - 1))
+        half_h = max(2, min(3, r.height() // 2 - 1))
+        if up:
+            pts = [
+                QPoint(cx, cy - half_h),
+                QPoint(cx - half_w, cy + half_h),
+                QPoint(cx + half_w, cy + half_h),
+            ]
+        else:
+            pts = [
+                QPoint(cx, cy + half_h),
+                QPoint(cx - half_w, cy - half_h),
+                QPoint(cx + half_w, cy - half_h),
+            ]
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(_SPIN_ARROW)
+        painter.drawPolygon(QPolygon(pts))
+        painter.restore()
 
 
 class _SelectableLabelsFilter(QObject):
@@ -50,8 +89,8 @@ def apply_style(app: QApplication) -> None:
     """
     # Fusion respects palette + stylesheet on all platforms; the Windows native style
     # often keeps pale widget backgrounds while still using our light Text color.
-    if "Fusion" in QStyleFactory.keys():
-        app.setStyle("Fusion")
+    base = QStyleFactory.create("Fusion") if "Fusion" in QStyleFactory.keys() else app.style()
+    app.setStyle(_BrightSpinArrowStyle(base))
 
     _enable_selectable_labels(app)
 
@@ -108,26 +147,7 @@ def apply_style(app: QApplication) -> None:
             outline: 0;
         }}
 
-        QSpinBox::up-button, QSpinBox::down-button,
-        QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
-            background: #182232;
-            border: 0;
-            width: 18px;
-        }}
-        QSpinBox::up-button:hover, QSpinBox::down-button:hover,
-        QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {{
-            background: #1b2a3d;
-        }}
-        QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
-            image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpolygon points='0,5 4,0 8,5' fill='%23e7eef6'/%3E%3C/svg%3E");
-            width: 8px;
-            height: 5px;
-        }}
-        QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
-            image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpolygon points='0,0 4,5 8,0' fill='%23e7eef6'/%3E%3C/svg%3E");
-            width: 8px;
-            height: 5px;
-        }}
+        /* Spin arrows are painted by _BrightSpinArrowStyle (stylesheet ::*-arrow is ignored). */
 
         QCheckBox {{ color: #e7eef6; spacing: 6px; }}
 
@@ -181,4 +201,3 @@ def apply_style(app: QApplication) -> None:
         }}
         """
     )
-

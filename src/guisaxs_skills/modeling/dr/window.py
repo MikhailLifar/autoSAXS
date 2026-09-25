@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (
 from ...liveview.ui.panels.right.polydisperse.plots import MixtureDistPlot, MixtureFitPlot
 from ...ui.passport_table import PassportTableWidget
 from ...ui.path_field import PathField
+from ...ui.run_status_bar import RunStatusBar
 from ..context import ModelingContext
 from ..freeze_ui import (
     enter_context_freeze,
@@ -267,8 +268,7 @@ class DrModelingWindow(QMainWindow):
         form.addRow("q_min (nm⁻¹)", self._q_min)
         form.addRow("q_max (nm⁻¹)", self._q_max)
         ctrl.addWidget(self._mixture_params)
-        self._status = QLabel("—")
-        self._status.setWordWrap(True)
+        self._status = RunStatusBar()
         ctrl.addWidget(self._status)
         self._confirm = QPushButton("Confirm")
         self._confirm.clicked.connect(lambda: self._on_confirm(quiet=False))
@@ -374,16 +374,16 @@ class DrModelingWindow(QMainWindow):
 
         self._confirm.setEnabled(False)
         self._progress_buf = ProgressStderrBuffer()
-        self._status.setText("Running model_mixture…")
+        self._status.set_running(True, text="Running model_mixture…")
         self._runtime.start("model_mixture", [str(Path(prof).resolve())], opts)
 
     def _on_started(self, skill: str) -> None:
-        self._status.setText(f"Running {skill}…")
+        self._status.set_running(True, text=f"Running {skill}…")
         self._passport.set_message(f"Running {skill}…")
 
     def _on_stderr(self, chunk: str) -> None:
         for status in self._progress_buf.feed(chunk):
-            self._status.setText(status)
+            self._status.set_running(True, text=status)
             self._passport.set_message(status)
 
     def _on_finished(self, outcome: object) -> None:
@@ -396,12 +396,14 @@ class DrModelingWindow(QMainWindow):
         if self._ipc is not None:
             self._ipc.send_finished(success=success, result=result)
         if not success:
-            self._status.setText(f"Failed (exit {getattr(outcome, 'exit_code', '?')})")
+            self._status.set_running(
+                False, text=f"Failed (exit {getattr(outcome, 'exit_code', '?')})"
+            )
             self._passport.set_message(self._status.text(), poor=True)
             self._update_confirm_enabled()
             notify_ready_for_context_if_deferred(self, self._ipc)
             return
-        self._status.setText("Done.")
+        self._status.set_running(False, text="Done.")
         self._ingest_result(result)
         self._update_confirm_enabled()
         notify_ready_for_context_if_deferred(self, self._ipc)
