@@ -117,7 +117,7 @@ def draw_gnom_iq_on_ax(
 
 def draw_gnom_residuals_on_ax(ax, gnom_out_path: str) -> Optional[str]:
     """
-    Draw ``(I − I_fit) / (σ + 0.1)`` vs q from a GNOM ``.out`` I(q) table.
+    Draw ``ΔI / (σ + 0.1)`` vs q from a GNOM ``.out`` I(q) table.
 
     Matches the residual panel written by fit_distances / fit_sizes
     (``write_iq_fit_comparison_png``). Returns an error status string, or None.
@@ -146,20 +146,21 @@ def draw_gnom_residuals_on_ax(ax, gnom_out_path: str) -> Optional[str]:
             return "Empty residuals"
         qq, ye, yf = q[m], i_exp[m], i_fit[m]
         denom = np.abs(ye) + 0.1
-        ylabel = r"$(I-I_{\mathrm{fit}})/(|I|+0.1)$"
+        ylabel = r"$\Delta I/(|I|+0.1)$"
     else:
         qq, ye, yf, sig = q[m], i_exp[m], i_fit[m], sigma[m]
         if np.any(sig > 0):
             denom = np.abs(sig) + 0.1
-            ylabel = r"$(I-I_{\mathrm{fit}})/(\sigma+0.1)$"
+            ylabel = r"$\Delta I/(\sigma+0.1)$"
         else:
             denom = np.abs(ye) + 0.1
-            ylabel = r"$(I-I_{\mathrm{fit}})/(|I|+0.1)$"
+            ylabel = r"$\Delta I/(|I|+0.1)$"
     with np.errstate(divide="ignore", invalid="ignore"):
         resid = (ye - yf) / denom
     ax.clear()
-    ax.axhline(0.0, color="0.5", lw=0.8)
     ax.plot(qq, resid, "C1-", lw=1.0)
+    ax.axhline(0.0, color="0.5", lw=0.8)
+    ax.set_xlim(float(qq.min()), float(qq.max()))
     ax.set_xlabel("q (nm⁻¹)")
     ax.set_ylabel(ylabel)
     ax.grid(True, alpha=0.25)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -12,6 +11,7 @@ import numpy as np
 
 from autosaxs.core.gnom import parse_gnom_out
 from autosaxs.core.gnom_quality import analyze_dmax_validation
+from autosaxs.core.stdio_utf8 import safe_print
 
 from ..common import (
     ConfigPathExpressionArg,
@@ -154,7 +154,7 @@ def fit_distances(
     ```
     """
     bus = EventBus()
-    bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
+    bus.subscribe(EventType.MESSAGE, lambda data: safe_print((data or {}).get("text", "")))
     profile = coerce_dat_path_expression(profile)
     expanded_profiles = expand_files_from_unwrapped(profile.unwrap(), kind="1d_dat")
     for p in expanded_profiles:

@@ -108,7 +108,7 @@ class GuinierAdjustWizardDialog(QDialog):
         fit_lay = QVBoxLayout(fit_box)
         fit_lay.setContentsMargins(6, 8, 6, 6)
         fit_lay.addWidget(self._fit_plot, 1)
-        resid_box = QGroupBox("Residuals")
+        resid_box = QGroupBox("ΔI")
         resid_lay = QVBoxLayout(resid_box)
         resid_lay.setContentsMargins(6, 8, 6, 6)
         resid_lay.addWidget(self._resid_plot, 1)
@@ -447,7 +447,7 @@ class GuinierAdjustWizardDialog(QDialog):
                 return
             if self._resid_dlg is None:
                 self._resid_dlg = _MplViewerDialog(
-                    title="Residuals",
+                    title="ΔI",
                     plot=GuinierResidualsPlot(figsize=(5.0, 3.5)),
                     parent=self,
                 )

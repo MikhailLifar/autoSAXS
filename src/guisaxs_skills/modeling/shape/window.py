@@ -222,7 +222,7 @@ class ShapeModelingWindow(QMainWindow):
         self._pr = PrPlot()
         for p, title in (
             (self._iq, "Model I(q) fit (DAM / DENSS / BODIES)"),
-            (self._delta, "Model Δ (I−fit)/σ"),
+            (self._delta, "Model ΔI"),
             (self._pr, "P(r) comparison (GNOM vs model)"),
         ):
             box = QGroupBox(title)
@@ -861,7 +861,7 @@ class ShapeModelingWindow(QMainWindow):
 
         self._plot_clicks.open(
             key="delta",
-            title=f"Model Δ (I−fit)/σ — {Path(path).name}",
+            title=f"Model ΔI — {Path(path).name}",
             make_plot=lambda: FitResidualsPlot(figsize=(8, 4)),
             populate=_populate,
         )

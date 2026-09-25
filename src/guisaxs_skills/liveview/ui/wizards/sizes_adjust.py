@@ -108,7 +108,7 @@ class SizesAdjustWizardDialog(QDialog):
         iq_lay = QVBoxLayout(iq_box)
         iq_lay.setContentsMargins(6, 8, 6, 6)
         iq_lay.addWidget(self._fit_plot, 1)
-        resid_box = QGroupBox("Residuals")
+        resid_box = QGroupBox("ΔI")
         resid_lay = QVBoxLayout(resid_box)
         resid_lay.setContentsMargins(6, 8, 6, 6)
         resid_lay.addWidget(self._resid_plot, 1)

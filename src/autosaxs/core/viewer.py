@@ -666,17 +666,18 @@ def write_iq_fit_comparison_png(
         sig = np.asarray(sigma, dtype=float)
         if sig.shape == ye.shape and np.any(np.isfinite(sig) & (sig > 0)):
             denom = np.where(np.isfinite(sig), np.abs(sig), 0.0) + 0.1
-            resid_ylabel = r"$(I-I_\mathrm{fit})/(\sigma+0.1)$"
+            resid_ylabel = r"$\Delta I/(\sigma+0.1)$"
         else:
             denom = np.abs(ye) + 0.1
-            resid_ylabel = r"$(I-I_\mathrm{fit})/(|I|+0.1)$"
+            resid_ylabel = r"$\Delta I/(|I|+0.1)$"
     else:
         denom = np.abs(ye) + 0.1
-        resid_ylabel = r"$(I-I_\mathrm{fit})/(|I|+0.1)$"
+        resid_ylabel = r"$\Delta I/(|I|+0.1)$"
     with np.errstate(divide="ignore", invalid="ignore"):
         resid = (ye - y_primary) / denom
-    axr.axhline(0.0, color="0.5", lw=0.8)
     axr.plot(q, resid, "C1-", lw=1.0)
+    axr.axhline(0.0, color="0.5", lw=0.8)
+    axr.set_xlim(float(np.nanmin(q)), float(np.nanmax(q)))
     axr.set_xlabel(r"$q$ (nm$^{-1}$)")
     axr.set_ylabel(resid_ylabel)
     axr.grid(True, alpha=0.25)

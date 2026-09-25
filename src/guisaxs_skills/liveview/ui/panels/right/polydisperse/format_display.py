@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Mapping
 
 from ..monodisperse.format_display import format_display_number, scalar_value
@@ -67,6 +68,10 @@ def format_sizes_passport_rows(
 
     n_s = scalar_value(result.get("n_shannon"))
     if n_s is not None and n_s not in ("", None):
+        try:
+            n_s = math.floor(float(n_s))
+        except (TypeError, ValueError):
+            pass
         rows.append(("n_shannon", format_display_number(n_s), False))
 
     if not compact:

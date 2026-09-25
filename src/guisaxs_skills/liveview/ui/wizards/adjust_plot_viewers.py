@@ -43,7 +43,7 @@ class AdjustPlotClickRouter:
         make_fit_plot: Callable[[], QWidget],
         dist_title: str,
         fit_title: str = "I(q) fit",
-        residuals_title: str = "Residuals",
+        residuals_title: str = "ΔI",
     ) -> None:
         self._parent = parent
         self._make_dist = make_dist_plot

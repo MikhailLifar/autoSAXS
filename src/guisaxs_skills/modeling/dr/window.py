@@ -211,7 +211,7 @@ class DrModelingWindow(QMainWindow):
         fit_lay = QVBoxLayout(fit_box)
         self._fit = MixtureFitPlot()
         fit_lay.addWidget(self._fit, 1)
-        delta_box = QGroupBox("MIXTURE Δ (I−fit)/σ")
+        delta_box = QGroupBox("MIXTURE ΔI")
         delta_lay = QVBoxLayout(delta_box)
         self._delta = FitResidualsPlot()
         delta_lay.addWidget(self._delta, 1)
@@ -502,7 +502,7 @@ class DrModelingWindow(QMainWindow):
 
         self._plot_clicks.open(
             key="delta",
-            title=f"MIXTURE Δ (I−fit)/σ — {Path(path).name}",
+            title=f"MIXTURE ΔI — {Path(path).name}",
             make_plot=lambda: FitResidualsPlot(figsize=(8, 4)),
             populate=_populate,
         )

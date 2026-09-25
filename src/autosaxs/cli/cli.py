@@ -698,6 +698,9 @@ def _add_skill_subparser(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    from ..core.stdio_utf8 import reconfigure_stdio_utf8
+
+    reconfigure_stdio_utf8()
     version = _autosaxs_version()
     parser = argparse.ArgumentParser(
         prog="autosaxs",

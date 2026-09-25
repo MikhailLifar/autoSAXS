@@ -66,13 +66,15 @@ class FitResidualsPlot(FigureCanvas):
         if not m.any():
             self.clear_plot()
             return
+        qq = q[m]
         resid = (i_exp[m] - i_fit[m]) / err[m]
         self._click_path = fir_path
         self._ax.clear()
+        self._ax.scatter(qq, resid, s=8, alpha=0.7)
         self._ax.axhline(0.0, color="0.5", lw=0.8)
-        self._ax.scatter(q[m], resid, s=8, alpha=0.7)
+        self._ax.set_xlim(float(qq.min()), float(qq.max()))
         self._ax.set_xlabel("q (nm⁻¹)")
-        self._ax.set_ylabel("(I−fit)/σ")
+        self._ax.set_ylabel(r"$\Delta I/\sigma$")
         self._ax.grid(True, alpha=0.2)
         self._fig.tight_layout()
         self.draw_idle()
