@@ -56,10 +56,18 @@ def is_sample_path(path: str) -> bool:
 
 
 def normalize_sample_path(path: str) -> str:
+    """Absolute path key for ingest caches / settle / owned-output sets.
+
+    On Windows, ``normcase`` so TREE scan keys and acknowledge keys cannot diverge
+    by drive/letter casing (case-insensitive FS, case-sensitive dicts).
+    """
     try:
-        return str(Path(path).expanduser().resolve())
+        resolved = str(Path(path).expanduser().resolve())
     except Exception:
-        return os.path.normcase(os.path.abspath(path))
+        resolved = os.path.abspath(path)
+    if os.name == "nt":
+        return os.path.normcase(resolved)
+    return resolved
 
 
 def sample_stem_from_path(path: str) -> str:
@@ -85,13 +93,7 @@ def revision_changed(prev: Optional[FileStatSnapshot], cur: FileStatSnapshot) ->
 
 def is_newer_than(candidate: FileStatSnapshot, than: FileStatSnapshot) -> bool:
     """True when ``candidate`` is a strictly newer on-disk version than ``than``."""
-    if (candidate.dev, candidate.ino) != (than.dev, than.ino):
-        return True
-    if candidate.ctime_ns != than.ctime_ns:
-        return candidate.ctime_ns > than.ctime_ns
-    if candidate.mtime_ns != than.mtime_ns:
-        return candidate.mtime_ns > than.mtime_ns
-    return candidate.size > than.size
+    return candidate.is_newer_than(than)
 
 
 def make_revision(

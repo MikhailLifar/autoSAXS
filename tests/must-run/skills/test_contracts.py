@@ -149,6 +149,20 @@ def _write_minimal_dammif_cif(path: str) -> None:
     )
 
 
+def _assert_best_cif(best: Path, *, target_name: str | None = None) -> None:
+    """``best.cif`` is a relative symlink, or a byte-identical copy when symlink is blocked."""
+    assert best.name == "best.cif"
+    assert best.exists()
+    if target_name is None:
+        assert best.is_file() or best.is_symlink()
+        return
+    if best.is_symlink():
+        assert best.resolve().name == target_name
+        return
+    target = best.parent / target_name
+    assert target.is_file()
+    assert best.read_bytes() == target.read_bytes()
+
 
 def test_read_cache_missing():
     with tempfile.TemporaryDirectory() as d:
@@ -1247,9 +1261,7 @@ def test_model_dam_calls_fit_distances_when_gnom_omitted(monkeypatch):
         assert os.path.isabs(dammif_gnom_args[0])
         assert dammif_gnom_args[0].endswith("fake_gnom.out")
         assert os.path.isdir(str(result["output_subdir"]))
-        best = Path(str(result["best_cif_path"]))
-        assert best.is_symlink()
-        assert best.name == "best.cif"
+        _assert_best_cif(Path(str(result["best_cif_path"])))
         assert result["frequency_map_path"] == ""
 
 
@@ -1321,9 +1333,7 @@ def test_model_dam_n_runs_runs_damaver(monkeypatch):
         assert len(damaver_calls) == 1
         assert result["frequency_map_path"]
         assert os.path.isfile(str(result["frequency_map_path"]))
-        best = Path(str(result["best_cif_path"]))
-        assert best.is_symlink()
-        assert best.resolve().name == "dammif-2-1.cif"
+        _assert_best_cif(Path(str(result["best_cif_path"])), target_name="dammif-2-1.cif")
 
 
 

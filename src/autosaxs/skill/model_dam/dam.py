@@ -83,7 +83,7 @@ def model_dam(
     `dict[str, str | list[str]]` with:
 
     - `output_subdir`: Directory containing DAMMIF fit artifacts (FIR/CIF and summary files). Each replica also gets `{rep}_pr.dat` and `{rep}_pr.png` (GNOM-style p(r) from DAM bead pairs via Monte Carlo).
-    - `best_cif_path`: Symlink `best.cif` pointing at the most probable particle CIF (the sole run when `n_runs=1`).
+    - `best_cif_path`: `best.cif` convenience path (relative symlink, or a copy when symlink creation is blocked) pointing at the most probable particle CIF (the sole run when `n_runs=1`).
     - `best_view_path`: Path to ``best_view.png`` (isosurface + fit overlay for the best model); empty if unavailable.
     - `frequency_map_path`: Path to the DAMAVER frequency/occupancy map CIF (empty string when `n_runs=1`).
     - `visuals_dir`, `overlap_png`, `overlap_gif`, `occupancy_png`, `occupancy_gif`, `occupancy_thresholds_png`, `run_gifs` when `visualize_all=True` (empty strings / empty list otherwise).
@@ -183,21 +183,18 @@ def _gnom_path_from_fit_distances(
 
 
 def _symlink_best_cif(output_dir: str, target_cif: str) -> str:
-    """Create ``best.cif`` in ``output_dir`` as a relative symlink to ``target_cif``."""
-    target_abs = os.path.normpath(os.path.abspath(target_cif))
-    if not os.path.isfile(target_abs):
-        raise FileNotFoundError(f"model_dam: cannot symlink best.cif; missing {target_abs}")
+    """Create ``best.cif`` in ``output_dir`` (relative symlink, or copy if symlink is blocked)."""
+    from autosaxs.core.fsutil import replace_with_relative_symlink_or_copy
+
     link_path = os.path.join(output_dir, _BEST_CIF_NAME)
-    rel_target = os.path.relpath(target_abs, start=os.path.abspath(output_dir))
-    if os.path.lexists(link_path):
-        os.unlink(link_path)
     try:
-        os.symlink(rel_target, link_path)
+        return replace_with_relative_symlink_or_copy(link_path, target_cif)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"model_dam: cannot create best.cif; {exc}") from exc
     except OSError as exc:
         raise RuntimeError(
-            f"model_dam: failed to create symlink {link_path!r} -> {rel_target!r}: {exc}"
+            f"model_dam: failed to create best.cif at {link_path!r} from {target_cif!r}: {exc}"
         ) from exc
-    return os.path.normpath(os.path.abspath(link_path))
 
 
 def _particle_cif_paths(output_dir: str, n_runs: int) -> List[str]:
@@ -626,7 +623,7 @@ def _model_dam_paths(
         best_target = particle_cifs[0] if particle_cifs else None
 
     if best_target is None:
-        raise RuntimeError("model_dam: no particle CIF available to create best.cif symlink")
+        raise RuntimeError("model_dam: no particle CIF available to create best.cif")
 
     emit_skill_progress("model_dam", "finalizing")
     best_cif_path = _symlink_best_cif(output_dir, best_target)
@@ -652,7 +649,7 @@ def _model_dam_paths(
         md_parts.append(f"![Fits comparison]({os.path.basename(dammif_fits_png)})\n")
     if frequency_map_path:
         md_parts.append(f"- Frequency/occupancy map: `{os.path.relpath(frequency_map_path, output_dir)}`\n")
-    md_parts.append(f"- Best model (symlink): `{_BEST_CIF_NAME}` → `{os.path.basename(best_target)}`\n")
+    md_parts.append(f"- Best model: `{_BEST_CIF_NAME}` → `{os.path.basename(best_target)}`\n")
     summary_refs_d: List[Dict[str, Any]] = []
     if os.path.isfile(dammif_fits_yml):
         summary_refs_d.append({"role": "dammif_fits_yml", "path": os.path.basename(dammif_fits_yml), "format": "text"})

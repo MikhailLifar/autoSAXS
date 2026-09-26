@@ -2,7 +2,7 @@
 GUI scenario test for guisaxs-liveview: drive the real PyQt GUI (no pixel checks).
 
 Primary monodisperse scenario (``test_guisaxs_liveview_monodisperse_scenario``):
-- Launch Liveview on ``WORKSPACE_ROOT/test_liveview``
+- Launch Liveview on a test watchdir (local disk on Windows; see ``_test_watchdir``)
 - Calibrate once (validation AgBh + mask)
 - For **three** consecutive buffer–sample pairs (ihs27, ihs28, ihs29):
   - Reset buffer between pairs (disarms analysis)
@@ -46,6 +46,28 @@ _VALIDATION_MISSING_MSG = (
     f"Validation directory not found: {VALIDATION_DIR}. "
     "Run: python scripts/setup_validation_data.py"
 )
+
+
+def _test_watchdir(name: str) -> Path:
+    """
+    Watch-folder root for liveview GUI tests.
+
+    VirtualBox shared folders (``Z:\\`` / ``\\\\VBoxSvr\\...``) are a common host for
+    validation fixtures, but running the liveview watchdir + QProcess skill I/O there
+    can abort the guest with ``STATUS_STACK_BUFFER_OVERRUN`` mid-pipeline. Prefer a
+    local disk root on Windows; override with ``GUISAXS_LIVEVIEW_TEST_WORKDIR``.
+    """
+    override = (os.environ.get("GUISAXS_LIVEVIEW_TEST_WORKDIR") or "").strip()
+    if override:
+        root = Path(override)
+    elif os.name == "nt":
+        root = Path(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()) / "autosaxs-liveview-tests"
+    else:
+        root = Path(WORKSPACE_ROOT)
+    path = root / name
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
 
 # (protocol_key, buffer_tif, sample_tif, sample_stem_for_artifacts)
 _MONO_SCENARIO_PAIRS: List[Tuple[str, str, str, str]] = [
@@ -202,6 +224,20 @@ def _rm_tree_contents(path: Path) -> None:
                 pass
 
 
+def _copyfile_share_safe(src: Path, dst: Path) -> None:
+    """
+    Copy bytes to ``dst``.
+
+    VirtualBox shared folders often make ``os.path.samefile()`` true for distinct
+    paths (identical volume serial / file index), so ``shutil.copyfile`` raises
+    ``SameFileError``. Byte copy skips that check.
+    """
+    try:
+        shutil.copyfile(src, dst)
+    except shutil.SameFileError:
+        dst.write_bytes(Path(src).read_bytes())
+
+
 def _atomic_copy_into_watchdir(src: Path, watchdir: Path) -> Path:
     """
     Copy into a temporary *non-tif* name inside watchdir, then atomically rename to `.tif`.
@@ -219,7 +255,7 @@ def _atomic_copy_into_watchdir(src: Path, watchdir: Path) -> Path:
     os.close(fd)
     tmp_p = Path(tmp)
     try:
-        shutil.copyfile(src, tmp_p)
+        _copyfile_share_safe(src, tmp_p)
         try:
             os.utime(tmp_p, None)
         except Exception:
@@ -976,7 +1012,7 @@ def _atomic_copy_into_tree(src: Path, watchdir: Path, *, stem: Optional[str] = N
     os.close(fd)
     tmp_p = Path(tmp)
     try:
-        shutil.copyfile(src, tmp_p)
+        _copyfile_share_safe(src, tmp_p)
         try:
             os.utime(tmp_p, None)
         except Exception:

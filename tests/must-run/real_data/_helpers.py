@@ -51,6 +51,46 @@ from autosaxs.skill.integrate import integrate
 from autosaxs.skill.model_dam import model_dam
 from autosaxs.skill.subtract import subtract
 
+
+def _rmtree_force(path: str) -> None:
+    """
+    Remove a directory tree on flaky filesystems (VirtualBox shared folders).
+
+    VBox guests often raise WinError 2 (not found) mid-unlink or WinError 145
+    (directory not empty) after partial deletes. Prefer wipe → rename-aside →
+    recreate-friendly empty path.
+    """
+    import time
+
+    if not os.path.isdir(path):
+        return
+
+    def _onexc(func: Any, p: str, exc: BaseException) -> None:
+        if isinstance(exc, (FileNotFoundError, PermissionError)):
+            return
+        if isinstance(exc, OSError) and getattr(exc, "winerror", None) in (2, 5, 32, 145):
+            return
+        # Best-effort: swallow other OSError on share paths so rename fallback runs.
+        if isinstance(exc, OSError):
+            return
+        raise exc
+
+    for _ in range(3):
+        shutil.rmtree(path, onexc=_onexc)
+        if not os.path.isdir(path):
+            return
+        time.sleep(0.15)
+
+    if not os.path.isdir(path):
+        return
+    trash = f"{path}.trash_{os.getpid()}_{time.time_ns()}"
+    try:
+        os.rename(path, trash)
+    except OSError:
+        shutil.rmtree(path, ignore_errors=True)
+        return
+    shutil.rmtree(trash, ignore_errors=True)
+
 WORKSPACE_ROOT = os.path.abspath(os.path.join(_REPOS, ".."))
 VALIDATION_DIR = os.path.join(WORKSPACE_ROOT, "validation")
 RAW_DIR = os.path.join(VALIDATION_DIR, "raw")
@@ -138,7 +178,7 @@ def _reset_validation_plots_subdir(which: str) -> None:
         raise ValueError("which must be 'integrated' or 'subtracted'")
     root = OUTPUT_DIR_INTEGRATED if which == "integrated" else OUTPUT_DIR_SUBTRACTED
     if os.path.isdir(root):
-        shutil.rmtree(root)
+        _rmtree_force(root)
     if which == "integrated":
         os.makedirs(OUTPUT_DIR_INTEGRATED_LOG, exist_ok=True)
         os.makedirs(OUTPUT_DIR_INTEGRATED_LINEAR, exist_ok=True)
@@ -581,7 +621,7 @@ def _guinier_results_path_for_stem(stem: str) -> str:
 def _reset_mono_output_dirs() -> None:
     for d in (MONO_GUINIER_DIR, MONO_KRATKY_DIR, MONO_FD_SMOKE_DIR, MONO_FD_REFINE_DIR):
         if os.path.isdir(d):
-            shutil.rmtree(d)
+            _rmtree_force(d)
         os.makedirs(d, exist_ok=True)
 
 
@@ -746,7 +786,7 @@ def run_model_dam_heavy(*, model_dam_key: Optional[str] = None) -> Dict[str, Any
         raise RuntimeError(f"Cannot locate sub curve / refine .out for model_dam key {key}")
 
     if os.path.isdir(MONO_DAM_DIR):
-        shutil.rmtree(MONO_DAM_DIR)
+        _rmtree_force(MONO_DAM_DIR)
     os.makedirs(MONO_DAM_DIR, exist_ok=True)
 
     dam_out = model_dam(
@@ -993,7 +1033,7 @@ def run_polydisperse_pipeline() -> Dict[str, Any]:
 
     for d in (POLY_GUINIER_DIR, POLY_FIT_SIZES_DIR):
         if os.path.isdir(d):
-            shutil.rmtree(d)
+            _rmtree_force(d)
         os.makedirs(d, exist_ok=True)
 
     guinier_by_key: Dict[str, Dict[str, Any]] = {}

@@ -25,7 +25,7 @@ def test_guisaxs_liveview_monodisperse_scenario():
     timeout = _gui_timeout_sec()
     q_min, q_max = _subtract_q_window_from_validation_config()
 
-    watchdir = Path(WORKSPACE_ROOT) / "test_liveview"
+    watchdir = _test_watchdir("test_liveview")
     _rm_tree_contents(watchdir)
 
     from PyQt5.QtCore import Qt

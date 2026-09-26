@@ -68,7 +68,7 @@ SAXS / small-angle x-ray scattering: ab initio bead-model shape reconstruction w
 `dict[str, str | list[str]]` with:
 
 - `output_subdir`: Directory containing DAMMIF fit artifacts (FIR/CIF and summary files). Each replica also gets `{rep}_pr.dat` and `{rep}_pr.png` (GNOM-style p(r) from DAM bead pairs via Monte Carlo).
-- `best_cif_path`: Symlink `best.cif` pointing at the most probable particle CIF (the sole run when `n_runs=1`).
+- `best_cif_path`: `best.cif` convenience path (relative symlink, or a copy when symlink creation is blocked) pointing at the most probable particle CIF (the sole run when `n_runs=1`).
 - `best_view_path`: Path to ``best_view.png`` (isosurface + fit overlay for the best model); empty if unavailable.
 - `frequency_map_path`: Path to the DAMAVER frequency/occupancy map CIF (empty string when `n_runs=1`).
 - `visuals_dir`, `overlap_png`, `overlap_gif`, `occupancy_png`, `occupancy_gif`, `occupancy_thresholds_png`, `run_gifs` when `visualize_all=True` (empty strings / empty list otherwise).

@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+_IS_WINDOWS = os.name == "nt"
+
 
 @dataclass(frozen=True)
 class StabilityConfig:
@@ -13,12 +15,20 @@ class StabilityConfig:
     timeout_s: float = 30.0
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class FileStatSnapshot:
     """On-disk identity for change detection.
 
-    ``dev``/``ino`` catch many replaces. ``ctime_ns`` catches delete+recreate even when
-    the filesystem reuses the inode and size/mtime are preserved (``copy2`` / F5 + ``utime``).
+    Equality is platform-aware (this type is the sole owner of “same revision?”):
+
+    - Always: ``size`` + ``mtime_ns`` + ``ctime_ns``.
+    - POSIX: also ``dev``/``ino`` when both sides have a non-zero inode (catches
+      replaces; ``ctime`` catches delete+recreate when inode/size/mtime are reused
+      after ``copy2`` / F5 + ``utime``).
+    - Windows: **ignore** ``dev``/``ino``. File indexes are often 0 or unstable
+      (SMB/network volumes), which otherwise makes every TREE/poll re-stat look
+      like a change → hot dirs never cool → detection/reprocess loops.
+      ``st_ctime`` is creation time and stays stable for untouched files.
     """
 
     size: int
@@ -26,6 +36,33 @@ class FileStatSnapshot:
     dev: int = 0
     ino: int = 0
     ctime_ns: int = 0
+
+    def _identity_tuple(self) -> tuple:
+        base = (self.size, self.mtime_ns, self.ctime_ns)
+        if _IS_WINDOWS:
+            return base
+        if self.ino:
+            return base + (self.dev, self.ino)
+        return base
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, FileStatSnapshot):
+            return NotImplemented
+        return self._identity_tuple() == other._identity_tuple()
+
+    def __hash__(self) -> int:
+        return hash(self._identity_tuple())
+
+    def is_newer_than(self, than: "FileStatSnapshot") -> bool:
+        """True when ``self`` is a strictly newer on-disk version than ``than``."""
+        if not _IS_WINDOWS:
+            if self.ino and than.ino and (self.dev, self.ino) != (than.dev, than.ino):
+                return True
+        if self.ctime_ns != than.ctime_ns:
+            return self.ctime_ns > than.ctime_ns
+        if self.mtime_ns != than.mtime_ns:
+            return self.mtime_ns > than.mtime_ns
+        return self.size > than.size
 
 
 def _try_stat(path: str) -> Optional[FileStatSnapshot]:

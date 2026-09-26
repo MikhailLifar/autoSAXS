@@ -10,7 +10,12 @@ from typing import Callable, Dict, List, Optional, Set
 from PyQt5.QtCore import QObject, QTimer
 
 from .stability import FileStatSnapshot, _try_stat
-from .sample_revision import SampleRevision, SampleRevisionSource, is_tiff_path
+from .sample_revision import (
+    SampleRevision,
+    SampleRevisionSource,
+    is_tiff_path,
+    normalize_sample_path,
+)
 
 _CACHE_VERSION = 3
 _SLOW_INTERVAL_MIN_S = 1.0
@@ -184,7 +189,7 @@ class TreeScanEngine:
         look like delete→recreate, or the same TIFF is re-emitted forever).
         """
         try:
-            dir_key = str(dir_path.resolve())
+            dir_key = normalize_sample_path(str(dir_path))
         except OSError:
             return
         stale: List[str] = []
@@ -193,7 +198,7 @@ class TreeScanEngine:
                 continue
             try:
                 p = Path(file_key)
-                if str(p.resolve().parent) != dir_key:
+                if normalize_sample_path(str(p.parent)) != dir_key:
                     continue
                 # Positive existence check: do not trust an empty ``present`` alone.
                 if p.is_file():
@@ -220,7 +225,7 @@ class TreeScanEngine:
             for f in entries:
                 if not f.is_file():
                     continue
-                file_key = str(f.resolve())
+                file_key = normalize_sample_path(str(f))
                 snap = _try_stat(file_key)
                 if snap is None:
                     continue
@@ -243,7 +248,7 @@ class TreeScanEngine:
         if self._is_ignored(dir_path):
             return candidates
 
-        dir_key = str(dir_path.resolve())
+        dir_key = normalize_sample_path(str(dir_path))
         st = _try_stat_dir(dir_path)
         if st is None:
             # Directory gone: drop cached TIFFs that lived here.
@@ -261,7 +266,7 @@ class TreeScanEngine:
             self._cache.dirty = True
             self._touch_hot(dir_key)
 
-        # Full slow scans always re-stat TIFFs (ctime/ino + prune). Fast path only
+        # Full slow scans always re-stat TIFFs (identity + prune). Fast path only
         # when the directory changed or was marked hot.
         if dir_changed or force_tif_scan or recurse_all:
             candidates.extend(self._scan_tiffs_in_dir(dir_path))
@@ -276,7 +281,7 @@ class TreeScanEngine:
                 continue
             if self._is_ignored(child):
                 continue
-            child_key = str(child.resolve())
+            child_key = normalize_sample_path(str(child))
             child_st = _try_stat_dir(child)
             if child_st is None:
                 continue
@@ -410,7 +415,7 @@ class TreeDirObserver(QObject):
         if not raw or not is_tiff_path(raw):
             return
         try:
-            key = str(Path(raw).expanduser().resolve())
+            key = normalize_sample_path(raw)
         except OSError:
             return
         if snap is None:

@@ -26,7 +26,7 @@ from PyQt5.QtWidgets import QApplication
 def test_non_tif_in_watchdir_does_not_crash():
     """Junk files in watchdir must not take down the app or hang the queue."""
     timeout = min(60.0, _gui_timeout_sec())
-    watchdir = Path(WORKSPACE_ROOT) / "test_liveview_misuse"
+    watchdir = _test_watchdir("test_liveview_misuse")
     _rm_tree_contents(watchdir)
 
     created_app = QApplication.instance() is None
@@ -63,7 +63,7 @@ def test_non_tif_in_watchdir_does_not_crash():
 def test_arm_monodisperse_without_buffer_does_not_crash():
     """Opening monodisperse before buffer is set must be safe."""
     timeout = min(60.0, _gui_timeout_sec())
-    watchdir = Path(WORKSPACE_ROOT) / "test_liveview_misuse2"
+    watchdir = _test_watchdir("test_liveview_misuse2")
     _rm_tree_contents(watchdir)
 
     created_app = QApplication.instance() is None

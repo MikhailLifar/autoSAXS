@@ -188,10 +188,9 @@ def write_success_artifacts(
     force_zero_off_out_path = str(ensemble_info.get("force_zero_off_out_path") or "")
     best_link_path = os.path.join(output_dir, f"{base}_gnom_sizes.out")
     try:
-        if os.path.lexists(best_link_path):
-            os.remove(best_link_path)
-        rel_target = os.path.relpath(best_gnom_out_path, start=output_dir)
-        os.symlink(rel_target, best_link_path)
+        from autosaxs.core.fsutil import replace_with_relative_symlink_or_copy
+
+        replace_with_relative_symlink_or_copy(best_link_path, best_gnom_out_path)
     except OSError:
         pass
 
