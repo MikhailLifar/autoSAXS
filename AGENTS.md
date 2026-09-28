@@ -345,6 +345,25 @@ Headless GUI tests: `xvfb-run -a python -m pytest tests/must-run/guisaxs_livevie
 
 ---
 
+## Cursor Cloud specific instructions
+
+Cloud Agent VMs do not have the lab conda env (`/home/mikl/.conda/envs/dev_autosaxs`). Environment install creates a venv and an editable install of this repo:
+
+- Python: `/home/ubuntu/.venvs/autosaxs/bin/python`
+- pip: `/home/ubuntu/.venvs/autosaxs/bin/pip`
+- CLI: `/home/ubuntu/.venvs/autosaxs/bin/autosaxs`
+- GUIs: `/home/ubuntu/.venvs/autosaxs/bin/guisaxs-skills` and `guisaxs-liveview`
+
+Launch GUIs from a writable directory (for example `/tmp/saxs-watch`). `guisaxs-liveview` treats the current directory as the watch folder when it is writable.
+
+`autosaxs doctor` is the health check. It exits 0 when core dependencies are present. ATSAS is proprietary and is not installed here; doctor reports it as an optional warning. Skills that call ATSAS (`fit_distances`, `fit_sizes`, `model_bodies`, `model_dam`, `model_mixture`, `process_monodisperse`) will not run. Calibration, integration, subtraction, Guinier, plots, DENSS, and McSAS do not need ATSAS.
+
+`tests/must-run/skills/` is the suite that runs without external beamline fixtures. Two mixture contract tests still call the ATSAS gate and fail until ATSAS is on `PATH`. Real-data and liveview commit-gate tests expect validation data from `scripts/setup_validation_data.py` under a sibling `validation/` tree that is not in this repository. `helpers/run_tests.sh` hardcodes the lab conda path and lab checkout; on Cloud Agents invoke pytest with the venv Python instead.
+
+Set `MPLBACKEND=Agg` for headless matplotlib. Headless GUI tests need `xvfb-run` (already installed by the environment).
+
+---
+
 ## Known gaps / stale references
 
 - README / CLI help may still say `python -m autosaxs.cli` in places; entry module is `python -m autosaxs.cli.cli`.
