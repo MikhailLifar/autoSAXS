@@ -3,7 +3,13 @@ description:
 alwaysApply: true
 ---
 
-When running any Python code or installing packages, use these absolute paths (conda env `dev_autosaxs`):
+When running any Python code or installing packages, use the lab conda env when it exists:
 
 - Python: `/home/mikl/.conda/envs/dev_autosaxs/bin/python`
 - pip: `/home/mikl/.conda/envs/dev_autosaxs/bin/pip`
+
+On Cursor Cloud Agent VMs that conda env is not present. Use the environment venv instead:
+
+- Python: `/home/ubuntu/.venvs/autosaxs/bin/python`
+- pip: `/home/ubuntu/.venvs/autosaxs/bin/pip`
+- CLI: `/home/ubuntu/.venvs/autosaxs/bin/autosaxs`
