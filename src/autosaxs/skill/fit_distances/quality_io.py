@@ -149,20 +149,23 @@ def _pr_quality_markdown(quality: Dict[str, Any]) -> str:
         lines.append(f"\n- **ΔRg:** {float(drg):.1f}%")
     s_min = quality.get("shannon_s_min")
     if s_min is not None:
-        lines.append(
-            f"\n- **Shannon s_min:** {float(s_min):.3f} ({quality.get('shannon_class', 'unknown')})"
-        )
+        lines.append(f"\n- **Shannon** `s_min`: {float(s_min):.3f}")
+    s_class = quality.get("shannon_class")
+    if s_class and str(s_class).lower() != "unknown":
+        lines.append(f"\n- **Shannon** `shannon_class`: {s_class}")
     n_s = quality.get("n_shannon")
     if n_s is not None:
-        lines.append(f"\n- **n_shannon:** {float(n_s):.2f}")
+        lines.append(f"\n- `n_shannon`: {float(n_s):.2f}")
     s_max = quality.get("shannon_s_max")
     if s_max is not None:
-        lines.append(f"\n- **Shannon s_max:** {float(s_max):.3f}")
+        lines.append(f"\n- **Shannon** `s_max`: {float(s_max):.3f}")
     wig = quality.get("wiggle_index")
     if wig is not None:
-        lines.append(
-            f"\n- **Wiggle index:** {float(wig):.3f} ({quality.get('wiggle_class', 'unknown')})"
-        )
+        wig_cls = quality.get("wiggle_class", "unknown")
+        if wig_cls and str(wig_cls).lower() != "unknown":
+            lines.append(f"\n- `wiggle_index`: {float(wig):.3f} ({wig_cls})")
+        else:
+            lines.append(f"\n- `wiggle_index`: {float(wig):.3f}")
     tips = quality.get("user_tips") or []
     if tips:
         lines.append("\n- **Tips:**")

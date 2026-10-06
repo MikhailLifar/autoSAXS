@@ -5,7 +5,14 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping
 
-from ..monodisperse.format_display import format_display_number, scalar_value
+from guisaxs_skills.ui.passport_format import (
+    format_display_number,
+    format_metric_label,
+    format_value_with_class,
+    is_overall_status_poor,
+    scalar_value,
+    shannon_row_poor,
+)
 
 
 def format_sizes_passport_rows(
@@ -17,28 +24,30 @@ def format_sizes_passport_rows(
     D(R) passport rows as ``(metric, value, poor)``.
 
     ``compact`` omits wiggle index, s_max, and I(0)-style extras (analysis-pane preview).
+    Numeric metrics stay numeric; overall status is a separate Status row.
     """
     from autosaxs.core.gnom_quality import DrQualityThresholds
 
     t = DrQualityThresholds()
     rows: list[tuple[str, str, bool]] = []
 
+    status = str(scalar_value(result.get("overall_status")) or "").strip()
+    sizes_class = str(scalar_value(result.get("sizes_quality_class")) or "").strip()
+    if status:
+        rows.append(("Status", status, is_overall_status_poor(status)))
+    elif sizes_class:
+        rows.append(
+            ("Status", sizes_class, sizes_class.lower() in ("failed", "fail", "acceptable"))
+        )
+
     te = scalar_value(result.get("total_estimate"))
-    status = str(scalar_value(result.get("overall_status")) or "")
-    sizes_class = str(scalar_value(result.get("sizes_quality_class")) or "")
     if te is not None and te not in ("", None):
         te_poor = False
         try:
             te_poor = float(te) < float(t.total_estimate_min)
         except (TypeError, ValueError):
             te_poor = False
-        val = format_display_number(te)
-        if status:
-            val += f" · {status}"
-        elif sizes_class:
-            val += f" · {sizes_class}"
-        status_fail = status.upper() == "FAILED" or sizes_class.lower() == "failed"
-        rows.append(("Total est.", val, te_poor or status_fail))
+        rows.append(("Total est.", format_display_number(te), te_poor))
 
     chi2 = scalar_value(result.get("chi2"))
     chi2_class = str(scalar_value(result.get("chi2_class")) or "").strip()
@@ -59,7 +68,7 @@ def format_sizes_passport_rows(
             "failed": "failed",
         }.get(chi2_class.lower(), chi2_class or "—")
         chi2_poor = chi2_class.lower() in ("failed", "fail")
-        rows.append(("χ²", f"{format_display_number(chi2)} ({chi2_label})", chi2_poor))
+        rows.append(("χ²", format_value_with_class(chi2, chi2_label), chi2_poor))
 
     det = str(scalar_value(result.get("detail_reliability_class")) or "").strip()
     if det and det.lower() != "unknown":
@@ -72,36 +81,43 @@ def format_sizes_passport_rows(
             n_s = math.floor(float(n_s))
         except (TypeError, ValueError):
             pass
-        rows.append(("n_shannon", format_display_number(n_s), False))
+        rows.append((format_metric_label("n_shannon"), format_display_number(n_s), False))
 
     if not compact:
         s_max = scalar_value(result.get("shannon_s_max"))
         if s_max is not None and s_max not in ("", None):
-            rows.append(("s_max", format_display_number(s_max), False))
+            rows.append((format_metric_label("s_max"), format_display_number(s_max), False))
 
         wig = scalar_value(result.get("wiggle_index"))
         wig_class = str(scalar_value(result.get("wiggle_class")) or "unknown")
         if wig is not None and wig not in ("", None):
             wig_poor = wig_class.lower() == "high"
-            val = format_display_number(wig)
-            if wig_class and wig_class != "unknown":
-                val += f" ({wig_class})"
-            rows.append(("wiggle_index", val, wig_poor))
+            rows.append(
+                (
+                    format_metric_label("wiggle_index"),
+                    format_value_with_class(wig, wig_class),
+                    wig_poor,
+                )
+            )
 
     s_min = scalar_value(result.get("shannon_s_min"))
     s_class = str(scalar_value(result.get("shannon_class")) or "unknown")
     if s_min is not None and s_min not in ("", None):
-        shannon_ok_v = result.get("shannon_ok")
-        if isinstance(shannon_ok_v, str):
-            shannon_fail = shannon_ok_v.strip().lower() in ("false", "0", "no", "fail")
-        elif shannon_ok_v is None:
-            shannon_fail = s_class.lower() in ("unreliable", "failed", "fail")
-        else:
-            shannon_fail = not bool(shannon_ok_v)
-        val = format_display_number(s_min)
-        if s_class and s_class != "unknown":
-            val += f" ({s_class})"
-        rows.append(("s_min", val, shannon_fail))
+        rows.append(
+            (
+                format_metric_label("s_min"),
+                format_display_number(s_min),
+                shannon_row_poor(shannon_ok=result.get("shannon_ok"), shannon_class=s_class),
+            )
+        )
+    if s_class and s_class.lower() != "unknown":
+        rows.append(
+            (
+                format_metric_label("shannon_class"),
+                s_class,
+                s_class.lower() in ("unreliable", "failed", "fail"),
+            )
+        )
 
     d_avg = scalar_value(result.get("d_avg_nm"))
     d_std = scalar_value(result.get("d_std_nm"))
