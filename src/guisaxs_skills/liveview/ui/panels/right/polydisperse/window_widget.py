@@ -28,6 +28,7 @@ class PolydisperseWindowWidget(QWidget):
         self.sizes_pane = SizesPane(self)
         self.mixture_pane = MixturePane(self)
         self._auto_btn = QPushButton("Stop auto-processing")
+        self._auto_btn.setToolTip("Stop auto-processing (Ctrl+X)")
         self._auto_btn.clicked.connect(self.auto_toggle_clicked.emit)
         self._paused = False
 
@@ -102,9 +103,11 @@ class PolydisperseWindowWidget(QWidget):
     def _refresh_auto_button(self, *, processing_idle: bool) -> None:
         if self._paused:
             self._auto_btn.setText("Resume auto-processing")
+            self._auto_btn.setToolTip("Resume auto-processing (Ctrl+P)")
             self._auto_btn.setEnabled(processing_idle)
         else:
             self._auto_btn.setText("Stop auto-processing")
+            self._auto_btn.setToolTip("Stop auto-processing (Ctrl+X)")
             self._auto_btn.setEnabled(True)
 
     def set_auto_processing_paused(self, paused: bool) -> None:
