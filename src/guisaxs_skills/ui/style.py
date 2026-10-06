@@ -233,10 +233,6 @@ def apply_style(app: QApplication) -> None:
 
     _enable_selectable_labels(app)
     _enable_copyable_tables(app)
-
-    font = QFont()
-    font.setPointSize(11)
-    app.setFont(font)
     apply_font_point_size(app)
 
     # Softer, lower-contrast dark theme: slightly lighter surfaces, gentler borders,
