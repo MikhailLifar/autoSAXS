@@ -16,6 +16,11 @@ PassportSeverity = Union[bool, str]
 PassportRow = tuple[str, str, PassportSeverity]  # metric, value, severity
 
 
+def _escape_passport_text(text: str) -> str:
+    """HTML-escape; keep literal underscores (``&#95;``) so labels like ``s_min`` stay intact."""
+    return html_mod.escape(str(text)).replace("_", "&#95;")
+
+
 def _normalize_severity(flag: PassportSeverity) -> str:
     if flag is True or flag == "poor":
         return "poor"
@@ -60,9 +65,9 @@ def format_passport_table_html(
         parts.append(
             "<tr>"
             f"<td{color} style=\"padding:2px 8px 2px 0;vertical-align:top;\">"
-            f"{html_mod.escape(metric)}</td>"
+            f"{_escape_passport_text(metric)}</td>"
             f"<td{color} style=\"padding:2px 0;vertical-align:top;\">"
-            f"{html_mod.escape(value)}</td>"
+            f"{_escape_passport_text(value)}</td>"
             "</tr>"
         )
     parts.append("</table>")
