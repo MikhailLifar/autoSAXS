@@ -243,16 +243,15 @@ class LiveviewMiddlePanel(QWidget):
         self._btn_process.setEnabled(bool(enabled))
 
     def set_process_mode(self, *, manual: bool) -> None:
-        """Label/tooltip for Process; Manual also resumes Auto (Ctrl+P / Ctrl+X hints)."""
+        """Label/tooltip for Process; Manual also resumes Auto (hints stay in tooltip)."""
+        self._btn_process.setText("Process")
         if manual:
-            self._btn_process.setText("Process / Resume")
             self._btn_process.setToolTip(
                 "Resume auto-processing and enqueue the selected file "
                 "(same as a new upload).\n"
                 "Shortcut: Ctrl+P (resume Auto) · Ctrl+X (switch to Manual)"
             )
         else:
-            self._btn_process.setText("Process")
             self._btn_process.setToolTip(
                 "Enqueue the selected file for the live pipeline "
                 "(same as a new upload).\n"

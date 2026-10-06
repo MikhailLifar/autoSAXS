@@ -81,12 +81,12 @@ def format_sizes_passport_rows(
             n_s = math.floor(float(n_s))
         except (TypeError, ValueError):
             pass
-        rows.append((format_metric_label("n_shannon"), format_display_number(n_s), False))
+        rows.append(("n_shannon", format_display_number(n_s), False))
 
     if not compact:
         s_max = scalar_value(result.get("shannon_s_max"))
         if s_max is not None and s_max not in ("", None):
-            rows.append((format_metric_label("s_max"), format_display_number(s_max), False))
+            rows.append(("s_max", format_display_number(s_max), False))
 
         wig = scalar_value(result.get("wiggle_index"))
         wig_class = str(scalar_value(result.get("wiggle_class")) or "unknown")
@@ -94,7 +94,7 @@ def format_sizes_passport_rows(
             wig_poor = wig_class.lower() == "high"
             rows.append(
                 (
-                    format_metric_label("wiggle_index"),
+                    "wiggle_index",
                     format_value_with_class(wig, wig_class),
                     wig_poor,
                 )
@@ -105,7 +105,7 @@ def format_sizes_passport_rows(
     if s_min is not None and s_min not in ("", None):
         rows.append(
             (
-                format_metric_label("s_min"),
+                "s_min",
                 format_display_number(s_min),
                 shannon_row_poor(shannon_ok=result.get("shannon_ok"), shannon_class=s_class),
             )
@@ -113,7 +113,7 @@ def format_sizes_passport_rows(
     if s_class and s_class.lower() != "unknown":
         rows.append(
             (
-                format_metric_label("shannon_class"),
+                "shannon_class",
                 s_class,
                 s_class.lower() in ("unreliable", "failed", "fail"),
             )
@@ -152,7 +152,7 @@ def format_sizes_passport_rows(
 
 
 def format_sizes_passport_text(result: Mapping[str, Any], *, compact: bool = False) -> str:
-    return "\n".join(f"{m} = {v}" for m, v, _p in format_sizes_passport_rows(result, compact=compact))
+    return "\n".join(f"{format_metric_label(m)} = {v}" for m, v, _p in format_sizes_passport_rows(result, compact=compact))
 
 
 def format_sizes_passport_html(

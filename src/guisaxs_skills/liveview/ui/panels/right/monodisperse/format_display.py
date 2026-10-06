@@ -200,7 +200,7 @@ def format_guinier_passport_text(result: Mapping[str, Any]) -> str:
     rows = format_guinier_passport_rows(result)
     if not rows:
         return "—"
-    return "\n".join(f"{m}: {v}" for m, v, _p in rows)
+    return "\n".join(f"{format_metric_label(m)}: {v}" for m, v, _p in rows)
 
 
 def is_passport_quality_poor(
@@ -285,12 +285,12 @@ def format_gnom_passport_rows(
             n_s = math.floor(float(n_s))
         except (TypeError, ValueError):
             pass
-        rows.append((format_metric_label("n_shannon"), format_display_number(n_s), False))
+        rows.append(("n_shannon", format_display_number(n_s), False))
 
     if not compact:
         s_max = scalar_value(result.get("shannon_s_max"))
         if s_max is not None and s_max not in ("", None):
-            rows.append((format_metric_label("s_max"), format_display_number(s_max), False))
+            rows.append(("s_max", format_display_number(s_max), False))
 
         wig = scalar_value(result.get("wiggle_index"))
         wig_class = str(scalar_value(result.get("wiggle_class")) or "unknown")
@@ -298,7 +298,7 @@ def format_gnom_passport_rows(
             wig_poor = wig_class.lower() == "high"
             rows.append(
                 (
-                    format_metric_label("wiggle_index"),
+                    "wiggle_index",
                     format_value_with_class(wig, wig_class),
                     wig_poor,
                 )
@@ -310,7 +310,7 @@ def format_gnom_passport_rows(
     if s_min is not None and s_min not in ("", None):
         rows.append(
             (
-                format_metric_label("s_min"),
+                "s_min",
                 format_display_number(s_min),
                 shannon_row_poor(shannon_ok=result.get("shannon_ok"), shannon_class=s_class),
             )
@@ -318,7 +318,7 @@ def format_gnom_passport_rows(
     if s_class and s_class.lower() != "unknown":
         rows.append(
             (
-                format_metric_label("shannon_class"),
+                "shannon_class",
                 s_class,
                 s_class.lower() in ("unreliable", "failed", "fail"),
             )
@@ -329,13 +329,13 @@ def format_gnom_passport_rows(
         rg_g = handoff.get("rg")
     if rg_g is not None and scalar_value(rg_g) not in ("", None):
         rows.append(
-            (format_metric_label("Rg_guinier"), f"{format_display_number(rg_g)} nm", False)
+            ("Rg_guinier", f"{format_display_number(rg_g)} nm", False)
         )
     if not compact:
         i0_g = handoff.get("i0")
         if i0_g is not None and scalar_value(i0_g) not in ("", None):
             rows.append(
-                (format_metric_label("I(0)_guinier"), format_display_number(i0_g), False)
+                ("I(0)_guinier", format_display_number(i0_g), False)
             )
 
     rg_pr = result.get("rg_pr_nm")
@@ -344,7 +344,7 @@ def format_gnom_passport_rows(
     if not compact:
         i0_pr = result.get("i0_pr")
         if i0_pr is not None and scalar_value(i0_pr) not in ("", None):
-            rows.append((format_metric_label("I0_P(r)"), format_display_number(i0_pr), False))
+            rows.append(("I0_P(r)", format_display_number(i0_pr), False))
 
     drg = scalar_value(result.get("delta_rg_pct"))
     if drg is not None and drg not in ("", None):
@@ -380,7 +380,7 @@ def format_gnom_passport_text(
 ) -> str:
     """Plain-text passport (one line per metric)."""
     return "\n".join(
-        f"{m} = {v}"
+        f"{format_metric_label(m)} = {v}"
         for m, v, _poor in format_gnom_passport_rows(
             result, guinier_handoff=guinier_handoff, compact=compact
         )

@@ -84,13 +84,64 @@ def format_display_number(value: Union[float, int, str, None]) -> str:
     return f"{sign}{intpart}.{''.join(out)}"
 
 
+
+# True Unicode subscripts where available; modifier-letter fallbacks for letters
+# with no dedicated subscript code point (b/c/d/f/g/q/w/y/z).
+_SUBSCRIPT_CHARS: dict[str, str] = {
+    "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄",
+    "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
+    "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎",
+    "a": "ₐ", "b": "ᵦ", "c": "ᶜ", "d": "ᵈ", "e": "ₑ",
+    "f": "ᶠ", "g": "ᵍ", "h": "ₕ", "i": "ᵢ", "j": "ⱼ",
+    "k": "ₖ", "l": "ₗ", "m": "ₘ", "n": "ₙ", "o": "ₒ",
+    "p": "ₚ", "r": "ᵣ", "s": "ₛ", "t": "ₜ", "u": "ᵤ",
+    "v": "ᵥ", "w": "ʷ", "x": "ₓ", "y": "ʸ", "z": "ᶻ",
+}
+
+
+def _to_subscript(segment: str) -> str:
+    """Map a subscript segment to Unicode undertext (best-effort)."""
+    out: list[str] = []
+    for ch in segment:
+        if ch == "_":
+            continue
+        key = ch.lower() if ch.isalpha() else ch
+        out.append(_SUBSCRIPT_CHARS.get(key, ch))
+    return "".join(out)
+
+
 def format_metric_label(name: str) -> str:
     """
-    Passport metric label: keep snake_case underscores (never kebab/space).
+    Passport/quantity metric label with undertext.
 
-    Callers pass the intended display token (``s_min``, ``n_shannon``, …).
+    ``_`` introduces a subscript segment (``s_min`` → sₘᵢₙ, ``R_g`` → Rᵍ,
+    ``I_0`` → I₀). Only for passport-style quantity labels — do not pass file
+    paths, snake_case code ids, or menu names.
     """
-    return str(name or "").strip().replace("-", "_")
+    token = str(name or "").strip().replace("-", "_")
+    if not token or "_" not in token:
+        return token
+    base, rest = token.split("_", 1)
+    if not rest:
+        return base
+    return f"{base}{_to_subscript(rest)}"
+
+
+def format_metric_label_html(name: str) -> str:
+    """
+    Rich-text passport metric label (``s_min`` → s<sub>min</sub>).
+
+    Same underscore→undertext rule as ``format_metric_label``; for QLabel HTML only.
+    """
+    import html as html_mod
+
+    token = str(name or "").strip().replace("-", "_")
+    if not token or "_" not in token:
+        return html_mod.escape(token)
+    base, rest = token.split("_", 1)
+    if not rest:
+        return html_mod.escape(base)
+    return f"{html_mod.escape(base)}<sub>{html_mod.escape(rest)}</sub>"
 
 
 def format_value_with_class(

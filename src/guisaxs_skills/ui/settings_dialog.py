@@ -81,7 +81,8 @@ class _AppearancePage(QWidget):
         heading.setFont(heading_font)
         section_lay.addWidget(heading)
 
-        hint = QLabel("Applies immediately across the whole app.")
+        hint = QLabel("Preview updates as you adjust. Click Apply or OK to use the size app-wide.")
+        hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {COLOR_MUTED_TEXT};")
         section_lay.addWidget(hint)
 
@@ -145,7 +146,7 @@ class _AppearancePage(QWidget):
 
         self._slider.valueChanged.connect(self._on_slider)
         self._spin.valueChanged.connect(self._on_spin)
-        self._set_size(self._current, persist=False, apply=False)
+        self._set_size(self._current)
         self._refresh_preview()
 
     def _style_preset_buttons(self) -> None:
@@ -183,7 +184,8 @@ class _AppearancePage(QWidget):
             preset = int(btn.property("fontPreset"))
             btn.setChecked(preset == self._current)
 
-    def _set_size(self, size: int, *, persist: bool, apply: bool) -> None:
+    def _set_size(self, size: int) -> None:
+        """Update local selection + preview only (no app-wide apply)."""
         size = clamp_font_point_size(size)
         self._updating = True
         try:
@@ -194,26 +196,28 @@ class _AppearancePage(QWidget):
             self._refresh_preview()
         finally:
             self._updating = False
-        if apply:
-            apply_font_point_size(point_size=size, persist=persist)
 
     def _on_preset(self, size: int) -> None:
         if self._updating:
             return
-        self._set_size(size, persist=True, apply=True)
+        self._set_size(size)
 
     def _on_slider(self, value: int) -> None:
         if self._updating:
             return
-        self._set_size(value, persist=True, apply=True)
+        self._set_size(value)
 
     def _on_spin(self, value: int) -> None:
         if self._updating:
             return
-        self._set_size(value, persist=True, apply=True)
+        self._set_size(value)
 
     def current_size(self) -> int:
         return self._current
+
+    def apply_current(self) -> int:
+        """Persist and apply the selected size app-wide via style SSOT."""
+        return apply_font_point_size(point_size=self._current, persist=True)
 
 
 class SettingsDialog(QDialog):
@@ -228,11 +232,12 @@ class SettingsDialog(QDialog):
     def __init__(self, *, parent: QWidget | None = None, initial_page: int = PAGE_APPEARANCE) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setMinimumSize(640, 420)
-        self.resize(720, 480)
+        self.setMinimumSize(780, 520)
+        self.resize(880, 600)
+        self._entry_size = load_font_point_size()
 
         self._categories = QListWidget()
-        self._categories.setFixedWidth(168)
+        self._categories.setFixedWidth(180)
         self._categories.setSpacing(2)
         self._categories.setStyleSheet(
             f"""
@@ -266,11 +271,17 @@ class SettingsDialog(QDialog):
         body.addWidget(self._categories)
         body.addWidget(self._stack, 1)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        buttons.rejected.connect(self.accept)
-        close_btn = buttons.button(QDialogButtonBox.Close)
-        if close_btn is not None:
-            close_btn.setDefault(True)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel | QDialogButtonBox.Apply
+        )
+        buttons.accepted.connect(self._on_ok)
+        buttons.rejected.connect(self._on_cancel)
+        apply_btn = buttons.button(QDialogButtonBox.Apply)
+        if apply_btn is not None:
+            apply_btn.clicked.connect(self._on_apply)
+        ok_btn = buttons.button(QDialogButtonBox.Ok)
+        if ok_btn is not None:
+            ok_btn.setDefault(True)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 12)
@@ -288,8 +299,20 @@ class SettingsDialog(QDialog):
         page = max(0, min(self._stack.count() - 1, int(initial_page)))
         self._categories.setCurrentRow(page)
 
+    def _on_apply(self) -> None:
+        self._appearance.apply_current()
+        self._entry_size = self._appearance.current_size()
+
+    def _on_ok(self) -> None:
+        self._appearance.apply_current()
+        self.accept()
+
+    def _on_cancel(self) -> None:
+        self.reject()
+
     def reject(self) -> None:  # type: ignore[override]
-        # Esc / window close: keep the live-applied size (already persisted).
+        # Esc / Cancel / window close: keep last Applied (or entry) size.
+        apply_font_point_size(point_size=self._entry_size, persist=True)
         super().reject()
 
 

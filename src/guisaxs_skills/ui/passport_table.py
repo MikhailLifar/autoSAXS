@@ -9,6 +9,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QHeaderView, QLabel, QTableWidget, QTableWidgetItem
 
+from .passport_format import format_metric_label, format_metric_label_html
 from .style import COLOR_QUALITY_POOR, COLOR_QUALITY_WARN, configure_readonly_copyable_table
 
 # Third field: False/"ok" = default, True/"poor" = red, "warn" = amber.
@@ -17,8 +18,8 @@ PassportRow = tuple[str, str, PassportSeverity]  # metric, value, severity
 
 
 def _escape_passport_text(text: str) -> str:
-    """HTML-escape; keep literal underscores (``&#95;``) so labels like ``s_min`` stay intact."""
-    return html_mod.escape(str(text)).replace("_", "&#95;")
+    """HTML-escape passport cell text (metric values; metrics use format_metric_label_html)."""
+    return html_mod.escape(str(text))
 
 
 def _normalize_severity(flag: PassportSeverity) -> str:
@@ -65,7 +66,7 @@ def format_passport_table_html(
         parts.append(
             "<tr>"
             f"<td{color} style=\"padding:2px 8px 2px 0;vertical-align:top;\">"
-            f"{_escape_passport_text(metric)}</td>"
+            f"{format_metric_label_html(metric)}</td>"
             f"<td{color} style=\"padding:2px 0;vertical-align:top;\">"
             f"{_escape_passport_text(value)}</td>"
             "</tr>"
@@ -109,7 +110,7 @@ class PassportTableWidget(QTableWidget):
             return
         self.setRowCount(len(row_list))
         for i, (metric, value, flag) in enumerate(row_list):
-            m_item = QTableWidgetItem(metric)
+            m_item = QTableWidgetItem(format_metric_label(metric))
             v_item = QTableWidgetItem(value)
             color_hex = _severity_color(flag, poor_color=poor_color, warn_color=warn_color)
             for it in (m_item, v_item):
