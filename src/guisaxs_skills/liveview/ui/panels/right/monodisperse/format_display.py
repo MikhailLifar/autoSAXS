@@ -1,7 +1,35 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Mapping, Optional, Union
+from typing import Any, Mapping, Optional
+
+from guisaxs_skills.ui.passport_format import (
+    format_display_number,
+    format_metric_label,
+    format_value_with_class,
+    is_overall_status_poor,
+    scalar_value,
+    shannon_row_poor,
+)
+
+# Re-export for existing liveview imports.
+__all__ = [
+    "format_display_number",
+    "format_gnom_passport_html",
+    "format_gnom_passport_rows",
+    "format_gnom_passport_text",
+    "format_guinier_passport_html",
+    "format_guinier_passport_rows",
+    "format_guinier_passport_text",
+    "guinier_quality_severity",
+    "is_guinier_classification_poor",
+    "is_guinier_qrg_poor",
+    "is_guinier_quality_poor",
+    "is_guinier_quality_warn",
+    "is_passport_quality_poor",
+    "normalize_guinier_quality_label",
+    "scalar_value",
+]
 
 _GUINIER_QUALITY_POOR = frozenset(
     {
@@ -33,12 +61,6 @@ _GUINIER_QUALITY_LABELS = {
     "qrg limit violated": "weak in Guinier region",
 }
 
-
-def scalar_value(value: Any) -> Any:
-    """Unwrap single-element lists from skill stdout parsing."""
-    if isinstance(value, list) and len(value) == 1:
-        return value[0]
-    return value
 
 
 def is_guinier_quality_poor(quality_class: str) -> bool:
@@ -198,73 +220,6 @@ def is_passport_quality_poor(
     return stab in _STABILITY_POOR
 
 
-def format_display_number(value: Union[float, int, str, None]) -> str:
-    """
-    Format a scalar for monodisperse wizard labels.
-
-    - |value| >= 1: two digits after the decimal point
-    - otherwise: show up to the first three non-zero decimal digits
-    """
-    if value is None:
-        return ""
-    value = scalar_value(value)
-    try:
-        x = float(value)
-    except (TypeError, ValueError):
-        return str(value)
-    if not math.isfinite(x):
-        return "—"
-    if x == 0.0:
-        return "0"
-    if abs(x) >= 1.0:
-        return f"{x:.2f}"
-
-    sign = "-" if x < 0 else ""
-    compact = format(abs(x), ".12g")
-    if "e" in compact or "E" in compact:
-        mantissa, exp_str = compact.lower().split("e")
-        exp = int(exp_str)
-        if "." in mantissa:
-            whole, frac = mantissa.split(".", 1)
-        else:
-            whole, frac = mantissa, ""
-        digits = list(whole + frac)
-        nz = 0
-        kept: list[str] = []
-        for ch in digits:
-            if ch == ".":
-                continue
-            kept.append(ch)
-            if ch != "0":
-                nz += 1
-                if nz >= 3:
-                    break
-        mantissa_str = "".join(kept).lstrip("0") or "0"
-        if exp >= 0:
-            if exp + 1 <= len(mantissa_str):
-                body = mantissa_str[: exp + 1]
-                tail = mantissa_str[exp + 1 :]
-                compact_dec = body + ("." + tail if tail else "")
-            else:
-                compact_dec = mantissa_str + "0" * (exp + 1 - len(mantissa_str))
-        else:
-            zeros = "0" * (-exp - 1)
-            compact_dec = f"0.{zeros}{mantissa_str}"
-        return f"{sign}{compact_dec}".rstrip("0").rstrip(".") if "." in compact_dec else f"{sign}{compact_dec}"
-
-    if "." not in compact:
-        return f"{sign}{compact}"
-    intpart, frac = compact.split(".", 1)
-    out: list[str] = []
-    nonzero = 0
-    for ch in frac:
-        out.append(ch)
-        if ch != "0":
-            nonzero += 1
-            if nonzero >= 3:
-                break
-    return f"{sign}{intpart}.{''.join(out)}"
-
 
 def format_gnom_passport_rows(
     result: Mapping[str, Any],
@@ -277,12 +232,17 @@ def format_gnom_passport_rows(
 
     ``poor`` marks rows that indicate failure (for per-line red styling).
     ``compact`` omits wiggle index, s_max, and I(0) (analysis-pane preview).
+    Numeric metrics stay numeric; overall status is a separate Status row.
     """
     from autosaxs.core.gnom_quality import PrQualityThresholds
 
     handoff = dict(guinier_handoff or {})
     t = PrQualityThresholds()
     rows: list[tuple[str, str, bool]] = []
+
+    overall = str(scalar_value(result.get("overall_status")) or "").strip()
+    if overall:
+        rows.append(("Status", overall, is_overall_status_poor(overall)))
 
     te = scalar_value(result.get("total_estimate"))
     if te is not None and te not in ("", None):
@@ -312,7 +272,7 @@ def format_gnom_passport_rows(
             "failed": "failed",
         }.get(chi2_class.lower(), chi2_class or "—")
         chi2_poor = chi2_class.lower() in ("failed", "fail")
-        rows.append(("χ²", f"{format_display_number(chi2)} ({chi2_label})", chi2_poor))
+        rows.append(("χ²", format_value_with_class(chi2, chi2_label), chi2_poor))
 
     det = str(scalar_value(result.get("detail_reliability_class")) or "").strip()
     if det and det.lower() != "unknown":
@@ -325,60 +285,58 @@ def format_gnom_passport_rows(
             n_s = math.floor(float(n_s))
         except (TypeError, ValueError):
             pass
-        rows.append(("n_shannon", format_display_number(n_s), False))
+        rows.append((format_metric_label("n_shannon"), format_display_number(n_s), False))
 
     if not compact:
         s_max = scalar_value(result.get("shannon_s_max"))
         if s_max is not None and s_max not in ("", None):
-            rows.append(("s_max", format_display_number(s_max), False))
+            rows.append((format_metric_label("s_max"), format_display_number(s_max), False))
 
         wig = scalar_value(result.get("wiggle_index"))
         wig_class = str(scalar_value(result.get("wiggle_class")) or "unknown")
         if wig is not None and wig not in ("", None):
             wig_poor = wig_class.lower() == "high"
-            val = format_display_number(wig)
-            if wig_class and wig_class != "unknown":
-                val += f" ({wig_class})"
-            rows.append(("wiggle_index", val, wig_poor))
+            rows.append(
+                (
+                    format_metric_label("wiggle_index"),
+                    format_value_with_class(wig, wig_class),
+                    wig_poor,
+                )
+            )
 
     s_min = scalar_value(result.get("shannon_s_min"))
     s_class = str(scalar_value(result.get("shannon_class")) or "unknown")
-    s_status = str(scalar_value(result.get("overall_status")) or "")
-    if s_status in ("", None) and result.get("shannon_ok") is not None:
-        s_status = "ok" if scalar_value(result.get("shannon_ok")) else "fail"
-    q_min = scalar_value(result.get("q_min_fit_nm"))
     dmax = scalar_value(result.get("dmax_nm"))
     if s_min is not None and s_min not in ("", None):
-        shannon_ok_v = result.get("shannon_ok")
-        if isinstance(shannon_ok_v, str):
-            shannon_fail = shannon_ok_v.strip().lower() in ("false", "0", "no", "fail")
-        elif shannon_ok_v is None:
-            shannon_fail = s_class.lower() in ("unreliable", "failed", "fail") or str(s_status).upper() == "FAILED"
-        else:
-            shannon_fail = not bool(shannon_ok_v)
-        if q_min is not None and dmax is not None:
-            metric = "s_min (q_min·Dmax/π)"
-        else:
-            metric = "s_min"
-        val = format_display_number(s_min)
-        extras = []
-        if s_class and s_class != "unknown":
-            extras.append(s_class)
-        if s_status:
-            extras.append(str(s_status))
-        if extras:
-            val += f" ({', '.join(extras)})"
-        rows.append((metric, val, shannon_fail))
+        rows.append(
+            (
+                format_metric_label("s_min"),
+                format_display_number(s_min),
+                shannon_row_poor(shannon_ok=result.get("shannon_ok"), shannon_class=s_class),
+            )
+        )
+    if s_class and s_class.lower() != "unknown":
+        rows.append(
+            (
+                format_metric_label("shannon_class"),
+                s_class,
+                s_class.lower() in ("unreliable", "failed", "fail"),
+            )
+        )
 
     rg_g = scalar_value(result.get("rg_guinier_nm"))
     if rg_g is None:
         rg_g = handoff.get("rg")
     if rg_g is not None and scalar_value(rg_g) not in ("", None):
-        rows.append(("Rg_guinier", f"{format_display_number(rg_g)} nm", False))
+        rows.append(
+            (format_metric_label("Rg_guinier"), f"{format_display_number(rg_g)} nm", False)
+        )
     if not compact:
         i0_g = handoff.get("i0")
         if i0_g is not None and scalar_value(i0_g) not in ("", None):
-            rows.append(("I(0)_guinier", format_display_number(i0_g), False))
+            rows.append(
+                (format_metric_label("I(0)_guinier"), format_display_number(i0_g), False)
+            )
 
     rg_pr = result.get("rg_pr_nm")
     if rg_pr is not None and scalar_value(rg_pr) not in ("", None):
@@ -386,7 +344,7 @@ def format_gnom_passport_rows(
     if not compact:
         i0_pr = result.get("i0_pr")
         if i0_pr is not None and scalar_value(i0_pr) not in ("", None):
-            rows.append(("I0_P(r)", format_display_number(i0_pr), False))
+            rows.append((format_metric_label("I0_P(r)"), format_display_number(i0_pr), False))
 
     drg = scalar_value(result.get("delta_rg_pct"))
     if drg is not None and drg not in ("", None):
@@ -404,7 +362,9 @@ def format_gnom_passport_rows(
         except (TypeError, ValueError):
             drg_status = str(scalar_value(result.get("pr_quality_class")) or "—")
             drg_poor = str(drg_status).lower() in ("failed", "fail")
-        rows.append(("ΔRg", f"{format_display_number(drg)}% ({drg_status})", drg_poor))
+        rows.append(
+            ("ΔRg", format_value_with_class(f"{format_display_number(drg)}%", drg_status), drg_poor)
+        )
 
     if dmax is not None and dmax not in ("", None):
         rows.append(("Dmax", f"{format_display_number(dmax)} nm", False))

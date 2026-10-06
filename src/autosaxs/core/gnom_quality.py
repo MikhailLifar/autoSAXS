@@ -1454,21 +1454,23 @@ def detail_indicators_markdown(ind: Dict[str, Any]) -> str:
     n_s = ind.get("n_shannon")
     if n_s is not None:
         try:
-            lines.append(f"\n- **n_shannon:** {float(n_s):.2f}")
+            lines.append(f"\n- `n_shannon`: {float(n_s):.2f}")
         except (TypeError, ValueError):
             pass
     s_max = ind.get("shannon_s_max")
     if s_max is not None:
         try:
-            lines.append(f"\n- **Shannon s_max:** {float(s_max):.3f}")
+            lines.append(f"\n- **Shannon** `s_max`: {float(s_max):.3f}")
         except (TypeError, ValueError):
             pass
     wig = ind.get("wiggle_index")
     if wig is not None:
         try:
-            lines.append(
-                f"\n- **Wiggle index:** {float(wig):.3f} ({ind.get('wiggle_class', 'unknown')})"
-            )
+            wig_cls = ind.get("wiggle_class", "unknown")
+            if wig_cls and str(wig_cls).lower() != "unknown":
+                lines.append(f"\n- `wiggle_index`: {float(wig):.3f} ({wig_cls})")
+            else:
+                lines.append(f"\n- `wiggle_index`: {float(wig):.3f}")
         except (TypeError, ValueError):
             pass
     return "".join(lines) + "\n"
