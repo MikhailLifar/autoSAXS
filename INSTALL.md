@@ -43,8 +43,8 @@ Unzip it anywhere convenient (for example your Desktop).
 
 Follow the windows:
 
-1. **Prerequisites** — the installer checks for Miniconda (required), Git (for nightbuilt), and ATSAS (optional), with download links. Only Miniconda is required to continue.
-2. **Options** — choose **Latest stable (PyPI)** (recommended) or **Latest nightbuilt (GitHub)**; leave **Create Desktop shortcut** checked (recommended).
+1. **Prerequisites** — confirm Miniconda (required). Git and ATSAS status are shown; use **More options…** only if you need download links or a different conda folder.
+2. **Options** — pick one visible install preset (stable + Desktop shortcut is pre-selected). Click **Install**.
 3. **Installing** — wait while packages download (needs internet; may take several minutes).
 4. **Finish** — you can open GUISAXS-LiveView from the installer, or close it.
 
@@ -92,7 +92,7 @@ Recommended version for autoSAXS: **3.2.1**. After installing, you can check wit
 
 **No Desktop shortcut**
 
-- Re-run the installer and leave **Create Desktop shortcut** checked.
+- Re-run the installer and choose a preset that includes the Desktop shortcut (recommended).
 - Or start LiveView from Anaconda Prompt / terminal after `conda activate autosaxs` with `guisaxs-liveview` (developers).
 
 **GUI does not open (Linux)**
