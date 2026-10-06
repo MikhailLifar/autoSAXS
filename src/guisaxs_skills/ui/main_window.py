@@ -31,6 +31,7 @@ from .help_dialog import HelpDialog
 from .log_view import LogView
 from .preview_panel import PreviewPanel
 from .run_controls import RunControls
+from .settings_dialog import open_appearance_settings
 from .skill_form import SkillForm
 from .skill_header import SkillHeader
 from .toast import Toast
@@ -146,6 +147,15 @@ class MainWindow(QMainWindow):
         act_exit = QAction("Exit", self)
         act_exit.triggered.connect(self.close)
         file_menu.addAction(act_exit)
+
+        settings_menu = mb.addMenu("Settings")
+        act_appearance = QAction("Appearance…", self)
+        act_appearance.setToolTip("Font size and other appearance options.")
+        act_appearance.triggered.connect(self._on_appearance_settings)
+        settings_menu.addAction(act_appearance)
+
+    def _on_appearance_settings(self) -> None:
+        open_appearance_settings(parent=self)
 
     def _wire(self) -> None:
         self._catalog.skill_selected.connect(self._on_skill_selected)

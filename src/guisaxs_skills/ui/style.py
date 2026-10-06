@@ -13,6 +13,14 @@ from PyQt5.QtWidgets import (
     QTableWidget,
 )
 
+from ..core.settings import (
+    DEFAULT_FONT_POINT_SIZE,
+    FONT_POINT_SIZE_MAX,
+    FONT_POINT_SIZE_MIN,
+    KEY_FONT_POINT_SIZE,
+    settings,
+)
+
 COLOR_MUTED_TEXT = "#728195"
 COLOR_REQUIRED_STAR = "#ff4d4f"
 # Same red as required-field star — poor fit / data-quality hints in analysis panes.
@@ -26,6 +34,53 @@ _SELECTABLE_LABELS_FILTER_ATTR = "_autosaxs_selectable_labels_filter"
 _COPYABLE_TABLES_FILTER_ATTR = "_autosaxs_copyable_tables_filter"
 _COPYABLE_TABLE_ATTR = "_autosaxs_copyable_table"
 _SPIN_ARROW = QColor("#e7eef6")
+
+
+def clamp_font_point_size(point_size: int | float | str | None) -> int:
+    """Clamp a raw settings/UI value to the supported font point-size range."""
+    try:
+        size = int(float(point_size))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        size = DEFAULT_FONT_POINT_SIZE
+    return max(FONT_POINT_SIZE_MIN, min(FONT_POINT_SIZE_MAX, size))
+
+
+def load_font_point_size() -> int:
+    """Read persisted font size from the shared settings store."""
+    raw = settings().value(KEY_FONT_POINT_SIZE, DEFAULT_FONT_POINT_SIZE)
+    return clamp_font_point_size(raw)
+
+
+def save_font_point_size(point_size: int) -> int:
+    """Persist font size and return the clamped value that was stored."""
+    size = clamp_font_point_size(point_size)
+    s = settings()
+    s.setValue(KEY_FONT_POINT_SIZE, size)
+    s.sync()
+    return size
+
+
+def apply_font_point_size(
+    app: QApplication | None = None,
+    point_size: int | None = None,
+    *,
+    persist: bool = False,
+) -> int:
+    """
+    Apply app-wide Qt font size (menus, labels, buttons, forms, panels).
+
+    This is the SSOT entry point for appearance font size. Matplotlib/custom
+    painters that hardcode point sizes are out of scope.
+    """
+    size = clamp_font_point_size(point_size if point_size is not None else load_font_point_size())
+    if persist:
+        size = save_font_point_size(size)
+    target = app if app is not None else QApplication.instance()
+    if target is not None:
+        font = QFont(target.font())
+        font.setPointSize(size)
+        target.setFont(font)
+    return size
 
 
 class _BrightSpinArrowStyle(QProxyStyle):
@@ -182,6 +237,7 @@ def apply_style(app: QApplication) -> None:
     font = QFont()
     font.setPointSize(11)
     app.setFont(font)
+    apply_font_point_size(app)
 
     # Softer, lower-contrast dark theme: slightly lighter surfaces, gentler borders,
     # and a less saturated accent for comfort.

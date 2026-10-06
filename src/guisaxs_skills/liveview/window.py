@@ -23,6 +23,7 @@ from ..logic.app_relaunch import launch_guisaxs_liveview
 from ..logic.path_display import contracted_path_label
 from ..ui.about_dialog import AboutDialog
 from ..ui.html_help_dialog import HtmlHelpDialog
+from ..ui.settings_dialog import open_appearance_settings
 from ..logic.package_update import (
     AUTOSAXS_NIGHTBUILT_UPDATE_SPEC,
     AUTOSAXS_STABLE_UPDATE_SPEC,
@@ -150,6 +151,12 @@ class LiveviewMainWindow(QMainWindow):
         act_exit.triggered.connect(self.close)
         file_menu.addAction(act_exit)
 
+        settings_menu = mb.addMenu("Settings")
+        act_appearance = QAction("Appearance…", self)
+        act_appearance.setToolTip("Font size and other appearance options.")
+        act_appearance.triggered.connect(self._on_appearance_settings)
+        settings_menu.addAction(act_appearance)
+
         update_menu = mb.addMenu("Update")
         act_update_stable = QAction("Update to the latest stable version", self)
         act_update_stable.setToolTip("Same as: autosaxs update  (or autosaxs -U)")
@@ -197,6 +204,9 @@ class LiveviewMainWindow(QMainWindow):
 
     def _on_about_requested(self) -> None:
         AboutDialog(parent=self).exec_()
+
+    def _on_appearance_settings(self) -> None:
+        open_appearance_settings(parent=self)
 
     def _on_update_stable_requested(self) -> None:
         self._request_update(package_spec=AUTOSAXS_STABLE_UPDATE_SPEC)

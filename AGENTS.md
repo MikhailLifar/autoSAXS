@@ -193,7 +193,7 @@ Sibling package for modeling apps: `guisaxs_skills/modeling/` (also launched as 
 |--------|------|
 | `logic/skill_catalog.py` | `discover_skills()` from `autosaxs.skill` → `SkillMeta` |
 | `ui/skill_form.py` | Dynamic form from `SkillMeta`; emits `RunRequest` |
-| `ui/style.py` | **Canonical** PyQt theme/colors (`COLOR_MUTED_TEXT`, `apply_style`) |
+| `ui/style.py` | **Canonical** PyQt theme/colors (`COLOR_MUTED_TEXT`, `apply_style`, `apply_font_point_size`) |
 | `ui/path_field.py` | Path input with DnD |
 | `logic/runner_qprocess.py` | `SkillRunner` — subprocess CLI, streams logs |
 | `logic/app_relaunch.py` | Detached liveview process relaunch (watchdir change, post-update) |
@@ -240,7 +240,7 @@ Help assets live in `autosaxs/resources/help/guisaxs_liveview/`.
 | GUI subprocess runner | `guisaxs_skills/logic/runner_qprocess.py` |
 | Liveview job building | `guisaxs_skills/liveview/pipeline/plan.py`, `executor.py` |
 | Liveview middle column | `liveview/services/history/middle_from_stem.py` (`sync_middle_view`) |
-| PyQt colors/theme | `guisaxs_skills/ui/style.py` |
+| PyQt colors/theme / font size | `guisaxs_skills/ui/style.py`, `ui/settings_dialog.py`, `core/settings.py` (`KEY_FONT_POINT_SIZE`) |
 | Bundled defaults export | `autosaxs get-default-config -o <dir>` |
 | Skill docstrings → Cursor skills | `autosaxs get-skills -o <dir>` |
 
@@ -276,7 +276,7 @@ Use conda env **`dev_autosaxs`**:
 
 Per `.cursor/rules/reuse-existing-functionality.mdc`:
 
-- Theme/colors → `guisaxs_skills/ui/style.py`
+- Theme/colors / font size → `guisaxs_skills/ui/style.py` (SSOT); Settings UI → `ui/settings_dialog.py`
 - Form widgets → `skill_form.py`, `path_field.py`
 - Skill metadata → `skill_catalog.py`
 
