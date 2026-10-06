@@ -91,6 +91,8 @@ Drops may auto-switch intake (Option A): `.dat` in 2D → classify to 1D/Sub; `.
 
 Session owns `auto_processing` (default Auto; **in-memory only** — not restored from `session.yaml`). **Stop** / interventions set Manual; **Resume** restores Auto. Manual holds **auto** queue advance; manual jobs still run.
 
+History **Process** while Manual also **resumes Auto** (incoming samples only promote to jobs when Auto is on). Shortcuts: **Ctrl+X** Auto→Manual; **Ctrl+P** Manual→Auto (resume). Hints live on the middle Process / Resume button and analysis Stop/Resume buttons.
+
 ---
 
 ## 5. Watching and queue

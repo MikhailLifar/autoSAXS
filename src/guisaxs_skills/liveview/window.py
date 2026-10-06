@@ -8,9 +8,13 @@ from PyQt5.QtWidgets import (
     QAction,
     QApplication,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
+    QShortcut,
     QSplitter,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -73,9 +77,11 @@ class LiveviewMainWindow(QMainWindow):
 
         self._controller.bind_panels(left=self._left, middle=self._middle, right=self._right, parent=self)
         self._wire_ui()
+        self._wire_auto_manual_shortcuts()
         self._sub_wizard: SubtractionWizardDialog | None = None
         self._sub_apply_pending = False
         self._help_dialog: HtmlHelpDialog | None = None
+        self._sync_process_button_mode()
 
     def _enforce_column_width_ratio(self) -> None:
         sp = self._splitter
@@ -286,9 +292,43 @@ class LiveviewMainWindow(QMainWindow):
         self._controller.session.mode_changed.connect(
             lambda *_args: self._left.refresh_attention_coach()
         )
+        self._controller.session.mode_changed.connect(
+            lambda *_args: self._sync_process_button_mode()
+        )
         self._controller.session.intake_changed.connect(
             lambda *_args: self._left.refresh_attention_coach()
         )
+
+    def _sync_process_button_mode(self) -> None:
+        self._middle.set_process_mode(manual=self._controller.session.is_stopped)
+
+    def _wire_auto_manual_shortcuts(self) -> None:
+        """Ctrl+X Auto→Manual; Ctrl+P Manual→Auto. Skip when typing in a text field."""
+        sc_manual = QShortcut(QKeySequence("Ctrl+X"), self)
+        sc_manual.setContext(Qt.WindowShortcut)
+        sc_manual.activated.connect(self._on_shortcut_switch_to_manual)
+        sc_auto = QShortcut(QKeySequence("Ctrl+P"), self)
+        sc_auto.setContext(Qt.WindowShortcut)
+        sc_auto.activated.connect(self._on_shortcut_switch_to_auto)
+
+    @staticmethod
+    def _focus_is_text_edit() -> bool:
+        w = QApplication.focusWidget()
+        while w is not None:
+            if isinstance(w, (QLineEdit, QTextEdit, QPlainTextEdit)):
+                return True
+            w = w.parentWidget()
+        return False
+
+    def _on_shortcut_switch_to_manual(self) -> None:
+        if self._focus_is_text_edit():
+            return
+        self._controller.shortcut_switch_to_manual()
+
+    def _on_shortcut_switch_to_auto(self) -> None:
+        if self._focus_is_text_edit():
+            return
+        self._controller.shortcut_switch_to_auto()
 
     def _open_subtraction_wizard(self) -> None:
         buf = self._state.buffer_dat_path

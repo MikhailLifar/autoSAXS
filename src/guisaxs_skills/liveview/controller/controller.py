@@ -286,7 +286,30 @@ class LiveviewController(QObject):
         self.history.step(delta)
 
     def process_history_file(self) -> None:
+        """Re-enqueue the history-current sample; if Manual, also resume Auto.
+
+        Incoming samples only promote to jobs while ``auto_processing`` is on, so
+        Process in Manual must resume — otherwise the user stays stuck with a
+        queued sample that never runs.
+        """
+        was_manual = self.session.is_stopped
         self.history.process_current_file()
+        if was_manual:
+            self.session.resume()
+
+    def shortcut_switch_to_manual(self) -> None:
+        """Ctrl+X: Auto → Manual (same as Stop auto-processing)."""
+        if self.session.is_stopped:
+            return
+        self.session.stop()
+        self.executor.cancel_current()
+
+    def shortcut_switch_to_auto(self) -> None:
+        """Ctrl+P: Manual → Auto (same as Resume auto-processing)."""
+        if not self.session.is_stopped:
+            return
+        self.enqueue_report_for_current_sample()
+        self.session.resume()
 
     def on_analysis_arming_changed(self) -> None:
         self.history.refresh_right_outputs()

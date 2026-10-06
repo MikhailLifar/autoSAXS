@@ -61,8 +61,8 @@ class LiveviewMiddlePanel(QWidget):
         self._btn_hist_next.setToolTip("Next processed file (session)")
         self._btn_hist_next.clicked.connect(lambda: self.history_step.emit(1))
         self._btn_process = QPushButton("Process")
-        self._btn_process.setToolTip("Enqueue the selected file for the live pipeline (same as a new upload)")
         self._btn_process.clicked.connect(self.process_history_file_requested.emit)
+        self.set_process_mode(manual=False)
         self._history_label = QLabel("")
         self._history_label.setWordWrap(True)
         self._history_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -241,6 +241,23 @@ class LiveviewMiddlePanel(QWidget):
 
     def set_process_enabled(self, enabled: bool) -> None:
         self._btn_process.setEnabled(bool(enabled))
+
+    def set_process_mode(self, *, manual: bool) -> None:
+        """Label/tooltip for Process; Manual also resumes Auto (Ctrl+P / Ctrl+X hints)."""
+        if manual:
+            self._btn_process.setText("Process / Resume")
+            self._btn_process.setToolTip(
+                "Resume auto-processing and enqueue the selected file "
+                "(same as a new upload).\n"
+                "Shortcut: Ctrl+P (resume Auto) · Ctrl+X (switch to Manual)"
+            )
+        else:
+            self._btn_process.setText("Process")
+            self._btn_process.setToolTip(
+                "Enqueue the selected file for the live pipeline "
+                "(same as a new upload).\n"
+                "Shortcut: Ctrl+X (switch to Manual) · Ctrl+P (resume Auto when Manual)"
+            )
 
     def set_queue_status(self, status: LiveviewQueueStatus) -> None:
         rem = max(0, int(status.remaining))

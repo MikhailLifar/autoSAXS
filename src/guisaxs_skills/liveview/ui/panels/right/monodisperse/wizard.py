@@ -29,6 +29,7 @@ class MonodisperseWizardWidget(QWidget):
         self.gnom_pane = GnomPane(self)
         self.shape_pane = ShapePane(self)
         self._auto_btn = QPushButton("Stop auto-processing")
+        self._auto_btn.setToolTip("Stop auto-processing (Ctrl+X)")
         self._auto_btn.clicked.connect(self.auto_toggle_clicked.emit)
         self._paused = False
 
@@ -112,9 +113,11 @@ class MonodisperseWizardWidget(QWidget):
     def _refresh_auto_button(self, *, processing_idle: bool) -> None:
         if self._paused:
             self._auto_btn.setText("Resume auto-processing")
+            self._auto_btn.setToolTip("Resume auto-processing (Ctrl+P)")
             self._auto_btn.setEnabled(processing_idle)
         else:
             self._auto_btn.setText("Stop auto-processing")
+            self._auto_btn.setToolTip("Stop auto-processing (Ctrl+X)")
             self._auto_btn.setEnabled(True)
 
     def summary_lines(self) -> tuple[str, str]:
