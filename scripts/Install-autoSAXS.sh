@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Install-autoSAXS.sh — beginner installer (Linux). No global Python required for the UI.
 # Uses zenity or kdialog. Installs via conda create + pip install stable (PyPI) or nightbuilt (GitHub).
+#
+# Happy path (conda already found): Continue → pick install preset → install.
+# Optional: AUTOSAXS_INSTALLER_DRY_RUN=1 or --smoke-ui stops before conda work (UI smoke only).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,9 +17,15 @@ PIP_SPEC_NIGHTBUILT="autosaxs[gui] @ git+https://github.com/MikhailLifar/autoSAX
 PIP_SPEC="${PIP_SPEC_STABLE}"
 INSTALL_SOURCE="stable"
 INSTALL_SOURCE_LABEL="stable (PyPI)"
+CREATE_SHORTCUT=1
 MINICONDA_URL="https://docs.anaconda.com/miniconda/miniconda-install/"
 ATSAS_URL="https://www.embl-hamburg.de/biosaxs/download.html"
 GIT_URL="https://git-scm.com/download/linux"
+
+DRY_RUN=0
+if [[ "${1:-}" == "--smoke-ui" ]] || [[ "${AUTOSAXS_INSTALLER_DRY_RUN:-}" == "1" ]]; then
+  DRY_RUN=1
+fi
 
 DIALOG=""
 if command -v zenity >/dev/null 2>&1; then
@@ -61,6 +70,26 @@ question_yesno() {
   fi
 }
 
+# Zenity list rows get crushed when --text is long and --height is modest.
+# Size the window so short option lists show every row without a scrollbar.
+zenity_list_height_for_rows() {
+  local n_rows="$1"
+  # Chrome + short caption + ~36px per row + padding
+  echo $(( 220 + n_rows * 36 ))
+}
+
+prereq_status_line() {
+  local git_status="not found"
+  local atsas_status="not found (optional)"
+  if command -v git >/dev/null 2>&1; then
+    git_status="found"
+  fi
+  if command -v dammif >/dev/null 2>&1; then
+    atsas_status="found (optional)"
+  fi
+  printf 'Git: %s · ATSAS: %s' "$git_status" "$atsas_status"
+}
+
 find_conda() {
   if command -v conda >/dev/null 2>&1; then
     local c
@@ -103,91 +132,129 @@ validate_conda() {
   "$conda_exe" --version >/dev/null 2>&1
 }
 
-confirm_conda_choice() {
-  local git_status="not found"
-  local atsas_status="not found"
-  if command -v git >/dev/null 2>&1; then
-    git_status="found"
-  fi
-  if command -v dammif >/dev/null 2>&1; then
-    atsas_status="found (dammif on PATH)"
-  fi
-  local summary="Miniconda / Anaconda: ready
+# Secondary menu when the user wants links / another conda folder.
+show_conda_more_options() {
+  local status
+  status="$(prereq_status_line)"
+  local text="Miniconda is ready at:
 ${CONDA}
 
-Git: ${git_status}
-  (needed for nightbuilt installs; installer can also install git into the env)
+${status}
 
-ATSAS: ${atsas_status}
-  (optional; needed later for DAMMIF / p(r) / similar tools)
-
-Only Miniconda is required to continue."
-
+Pick an action:"
+  local choice=""
   if [[ "$DIALOG" == zenity ]]; then
-    choice="$(zenity --list --title="Install autoSAXS" --width=560 --height=360 \
-      --text="${summary}
-
-How do you want to continue?" \
+    local h
+    h="$(zenity_list_height_for_rows 4)"
+    choice="$(zenity --list --title="Install autoSAXS" --width=560 --height="$h" --hide-header \
+      --text="${text}" \
+      --ok-label="OK" --cancel-label="Back" \
       --column="Action" \
-      "Continue to install options" \
       "Open Git download page" \
       "Open ATSAS download page" \
       "Choose a different conda folder…" \
       "Exit" \
       || true)"
     case "$choice" in
-      "Continue to install options") return 0 ;;
       "Open Git download page")
         (xdg-open "$GIT_URL" >/dev/null 2>&1 || true)
-        confirm_conda_choice
+        show_conda_more_options
         return $?
         ;;
       "Open ATSAS download page")
         (xdg-open "$ATSAS_URL" >/dev/null 2>&1 || true)
-        confirm_conda_choice
+        show_conda_more_options
         return $?
         ;;
       "Choose a different conda folder…")
         CONDA=""
         if prompt_manual_conda_dir; then
-          confirm_conda_choice
-          return $?
+          return 0
         fi
         return 1
         ;;
+      "Exit") return 1 ;;
       *) return 1 ;;
     esac
   else
     choice="$(kdialog --title "Install autoSAXS" --menu \
-      "${summary}" \
-      continue "Continue to install options" \
+      "${text}" \
       git "Open Git download page" \
       atsas "Open ATSAS download page" \
       manual "Choose a different conda folder…" \
       exit "Exit" \
-      continue 2>/dev/null || true)"
+      git 2>/dev/null || true)"
     case "$choice" in
-      continue) return 0 ;;
       git)
         xdg-open "$GIT_URL" >/dev/null 2>&1 || true
-        confirm_conda_choice
+        show_conda_more_options
         return $?
         ;;
       atsas)
         xdg-open "$ATSAS_URL" >/dev/null 2>&1 || true
-        confirm_conda_choice
+        show_conda_more_options
         return $?
         ;;
       manual)
         CONDA=""
         if prompt_manual_conda_dir; then
-          confirm_conda_choice
-          return $?
+          return 0
         fi
         return 1
         ;;
       *) return 1 ;;
     esac
+  fi
+}
+
+confirm_conda_choice() {
+  local status
+  status="$(prereq_status_line)"
+  local text="Miniconda is ready:
+${CONDA}
+
+${status}
+
+Only Miniconda is required. Continue?"
+
+  if [[ "$DIALOG" == zenity ]]; then
+    local out="" rc=0
+    set +e
+    out="$(zenity --question --title="Install autoSAXS" --width=520 \
+      --text="${text}" \
+      --ok-label="Continue" --cancel-label="Exit" \
+      --extra-button="More options…" 2>/dev/null)"
+    rc=$?
+    set -e
+    # 0 = Continue; 1 + stdout = extra button; 1 empty = Exit/Cancel
+    if [[ "$rc" -eq 0 ]]; then
+      return 0
+    fi
+    if [[ "$out" == "More options…" ]]; then
+      if show_conda_more_options; then
+        confirm_conda_choice
+        return $?
+      fi
+      confirm_conda_choice
+      return $?
+    fi
+    return 1
+  else
+    if kdialog --title "Install autoSAXS" --yesnocancel "${text}" \
+      --yes-label "Continue" --no-label "More options…" --cancel-label "Exit" 2>/dev/null; then
+      return 0
+    else
+      local krc=$?
+      if [[ "$krc" -eq 1 ]]; then
+        if show_conda_more_options; then
+          confirm_conda_choice
+          return $?
+        fi
+        confirm_conda_choice
+        return $?
+      fi
+      return 1
+    fi
   fi
 }
 
@@ -212,33 +279,26 @@ Choose the top-level folder that contains bin/conda (for example ${HOME}/minicon
 }
 
 handle_conda_missing_page() {
-  local git_status="not found"
-  local atsas_status="not found"
-  if command -v git >/dev/null 2>&1; then
-    git_status="found"
-  fi
-  if command -v dammif >/dev/null 2>&1; then
-    atsas_status="found"
-  fi
-  local summary="autoSAXS needs Miniconda (a free Python toolbox).
+  local status
+  status="$(prereq_status_line)"
+  local text="autoSAXS needs Miniconda (a free Python toolbox).
 It was not found automatically.
 
-Also checked:
-  Git: ${git_status}
-  ATSAS: ${atsas_status}
+${status}"
 
-Install Miniconda, enter your conda directory path, or click Retry."
-
+  local choice=""
   if [[ "$DIALOG" == zenity ]]; then
-    choice="$(zenity --list --title="Install autoSAXS" --width=560 --height=360 \
-      --text="${summary}" \
+    local h
+    h="$(zenity_list_height_for_rows 5)"
+    choice="$(zenity --list --title="Install autoSAXS" --width=560 --height="$h" --hide-header \
+      --text="${text}" \
+      --ok-label="OK" --cancel-label="Exit" \
       --column="Action" \
       "Open Miniconda download page" \
-      "Open Git download page" \
-      "Open ATSAS download page" \
       "Enter conda directory path…" \
       "Retry search" \
-      "Exit" \
+      "Open Git download page" \
+      "Open ATSAS download page" \
       || true)"
     case "$choice" in
       "Open Miniconda download page")
@@ -260,14 +320,13 @@ Install Miniconda, enter your conda directory path, or click Retry."
     esac
   else
     choice="$(kdialog --title "Install autoSAXS" --menu \
-      "${summary}" \
-      manual "Enter conda directory path…" \
+      "${text}" \
       download "Open Miniconda download page" \
+      manual "Enter conda directory path…" \
+      retry "Retry search" \
       git "Open Git download page" \
       atsas "Open ATSAS download page" \
-      retry "Retry search" \
-      exit "Exit" \
-      manual 2>/dev/null || true)"
+      download 2>/dev/null || true)"
     case "$choice" in
       manual)
         if prompt_manual_conda_dir; then
@@ -300,12 +359,12 @@ prompt_env_name() {
   while true; do
     if [[ "$DIALOG" == zenity ]]; then
       name="$(zenity --entry --title="Install autoSAXS" --width=420 \
-        --text="Conda environment name for autoSAXS:" \
+        --text="Conda environment name:" \
         --entry-text="${DEFAULT_ENV_NAME}" 2>/dev/null || true)"
     else
-      name="$(kdialog --title "Install autoSAXS" --inputbox "Conda environment name for autoSAXS:" "${DEFAULT_ENV_NAME}" 2>/dev/null || true)"
+      name="$(kdialog --title "Install autoSAXS" --inputbox "Conda environment name:" "${DEFAULT_ENV_NAME}" 2>/dev/null || true)"
     fi
-    [[ -z "$name" ]] && exit 0
+    [[ -z "$name" ]] && return 1
     if validate_env_name "$name"; then
       ENV_NAME="$name"
       return 0
@@ -314,35 +373,103 @@ prompt_env_name() {
   done
 }
 
-prompt_install_source() {
-  local choice=""
-  if [[ "$DIALOG" == zenity ]]; then
-    choice="$(zenity --list --radiolist --title="Install autoSAXS" --width=520 --height=260 \
-      --text="Which autoSAXS version should be installed?" \
-      --column="Select" --column="Option" --column="Description" \
-      TRUE "stable" "Latest stable (PyPI) - recommended" \
-      FALSE "nightbuilt" "Latest nightbuilt (GitHub)" \
-      2>/dev/null || true)"
-  else
-    choice="$(kdialog --title "Install autoSAXS" --radiolist \
-      "Which autoSAXS version should be installed?" \
-      stable "Latest stable (PyPI) - recommended" on \
-      nightbuilt "Latest nightbuilt (GitHub)" off \
-      2>/dev/null || true)"
-  fi
-  [[ -z "$choice" ]] && exit 0
-  case "$choice" in
-    nightbuilt)
-      INSTALL_SOURCE="nightbuilt"
-      PIP_SPEC="${PIP_SPEC_NIGHTBUILT}"
-      INSTALL_SOURCE_LABEL="nightbuilt (GitHub)"
-      ;;
-    *)
+apply_install_preset() {
+  local preset="$1"
+  case "$preset" in
+    "Stable (PyPI) + Desktop shortcut — recommended"|"stable_shortcut")
       INSTALL_SOURCE="stable"
       PIP_SPEC="${PIP_SPEC_STABLE}"
       INSTALL_SOURCE_LABEL="stable (PyPI)"
+      CREATE_SHORTCUT=1
+      ;;
+    "Stable (PyPI), no Desktop shortcut"|"stable_noshortcut")
+      INSTALL_SOURCE="stable"
+      PIP_SPEC="${PIP_SPEC_STABLE}"
+      INSTALL_SOURCE_LABEL="stable (PyPI)"
+      CREATE_SHORTCUT=0
+      ;;
+    "Nightbuilt (GitHub) + Desktop shortcut"|"night_shortcut")
+      INSTALL_SOURCE="nightbuilt"
+      PIP_SPEC="${PIP_SPEC_NIGHTBUILT}"
+      INSTALL_SOURCE_LABEL="nightbuilt (GitHub)"
+      CREATE_SHORTCUT=1
+      ;;
+    "Nightbuilt (GitHub), no Desktop shortcut"|"night_noshortcut")
+      INSTALL_SOURCE="nightbuilt"
+      PIP_SPEC="${PIP_SPEC_NIGHTBUILT}"
+      INSTALL_SOURCE_LABEL="nightbuilt (GitHub)"
+      CREATE_SHORTCUT=0
+      ;;
+    *)
+      return 1
       ;;
   esac
+  return 0
+}
+
+# One screen: all install presets visible (no scrollbar), OK starts install.
+prompt_install_options() {
+  ENV_NAME="${DEFAULT_ENV_NAME}"
+  local choice=""
+  local text="Install into conda environment “${DEFAULT_ENV_NAME}”.
+
+All options are listed below — pick one, then click Install:"
+
+  if [[ "$DIALOG" == zenity ]]; then
+    local h
+    h="$(zenity_list_height_for_rows 5)"
+    choice="$(zenity --list --radiolist --title="Install autoSAXS" --width=580 --height="$h" --hide-header \
+      --text="${text}" \
+      --ok-label="Install" --cancel-label="Cancel" \
+      --column="Select" --column="Option" \
+      TRUE "Stable (PyPI) + Desktop shortcut — recommended" \
+      FALSE "Stable (PyPI), no Desktop shortcut" \
+      FALSE "Nightbuilt (GitHub) + Desktop shortcut" \
+      FALSE "Nightbuilt (GitHub), no Desktop shortcut" \
+      FALSE "Customize environment name…" \
+      2>/dev/null || true)"
+    [[ -z "$choice" ]] && exit 0
+    if [[ "$choice" == "Customize environment name…" ]]; then
+      prompt_env_name || exit 0
+      text="Install into conda environment “${ENV_NAME}”.
+
+Pick a package and shortcut preference:"
+      h="$(zenity_list_height_for_rows 4)"
+      choice="$(zenity --list --radiolist --title="Install autoSAXS" --width=580 --height="$h" --hide-header \
+        --text="${text}" \
+        --ok-label="Install" --cancel-label="Cancel" \
+        --column="Select" --column="Option" \
+        TRUE "Stable (PyPI) + Desktop shortcut — recommended" \
+        FALSE "Stable (PyPI), no Desktop shortcut" \
+        FALSE "Nightbuilt (GitHub) + Desktop shortcut" \
+        FALSE "Nightbuilt (GitHub), no Desktop shortcut" \
+        2>/dev/null || true)"
+      [[ -z "$choice" ]] && exit 0
+    fi
+    apply_install_preset "$choice" || exit 0
+  else
+    choice="$(kdialog --title "Install autoSAXS" --radiolist \
+      "${text}" \
+      stable_shortcut "Stable (PyPI) + Desktop shortcut — recommended" on \
+      stable_noshortcut "Stable (PyPI), no Desktop shortcut" off \
+      night_shortcut "Nightbuilt (GitHub) + Desktop shortcut" off \
+      night_noshortcut "Nightbuilt (GitHub), no Desktop shortcut" off \
+      customize "Customize environment name…" off \
+      2>/dev/null || true)"
+    [[ -z "$choice" ]] && exit 0
+    if [[ "$choice" == "customize" ]]; then
+      prompt_env_name || exit 0
+      choice="$(kdialog --title "Install autoSAXS" --radiolist \
+        "Install into conda environment “${ENV_NAME}”." \
+        stable_shortcut "Stable (PyPI) + Desktop shortcut — recommended" on \
+        stable_noshortcut "Stable (PyPI), no Desktop shortcut" off \
+        night_shortcut "Nightbuilt (GitHub) + Desktop shortcut" off \
+        night_noshortcut "Nightbuilt (GitHub), no Desktop shortcut" off \
+        2>/dev/null || true)"
+      [[ -z "$choice" ]] && exit 0
+    fi
+    apply_install_preset "$choice" || exit 0
+  fi
 }
 
 ensure_git_for_nightbuilt() {
@@ -417,18 +544,26 @@ while true; do
   fi
 done
 
-# --- Page 2: options (environment name + version + Desktop shortcut) ---
-prompt_env_name
-prompt_install_source
+# --- Page 2: install options (single list — all presets visible) ---
+prompt_install_options
 
-CREATE_SHORTCUT=1
-if question_yesno "Create a Desktop shortcut for GUISAXS-LiveView?\n\n(Recommended: Yes)"; then
-  CREATE_SHORTCUT=1
-else
-  CREATE_SHORTCUT=0
+if [[ "$INSTALL_SOURCE" == "nightbuilt" ]] && ! command -v git >/dev/null 2>&1; then
+  if ! question_yesno "Git was not found on PATH.
+
+Nightbuilt installs need git. The installer can install git into the conda environment automatically.
+
+Continue anyway?"; then
+    exit 0
+  fi
 fi
 
-if ! question_yesno "Install autoSAXS (${INSTALL_SOURCE_LABEL}) into conda environment '${ENV_NAME}' now?\n\nThis downloads packages from the internet and may take several minutes."; then
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  info "Smoke UI OK.
+
+Would install ${INSTALL_SOURCE_LABEL} into conda environment “${ENV_NAME}”
+Desktop shortcut: $([[ "$CREATE_SHORTCUT" -eq 1 ]] && echo yes || echo no)
+
+Stopping before conda (dry-run / --smoke-ui)."
   exit 0
 fi
 
