@@ -7,9 +7,9 @@ from typing import Iterable, Optional, Sequence, Union
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QAbstractItemView, QHeaderView, QLabel, QTableWidget, QTableWidgetItem
+from PyQt5.QtWidgets import QHeaderView, QLabel, QTableWidget, QTableWidgetItem
 
-from .style import COLOR_QUALITY_POOR, COLOR_QUALITY_WARN
+from .style import COLOR_QUALITY_POOR, COLOR_QUALITY_WARN, configure_readonly_copyable_table
 
 # Third field: False/"ok" = default, True/"poor" = red, "warn" = amber.
 PassportSeverity = Union[bool, str]
@@ -76,9 +76,7 @@ class PassportTableWidget(QTableWidget):
         super().__init__(0, 2, parent)
         self.setHorizontalHeaderLabels(["Metric", "Value"])
         self.verticalHeader().setVisible(False)
-        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.setSelectionMode(QAbstractItemView.NoSelection)
-        self.setFocusPolicy(Qt.NoFocus)
+        configure_readonly_copyable_table(self)
         self.setShowGrid(False)
         self.setAlternatingRowColors(True)
         hdr = self.horizontalHeader()
@@ -100,7 +98,7 @@ class PassportTableWidget(QTableWidget):
         if not row_list:
             self.setRowCount(1)
             empty = QTableWidgetItem("—")
-            empty.setFlags(Qt.ItemIsEnabled)
+            empty.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.setItem(0, 0, empty)
             self.setSpan(0, 0, 1, 2)
             return
@@ -110,7 +108,7 @@ class PassportTableWidget(QTableWidget):
             v_item = QTableWidgetItem(value)
             color_hex = _severity_color(flag, poor_color=poor_color, warn_color=warn_color)
             for it in (m_item, v_item):
-                it.setFlags(Qt.ItemIsEnabled)
+                it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 if color_hex:
                     it.setForeground(QColor(color_hex))
             self.setItem(i, 0, m_item)
@@ -128,7 +126,7 @@ class PassportTableWidget(QTableWidget):
         self.clearSpans()
         self.setRowCount(1)
         item = QTableWidgetItem(text or "—")
-        item.setFlags(Qt.ItemIsEnabled)
+        item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
         if poor:
             item.setForeground(QColor(poor_color))
         self.setItem(0, 0, item)

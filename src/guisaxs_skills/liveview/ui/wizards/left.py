@@ -7,7 +7,6 @@ from typing import Optional
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import (
-    QAbstractItemView,
     QDialog,
     QGroupBox,
     QHBoxLayout,
@@ -37,6 +36,7 @@ from ....logic.smart_defaults import (
     session_hint_soft_buffer_1d,
 )
 from ....ui.path_field import PathField
+from ....ui.style import configure_readonly_copyable_table
 from ....ui.skill_form import SkillForm
 from ..skill_form_utils import (
     liveview_run_controls,
@@ -480,9 +480,7 @@ class CalibrationWizardDialog(QDialog):
         hdr.setSectionResizeMode(0, QHeaderView.Stretch)
         hdr.setSectionResizeMode(1, QHeaderView.Stretch)
         table.verticalHeader().setVisible(False)
-        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        table.setSelectionMode(QAbstractItemView.NoSelection)
-        table.setFocusPolicy(Qt.NoFocus)
+        configure_readonly_copyable_table(table)
         table.setShowGrid(True)
         table.setMinimumHeight(140)
         return table
