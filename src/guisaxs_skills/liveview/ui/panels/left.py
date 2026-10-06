@@ -6,7 +6,6 @@ from typing import Any, Dict, Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QAbstractItemView,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -30,6 +29,7 @@ from ..wizards.left import BufferWizardDialog, CalibrationWizardDialog
 from ..wizards.mask import MaskWizardDialog
 from ....logic.session_state import SessionPathHints
 from ....ui.preview_panel import PreviewPanel
+from ....ui.style import configure_readonly_copyable_table
 from ....ui.toast import Toast
 
 
@@ -88,9 +88,7 @@ class LiveviewLeftPanel(QWidget):
         hdr.setSectionResizeMode(0, QHeaderView.Stretch)
         hdr.setSectionResizeMode(1, QHeaderView.Stretch)
         self._cal_params_table.verticalHeader().setVisible(False)
-        self._cal_params_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self._cal_params_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self._cal_params_table.setFocusPolicy(Qt.NoFocus)
+        configure_readonly_copyable_table(self._cal_params_table)
         self._cal_params_table.setShowGrid(True)
         self._cal_params_table.setMinimumHeight(72)
         self._cal_params_table.setMaximumHeight(240)

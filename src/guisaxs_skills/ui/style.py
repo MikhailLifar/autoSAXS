@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import QEvent, QObject, QPoint, QRect, Qt
-from PyQt5.QtGui import QColor, QFont, QPainter, QPalette, QPolygon
-from PyQt5.QtWidgets import QApplication, QLabel, QProxyStyle, QStyle, QStyleFactory
+from PyQt5.QtGui import QColor, QFont, QKeySequence, QPainter, QPalette, QPolygon
+from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QLabel,
+    QMenu,
+    QProxyStyle,
+    QStyle,
+    QStyleFactory,
+    QTableWidget,
+)
 
 COLOR_MUTED_TEXT = "#728195"
 COLOR_REQUIRED_STAR = "#ff4d4f"
@@ -14,6 +23,8 @@ COLOR_QUALITY_WARN = "#b45309"
 COLOR_ACCENT = "#4c8dff"
 
 _SELECTABLE_LABELS_FILTER_ATTR = "_autosaxs_selectable_labels_filter"
+_COPYABLE_TABLES_FILTER_ATTR = "_autosaxs_copyable_tables_filter"
+_COPYABLE_TABLE_ATTR = "_autosaxs_copyable_table"
 _SPIN_ARROW = QColor("#e7eef6")
 
 
@@ -75,6 +86,77 @@ def _enable_selectable_labels(app: QApplication) -> None:
     setattr(app, _SELECTABLE_LABELS_FILTER_ATTR, filt)
 
 
+def copy_selected_table_text(table: QTableWidget) -> bool:
+    """Copy selected cells (TSV) or the current cell to the clipboard."""
+    indexes = table.selectedIndexes()
+    if not indexes:
+        item = table.currentItem()
+        if item is None:
+            return False
+        QApplication.clipboard().setText(item.text())
+        return True
+    indexes = sorted(indexes, key=lambda idx: (idx.row(), idx.column()))
+    by_row: dict[int, dict[int, str]] = {}
+    for idx in indexes:
+        item = table.item(idx.row(), idx.column())
+        by_row.setdefault(idx.row(), {})[idx.column()] = item.text() if item else ""
+    lines = [
+        "\t".join(cols[c] for c in sorted(cols))
+        for _, cols in sorted(by_row.items())
+    ]
+    QApplication.clipboard().setText("\n".join(lines))
+    return True
+
+
+def _table_copy_context_menu(table: QTableWidget, pos) -> None:
+    menu = QMenu(table)
+    act = menu.addAction("Copy")
+    act.setShortcut(QKeySequence.Copy)
+    chosen = menu.exec_(table.viewport().mapToGlobal(pos))
+    if chosen == act:
+        copy_selected_table_text(table)
+
+
+def configure_readonly_copyable_table(table: QTableWidget) -> None:
+    """Read-only table: cell selection + Ctrl+C / context-menu Copy."""
+    table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    table.setSelectionMode(QAbstractItemView.ContiguousSelection)
+    table.setSelectionBehavior(QAbstractItemView.SelectItems)
+    table.setFocusPolicy(Qt.ClickFocus)
+    if getattr(table, _COPYABLE_TABLE_ATTR, False):
+        return
+    table.setContextMenuPolicy(Qt.CustomContextMenu)
+    table.customContextMenuRequested.connect(
+        lambda pos, t=table: _table_copy_context_menu(t, pos)
+    )
+    setattr(table, _COPYABLE_TABLE_ATTR, True)
+
+
+class _CopyableTablesFilter(QObject):
+    """Upgrade read-only NoSelection tables; handle Ctrl+C on focused tables."""
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt naming
+        if event.type() == QEvent.Polish and isinstance(obj, QTableWidget):
+            if (
+                obj.selectionMode() == QAbstractItemView.NoSelection
+                and obj.editTriggers() == QAbstractItemView.NoEditTriggers
+            ):
+                configure_readonly_copyable_table(obj)
+        elif event.type() == QEvent.KeyPress and isinstance(obj, QTableWidget):
+            if event.matches(QKeySequence.Copy) and copy_selected_table_text(obj):
+                return True
+        return False
+
+
+def _enable_copyable_tables(app: QApplication) -> None:
+    """Install once: read-only tables become selectable/copyable app-wide."""
+    if getattr(app, _COPYABLE_TABLES_FILTER_ATTR, None) is not None:
+        return
+    filt = _CopyableTablesFilter(app)
+    app.installEventFilter(filt)
+    setattr(app, _COPYABLE_TABLES_FILTER_ATTR, filt)
+
+
 def apply_quality_hint_style(widget, *, poor: bool) -> None:
     """Color a label (or similar) when quality/fit hints indicate a problem."""
     if poor:
@@ -87,7 +169,7 @@ def apply_quality_hint_style(widget, *, poor: bool) -> None:
 def apply_style(app: QApplication) -> None:
     """
     Apply a modern, readable theme (dark-ish neutral + blue accent) and a slightly larger font.
-    Also enables select-copy on all QLabels app-wide (no per-label flags needed).
+    Also enables select-copy on all QLabels and read-only QTableWidgets app-wide.
     """
     # Fusion respects palette + stylesheet on all platforms; the Windows native style
     # often keeps pale widget backgrounds while still using our light Text color.
@@ -95,6 +177,7 @@ def apply_style(app: QApplication) -> None:
     app.setStyle(_BrightSpinArrowStyle(base))
 
     _enable_selectable_labels(app)
+    _enable_copyable_tables(app)
 
     font = QFont()
     font.setPointSize(11)
