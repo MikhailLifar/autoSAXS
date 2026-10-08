@@ -25,6 +25,7 @@ SKILLS_NEED_ATSAS: Tuple[str, ...] = (
     "model_dam",
     "model_mixture",
     "process_monodisperse",
+    "process_polydisperse",
 )
 
 # Beamline / analysis skills that run without ATSAS.
