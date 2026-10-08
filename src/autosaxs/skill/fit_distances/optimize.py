@@ -1,20 +1,30 @@
-"""Guinier/Rg optimization and DATGNOM candidate helpers for fit_distances."""
+"""Guinier helpers and Shannon×α GNOM search for fit_distances."""
 
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
-import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from autosaxs.core.gnom import candidate_score, distribution_arrays, parse_gnom_out
+from autosaxs.core.gnom import distribution_arrays, parse_gnom_out
+from autosaxs.core.shape_score import (
+    ALPHA_GRID_N,
+    DMAX_GRID_N,
+    alpha_log10_grid,
+    extent_candidate_grid,
+    pick_best_by_score,
+    q_min_first_positive_nm,
+    shape_features_from_parsed,
+    shape_tight_extent_score,
+)
 
 from ..deps import EventBus, EventType
 from ..fit_guinier.guinier import run_guinier_analysis
 from .quality_io import _pr_metrics
-from .runners import _run_datgnom_once
+from .runners import _run_gnom_pr_once
 
 
 def _candidate_from_out_text(
@@ -28,11 +38,15 @@ def _candidate_from_out_text(
     rc: int,
     stderr: str,
     intermediate: bool,
+    alpha: Optional[float] = None,
+    extent_nm: Optional[float] = None,
 ) -> Dict[str, Any]:
     parsed = parse_gnom_out(out_text)
     total = parsed.get("total_estimate")
     suspicious = bool(parsed.get("suspicious"))
     rmax_nm = parsed.get("real_space_rmax")
+    if rmax_nm is None and extent_nm is not None:
+        rmax_nm = float(extent_nm)
     pr = parsed.get("distribution")
 
     diag: Dict[str, Any] = {"total_estimate": total}
@@ -61,11 +75,19 @@ def _candidate_from_out_text(
                     diag["smoothness"] = 1.0
             prm = _pr_metrics(np.asarray(r, dtype=float), p)
 
+    extent_for_feat = float(rmax_nm) if rmax_nm is not None else float(extent_nm or 0.0)
+    feats = shape_features_from_parsed(
+        parsed,
+        extent_requested_nm=extent_for_feat if extent_for_feat > 0 else 1.0,
+        rg_guinier_nm=float(rg_nm),
+    )
+
     cand: Dict[str, Any] = {
         "rg_nm": float(rg_nm),
         "first": int(first) if first is not None else None,
         "last": int(last) if last is not None else None,
         "smooth": float(smooth) if smooth is not None else None,
+        "alpha": float(alpha) if alpha is not None else feats.get("alpha"),
         "rmax_nm": rmax_nm,
         "suspicious": suspicious,
         "out_path": out_path,
@@ -75,8 +97,9 @@ def _candidate_from_out_text(
         "stderr": stderr,
         **diag,
         **prm,
+        **{k: v for k, v in feats.items() if k not in diag},
     }
-    cand["score"] = candidate_score(cand)
+    cand["score"] = shape_tight_extent_score(cand)
     return cand
 
 
@@ -113,108 +136,134 @@ def _q_to_first_point_1based(q_nm: np.ndarray, q_target: float) -> int:
     return idx + 1
 
 
-def _optimize_rg_nm(
+def _search_shannon_alpha_pr(
     *,
     atsas_dat_path: str,
     output_dir: str,
-    rg_max_nm: float,
+    q_nm: np.ndarray,
+    rg_guinier_nm: float,
     first: int,
     last: Optional[int],
-    smooth: float,
-    eval_tmp_path: str,
-    timeout_s: float = 30.0,
+    force_zero_rmin: str = "Y",
+    force_zero_rmax: str = "Y",
+    n_dmax: int = DMAX_GRID_N,
+    n_alpha: int = ALPHA_GRID_N,
     event_bus: Optional[EventBus] = None,
-) -> Tuple[float, List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
     """
-  1D bounded search for Rg in (rg_lo, 1.5 * rg_max_nm], maximizing TE − neg_frac per DATGNOM trial.
+    Joint Shannon-bound Dmax × log₁₀(α) monodisperse GNOM search.
+
+    Selection: ``shape_tight_extent`` (soft taper + non-neg + low wiggle − χ² − extent).
+    Returns ``(best_candidate, trials, failures, grid_meta)``.
     """
-    from scipy.optimize import minimize_scalar
+    rg = float(rg_guinier_nm)
+    if not (rg > 0 and np.isfinite(rg)):
+        raise ValueError(f"fit_distances: invalid rg_guinier_nm={rg_guinier_nm}")
 
-    rg_max_nm = float(rg_max_nm)
-    if rg_max_nm <= 0 or not np.isfinite(rg_max_nm):
-        raise ValueError(f"fit_distances: invalid rg_max from fit_guinier: {rg_max_nm}")
+    q_min = q_min_first_positive_nm(q_nm)
+    dmax_grid, grid_meta = extent_candidate_grid(
+        q_min_nm=q_min,
+        rg_guinier_nm=rg,
+        n=int(n_dmax),
+    )
+    a_grid = alpha_log10_grid(n=int(n_alpha))
+    grid_meta = dict(grid_meta)
+    grid_meta["alpha_log10_lo"] = float(a_grid[0])
+    grid_meta["alpha_log10_hi"] = float(a_grid[-1])
+    grid_meta["alpha_grid_n"] = int(len(a_grid))
+    grid_meta["score"] = "shape_tight_extent"
+    grid_meta["engine"] = "gnom_pr_fixed_alpha"
 
-    rg_lo = 1e-6
-    rg_hi = 1.5 * rg_max_nm
-    t0 = time.monotonic()
-    trials: List[Dict[str, Any]] = []
-    failures: List[Dict[str, Any]] = []
-    best_score = float("-inf")
-    best_rg: Optional[float] = None
-
-    def objective(rg: float) -> float:
-        nonlocal best_score, best_rg
-        if time.monotonic() - t0 > timeout_s:
-            return 1e10
-        rg_v = float(max(rg_lo, min(float(rg), rg_hi)))
-        ok, rc, stderr, out_text = _run_datgnom_once(
-            atsas_dat_path=atsas_dat_path,
-            output_dir=output_dir,
-            rg_nm=rg_v,
-            first=int(first),
-            last=last,
-            smooth=float(smooth),
-            out_path=eval_tmp_path,
-        )
-        if not ok:
-            failures.append(
-                {
-                    "rg_nm": rg_v,
-                    "first": int(first),
-                    "last": last,
-                    "smooth": float(smooth),
-                    "ok": False,
-                    "returncode": int(rc),
-                    "stderr": stderr,
-                }
-            )
-            if event_bus:
-                event_bus.publish(
-                    EventType.MESSAGE,
-                    {"text": f"DATGNOM (fit_distances): Rg trial failed at rg={rg_v:.4g} nm (rc={rc})."},
-                )
-            return 1e10
-        cand = _candidate_from_out_text(
-            out_text,
-            rg_nm=rg_v,
-            first=first,
-            last=last,
-            smooth=smooth,
-            out_path="",
-            rc=rc,
-            stderr=stderr,
-            intermediate=True,
-        )
-        trials.append(cand)
-        sc = float(cand["score"])
-        if sc > best_score:
-            best_score = sc
-            best_rg = rg_v
-        return -sc
-
+    n_total = int(len(dmax_grid) * len(a_grid))
     if event_bus:
         event_bus.publish(
             EventType.MESSAGE,
             {
                 "text": (
-                    f"DATGNOM (fit_distances): optimizing Rg in [{rg_lo:.4g}, {rg_hi:.4g}] nm "
-                    f"(30 s max)…"
+                    f"GNOM (fit_distances): Shannon×α search "
+                    f"Dmax∈[{float(dmax_grid[0]):.4g}, {float(dmax_grid[-1]):.4g}] nm "
+                    f"× log10(α)∈[{float(a_grid[0]):.3g}, {float(a_grid[-1]):.3g}] "
+                    f"({n_total} trials); pick by shape_tight_extent…"
                 ),
             },
         )
 
+    trials: List[Dict[str, Any]] = []
+    failures: List[Dict[str, Any]] = []
+    work_dir = tempfile.mkdtemp(prefix="fit_distances_shannon_", dir=output_dir)
     try:
-        minimize_scalar(
-            objective,
-            bounds=(rg_lo, rg_hi),
-            method="bounded",
-            options={"maxiter": 40},
-        )
-    except Exception:
+        done = 0
+        for dmax in dmax_grid:
+            for log_a in a_grid:
+                alpha = float(10.0 ** float(log_a))
+                out_name = f"dmax_{float(dmax):.6g}_log10a_{float(log_a):.6g}.out"
+                out_path = os.path.join(work_dir, out_name)
+                ok, rc, stderr, out_text = _run_gnom_pr_once(
+                    atsas_dat_path=atsas_dat_path,
+                    output_dir=work_dir,
+                    rmax_nm=float(dmax),
+                    first=int(first),
+                    last=last,
+                    alpha=alpha,
+                    force_zero_rmin=force_zero_rmin,
+                    force_zero_rmax=force_zero_rmax,
+                    out_path=out_path,
+                )
+                done += 1
+                if not ok or not out_text:
+                    failures.append(
+                        {
+                            "dmax_nm": float(dmax),
+                            "log10_alpha": float(log_a),
+                            "alpha": alpha,
+                            "ok": False,
+                            "returncode": int(rc),
+                            "stderr": stderr,
+                        }
+                    )
+                    continue
+                cand = _candidate_from_out_text(
+                    out_text,
+                    rg_nm=rg,
+                    first=first,
+                    last=last,
+                    smooth=None,
+                    out_path=out_path,
+                    rc=rc,
+                    stderr=stderr,
+                    intermediate=True,
+                    alpha=alpha,
+                    extent_nm=float(dmax),
+                )
+                cand["dmax_nm"] = float(dmax)
+                cand["log10_alpha"] = float(log_a)
+                trials.append(cand)
+                if event_bus and (done % 50 == 0 or done == n_total):
+                    event_bus.publish(
+                        EventType.MESSAGE,
+                        {"text": f"GNOM (fit_distances): Shannon×α progress {done}/{n_total}…"},
+                    )
+    finally:
+        # Keep outs only for diagnostics via trial paths until best is copied;
+        # wipe the scratch dir after we copy the winner in the caller if needed.
         pass
 
-    if best_rg is None:
+    best = pick_best_by_score(trials, shape_tight_extent_score)
+    if best is None:
+        shutil.rmtree(work_dir, ignore_errors=True)
         raise RuntimeError(
-            "fit_distances: Rg optimization produced no successful DATGNOM trial within 30 s."
+            "fit_distances: Shannon×α GNOM search produced no successful trial "
+            f"({len(failures)} failures)."
         )
-    return float(best_rg), trials, failures
+    best["search_workdir"] = work_dir
+    grid_meta["n_ok"] = len(trials)
+    grid_meta["n_fail"] = len(failures)
+    return best, trials, failures, grid_meta
+
+
+# Back-compat alias name used by older tests / callers.
+def _optimize_rg_nm(*_a, **_k):  # pragma: no cover - removed path
+    raise RuntimeError(
+        "fit_distances: Rg→DATGNOM optimization was replaced by Shannon×α GNOM + "
+        "shape_tight_extent; use _search_shannon_alpha_pr."
+    )

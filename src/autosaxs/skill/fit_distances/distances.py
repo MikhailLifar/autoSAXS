@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -34,7 +33,7 @@ from .artifacts import _finalize_fit_distances_failure, write_success_artifacts
 from .optimize import (
     _candidate_from_out_text,
     _guinier_from_profile,
-    _optimize_rg_nm,
+    _search_shannon_alpha_pr,
 )
 from autosaxs.skill.gnom_fit_common import (
     N_SHANNON_CAP_FIT_DISTANCES,
@@ -45,7 +44,6 @@ from .quality_io import _assess_and_write_pr_quality
 from autosaxs.core.atsas_gnom import normalize_force_zero
 from .runners import (
     GNOM_BEST_OUT,
-    _run_datgnom_once,
     _run_dmax_close_fit_ensemble,
     _run_gnom_pr_once,
     cleanup_legacy_best_outs,
@@ -71,22 +69,26 @@ def fit_distances(
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     r"""
-    SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve (real-space distance distribution).
+    SAXS / small-angle x-ray scattering: obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve via ATSAS GNOM (real-space distance distribution).
+
+    **Auto path** (when `dmax_nm` is omitted): Guinier \(R_g\) (tool only) → Shannon-bound \(D_{\max}\) grid \(\times\) \(\log_{10}\alpha\) joint monodisperse GNOM search → pick by interpretable **`shape_tight_extent`** score (soft taper, non‑negativity, low wiggle, χ² guardrail, extent band \(\sim 3.2\)–\(5\times R_g\)). Units: \(q\) in nm⁻¹, lengths in nm. Does **not** use Autorg→DATGNOM TOTAL selection (clarity over deposit‑Dmax matching).
+
+    **Refine path** (when `dmax_nm` is set): single GNOM `--rmax` run at the given Dmax (optional fixed `--alpha`), plus Dmax±10% close-fits ensemble unless `minimal=True`.
 
     ### Arguments
 
     - `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
     - `output_dir` (str, default `.`): Directory where the outputs are written (one subdirectory per input profile).
-    - `rg_nm` (float | None, default `None`): Expected Rg in nm, usually passed from Guinier analysis. If omitted, in-process Guinier analysis (`fit_guinier`) is run for an Rg span, then 1D Rg optimization in `[0, 1.5 × rg_max]` (30 s max) takes place.
-    - `first` (int | None, default `None`): DATGNOM `--first` (1-based point index). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
-    - `last` (int | None, default `None`): DATGNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
+    - `rg_nm` (float | None, default `None`): Guinier Rg in nm used to anchor the Shannon \(D_{\max}\) lower bound (\(2 R_g\)). If omitted, in-process Guinier analysis (`fit_guinier`) supplies Rg (and the Guinier interval for `--first` when needed).
+    - `first` (int | None, default `None`): GNOM `--first` (1-based point index). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
+    - `last` (int | None, default `None`): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
     - `q_min` (float | None, default `None`): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
     - `q_max` (float | None, default `None`): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`. When both `last` and `q_max` are omitted, a silent safer default is applied.
-    - `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`. Unused when `dmax_nm` is set (GNOM refine).
-    - `dmax_nm` (float | None, default `None`): When set, skip DATGNOM search and run monodisperse GNOM (`--rmax`) with this Dmax (nm). Still writes the Dmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
-    - `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted, GNOM chooses automatically. Ignored when `dmax_nm` is unset.
-    - `force_zero_rmin` (str | None, default `None`): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y` when refining.
-    - `force_zero_rmax` (str | None, default `None`): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y` when refining.
+    - `smooth` (float | None, default `None`): Legacy DATGNOM `--smooth` knob; **unused** on the current GNOM auto/refine paths (kept for API compatibility).
+    - `dmax_nm` (float | None, default `None`): When set, skip Shannon×α search and run monodisperse GNOM (`--rmax`) with this Dmax (nm). Still writes the Dmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
+    - `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted on refine, GNOM chooses automatically. On the auto Shannon×α path, α is searched on \(\log_{10}\alpha\in[-1,2.5]\) and this argument is ignored.
+    - `force_zero_rmin` (str | None, default `None`): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
+    - `force_zero_rmax` (str | None, default `None`): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y`.
     - `minimal` (bool, default `False`): When `True` with `dmax_nm` set, write only the single refine `.out` and remove any previous `ensemble/` (no close-fits / force-zero-off probe).
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
@@ -331,7 +333,6 @@ def _fit_distances_paths(
         fallback_q_min=fallback_q_min,
         skill_id="fit_distances",
     )
-    smooth_val = float(user_smooth) if user_smooth is not None else 2.0
 
     if user_dmax_nm is not None:
         dmax_f = float(user_dmax_nm)
@@ -487,94 +488,121 @@ def _fit_distances_paths(
     failures: List[Dict[str, Any]] = []
     rg_trials: List[Dict[str, Any]] = []
 
-    eval_tmp_path: Optional[str] = None
-    if user_rg_nm is None:
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                suffix=".out",
-                prefix="datgnom_eval_",
-                dir=output_dir,
-                delete=False,
-            ) as tf:
-                eval_tmp_path = tf.name
-        except Exception as e:
-            raise RuntimeError(f"fit_distances: failed to create temporary DATGNOM output file: {e}")
-        assert guinier_info is not None
-        try:
-            rg_nm, rg_trials, rg_failures = _optimize_rg_nm(
-                atsas_dat_path=atsas_dat_path,
-                output_dir=output_dir,
-                rg_max_nm=float(guinier_info["rg_max"]),
-                first=first_pt,
-                last=last_pt,
-                smooth=smooth_val,
-                eval_tmp_path=eval_tmp_path,
-                timeout_s=30.0,
-                event_bus=event_bus,
-            )
-        except RuntimeError as exc:
-            if eval_tmp_path:
-                try:
-                    os.remove(eval_tmp_path)
-                except OSError:
-                    pass
-            return _finalize_fit_distances_failure(
-                output_dir=output_dir,
-                profile=profile,
-                base=base,
-                atsas_dat_path=atsas_dat_path,
-                failure_reason="rg_optimization_no_success",
-                failures=failures,
-                candidates=candidates,
-                guinier_summary=guinier_summary,
-                event_bus=event_bus,
-                detail=str(exc),
-                q_nm=q_nm,
-                first_pt=first_pt,
-                rg_guinier_nm=rg_guinier_nm_val,
-            )
-        failures.extend(rg_failures)
-        candidates.extend(rg_trials)
-    else:
-        rg_nm = float(user_rg_nm)
+    if rg_guinier_nm_val is None or not (np.isfinite(float(rg_guinier_nm_val)) and float(rg_guinier_nm_val) > 0):
+        return _finalize_fit_distances_failure(
+            output_dir=output_dir,
+            profile=profile,
+            base=base,
+            atsas_dat_path=atsas_dat_path,
+            failure_reason="missing_rg_guinier",
+            failures=failures,
+            candidates=candidates,
+            guinier_summary=guinier_summary,
+            event_bus=event_bus,
+            detail="fit_distances auto path requires Guinier Rg (pass rg_nm or allow fit_guinier).",
+            q_nm=q_nm,
+            first_pt=first_pt,
+            rg_guinier_nm=rg_guinier_nm_val,
+        )
 
-    rg_nm = float(rg_nm)
+    rg_nm = float(rg_guinier_nm_val)
+    search_workdir: Optional[str] = None
+    try:
+        best_search, search_trials, search_failures, grid_meta = _search_shannon_alpha_pr(
+            atsas_dat_path=atsas_dat_path,
+            output_dir=output_dir,
+            q_nm=q_nm,
+            rg_guinier_nm=rg_nm,
+            first=first_pt,
+            last=last_pt,
+            force_zero_rmin=fz_rmin,
+            force_zero_rmax=fz_rmax,
+            event_bus=event_bus,
+        )
+    except RuntimeError as exc:
+        return _finalize_fit_distances_failure(
+            output_dir=output_dir,
+            profile=profile,
+            base=base,
+            atsas_dat_path=atsas_dat_path,
+            failure_reason="shannon_alpha_search_no_success",
+            failures=failures,
+            candidates=candidates,
+            guinier_summary=guinier_summary,
+            event_bus=event_bus,
+            detail=str(exc),
+            q_nm=q_nm,
+            first_pt=first_pt,
+            rg_guinier_nm=rg_guinier_nm_val,
+        )
+    failures.extend(search_failures)
+    # Keep a compact trial summary in the log (full 341 rows are heavy).
+    rg_trials = [
+        {
+            "dmax_nm": t.get("dmax_nm"),
+            "log10_alpha": t.get("log10_alpha"),
+            "alpha": t.get("alpha"),
+            "score": t.get("score"),
+            "total_estimate": t.get("total_estimate"),
+            "neg_frac": t.get("neg_frac"),
+            "chi2_med": t.get("chi2_med"),
+            "d_over_rg": t.get("d_over_rg"),
+            "intermediate": True,
+        }
+        for t in search_trials
+    ]
+    candidates.extend(rg_trials)
+    search_workdir = best_search.get("search_workdir")
+
+    dmax_best_f = float(best_search.get("dmax_nm") or best_search.get("rmax_nm"))
+    alpha_best = best_search.get("alpha")
+    try:
+        alpha_f = float(alpha_best) if alpha_best is not None else None
+    except (TypeError, ValueError):
+        alpha_f = None
+
     last_msg = f" --last={last_pt}" if last_pt is not None else " (no --last)"
+    alpha_msg = f" --alpha={alpha_f:.6g}" if alpha_f is not None else " (auto alpha)"
     if event_bus:
         event_bus.publish(
             EventType.MESSAGE,
             {
                 "text": (
-                    f"DATGNOM (fit_distances): final run --first={first_pt}{last_msg} "
-                    f"--smooth={smooth_val:.6g} Rg={rg_nm:.4f} nm…"
+                    f"GNOM (fit_distances): final run --rmax={dmax_best_f:.4g} nm "
+                    f"--first={first_pt}{last_msg}{alpha_msg} "
+                    f"(shape_tight_extent score={float(best_search.get('score', float('nan'))):.4g}; "
+                    f"grid ok={grid_meta.get('n_ok')}/{grid_meta.get('n_ok', 0) + grid_meta.get('n_fail', 0)})…"
                 ),
             },
         )
 
     out_path_final = os.path.join(output_dir, GNOM_BEST_OUT)
-    ok, rc, stderr, out_text = _run_datgnom_once(
+    ok, rc, stderr, out_text = _run_gnom_pr_once(
         atsas_dat_path=atsas_dat_path,
         output_dir=output_dir,
-        rg_nm=rg_nm,
+        rmax_nm=dmax_best_f,
         first=first_pt,
         last=last_pt,
-        smooth=smooth_val,
+        alpha=alpha_f,
+        force_zero_rmin=fz_rmin,
+        force_zero_rmax=fz_rmax,
         out_path=out_path_final,
     )
     cleanup_legacy_best_outs(output_dir, keep=out_path_final)
+    if search_workdir:
+        try:
+            import shutil
+
+            shutil.rmtree(search_workdir, ignore_errors=True)
+        except OSError:
+            pass
     if not ok:
-        if eval_tmp_path:
-            try:
-                os.remove(eval_tmp_path)
-            except OSError:
-                pass
         failures.append(
             {
-                "rg_nm": float(rg_nm),
+                "dmax_nm": dmax_best_f,
+                "alpha": alpha_f,
                 "first": first_pt,
                 "last": last_pt,
-                "smooth": smooth_val,
                 "ok": False,
                 "returncode": int(rc),
                 "stderr": stderr,
@@ -602,12 +630,15 @@ def _fit_distances_paths(
         rg_nm=rg_nm,
         first=first_pt,
         last=last_pt,
-        smooth=smooth_val,
+        smooth=None,
         out_path=out_path_final,
         rc=rc,
         stderr=stderr,
         intermediate=False,
+        alpha=alpha_f,
+        extent_nm=dmax_best_f,
     )
+    best["grid_meta"] = grid_meta
     candidates.append(best)
 
     # Close-fits Dmax ensemble + force-zero-off validation (saved artifacts).
@@ -620,22 +651,12 @@ def _fit_distances_paths(
         "force_zero_off_parsed": None,
     }
     dmax_validation: Optional[Dict[str, Any]] = None
-    dmax_best = best.get("rmax_nm")
-    try:
-        dmax_best_f = float(dmax_best) if dmax_best is not None else float("nan")
-    except (TypeError, ValueError):
-        dmax_best_f = float("nan")
     if np.isfinite(dmax_best_f) and dmax_best_f > 0:
         best_parsed_for_alpha = parse_gnom_out(out_text)
-        alpha_best = best_parsed_for_alpha.get("current_alpha")
-        try:
-            alpha_f = float(alpha_best) if alpha_best is not None else None
-        except (TypeError, ValueError):
-            alpha_f = None
         if event_bus:
             event_bus.publish(
                 EventType.MESSAGE,
-                {"text": f"DATGNOM (fit_distances): Dmax ensemble around {dmax_best_f:.4g} nm…"},
+                {"text": f"GNOM (fit_distances): Dmax ensemble around {dmax_best_f:.4g} nm…"},
             )
         ensemble_info = _run_dmax_close_fit_ensemble(
             atsas_dat_path=atsas_dat_path,
@@ -669,12 +690,6 @@ def _fit_distances_paths(
         event_bus=event_bus,
         dmax_validation=dmax_validation,
     )
-
-    if eval_tmp_path:
-        try:
-            os.remove(eval_tmp_path)
-        except OSError:
-            pass
 
     return write_success_artifacts(
         profile=profile,
