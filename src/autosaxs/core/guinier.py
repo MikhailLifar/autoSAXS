@@ -23,6 +23,19 @@ ADAPTIVE_I_START_INDEX_MAX = 50
 ADAPTIVE_SELECTION_R2_MIN = 0.5
 ADAPTIVE_VALIDATED_STRONG_R2 = 0.85
 
+# Classical (Shannon-style) Guinier search + interpretable score — product default.
+# Hard gate: q·Rg ≤ CLASSICAL_QRG_CAP. Soft fail-soft stages share one score.
+CLASSICAL_N_MIN = 5
+CLASSICAL_MAX_PTS = 80
+CLASSICAL_QRG_CAP = 1.3
+CLASSICAL_R2_FLOOR = 0.75
+CLASSICAL_W_N = 0.10          # + ln(n_points)
+CLASSICAL_W_QRG = 0.10        # + min(qRg, cap)/cap  (use classical band)
+CLASSICAL_W_START_RG = 0.25   # − q_min·Rg           (prefer near-origin start)
+CLASSICAL_W_RESID = 0.10      # − |corr(q², resid)|
+CLASSICAL_W_CURV = 0.05       # − quadratic curvature proxy
+CLASSICAL_W_QRG_EXCESS = 2.0  # − max(0, qRg−cap)/cap (fail-soft stage only)
+
 
 def _parse_optional_float(token: str) -> Optional[float]:
     s = str(token).strip()
@@ -810,6 +823,233 @@ def _degenerate_adaptive_fallback(
         "fit_quality": interval_r2 if np.isnan(val_r2) else float(max(val_r2, interval_r2)),
         "n_candidates": 0,
         "degenerate": True,
+    }
+
+
+def _classical_candidate_extras(
+    q: np.ndarray,
+    I: np.ndarray,
+    fit: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Attach qRg, q_start·Rg, residual slope, and curvature proxies to a raw interval fit."""
+    out = dict(fit)
+    rg = float(out["rg"])
+    q_min = float(out["q_min"])
+    q_max = float(out["q_max"])
+    i_start = int(out["i_start"])
+    n_pts = int(out["n_points"])
+    out["qrg"] = q_max * rg
+    out["q_start_rg"] = q_min * rg
+    xs = q[i_start : i_start + n_pts] ** 2
+    ys = np.log(I[i_start : i_start + n_pts])
+    slope = -(rg ** 2) / 3.0
+    i0 = float(out["i0"])
+    intercept = float(np.log(i0)) if i0 > 0 else 0.0
+    resid = ys - (intercept + slope * xs)
+    if n_pts >= 4:
+        try:
+            a2, _a1, _a0 = np.polyfit(xs, ys, 2)
+            out["curvature"] = abs(float(a2)) * (float(xs[-1] - xs[0]) ** 2)
+        except Exception:
+            out["curvature"] = 0.0
+    else:
+        out["curvature"] = 0.0
+    if n_pts >= 3 and float(np.std(xs)) > 0 and float(np.std(resid)) > 0:
+        out["resid_slope"] = abs(float(np.corrcoef(xs, resid)[0, 1]))
+    else:
+        out["resid_slope"] = 0.0
+    return out
+
+
+def _enumerate_classical_candidates(
+    q: np.ndarray,
+    I: np.ndarray,
+    sigma: Optional[np.ndarray] = None,
+    *,
+    n_min: int = CLASSICAL_N_MIN,
+    max_pts: int = CLASSICAL_MAX_PTS,
+) -> List[Dict[str, Any]]:
+    """
+    Sliding Guinier windows (same start bounds as adaptive) with classical extras.
+
+    Bounds: n ∈ [n_min, max_pts]; start allowed if q_start < 1 nm⁻¹ or index < 50.
+    """
+    q = np.asarray(q, dtype=float)
+    I = np.asarray(I, dtype=float)
+    if sigma is not None:
+        sigma = np.asarray(sigma, dtype=float)
+    valid = I > 0
+    if np.sum(valid) < n_min:
+        return []
+    q, I = q[valid], I[valid]
+    if sigma is not None:
+        sigma = sigma[valid]
+    n = len(q)
+    candidates: List[Dict[str, Any]] = []
+    for i_start in range(0, max(0, n - n_min + 1)):
+        if not _adaptive_i_start_allowed(q, i_start):
+            continue
+        for n_pts in range(n_min, min(max_pts, n - i_start) + 1):
+            fit = _fit_guinier_interval_raw(q, I, sigma, i_start, n_pts)
+            if fit is None:
+                continue
+            cand = _classical_candidate_extras(q, I, fit)
+            cand["validation_r2"] = _validation_r2_or_nan(q, I, cand["rg"], cand["i0"])
+            candidates.append(cand)
+    return candidates
+
+
+def classical_guinier_score(
+    cand: Dict[str, Any],
+    *,
+    qrg_cap: float = CLASSICAL_QRG_CAP,
+    w_n: float = CLASSICAL_W_N,
+    w_qrg: float = CLASSICAL_W_QRG,
+    w_start_rg: float = CLASSICAL_W_START_RG,
+    w_resid: float = CLASSICAL_W_RESID,
+    w_curv: float = CLASSICAL_W_CURV,
+    w_qrg_excess: float = CLASSICAL_W_QRG_EXCESS,
+) -> float:
+    """
+    Interpretable Shannon-classical Guinier score (higher is better).
+
+    score = R²_interval
+          + w_n · ln(n)
+          + w_qrg · min(qRg, cap)/cap
+          − w_start_rg · (q_min · Rg)
+          − w_resid · |corr(q², residual)|
+          − w_curv · curvature
+          − w_qrg_excess · max(0, qRg − cap)/cap
+    """
+    qrg = float(cand["qrg"])
+    use = min(qrg, qrg_cap) / qrg_cap
+    excess = max(0.0, qrg - qrg_cap) / qrg_cap
+    return (
+        float(cand["interval_r2"])
+        + w_n * float(np.log(max(int(cand["n_points"]), 1)))
+        + w_qrg * use
+        - w_start_rg * float(cand["q_start_rg"])
+        - w_resid * float(cand.get("resid_slope", 0.0))
+        - w_curv * min(float(cand.get("curvature", 0.0)), 5.0)
+        - w_qrg_excess * excess
+    )
+
+
+def _select_classical_candidate(
+    candidates: List[Dict[str, Any]],
+    *,
+    qrg_cap: float = CLASSICAL_QRG_CAP,
+    r2_floor: float = CLASSICAL_R2_FLOOR,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    """
+    One procedure, staged gates (same score throughout — not a method hybrid):
+
+    1. ``qrg_r2``: q·Rg ≤ cap and interval R² ≥ floor
+    2. ``qrg``: q·Rg ≤ cap (any R²)
+    3. ``best_available``: all physical candidates (qRg excess penalized in score)
+    """
+    if not candidates:
+        return None, "best_available"
+
+    def score(c: Dict[str, Any]) -> float:
+        return classical_guinier_score(c, qrg_cap=qrg_cap)
+
+    stages: List[Tuple[str, Any]] = [
+        ("qrg_r2", lambda c: float(c["qrg"]) <= qrg_cap and float(c["interval_r2"]) >= r2_floor),
+        ("qrg", lambda c: float(c["qrg"]) <= qrg_cap),
+        ("best_available", lambda c: True),
+    ]
+    for mode, gate in stages:
+        pool = [c for c in candidates if gate(c)]
+        if pool:
+            best = max(pool, key=score)
+            out = dict(best)
+            out["score"] = score(best)
+            return out, mode
+    return None, "best_available"
+
+
+def run_classical_guinier(
+    q: np.ndarray,
+    I: np.ndarray,
+    sigma: Optional[np.ndarray] = None,
+) -> Dict[str, Any]:
+    """
+    Classical Guinier window search with an interpretable Shannon-style score.
+
+    Enumerates sliding windows under the same start bounds as adaptive, gates by
+    classical ``q·Rg ≤ 1.3``, and picks by :func:`classical_guinier_score`
+    (linearity, band use, low-q start, residual structure). Fail-soft stages
+    widen gates but keep the same score — not a hybrid with ATSAS autorg.
+
+    Always returns Rg, interval, fit_quality, quality_class, classification,
+    rg_min, rg_max (degenerate 4-point fallback if enumeration is empty).
+    """
+    q = np.asarray(q, dtype=float)
+    I = np.asarray(I, dtype=float)
+    if sigma is not None:
+        sigma = np.asarray(sigma, dtype=float)
+
+    candidates = _enumerate_classical_candidates(q, I, sigma)
+    degenerate = False
+
+    if candidates:
+        rg_min = float(min(c["rg"] for c in candidates))
+        rg_max = float(max(c["rg"] for c in candidates))
+        chosen, selection_mode = _select_classical_candidate(candidates)
+        assert chosen is not None
+    else:
+        degenerate = True
+        fb = _degenerate_adaptive_fallback(q, I, sigma, n_min=CLASSICAL_N_MIN)
+        chosen = fb
+        selection_mode = fb["selection_mode"]
+        rg_min = fb["rg_min"]
+        rg_max = fb["rg_max"]
+        candidates = []
+
+    rg = float(chosen["rg"])
+    i0 = float(chosen["i0"])
+    interval_r2 = float(chosen.get("interval_r2", chosen.get("r_squared", 0.0)))
+    scored = evaluate_guinier_fit(
+        q,
+        I,
+        rg=rg,
+        i0=i0,
+        interval_r2=interval_r2,
+        degenerate=degenerate,
+    )
+    val_r2_out = scored["validation_r2"]
+    fit_quality = float(scored["fit_quality"])
+    quality_class = str(scored["quality_class"])
+    classification = scored["classification"]
+    q_max = float(chosen["q_max"])
+    qrg = float(chosen.get("qrg", q_max * rg))
+    return {
+        "Rg": rg,
+        "I0": i0,
+        "n_points": int(chosen["n_points"]),
+        "fit_quality": fit_quality,
+        "guinier_interval": (float(chosen["q_min"]), q_max),
+        "interval_r2": float(interval_r2),
+        "validation_r2": val_r2_out,
+        "sigma_rg": chosen.get("sigma_rg"),
+        "sigma_i0": chosen.get("sigma_i0"),
+        "rg_min": rg_min,
+        "rg_max": rg_max,
+        "selection_mode": selection_mode,
+        "quality_class": quality_class,
+        "classification": classification,
+        "n_candidates": len(candidates),
+        "i_start": chosen.get("i_start"),
+        "qrg": qrg,
+        "q_start_rg": (
+            float(chosen["q_start_rg"])
+            if chosen.get("q_start_rg") is not None
+            else float(chosen["q_min"]) * rg
+        ),
+        "score": float(chosen["score"]) if chosen.get("score") is not None else None,
+        "resid_slope": chosen.get("resid_slope"),
+        "curvature": chosen.get("curvature"),
     }
 
 
