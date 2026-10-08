@@ -96,7 +96,6 @@ def process_polydisperse(
     profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
-    frames_dir: Optional[str] = None,
     config_path: Optional[ConfigPathExpressionArg] = None,
     first: Optional[int] = None,
     last: Optional[int] = None,
@@ -111,22 +110,23 @@ def process_polydisperse(
     (Guinier → GNOM D(R) / size-distribution passport → optional MIXTURE when requested and
     D(R) quality gates pass → per-sample PDF report).
 
-    Accepts either subtracted ``.dat`` profiles (``profile``) **or** a TIFF frames
-    directory (``frames_dir`` + YAML config) that runs calibrate → integrate →
-    average-as-needed → subtract before this analysis chain. For a directory-only
-    CLI entry that reads ``analysis: mono|poly`` from config, prefer
-    ``process_directory``.
+    **First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
+    **and** a pipeline config is available (``config.conf`` in that dir, or
+    ``config_path`` / ``--conf``), run the TIFF full pipeline (calibrate → integrate →
+    average as needed → subtract via ``buffer_rules``) then analyze each subtracted
+    ``.dat``. Otherwise treat ``profile`` as subtracted ``.dat`` path(s) (backward
+    compatible). TIFF dir without config → clear ``FileNotFoundError`` (not silent
+    fallthrough). Explicit folder+config router: ``process_full`` (reads
+    ``analysis: mono|poly``).
 
     ### Arguments
 
-    - `profile` (str): 1D path expression (file/directory/glob of `*.dat`). Directories expand non-recursively.
-      Ignored when `frames_dir` is set (still required by the CLI signature; pass any placeholder).
+    - `profile` (str): Subtracted 1D path expression (file/directory/glob of `*.dat`),
+      **or** a TIFF frames directory (see inference above). Directories expand
+      non-recursively for ``.dat`` mode.
     - `output_dir` (str, default `.`): Pipeline root; leaf skills write under subdirectories here.
-    - `frames_dir` (str | None, default `None`): Optional directory of TIFF frames. When set, run the
-      YAML-driven TIFF front-end (`tiff_pipeline`) then analyze each subtracted curve. Config default:
-      ``<frames_dir>/config.conf``.
     - `config_path` (str | None, default `None`): Optional YAML config forwarded to leaf skills
-      (and to the TIFF front-end when `frames_dir` is set).
+      (and required for TIFF full-pipeline inference when ``<dir>/config.conf`` is absent).
     - `first` / `last` (int | None): Optional fixed Guinier interval (1-based); both required together.
       Guinier `first` is forwarded to `fit_sizes` when set (or when auto-Guinier succeeds); Guinier
       `last` is **not** passed to GNOM D(R) (same narrow-window rule as mono DATGNOM).
@@ -151,7 +151,7 @@ def process_polydisperse(
     - `fit_sizes`: Return dict from `fit_sizes`.
     - `model_mixture`: Return dict from `model_mixture` (empty dict when skipped).
     - `report_individual`: Return dict from `report_individual`.
-    - `tiff_front` (only when `frames_dir` was set): TIFF front-end return dict.
+    - `tiff_front` (only when TIFF full pipeline ran): TIFF front-end return dict.
 
     ### Python usage
 
@@ -164,25 +164,27 @@ def process_polydisperse(
     )
     print(out["report_pdf_path"])
 
-    # TIFF directory + config.conf (analysis chain forced to poly):
-    out = process_polydisperse(".", output_dir="poly_out", frames_dir="/data/run01")
+    # TIFF directory + config.conf (poly analysis after subtract):
+    out = process_polydisperse("/data/run01", output_dir="poly_out")
     ```
 
     ### CLI usage
 
     ```bash
     autosaxs process-polydisperse subtracted/sub_sample_01.dat --output-dir poly_out
-    # TIFF directory → report (reads analysis from config):
-    autosaxs process-directory /data/run01 --conf /data/run01/config.conf -o poly_out
+    autosaxs process-polydisperse /data/run01 --conf /data/run01/config.conf -o poly_out
+    # or explicit folder+config router (reads analysis: mono|poly):
+    autosaxs process-full /data/run01 --conf /data/run01/config.conf -o poly_out
     ```
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
 
-    tiff_front: Optional[Dict[str, Any]] = None
-    if frames_dir:
-        from .tiff_pipeline import run_tiff_to_subtracted
+    from .tiff_pipeline import resolve_frames_dir_for_tiff_pipeline, run_tiff_to_subtracted
 
+    tiff_front: Optional[Dict[str, Any]] = None
+    frames_dir = resolve_frames_dir_for_tiff_pipeline(profile, config_path)
+    if frames_dir is not None:
         if bus:
             bus.publish(EventType.MESSAGE, {"text": "process_polydisperse: TIFF front-end…"})
         tiff_front = run_tiff_to_subtracted(

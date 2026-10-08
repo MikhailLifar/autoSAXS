@@ -1,9 +1,13 @@
 """
-YAML-driven TIFF → subtracted-1D front-end for meta-skills / ``process_directory``.
+YAML-driven TIFF → subtracted-1D front-end for meta-skills / ``process_full``.
 
 Config schema, classification, and pairing rules: see Project doc
 ``docs/tiff-to-report-config.md`` (agent store) and skill docstrings on
-``process_directory``.
+``process_full`` / ``process_monodisperse`` / ``process_polydisperse``.
+
+First-arg inference (mono/poly): when the profile path is a directory that
+contains TIFFs and a pipeline config is available, run this front-end before
+analysis. See ``resolve_frames_dir_for_tiff_pipeline``.
 """
 
 from __future__ import annotations
@@ -82,6 +86,89 @@ def resolve_tiff_config_path(
             f"(pass --conf / config_path, or place {DEFAULT_CONFIG_BASENAME} in the frames directory)"
         )
     return candidate
+
+
+def find_optional_tiff_config_path(
+    frames_dir: str,
+    config_path: Optional[ConfigPathExpressionArg] = None,
+) -> Optional[str]:
+    """
+    Like ``resolve_tiff_config_path``, but returns ``None`` when no config exists.
+
+    Used for first-arg inference (do not raise until TIFF mode is confirmed).
+    """
+    resolved = resolve_optional_config_path(config_path)
+    if resolved:
+        return resolved
+    candidate = default_config_path_for_frames_dir(frames_dir)
+    if os.path.isfile(candidate):
+        return candidate
+    return None
+
+
+def directory_has_tiffs(path: str) -> bool:
+    """True if ``path`` is a directory with ≥1 non-recursive ``.tif`` / ``.tiff``."""
+    root = os.path.abspath(os.path.expanduser(str(path)))
+    if not os.path.isdir(root):
+        return False
+    try:
+        return bool(list_tiff_files(root))
+    except NotADirectoryError:
+        return False
+
+
+def resolve_frames_dir_for_tiff_pipeline(
+    profile: Any,
+    config_path: Optional[ConfigPathExpressionArg] = None,
+) -> Optional[str]:
+    """
+    Decide whether the first path argument should trigger the TIFF full pipeline.
+
+    **Trigger (all must hold):**
+
+    1. ``profile`` is a single ``str`` / ``Path`` naming an existing directory
+       (not a glob, comma-list, path-expression object, or list of paths).
+    2. That directory contains ≥1 ``.tif`` / ``.tiff`` (non-recursive).
+    3. A YAML config is available: explicit ``config_path`` that resolves to an
+       existing file, **or** ``<dir>/config.conf``.
+
+    Returns the absolute frames directory when triggered, else ``None``
+    (caller keeps backward-compatible subtracted-``.dat`` analysis).
+
+    **Hard error (not silent fallthrough):** directory contains TIFFs but no
+    config is available → ``FileNotFoundError`` with guidance to pass ``--conf``
+    or place ``config.conf``. Prefer clear failure over treating leftover ``.dat``
+    files as the intended input when TIFFs are present.
+
+    **Edge cases (documented for callers):**
+
+    - Mixed TIFF + ``.dat`` in one dir **with** config → TIFF full pipeline;
+      loose ``.dat`` files in the frames dir are ignored by the front-end.
+    - Mixed TIFF + ``.dat`` **without** config → error (same as TIFF-only without config).
+    - ``.dat``-only dir / file / glob → ``None`` (analysis only).
+    - Multiple calibrant matches → lexicographically first basename (see ``classify_tiffs``).
+    """
+    if isinstance(profile, (list, tuple)):
+        return None
+    if not isinstance(profile, (str, Path)):
+        return None
+    raw = str(profile).strip()
+    if not raw or "," in raw or any(ch in raw for ch in "*?[]"):
+        return None
+    frames_dir = os.path.abspath(os.path.expanduser(raw))
+    if not os.path.isdir(frames_dir):
+        return None
+    if not directory_has_tiffs(frames_dir):
+        return None
+    conf = find_optional_tiff_config_path(frames_dir, config_path)
+    if conf is None:
+        raise FileNotFoundError(
+            f"Directory {frames_dir!r} contains TIFF frames but no pipeline config. "
+            f"Place {DEFAULT_CONFIG_BASENAME} in that directory or pass --conf / config_path. "
+            f"(TIFF full-pipeline mode requires a config; for analysis-only, pass subtracted "
+            f".dat path(s) or a directory that contains only .dat files.)"
+        )
+    return frames_dir
 
 
 def load_tiff_pipeline_config(config_path: str) -> TiffPipelineConfig:

@@ -51,22 +51,26 @@ See the docstring section **Returns** below.
 
 ## Autosaxs skill docstring
 
-SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtain a size distribution function \(D(R)\) for a polydisperse system from a 1D SAXS curve.
+SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtain a size distribution function \(D(R)\) / \(D_v(R)\) for a polydisperse system from a 1D SAXS curve.
+
+**Auto path** (when `rmax_nm` is omitted): Guinier \(R_g\) (scale tool) → Shannon-bound \(R_{\max}\) grid \(\times\) \(\log_{10}\alpha\) joint GNOM search → pick by **`shape_tight_extent_dr`** (same soft-taper / non‑neg / low-wiggle / χ² philosophy as monodisperse `fit_distances`, with an adapted \(R_{\max}/R_g\) extent band for size distributions). Units: \(q\) in nm⁻¹, lengths in nm.
+
+**Refine path** (when `rmax_nm` is set): single GNOM `--rmax` at the given Rmax, plus Rmax±10% close-fits ensemble unless `minimal=True`.
 
 ### Arguments
 
 - `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where the outputs are written (one subdirectory per input profile).
 - `shape` (str, default `spheres`): Polydisperse system model. Options: `spheres` (GNOM `--system=1` volume distribution for solid spheres), `rods` (GNOM `--system=5` length distribution for long cylinders, requires `rad56_nm` cylinder radius, deprecated), `ellipsoids` (accepted for API compatibility but **not supported by GNOM command-line** (GNOM system 2 is interactive-only), the skill will raise a clear error if selected).
-- `rg_nm` (float | None): Optional metadata only (not passed to GNOM); recorded in outputs if set.
-- `rmin_nm` (float | None): GNOM `--rmin` (nm). If omitted, not passed to GNOM.
-- `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, optimized in `[ε, 3 × rg_max]` from in-process `fit_guinier` (30 s max). When set, skip Rmax search but still write the Rmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
+- `rg_nm` (float | None): Optional Guinier Rg (nm) recorded in outputs. Auto search uses in-process `fit_guinier` Rg when `rmax_nm` is omitted (this argument alone does not drive the grid).
+- `rmin_nm` (float | None): GNOM `--rmin` (nm). If omitted, not passed to GNOM. When set on the auto path, also floors the Shannon Rmax grid.
+- `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, Shannon×α search (see above). When set, skip Rmax search but still write the Rmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
 - `rad56_nm` (float | None): GNOM `--rad56` for `shape=rods` (nm cylinder radius), deprecated. Ignored for spheres.
 - `first` (int | None): GNOM `--first` (1-based). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
 - `last` (int | None): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
 - `q_min` (float | None): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
 - `q_max` (float | None): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`. When both `last` and `q_max` are omitted, a silent safer default is applied.
-- `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
+- `alpha` (float | None): GNOM `--alpha`. On auto path: if omitted, searched on \(\log_{10}\alpha\in[-1,2.5]\); if set, Rmax is still Shannon-gridded at that fixed α. On refine path: passed through (GNOM auto if omitted).
 - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
 - `force_zero_rmin` (str | None): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
 - `force_zero_rmax` (str | None): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y`.
@@ -76,8 +80,8 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtai
 ### Short parameter list
 
 - shape: shape of the polydisperse system particles, currently only spheres supported
-- rad56_nm: depricated, has no effect
-- alpha: regularization parameter, auto-optimized if not set
+- rad56_nm: deprecated, has no effect for spheres
+- alpha: regularization parameter; joint-searched on auto path if unset
 - nr: number of fitted points, stick to the default
 
 ### Returns

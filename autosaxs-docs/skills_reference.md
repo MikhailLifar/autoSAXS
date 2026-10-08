@@ -523,22 +523,26 @@ autosaxs analyze-kratky subtracted/sub_sample_01.dat --rg-nm 3.2 --i0 1.05 --out
 
 ## `fit_distances`
 
-SAXS / small-angle x-ray scattering: run ATSAS DATGNOM to obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve (real-space distance distribution).
+SAXS / small-angle x-ray scattering: obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve via ATSAS GNOM (real-space distance distribution).
+
+**Auto path** (when `dmax_nm` is omitted): Guinier \(R_g\) (tool only) → Shannon-bound \(D_{\max}\) grid \(\times\) \(\log_{10}\alpha\) joint monodisperse GNOM search → pick by interpretable **`shape_tight_extent`** score (soft taper, non‑negativity, low wiggle, χ² guardrail, extent band \(\sim 3.2\)–\(5\times R_g\)). Units: \(q\) in nm⁻¹, lengths in nm. Does **not** use Autorg→DATGNOM TOTAL selection (clarity over deposit‑Dmax matching).
+
+**Refine path** (when `dmax_nm` is set): single GNOM `--rmax` run at the given Dmax (optional fixed `--alpha`), plus Dmax±10% close-fits ensemble unless `minimal=True`.
 
 ### Arguments
 
 - `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where the outputs are written (one subdirectory per input profile).
-- `rg_nm` (float | None, default `None`): Expected Rg in nm, usually passed from Guinier analysis. If omitted, in-process Guinier analysis (`fit_guinier`) is run for an Rg span, then 1D Rg optimization in `[0, 1.5 × rg_max]` (30 s max) takes place.
-- `first` (int | None, default `None`): DATGNOM `--first` (1-based point index). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
-- `last` (int | None, default `None`): DATGNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
+- `rg_nm` (float | None, default `None`): Guinier Rg in nm used to anchor the Shannon \(D_{\max}\) lower bound (\(2 R_g\)). If omitted, in-process Guinier analysis (`fit_guinier`) supplies Rg (and the Guinier interval for `--first` when needed).
+- `first` (int | None, default `None`): GNOM `--first` (1-based point index). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
+- `last` (int | None, default `None`): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
 - `q_min` (float | None, default `None`): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
 - `q_max` (float | None, default `None`): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`. When both `last` and `q_max` are omitted, a silent safer default is applied.
-- `smooth` (float | None, default `None`): DATGNOM `--smooth`. If omitted, defaults to `2.0`. Unused when `dmax_nm` is set (GNOM refine).
-- `dmax_nm` (float | None, default `None`): When set, skip DATGNOM search and run monodisperse GNOM (`--rmax`) with this Dmax (nm). Still writes the Dmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
-- `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted, GNOM chooses automatically. Ignored when `dmax_nm` is unset.
-- `force_zero_rmin` (str | None, default `None`): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y` when refining.
-- `force_zero_rmax` (str | None, default `None`): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y` when refining.
+- `smooth` (float | None, default `None`): Legacy DATGNOM `--smooth` knob; **unused** on the current GNOM auto/refine paths (kept for API compatibility).
+- `dmax_nm` (float | None, default `None`): When set, skip Shannon×α search and run monodisperse GNOM (`--rmax`) with this Dmax (nm). Still writes the Dmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
+- `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted on refine, GNOM chooses automatically. On the auto Shannon×α path, α is searched on \(\log_{10}\alpha\in[-1,2.5]\) and this argument is ignored.
+- `force_zero_rmin` (str | None, default `None`): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
+- `force_zero_rmax` (str | None, default `None`): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y`.
 - `minimal` (bool, default `False`): When `True` with `dmax_nm` set, write only the single refine `.out` and remove any previous `ensemble/` (no close-fits / force-zero-off probe).
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
@@ -609,22 +613,26 @@ autosaxs fit_distances subtracted/sub_sample_01.dat --dmax-nm 8.5 --first 10 --a
 
 ## `fit_sizes`
 
-SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtain a size distribution function \(D(R)\) for a polydisperse system from a 1D SAXS curve.
+SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtain a size distribution function \(D(R)\) / \(D_v(R)\) for a polydisperse system from a 1D SAXS curve.
+
+**Auto path** (when `rmax_nm` is omitted): Guinier \(R_g\) (scale tool) → Shannon-bound \(R_{\max}\) grid \(\times\) \(\log_{10}\alpha\) joint GNOM search → pick by **`shape_tight_extent_dr`** (same soft-taper / non‑neg / low-wiggle / χ² philosophy as monodisperse `fit_distances`, with an adapted \(R_{\max}/R_g\) extent band for size distributions). Units: \(q\) in nm⁻¹, lengths in nm.
+
+**Refine path** (when `rmax_nm` is set): single GNOM `--rmax` at the given Rmax, plus Rmax±10% close-fits ensemble unless `minimal=True`.
 
 ### Arguments
 
 - `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
 - `output_dir` (str, default `.`): Directory where the outputs are written (one subdirectory per input profile).
 - `shape` (str, default `spheres`): Polydisperse system model. Options: `spheres` (GNOM `--system=1` volume distribution for solid spheres), `rods` (GNOM `--system=5` length distribution for long cylinders, requires `rad56_nm` cylinder radius, deprecated), `ellipsoids` (accepted for API compatibility but **not supported by GNOM command-line** (GNOM system 2 is interactive-only), the skill will raise a clear error if selected).
-- `rg_nm` (float | None): Optional metadata only (not passed to GNOM); recorded in outputs if set.
-- `rmin_nm` (float | None): GNOM `--rmin` (nm). If omitted, not passed to GNOM.
-- `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, optimized in `[ε, 3 × rg_max]` from in-process `fit_guinier` (30 s max). When set, skip Rmax search but still write the Rmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
+- `rg_nm` (float | None): Optional Guinier Rg (nm) recorded in outputs. Auto search uses in-process `fit_guinier` Rg when `rmax_nm` is omitted (this argument alone does not drive the grid).
+- `rmin_nm` (float | None): GNOM `--rmin` (nm). If omitted, not passed to GNOM. When set on the auto path, also floors the Shannon Rmax grid.
+- `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, Shannon×α search (see above). When set, skip Rmax search but still write the Rmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
 - `rad56_nm` (float | None): GNOM `--rad56` for `shape=rods` (nm cylinder radius), deprecated. Ignored for spheres.
 - `first` (int | None): GNOM `--first` (1-based). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
 - `last` (int | None): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
 - `q_min` (float | None): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
 - `q_max` (float | None): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`. When both `last` and `q_max` are omitted, a silent safer default is applied.
-- `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
+- `alpha` (float | None): GNOM `--alpha`. On auto path: if omitted, searched on \(\log_{10}\alpha\in[-1,2.5]\); if set, Rmax is still Shannon-gridded at that fixed α. On refine path: passed through (GNOM auto if omitted).
 - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
 - `force_zero_rmin` (str | None): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
 - `force_zero_rmax` (str | None): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y`.
@@ -634,8 +642,8 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtai
 ### Short parameter list
 
 - shape: shape of the polydisperse system particles, currently only spheres supported
-- rad56_nm: depricated, has no effect
-- alpha: regularization parameter, auto-optimized if not set
+- rad56_nm: deprecated, has no effect for spheres
+- alpha: regularization parameter; joint-searched on auto path if unset
 - nr: number of fitted points, stick to the default
 
 ### Returns
@@ -920,7 +928,7 @@ SAXS / small-angle x-ray scattering: ab initio bead-model shape reconstruction w
 `dict[str, str | list[str]]` with:
 
 - `output_subdir`: Directory containing DAMMIF fit artifacts (FIR/CIF and summary files). Each replica also gets `{rep}_pr.dat` and `{rep}_pr.png` (GNOM-style p(r) from DAM bead pairs via Monte Carlo).
-- `best_cif_path`: Symlink `best.cif` pointing at the most probable particle CIF (the sole run when `n_runs=1`).
+- `best_cif_path`: `best.cif` convenience path (relative symlink, or a copy when symlink creation is blocked) pointing at the most probable particle CIF (the sole run when `n_runs=1`).
 - `best_view_path`: Path to ``best_view.png`` (isosurface + fit overlay for the best model); empty if unavailable.
 - `frequency_map_path`: Path to the DAMAVER frequency/occupancy map CIF (empty string when `n_runs=1`).
 - `visuals_dir`, `overlap_png`, `overlap_gif`, `occupancy_png`, `occupancy_gif`, `occupancy_thresholds_png`, `run_gifs` when `visualize_all=True` (empty strings / empty list otherwise).
@@ -1019,11 +1027,23 @@ SAXS / small-angle x-ray scattering: run the monodisperse single-profile quality
 (Guinier → dimensionless Kratky → DATGNOM p(r) / Shannon–ΔRg passport → optional DAMMIF
 when quality gates pass → per-sample PDF report).
 
+**First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
+**and** a pipeline config is available (``config.conf`` in that dir, or
+``config_path`` / ``--conf``), run the TIFF full pipeline (calibrate → integrate →
+average as needed → subtract via ``buffer_rules``) then analyze each subtracted
+``.dat``. Otherwise treat ``profile`` as subtracted ``.dat`` path(s) (backward
+compatible). TIFF dir without config → clear ``FileNotFoundError`` (not silent
+fallthrough). Explicit folder+config router: ``process_full`` (reads
+``analysis: mono|poly``).
+
 ### Arguments
 
-- `profile` (str): 1D path expression (file/directory/glob of `*.dat`). Directories expand non-recursively.
+- `profile` (str): Subtracted 1D path expression (file/directory/glob of `*.dat`),
+  **or** a TIFF frames directory (see inference above). Directories expand
+  non-recursively for ``.dat`` mode.
 - `output_dir` (str, default `.`): Pipeline root; leaf skills write under subdirectories here.
-- `config_path` (str | None, default `None`): Deprecated. Optional YAML config forwarded to leaf skills.
+- `config_path` (str | None, default `None`): Optional YAML config forwarded to leaf skills
+  (and required for TIFF full-pipeline inference when ``<dir>/config.conf`` is absent).
 - `first` / `last` (int | None): Optional fixed Guinier interval (1-based); both required together.
   Guinier `first` is forwarded to DATGNOM; Guinier `last` is **not** passed to DATGNOM
   (window too narrow for p(r)).
@@ -1046,6 +1066,7 @@ when quality gates pass → per-sample PDF report).
 - `fit_distances`: Return dict from `fit_distances`.
 - `model_dam`: Return dict from `model_dam` (empty dict when skipped).
 - `report_individual`: Return dict from `report_individual`.
+- `tiff_front` (only when TIFF full pipeline ran): TIFF front-end return dict.
 
 ### Python usage
 
@@ -1057,12 +1078,166 @@ out = process_monodisperse(
     output_dir="mono_out",
 )
 print(out["report_pdf_path"])
+
+# TIFF directory + config.conf (mono analysis after subtract):
+out = process_monodisperse("/data/run01", output_dir="mono_out")
 ```
 
 ### CLI usage
 
 ```bash
 autosaxs process-monodisperse subtracted/sub_sample_01.dat --output-dir mono_out
+autosaxs process-monodisperse /data/run01 --conf /data/run01/config.conf -o mono_out
+# or explicit folder+config router (reads analysis: mono|poly):
+autosaxs process-full /data/run01 --conf /data/run01/config.conf -o mono_out
+```
+
+---
+
+## `process_polydisperse`
+
+SAXS / small-angle x-ray scattering: run the polydisperse single-profile quality pipeline
+(Guinier → GNOM D(R) / size-distribution passport → optional MIXTURE when requested and
+D(R) quality gates pass → per-sample PDF report).
+
+**First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
+**and** a pipeline config is available (``config.conf`` in that dir, or
+``config_path`` / ``--conf``), run the TIFF full pipeline (calibrate → integrate →
+average as needed → subtract via ``buffer_rules``) then analyze each subtracted
+``.dat``. Otherwise treat ``profile`` as subtracted ``.dat`` path(s) (backward
+compatible). TIFF dir without config → clear ``FileNotFoundError`` (not silent
+fallthrough). Explicit folder+config router: ``process_full`` (reads
+``analysis: mono|poly``).
+
+### Arguments
+
+- `profile` (str): Subtracted 1D path expression (file/directory/glob of `*.dat`),
+  **or** a TIFF frames directory (see inference above). Directories expand
+  non-recursively for ``.dat`` mode.
+- `output_dir` (str, default `.`): Pipeline root; leaf skills write under subdirectories here.
+- `config_path` (str | None, default `None`): Optional YAML config forwarded to leaf skills
+  (and required for TIFF full-pipeline inference when ``<dir>/config.conf`` is absent).
+- `first` / `last` (int | None): Optional fixed Guinier interval (1-based); both required together.
+  Guinier `first` is forwarded to `fit_sizes` when set (or when auto-Guinier succeeds); Guinier
+  `last` is **not** passed to GNOM D(R) (same narrow-window rule as mono DATGNOM).
+- `shape` (str, default `spheres`): Forwarded to `fit_sizes` (currently spheres).
+- `q_min` / `q_max` (float | None): Optional `fit_sizes` q bounds (nm⁻¹). When set, they override
+  Guinier-first handoff for the corresponding end (do not combine `q_min` with an implicit first).
+- `run_mixture` (bool, default `False`): When `True`, run `model_mixture` if D(R) is high quality.
+  Default stays off to match liveview auto / real-data light (MIXTURE is interactive Confirm in GUI).
+- `use_cache` (bool, default `False`): Forwarded to leaf skills.
+
+### Returns
+
+`dict` with:
+
+- `report_pdf_path`: Primary PDF quality passport (when written).
+- `assembled_report_md_path`: Merged Markdown report.
+- `pipeline_dir`: The `output_dir` used as the pipeline root.
+- `basename`: Sample basename used for report assembly.
+- `model_mixture_ran`: Whether `model_mixture` was invoked.
+- `model_mixture_skip_reason`: Why MIXTURE was skipped (empty when run).
+- `fit_guinier`: Return dict from `fit_guinier`.
+- `fit_sizes`: Return dict from `fit_sizes`.
+- `model_mixture`: Return dict from `model_mixture` (empty dict when skipped).
+- `report_individual`: Return dict from `report_individual`.
+- `tiff_front` (only when TIFF full pipeline ran): TIFF front-end return dict.
+
+### Python usage
+
+```python
+from autosaxs.skill import process_polydisperse
+
+out = process_polydisperse(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="poly_out",
+)
+print(out["report_pdf_path"])
+
+# TIFF directory + config.conf (poly analysis after subtract):
+out = process_polydisperse("/data/run01", output_dir="poly_out")
+```
+
+### CLI usage
+
+```bash
+autosaxs process-polydisperse subtracted/sub_sample_01.dat --output-dir poly_out
+autosaxs process-polydisperse /data/run01 --conf /data/run01/config.conf -o poly_out
+# or explicit folder+config router (reads analysis: mono|poly):
+autosaxs process-full /data/run01 --conf /data/run01/config.conf -o poly_out
+```
+
+---
+
+## `process_full`
+
+SAXS / small-angle x-ray scattering: process a directory of TIFF frames to
+per-sample PDF quality reports using a small YAML pipeline config.
+
+This skill is the explicit **folder + config** entry. It requires top-level
+``analysis: mono|poly``, then delegates to ``process_monodisperse`` or
+``process_polydisperse`` with ``frames_dir`` as the first path argument. The
+meta-skill infers TIFF full-pipeline mode (calibrate → integrate → average
+as needed → subtract → analysis) when that directory contains TIFFs and a
+config is available.
+
+Equivalent to calling the mono/poly meta-skill directly with the frames
+directory as the first argument (and a matching analysis choice).
+
+### Config (``config.conf`` / ``.yaml`` in the frames directory, or ``--conf``)
+
+```yaml
+calibrant: "*AgBh*.tif"          # basename fnmatch glob (default)
+buffer_rules:                    # sample_glob → buffer_glob (fnmatch only)
+  "*_sample*.tif": "*_buffer*.tif"
+analysis: mono                   # required: mono | poly
+# optional leaf overrides:
+# calibrate: { wavelength: 1.445 }
+# subtract: { q_min: 4.5, q_max: 5.5 }
+```
+
+Matching is **fnmatch against basenames** (no regex). Calibrant: lexicographically
+first match. Buffer pairing reuses ``map_sample_files_to_buffer_files``; if that
+leaves unpaired samples and exactly one buffer exists, all samples share it.
+
+### Arguments
+
+- `frames_dir` (str): Directory of TIFF frames (non-recursive ``*.tif`` / ``*.tiff``).
+- `output_dir` (str, default `.`): Pipeline root (`integrator/`, `averaged/`,
+  `subtracted/`, per-sample analysis trees).
+- `config_path` (str | None, default `None`): YAML config; default
+  ``<frames_dir>/config.conf``.
+- `use_cache` (bool, default `False`): Forwarded to leaf skills.
+- `n_runs` (int, default `5`): Forwarded to ``process_monodisperse`` (DAMMIF replicas).
+- `run_mixture` (bool, default `False`): Forwarded to ``process_polydisperse``.
+
+### Returns
+
+`dict` with the analysis meta-skill return keys, plus:
+
+- `analysis`: ``mono`` or ``poly``.
+- `config_path`: Resolved config path.
+- `frames_dir`: Absolute frames directory.
+- `report_pdf_path`: PDF path(s) from the analysis meta-skill.
+- `tiff_front`: Present when the TIFF front-end ran (usual for this entry).
+- `analysis_out`: Full return dict from ``process_monodisperse`` / ``process_polydisperse``.
+
+### Python usage
+
+```python
+from autosaxs.skill import process_full
+
+out = process_full("/data/run01", output_dir="/data/run01/out")
+print(out["report_pdf_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs process-full /data/run01
+autosaxs process-full /data/run01 --conf /data/run01/config.conf -o /data/run01/out
+# same TIFF inference via mono/poly first arg:
+autosaxs process-monodisperse /data/run01 --conf /data/run01/config.conf -o /data/run01/out
 ```
 
 ---

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import os
+import inspect
 from pathlib import Path
 
 import pytest
@@ -15,6 +15,7 @@ from autosaxs.skill.tiff_pipeline import (
     classify_tiffs,
     load_tiff_pipeline_config,
     pair_sample_buffer_1d,
+    resolve_frames_dir_for_tiff_pipeline,
     resolve_tiff_config_path,
 )
 
@@ -122,31 +123,82 @@ def test_pair_overlap_raises(tmp_path: Path):
         pair_sample_buffer_1d([s], [b1, b2])
 
 
-def test_process_directory_registered_and_cli_description(capsys):
+def test_process_full_registered_and_cli_description(capsys):
     from autosaxs.cli import main as cli_main
     from autosaxs.skill import SKILL_ORDER, list_skills
 
     skills = list_skills()
-    assert "process_directory" in skills
-    assert "process_directory" in SKILL_ORDER
-    assert SKILL_ORDER.index("process_directory") > SKILL_ORDER.index("process_polydisperse")
+    assert "process_full" in skills
+    assert "process_directory" not in skills
+    assert "process_full" in SKILL_ORDER
+    assert SKILL_ORDER.index("process_full") > SKILL_ORDER.index("process_polydisperse")
 
-    rc = cli_main(["process-directory", "--description"])
+    rc = cli_main(["process-full", "--description"])
     assert rc == 0
     out = capsys.readouterr().out.lower()
-    assert "process-directory" in out
+    assert "process-full" in out
     assert "calibrate" in out
     assert "analysis" in out
 
+    # Old CLI name must not exist
+    with pytest.raises(SystemExit):
+        cli_main(["process-directory", "--description"])
 
-def test_process_monodisperse_accepts_frames_dir_kw():
-    import inspect
 
+def test_process_meta_skills_have_no_frames_dir_kw():
     from autosaxs.skill.process_monodisperse import process_monodisperse
+    from autosaxs.skill.process_polydisperse import process_polydisperse
 
-    sig = inspect.signature(process_monodisperse)
-    assert "frames_dir" in sig.parameters
-    assert sig.parameters["frames_dir"].default is None
+    for fn in (process_monodisperse, process_polydisperse):
+        sig = inspect.signature(fn)
+        assert "frames_dir" not in sig.parameters
+        assert "profile" in sig.parameters
+        assert "config_path" in sig.parameters
+
+
+def test_resolve_frames_dir_inference_rules(tmp_path: Path):
+    frames = tmp_path / "run"
+    frames.mkdir()
+    (frames / "AgBh.tif").write_bytes(b"")
+    (frames / "s_sample.tif").write_bytes(b"")
+    (frames / "s_buffer.tif").write_bytes(b"")
+
+    # TIFFs present, no config → hard error
+    with pytest.raises(FileNotFoundError, match="pipeline config"):
+        resolve_frames_dir_for_tiff_pipeline(str(frames))
+
+    conf = frames / "config.conf"
+    conf.write_text("analysis: mono\n", encoding="utf-8")
+    got = resolve_frames_dir_for_tiff_pipeline(str(frames))
+    assert got == str(frames.resolve())
+
+    # Explicit --conf elsewhere also unlocks TIFF mode
+    other = tmp_path / "other.yaml"
+    other.write_text("analysis: poly\n", encoding="utf-8")
+    frames2 = tmp_path / "run2"
+    frames2.mkdir()
+    (frames2 / "x.tif").write_bytes(b"")
+    assert resolve_frames_dir_for_tiff_pipeline(str(frames2), str(other)) == str(
+        frames2.resolve()
+    )
+
+    # .dat-only directory → no TIFF trigger
+    dats = tmp_path / "dats"
+    dats.mkdir()
+    (dats / "sub_a.dat").write_text("0 1 0\n", encoding="utf-8")
+    assert resolve_frames_dir_for_tiff_pipeline(str(dats)) is None
+
+    # Single .dat file → no TIFF trigger
+    assert resolve_frames_dir_for_tiff_pipeline(str(dats / "sub_a.dat")) is None
+
+    # Mixed TIFF + .dat with config → TIFF trigger (loose .dats ignored by front-end)
+    (frames / "leftover.dat").write_text("0 1 0\n", encoding="utf-8")
+    assert resolve_frames_dir_for_tiff_pipeline(str(frames)) == str(frames.resolve())
+
+    # Globs / comma-lists / path lists never trigger
+    assert resolve_frames_dir_for_tiff_pipeline(str(frames / "*.tif")) is None
+    assert resolve_frames_dir_for_tiff_pipeline(f"{frames},{dats}") is None
+    assert resolve_frames_dir_for_tiff_pipeline([str(frames)]) is None
 
 
 def test_coerce_dat_path_expression_accepts_list(tmp_path: Path):
