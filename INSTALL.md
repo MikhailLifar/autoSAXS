@@ -75,7 +75,7 @@ Recommended version for autoSAXS: **3.2.1**. After installing, you can check wit
 | calibrate, integrate, average, integrate_proxy, subtract | fit_distances (p(r)) |
 | plot, plot_2d, fit_guinier, analyze_kratky | fit_sizes (D(R) via GNOM) |
 | model_dr_mc (McSAS), model_density (DENSS) | model_dam, model_bodies, model_mixture |
-| report_individual, report_summary | process_monodisperse |
+| report_individual, report_summary | process_monodisperse, process_polydisperse |
 
 ---
 

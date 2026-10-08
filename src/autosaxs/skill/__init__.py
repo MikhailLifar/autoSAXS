@@ -43,6 +43,7 @@ _SKILL_IMPORTS: Dict[str, str] = {
     "model_dam": "autosaxs.skill.model_dam",
     "model_density": "autosaxs.skill.model_density",
     "process_monodisperse": "autosaxs.skill.process_monodisperse",
+    "process_polydisperse": "autosaxs.skill.process_polydisperse",
     "report_individual": "autosaxs.skill.report_individual",
     "report_summary": "autosaxs.skill.report_summary",
 }
@@ -65,6 +66,7 @@ SKILL_ORDER = [
     "model_dam",
     "model_density",
     "process_monodisperse",
+    "process_polydisperse",
     "report_individual",
     "report_summary",
 ]
