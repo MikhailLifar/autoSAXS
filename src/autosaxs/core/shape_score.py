@@ -37,10 +37,11 @@ PR_EXTENT_LO = 3.2
 PR_EXTENT_HI = 5.0
 EXTENT_OVER_WEIGHT = 0.15
 
-# Polydisperse D(R): Rmax/Rg is typically smaller than protein Dmax/Rg
-# (compact sphere R/Rg ≈ √(5/3) ≈ 1.29; polydisperse Rmax sits higher).
-DR_EXTENT_LO = 1.0
-DR_EXTENT_HI = 4.0
+# Polydisperse D(R): Guinier Rg under-states the distribution support for
+# broad / multimodal nanoparticle populations, so Rmax/Rg often exceeds the
+# compact-sphere ratio √(5/3)≈1.29 — keep a wide soft band (not protein 3–5).
+DR_EXTENT_LO = 0.8
+DR_EXTENT_HI = 10.0
 DR_RMAX_LO_RG_MULT = 0.5
 
 
@@ -348,34 +349,69 @@ def shape_tight_extent_score(c: Dict[str, Any]) -> float:
     )
 
 
-def shape_tight_extent_score_dr(c: Dict[str, Any]) -> float:
-    """Polydisperse D(R)/Dv(R) score: same shape+χ² family, adapted extent band.
+def _wiggle_pen_dr(c: Dict[str, Any]) -> float:
+    """Like ``_wiggle_pen`` but half mode cost for exactly bimodal D(R)."""
+    smooth = _f(c.get("smoothness"), 0.0)
+    nsign = _f(c.get("n_sign_runs"), 0.0)
+    nmodes = _f(c.get("n_modes"), 1.0)
+    pen = 8.0 * max(0.0, smooth - 0.002)
+    pen += 0.05 * max(0.0, nsign - 2.0)
+    excess = max(0.0, nmodes - 1.0)
+    if int(round(nmodes)) == 2:
+        pen += 0.125 * excess
+    else:
+        pen += 0.25 * excess
+    return pen
 
-    Uses ``ρ = Rmax / Rg`` with a lower band suitable for size distributions
-    (compact-sphere scale), not protein ``Dmax/Rg ∼ 3–5``.
+
+def shape_tight_extent_score_dr(c: Dict[str, Any]) -> float:
+    """Polydisperse D(R)/Dv(R) score: soft-taper family with DR adaptations.
+
+    - Softer taper (``heavy=False``) and half bimode penalty — size distributions
+      are often broader / two-population.
+    - Extent band ``ρ = Rmax/Rg ∈ [0.8, 10]`` (not protein 3–5).
+    - Same χ²_med log guardrail as monodisperse.
     """
-    return (
-        shape_only_score(c)
-        - chi2_penalty(c)
-        - extent_penalty(c, lo=DR_EXTENT_LO, hi=DR_EXTENT_HI)
-    )
+    shape = -(_neg_pen(c) + _wiggle_pen_dr(c) + _taper_pen(c, heavy=False))
+    return shape - chi2_penalty(c) - extent_penalty(c, lo=DR_EXTENT_LO, hi=DR_EXTENT_HI)
 
 
 def pick_best_by_score(
     trials: List[Dict[str, Any]],
     score_fn,
+    *,
+    prefer_larger_extent: bool = False,
+    tie_eps: float = 0.02,
+    extent_key: str = "rmax_nm",
 ) -> Optional[Dict[str, Any]]:
-    """Argmax ``score_fn`` over trials with ``ok`` truthy; attaches ``score``."""
-    best = None
-    best_s = float("-inf")
+    """Argmax ``score_fn`` over trials with ``ok`` truthy; attaches ``score``.
+
+    When ``prefer_larger_extent`` is set (polydisperse default), among trials
+    within ``tie_eps`` of the top score prefer the largest ``extent_key``
+    (anti-stump for D(R) plateaus).
+    """
+    scored: List[Tuple[float, Dict[str, Any]]] = []
     for t in trials:
         if not t.get("ok"):
             continue
         s = float(score_fn(t))
         if not math.isfinite(s):
             continue
-        if s > best_s:
-            best_s = s
-            best = dict(t)
-            best["score"] = s
+        scored.append((s, t))
+    if not scored:
+        return None
+    top = max(s for s, _ in scored)
+    if prefer_larger_extent:
+        near = [t for s, t in scored if s >= top - float(tie_eps)]
+        best_t = max(
+            near,
+            key=lambda t: (
+                _f(t.get(extent_key), _f(t.get("dmax_nm"), float("-inf"))),
+                float(score_fn(t)),
+            ),
+        )
+    else:
+        best_t = max(scored, key=lambda x: x[0])[1]
+    best = dict(best_t)
+    best["score"] = float(score_fn(best_t))
     return best

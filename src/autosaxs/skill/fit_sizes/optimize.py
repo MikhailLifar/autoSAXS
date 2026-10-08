@@ -265,9 +265,15 @@ def _search_shannon_alpha_dr(
                     {"text": f"GNOM (fit_sizes): Shannon×α progress {done}/{n_total}…"},
                 )
 
-    # Prefer non-suspicious among equal-ish scores: filter then argmax.
+    # Prefer non-suspicious; among near-top scores prefer larger Rmax (anti-stump).
     ok_trials = [t for t in trials if not _is_suspicious_candidate(t)] or list(trials)
-    best = pick_best_by_score(ok_trials, shape_tight_extent_score_dr)
+    best = pick_best_by_score(
+        ok_trials,
+        shape_tight_extent_score_dr,
+        prefer_larger_extent=True,
+        tie_eps=0.05,
+        extent_key="rmax_nm",
+    )
     if best is None:
         shutil.rmtree(work_dir, ignore_errors=True)
         raise RuntimeError(

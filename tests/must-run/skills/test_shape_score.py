@@ -71,13 +71,31 @@ def test_dr_extent_band_allows_compact_sphere_scale():
     r = np.linspace(0.0, 5.0, 51)
     d = np.exp(-((r - 2.0) / 0.8) ** 2) * np.clip(1.0 - r / 5.0, 0.0, 1.0)
     feats = shape_features_from_distribution(r, d, extent_nm=5.0)
-    feats["d_over_rg"] = 5.0 / 3.0  # ~1.67 — ok for DR band [1,4], too small for PR [3.2,5]
+    feats["d_over_rg"] = 5.0 / 3.0  # ~1.67 — ok for DR band [0.8,10], too small for PR [3.2,5]
     feats["chi2_med"] = 1.0
     s_dr = shape_tight_extent_score_dr(feats)
     s_pr = shape_tight_extent_score(feats)
     assert math.isfinite(s_dr)
     # PR extent undersize penalty should make PR score worse than DR for this ρ
     assert s_dr > s_pr
+
+
+def test_dr_extent_allows_broad_nanoparticle_ratio():
+    """Broad poly Rmax/Rg (~8) must not be crushed by the extent wall."""
+    c = {
+        "neg_frac": 0.0,
+        "neg_mass": 0.0,
+        "tail_mass": 0.03,
+        "tail_ratio": 0.02,
+        "p_end_norm": 0.01,
+        "smoothness": 0.001,
+        "n_sign_runs": 0,
+        "n_modes": 1,
+        "chi2_med": 1.2,
+        "d_over_rg": 8.0,
+    }
+    # No oversize pen inside hi=10
+    assert shape_tight_extent_score_dr(c) == pytest.approx(shape_tight_extent_score_dr({**c, "d_over_rg": 3.0}), abs=0.05)
 
 
 def test_pick_best_by_score():
