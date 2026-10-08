@@ -57,6 +57,9 @@ def coerce_tiff_path_expression(value: TiffPathExpressionArg) -> TiffPathExpress
         return value
     if isinstance(value, Path):
         return TiffPathExpression(str(value))
+    if isinstance(value, (list, tuple)):
+        parts: List[str] = [str(x) for x in value]
+        return TiffPathExpression(", ".join(parts))
     return TiffPathExpression(str(value))
 
 
@@ -65,6 +68,9 @@ def coerce_dat_path_expression(value: DatPathExpressionArg) -> DatPathExpression
         return value
     if isinstance(value, Path):
         return DatPathExpression(str(value))
+    if isinstance(value, (list, tuple)):
+        parts: List[str] = [str(x) for x in value]
+        return DatPathExpression(", ".join(parts))
     return DatPathExpression(str(value))
 
 

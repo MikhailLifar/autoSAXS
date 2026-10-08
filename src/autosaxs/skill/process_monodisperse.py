@@ -93,6 +93,7 @@ def process_monodisperse(
     profile: DatPathExpressionArg,
     output_dir: str = ".",
     *,
+    frames_dir: Optional[str] = None,
     config_path: Optional[ConfigPathExpressionArg] = None,
     first: Optional[int] = None,
     last: Optional[int] = None,
@@ -105,11 +106,22 @@ def process_monodisperse(
     (Guinier → dimensionless Kratky → DATGNOM p(r) / Shannon–ΔRg passport → optional DAMMIF
     when quality gates pass → per-sample PDF report).
 
+    Accepts either subtracted ``.dat`` profiles (``profile``) **or** a TIFF frames
+    directory (``frames_dir`` + YAML config) that runs calibrate → integrate →
+    average-as-needed → subtract before this analysis chain. For a directory-only
+    CLI entry that reads ``analysis: mono|poly`` from config, prefer
+    ``process_directory``.
+
     ### Arguments
 
     - `profile` (str): 1D path expression (file/directory/glob of `*.dat`). Directories expand non-recursively.
+      Ignored when `frames_dir` is set (still required by the CLI signature; pass any placeholder).
     - `output_dir` (str, default `.`): Pipeline root; leaf skills write under subdirectories here.
-    - `config_path` (str | None, default `None`): Deprecated. Optional YAML config forwarded to leaf skills.
+    - `frames_dir` (str | None, default `None`): Optional directory of TIFF frames. When set, run the
+      YAML-driven TIFF front-end (`tiff_pipeline`) then analyze each subtracted curve. Config default:
+      ``<frames_dir>/config.conf`` (see `process_directory` / Project doc `tiff-to-report-config.md`).
+    - `config_path` (str | None, default `None`): Optional YAML config forwarded to leaf skills
+      (and to the TIFF front-end when `frames_dir` is set).
     - `first` / `last` (int | None): Optional fixed Guinier interval (1-based); both required together.
       Guinier `first` is forwarded to DATGNOM; Guinier `last` is **not** passed to DATGNOM
       (window too narrow for p(r)).
@@ -132,6 +144,7 @@ def process_monodisperse(
     - `fit_distances`: Return dict from `fit_distances`.
     - `model_dam`: Return dict from `model_dam` (empty dict when skipped).
     - `report_individual`: Return dict from `report_individual`.
+    - `tiff_front` (only when `frames_dir` was set): TIFF front-end return dict.
 
     ### Python usage
 
@@ -143,24 +156,46 @@ def process_monodisperse(
         output_dir="mono_out",
     )
     print(out["report_pdf_path"])
+
+    # TIFF directory + config.conf (analysis chain forced to mono):
+    out = process_monodisperse(".", output_dir="mono_out", frames_dir="/data/run01")
     ```
 
     ### CLI usage
 
     ```bash
     autosaxs process-monodisperse subtracted/sub_sample_01.dat --output-dir mono_out
+    # TIFF directory → report (reads analysis from config):
+    autosaxs process-directory /data/run01 --conf /data/run01/config.conf -o mono_out
     ```
     """
     bus = EventBus()
     bus.subscribe(EventType.MESSAGE, lambda data: print((data or {}).get("text", ""), file=sys.stdout))
 
-    profile_expr = coerce_dat_path_expression(profile)
-    expanded = expand_files_from_unwrapped(profile_expr.unwrap(), kind="1d_dat")
-    if not expanded:
-        raise FileNotFoundError(f"process_monodisperse: no .dat profiles matched {profile!r}")
-    for p in expanded:
-        if Path(p).suffix.lower() != ".dat":
-            raise ValueError("process_monodisperse input files must have .dat extension")
+    tiff_front: Optional[Dict[str, Any]] = None
+    if frames_dir:
+        from .tiff_pipeline import run_tiff_to_subtracted
+
+        if bus:
+            bus.publish(EventType.MESSAGE, {"text": "process_monodisperse: TIFF front-end…"})
+        tiff_front = run_tiff_to_subtracted(
+            frames_dir,
+            output_dir,
+            config_path=config_path,
+            use_cache=use_cache,
+            event_bus=bus,
+        )
+        expanded = list(tiff_front["subtracted_paths"])
+        # Prefer the same config file the front-end resolved.
+        config_path = tiff_front.get("config_path") or config_path
+    else:
+        profile_expr = coerce_dat_path_expression(profile)
+        expanded = expand_files_from_unwrapped(profile_expr.unwrap(), kind="1d_dat")
+        if not expanded:
+            raise FileNotFoundError(f"process_monodisperse: no .dat profiles matched {profile!r}")
+        for p in expanded:
+            if Path(p).suffix.lower() != ".dat":
+                raise ValueError("process_monodisperse input files must have .dat extension")
 
     if len(expanded) > 1:
         results: List[Dict[str, Any]] = []
@@ -179,11 +214,15 @@ def process_monodisperse(
                     use_cache=use_cache,
                 )
             )
-        return {
+        out_multi: Dict[str, Any] = {
             "pipeline_dir": output_dir,
             "samples": results,
             "report_pdf_path": [r.get("report_pdf_path") for r in results],
         }
+        if tiff_front is not None:
+            out_multi["tiff_front"] = tiff_front
+            out_multi["subtracted_paths"] = expanded
+        return out_multi
 
     profile_path = expanded[0]
     basename = _strip_sub_int_prefix(Path(profile_path).stem)
@@ -294,7 +333,7 @@ def process_monodisperse(
         use_cache=use_cache,
     )
 
-    return {
+    out: Dict[str, Any] = {
         "pipeline_dir": output_dir,
         "basename": basename,
         "report_pdf_path": out_report.get("report_pdf_path"),
@@ -307,6 +346,10 @@ def process_monodisperse(
         "model_dam": out_dam,
         "report_individual": out_report,
     }
+    if tiff_front is not None:
+        out["tiff_front"] = tiff_front
+        out["subtracted_paths"] = expanded
+    return out
 
 
 # Allow `from autosaxs.skill import process_monodisperse` to return a callable even
