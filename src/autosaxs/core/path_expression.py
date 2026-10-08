@@ -99,8 +99,24 @@ class PathExpression:
 
             # Prefer direct existence checks before globbing (faster, avoids surprising
             # behavior for literal paths containing glob metacharacters).
-            if os.path.isfile(part) or os.path.isdir(part):
+            if os.path.isfile(part):
                 expanded.append(str(Path(part).resolve()))
+                continue
+
+            if os.path.isdir(part):
+                resolved_dir = str(Path(part).resolve())
+                allowed_for_dir = self._normalize_exts(self.ext)
+                if allowed_for_dir:
+                    # Extension-constrained expressions: bare directories expand
+                    # non-recursively to matching files (docs / skills contract).
+                    matches = [
+                        str(child.resolve())
+                        for child in sorted(Path(resolved_dir).iterdir())
+                        if child.is_file() and child.suffix.lower() in allowed_for_dir
+                    ]
+                    expanded.extend(matches)
+                else:
+                    expanded.append(resolved_dir)
                 continue
 
             if _looks_like_glob(part):
@@ -117,7 +133,8 @@ class PathExpression:
         if allowed:
             for p in expanded:
                 if not os.path.isfile(p):
-                    # Extension-constrained expressions must resolve to files only.
+                    # After directory expansion above, only files remain for
+                    # extension-constrained expressions.
                     raise self._ext_error(allowed=allowed, actual=Path(p).suffix.lower())
                 actual = Path(p).suffix.lower()
                 if actual not in allowed:
