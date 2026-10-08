@@ -1381,3 +1381,226 @@ def test_fit_dammif_deprecated_alias(monkeypatch):
                 use_cache=False,
             )
 
+
+
+def _process_polydisperse_mod():
+    """Load the skill module object (not the package lazy entrypoint)."""
+    import importlib
+
+    return importlib.import_module("autosaxs.skill.process_polydisperse")
+
+
+def test_process_polydisperse_registered_and_cli_description(capsys):
+    from autosaxs.cli import main as cli_main
+    from autosaxs.skill import list_skills, SKILL_ORDER
+
+    skills = list_skills()
+    assert "process_polydisperse" in skills
+    assert "process_polydisperse" in SKILL_ORDER
+    assert SKILL_ORDER.index("process_polydisperse") > SKILL_ORDER.index("process_monodisperse")
+
+    rc = cli_main(["process-polydisperse", "--description"])
+    assert rc == 0
+    out = capsys.readouterr().out.lower()
+    assert "process-polydisperse" in out
+    assert "fit_sizes" in out or "d(r)" in out
+
+
+def test_process_polydisperse_orchestration_default_skips_mixture(monkeypatch):
+    """Default path: Guinier → fit_sizes → report; mixture skipped (liveview/light parity)."""
+    _stub_atsas_installed(monkeypatch)
+    mod = _process_polydisperse_mod()
+
+    calls: list[str] = []
+
+    def _fake_guinier(profile, output_dir, **kwargs):
+        calls.append("fit_guinier")
+        os.makedirs(output_dir, exist_ok=True)
+        results = os.path.join(output_dir, "guinier_results.txt")
+        Path(results).write_text(
+            "Rg = 2.5\nI0 = 1.0\nfirst_point_1based = 3\n",
+            encoding="utf-8",
+        )
+        return {"results_path": results, "rg": 2.5, "i0": 1.0}
+
+    def _fake_parse(path):
+        _ = path
+        return {"rg": 2.5, "i0": 1.0, "first_point_1based": 3}
+
+    def _fake_sizes(profile, output_dir, **kwargs):
+        calls.append("fit_sizes")
+        assert kwargs.get("first") == 3
+        assert kwargs.get("rg_nm") == 2.5
+        os.makedirs(output_dir, exist_ok=True)
+        handoff = os.path.join(output_dir, "sample_fit_sizes.yml")
+        Path(handoff).write_text(
+            "fit:\n  rmax_nm: 8.0\nquality:\n  sizes_quality_class: high_quality\n",
+            encoding="utf-8",
+        )
+        return {
+            "best_gnom_out_path": os.path.join(output_dir, "gnom_best.out"),
+            "fit_sizes_path": handoff,
+            "sizes_quality_class": "high_quality",
+            "overall_status": "HIGH QUALITY",
+            "dmax_nm": 8.0,
+        }
+
+    def _fake_mixture(*_a, **_k):
+        calls.append("model_mixture")
+        return {"results_csv_path": "should_not_run.csv"}
+
+    def _fake_report(search_root, basename, **kwargs):
+        calls.append("report_individual")
+        out_pdf = kwargs.get("output_path") or os.path.join(kwargs.get("output_dir") or ".", f"{basename}.pdf")
+        os.makedirs(os.path.dirname(out_pdf), exist_ok=True)
+        Path(out_pdf).write_text("%PDF-fake\n", encoding="utf-8")
+        return {
+            "report_pdf_path": out_pdf,
+            "assembled_report_md_path": out_pdf.replace(".pdf", ".md"),
+        }
+
+    monkeypatch.setattr(mod, "fit_guinier", _fake_guinier)
+    monkeypatch.setattr(mod, "parse_guinier_results_txt", _fake_parse)
+    monkeypatch.setattr(mod, "fit_sizes", _fake_sizes)
+    monkeypatch.setattr(mod, "model_mixture", _fake_mixture)
+    monkeypatch.setattr(mod, "report_individual", _fake_report)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.05, 2.0, 80)
+        profile_path = os.path.join(tmp, "sub_Pt_NPs_30.dat")
+        write_saxs(profile_path, q, np.exp(-((q * 2.5) ** 2)), 0.02, {})
+        out_dir = os.path.join(tmp, "poly_out")
+        result = mod.process_polydisperse(profile_path, out_dir, use_cache=False)
+
+        assert calls == ["fit_guinier", "fit_sizes", "report_individual"]
+        assert result["basename"] == "Pt_NPs_30"
+        assert result["model_mixture_ran"] is False
+        assert "run_mixture=False" in str(result["model_mixture_skip_reason"])
+        assert result["model_mixture"] == {}
+        assert result["fit_guinier"]
+        assert result["fit_sizes"]["sizes_quality_class"] == "high_quality"
+        assert os.path.isfile(str(result["report_pdf_path"]))
+
+
+def test_process_polydisperse_run_mixture_gated(monkeypatch):
+    """run_mixture=True runs MIXTURE only when D(R) is high_quality; passes r_max."""
+    _stub_atsas_installed(monkeypatch)
+    mod = _process_polydisperse_mod()
+
+    mix_kwargs_seen: dict = {}
+
+    def _fake_guinier(profile, output_dir, **kwargs):
+        os.makedirs(output_dir, exist_ok=True)
+        results = os.path.join(output_dir, "guinier_results.txt")
+        Path(results).write_text("Rg = 2.0\n", encoding="utf-8")
+        return {"results_path": results}
+
+    def _fake_parse(path):
+        _ = path
+        return {"rg": 2.0, "i0": 1.0, "first_point_1based": 2}
+
+    def _fake_sizes_hq(profile, output_dir, **kwargs):
+        os.makedirs(output_dir, exist_ok=True)
+        handoff = os.path.join(output_dir, "fit.yml")
+        Path(handoff).write_text("fit:\n  rmax_nm: 7.5\n", encoding="utf-8")
+        return {
+            "fit_sizes_path": handoff,
+            "sizes_quality_class": "high_quality",
+            "overall_status": "HIGH QUALITY",
+        }
+
+    def _fake_sizes_fail(profile, output_dir, **kwargs):
+        os.makedirs(output_dir, exist_ok=True)
+        return {
+            "fit_sizes_path": "",
+            "sizes_quality_class": "failed",
+            "overall_status": "FAILED",
+        }
+
+    def _fake_mixture(profile, output_dir, **kwargs):
+        mix_kwargs_seen.update(kwargs)
+        os.makedirs(output_dir, exist_ok=True)
+        return {"results_csv_path": os.path.join(output_dir, "mix.csv"), "r_max_nm": kwargs.get("r_max")}
+
+    def _fake_report(search_root, basename, **kwargs):
+        out_pdf = kwargs.get("output_path") or os.path.join(".", f"{basename}.pdf")
+        os.makedirs(os.path.dirname(out_pdf), exist_ok=True)
+        Path(out_pdf).write_text("%PDF-fake\n", encoding="utf-8")
+        return {"report_pdf_path": out_pdf, "assembled_report_md_path": ""}
+
+    monkeypatch.setattr(mod, "fit_guinier", _fake_guinier)
+    monkeypatch.setattr(mod, "parse_guinier_results_txt", _fake_parse)
+    monkeypatch.setattr(mod, "model_mixture", _fake_mixture)
+    monkeypatch.setattr(mod, "report_individual", _fake_report)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.05, 2.0, 40)
+        profile_path = os.path.join(tmp, "sample.dat")
+        write_saxs(profile_path, q, np.exp(-q**2), 0.02, {})
+
+        monkeypatch.setattr(mod, "fit_sizes", _fake_sizes_hq)
+        out_ok = mod.process_polydisperse(
+            profile_path, os.path.join(tmp, "ok"), run_mixture=True, use_cache=False
+        )
+        assert out_ok["model_mixture_ran"] is True
+        assert out_ok["model_mixture_skip_reason"] == ""
+        assert mix_kwargs_seen.get("r_max") == pytest.approx(7.5)
+
+        mix_kwargs_seen.clear()
+        monkeypatch.setattr(mod, "fit_sizes", _fake_sizes_fail)
+        out_skip = mod.process_polydisperse(
+            profile_path, os.path.join(tmp, "skip"), run_mixture=True, use_cache=False
+        )
+        assert out_skip["model_mixture_ran"] is False
+        assert "quality gate" in str(out_skip["model_mixture_skip_reason"]).lower()
+        assert mix_kwargs_seen == {}
+
+
+def test_process_polydisperse_multi_profile_batch(monkeypatch):
+    _stub_atsas_installed(monkeypatch)
+    mod = _process_polydisperse_mod()
+
+    def _fake_guinier(profile, output_dir, **kwargs):
+        os.makedirs(output_dir, exist_ok=True)
+        results = os.path.join(output_dir, "g.txt")
+        Path(results).write_text("Rg = 1.0\n", encoding="utf-8")
+        return {"results_path": results}
+
+    def _fake_parse(path):
+        _ = path
+        return {"rg": 1.0, "i0": 1.0, "first_point_1based": 1}
+
+    def _fake_sizes(profile, output_dir, **kwargs):
+        os.makedirs(output_dir, exist_ok=True)
+        return {
+            "sizes_quality_class": "acceptable",
+            "overall_status": "ACCEPTABLE",
+            "fit_sizes_path": "",
+        }
+
+    def _fake_report(search_root, basename, **kwargs):
+        out_pdf = kwargs.get("output_path") or os.path.join(".", f"{basename}.pdf")
+        os.makedirs(os.path.dirname(out_pdf), exist_ok=True)
+        Path(out_pdf).write_text("%PDF-fake\n", encoding="utf-8")
+        return {"report_pdf_path": out_pdf, "assembled_report_md_path": ""}
+
+    monkeypatch.setattr(mod, "fit_guinier", _fake_guinier)
+    monkeypatch.setattr(mod, "parse_guinier_results_txt", _fake_parse)
+    monkeypatch.setattr(mod, "fit_sizes", _fake_sizes)
+    monkeypatch.setattr(mod, "report_individual", _fake_report)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.05, 2.0, 30)
+        paths = []
+        for name in ("sub_a.dat", "sub_b.dat"):
+            p = os.path.join(tmp, name)
+            write_saxs(p, q, np.exp(-q**2), 0.02, {})
+            paths.append(p)
+        # Comma-list avoids directory+extension edge cases in path expressions.
+        out = mod.process_polydisperse(
+            ",".join(paths), os.path.join(tmp, "batch"), use_cache=False
+        )
+        assert "samples" in out
+        assert len(out["samples"]) == 2
+        assert isinstance(out["report_pdf_path"], list)
+        assert len(out["report_pdf_path"]) == 2
