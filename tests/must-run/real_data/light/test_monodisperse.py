@@ -46,7 +46,7 @@ def test_monodisperse_pipeline_validation():
     with open(H.SUCCESS_MONO_TXT, "w") as f:
         f.write("SUCCESS\n" if ok_all else "FAIL\n")
     print(f"VALIDATION MONO: {'SUCCESS' if ok_all else 'FAIL'}")
-    print(f"  samples smoked (DATGNOM): {len(run_state['smoke_out_by_stem'])}")
+    print(f"  samples smoked (fit_distances auto): {len(run_state['smoke_out_by_stem'])}")
     print(f"  refine keys: {sorted(run_state['refine_out_by_key'])}")
     for msg in failures:
         print(f"  FAIL: {msg}")

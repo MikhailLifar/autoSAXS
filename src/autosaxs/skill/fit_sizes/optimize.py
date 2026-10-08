@@ -1,13 +1,26 @@
-"""Guinier/rmax optimization and GNOM candidate helpers for fit_sizes."""
+"""Guinier helpers and Shannon×α GNOM search for fit_sizes."""
 
 from __future__ import annotations
 
-import time
+import os
+import shutil
+import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from autosaxs.core.gnom import candidate_score, distribution_arrays, parse_gnom_out
+from autosaxs.core.gnom import distribution_arrays, parse_gnom_out
+from autosaxs.core.shape_score import (
+    ALPHA_GRID_N,
+    DMAX_GRID_N,
+    DR_RMAX_LO_RG_MULT,
+    alpha_log10_grid,
+    extent_candidate_grid,
+    pick_best_by_score,
+    q_min_first_positive_nm,
+    shape_features_from_parsed,
+    shape_tight_extent_score_dr,
+)
 
 from ..deps import EventBus, EventType
 from ..fit_guinier.guinier import run_guinier_analysis
@@ -67,6 +80,7 @@ def _candidate_from_gnom_out(
     rc: int,
     stderr: str,
     intermediate: bool,
+    rg_guinier_nm: Optional[float] = None,
 ) -> Dict[str, Any]:
     parsed = parse_gnom_out(out_text)
     total = parsed.get("total_estimate")
@@ -83,6 +97,12 @@ def _candidate_from_gnom_out(
             d_arr = np.asarray(d, dtype=float)
             if d_arr.size > 0 and np.any(np.isfinite(d_arr)):
                 diag["neg_frac"] = float(np.mean(d_arr < 0.0))
+
+    feats = shape_features_from_parsed(
+        parsed,
+        extent_requested_nm=float(rmax_nm),
+        rg_guinier_nm=rg_guinier_nm,
+    )
     cand: Dict[str, Any] = {
         "shape": shape,
         "system": int(system),
@@ -91,7 +111,7 @@ def _candidate_from_gnom_out(
         "rad56_nm": rad56_nm,
         "first": int(first) if first is not None else None,
         "last": int(last) if last is not None else None,
-        "alpha": alpha,
+        "alpha": alpha if alpha is not None else feats.get("alpha"),
         "nr": nr,
         "suspicious": suspicious,
         "out_path": out_path,
@@ -100,141 +120,168 @@ def _candidate_from_gnom_out(
         "returncode": int(rc),
         "stderr": stderr,
         **diag,
+        **{k: v for k, v in feats.items() if k not in diag},
     }
-    cand["score"] = candidate_score(cand)
+    cand["score"] = shape_tight_extent_score_dr(cand)
     return cand
 
 
-def _trial_better(
-    sc: float,
-    susp: bool,
-    best_score: float,
-    best_rmax: Optional[float],
-    best_suspicious: bool,
-) -> bool:
-    if best_rmax is None:
-        return True
-    if susp and not best_suspicious:
-        return False
-    if not susp and best_suspicious:
-        return True
-    return sc > best_score
-
-
-def _optimize_rmax_nm(
+def _search_shannon_alpha_dr(
     *,
     atsas_dat_path: str,
     output_dir: str,
+    q_nm: np.ndarray,
     system: int,
     shape: str,
-    rg_max_nm: float,
+    rg_guinier_nm: float,
     rmin_nm: Optional[float],
     rad56_nm: Optional[float],
     first: Optional[int],
     last: Optional[int],
-    alpha: Optional[float],
     nr: Optional[int],
-    eval_tmp_path: str,
-    timeout_s: float = 30.0,
+    force_zero_rmin: str = "Y",
+    force_zero_rmax: str = "Y",
+    fixed_alpha: Optional[float] = None,
+    n_rmax: int = DMAX_GRID_N,
+    n_alpha: int = ALPHA_GRID_N,
     event_bus: Optional[EventBus] = None,
-) -> Tuple[float, List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Bounded 1D search for rmax in (rmax_lo, 3 * rg_max_nm], maximizing TE − neg_frac."""
-    from scipy.optimize import minimize_scalar
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Joint Shannon-bound Rmax × log₁₀(α) polydisperse GNOM search.
 
-    rg_max_nm = float(rg_max_nm)
-    if rg_max_nm <= 0 or not np.isfinite(rg_max_nm):
-        raise ValueError(f"fit_sizes: invalid rg_max from fit_guinier: {rg_max_nm}")
+    Selection: ``shape_tight_extent_score_dr`` (same soft-taper family; extent
+    band adapted for size distributions via ``Rmax/Rg``).
+    """
+    rg = float(rg_guinier_nm)
+    if not (rg > 0 and np.isfinite(rg)):
+        raise ValueError(f"fit_sizes: invalid rg_guinier_nm={rg_guinier_nm}")
 
-    rmax_lo = 1e-6
-    rmax_hi = 3.0 * rg_max_nm
-    t0 = time.monotonic()
-    trials: List[Dict[str, Any]] = []
-    failures: List[Dict[str, Any]] = []
-    best_score = float("-inf")
-    best_rmax: Optional[float] = None
-    best_suspicious = False
-
-    def objective(rmax: float) -> float:
-        nonlocal best_score, best_rmax, best_suspicious
-        if time.monotonic() - t0 > timeout_s:
-            return 1e10
-        rm = float(max(rmax_lo, min(float(rmax), rmax_hi)))
-        ok, rc, stderr, out_text = _run_gnom_once(
-            atsas_dat_path=atsas_dat_path,
-            output_dir=output_dir,
-            system=system,
-            rmin_nm=rmin_nm,
-            rmax_nm=rm,
-            rad56_nm=rad56_nm,
-            first=first,
-            last=last,
-            alpha=alpha,
-            nr=nr,
-            out_path=eval_tmp_path,
-        )
-        if not ok:
-            failures.append(
-                {
-                    "rmax_nm": rm,
-                    "ok": False,
-                    "returncode": int(rc),
-                    "stderr": stderr,
-                }
+    q_min = q_min_first_positive_nm(q_nm)
+    rmax_grid, grid_meta = extent_candidate_grid(
+        q_min_nm=q_min,
+        rg_guinier_nm=rg,
+        n=int(n_rmax),
+        lo_rg_mult=DR_RMAX_LO_RG_MULT,
+    )
+    # Honour explicit rmin as a floor on the search grid.
+    if rmin_nm is not None and np.isfinite(float(rmin_nm)):
+        rmin_f = float(rmin_nm)
+        rmax_grid = rmax_grid[rmax_grid > rmin_f]
+        if rmax_grid.size == 0:
+            raise RuntimeError(
+                f"fit_sizes: Shannon Rmax grid empty after rmin_nm={rmin_f} filter."
             )
-            if event_bus:
-                event_bus.publish(
-                    EventType.MESSAGE,
-                    {"text": f"GNOM (fit_sizes): rmax trial failed at rmax={rm:.4g} nm (rc={rc})."},
-                )
-            return 1e10
-        cand = _candidate_from_gnom_out(
-            out_text,
-            shape=shape,
-            system=system,
-            rmax_nm=rm,
-            rmin_nm=rmin_nm,
-            rad56_nm=rad56_nm,
-            first=first,
-            last=last,
-            alpha=alpha,
-            nr=nr,
-            out_path="",
-            rc=rc,
-            stderr=stderr,
-            intermediate=True,
-        )
-        trials.append(cand)
-        sc = float(cand["score"])
-        susp = _is_suspicious_candidate(cand)
-        if _trial_better(sc, susp, best_score, best_rmax, best_suspicious):
-            best_score = sc
-            best_rmax = rm
-            best_suspicious = susp
-        return -sc
+        grid_meta = dict(grid_meta)
+        grid_meta["rmin_floor_nm"] = rmin_f
+        grid_meta["grid_lo"] = float(rmax_grid[0])
+        grid_meta["grid_hi"] = float(rmax_grid[-1])
+        grid_meta["n"] = int(rmax_grid.size)
 
+    if fixed_alpha is not None and np.isfinite(float(fixed_alpha)) and float(fixed_alpha) > 0:
+        a_grid = np.asarray([float(np.log10(float(fixed_alpha)))], dtype=float)
+        grid_meta = dict(grid_meta)
+        grid_meta["alpha_fixed"] = float(fixed_alpha)
+    else:
+        a_grid = alpha_log10_grid(n=int(n_alpha))
+        grid_meta = dict(grid_meta)
+    grid_meta["alpha_log10_lo"] = float(a_grid[0])
+    grid_meta["alpha_log10_hi"] = float(a_grid[-1])
+    grid_meta["alpha_grid_n"] = int(len(a_grid))
+    grid_meta["score"] = "shape_tight_extent_dr"
+    grid_meta["engine"] = "gnom_system_fixed_alpha"
+
+    n_total = int(len(rmax_grid) * len(a_grid))
     if event_bus:
         event_bus.publish(
             EventType.MESSAGE,
             {
                 "text": (
-                    f"GNOM (fit_sizes): optimizing rmax in [{rmax_lo:.4g}, {rmax_hi:.4g}] nm "
-                    f"(30 s max)…"
+                    f"GNOM (fit_sizes): Shannon×α search "
+                    f"Rmax∈[{float(rmax_grid[0]):.4g}, {float(rmax_grid[-1]):.4g}] nm "
+                    f"× log10(α) ({n_total} trials); pick by shape_tight_extent_dr…"
                 ),
             },
         )
 
-    try:
-        minimize_scalar(
-            objective,
-            bounds=(rmax_lo, rmax_hi),
-            method="bounded",
-            options={"maxiter": 40},
-        )
-    except Exception:
-        pass
+    trials: List[Dict[str, Any]] = []
+    failures: List[Dict[str, Any]] = []
+    work_dir = tempfile.mkdtemp(prefix="fit_sizes_shannon_", dir=output_dir)
+    done = 0
+    for rmax in rmax_grid:
+        for log_a in a_grid:
+            alpha = float(10.0 ** float(log_a))
+            out_name = f"rmax_{float(rmax):.6g}_log10a_{float(log_a):.6g}.out"
+            out_path = os.path.join(work_dir, out_name)
+            ok, rc, stderr, out_text = _run_gnom_once(
+                atsas_dat_path=atsas_dat_path,
+                output_dir=work_dir,
+                system=system,
+                rmin_nm=rmin_nm,
+                rmax_nm=float(rmax),
+                rad56_nm=rad56_nm,
+                first=first,
+                last=last,
+                alpha=alpha,
+                nr=nr,
+                out_path=out_path,
+                force_zero_rmin=force_zero_rmin,
+                force_zero_rmax=force_zero_rmax,
+            )
+            done += 1
+            if not ok or not out_text:
+                failures.append(
+                    {
+                        "rmax_nm": float(rmax),
+                        "log10_alpha": float(log_a),
+                        "alpha": alpha,
+                        "ok": False,
+                        "returncode": int(rc),
+                        "stderr": stderr,
+                    }
+                )
+                continue
+            cand = _candidate_from_gnom_out(
+                out_text,
+                shape=shape,
+                system=system,
+                rmax_nm=float(rmax),
+                rmin_nm=rmin_nm,
+                rad56_nm=rad56_nm,
+                first=first,
+                last=last,
+                alpha=alpha,
+                nr=nr,
+                out_path=out_path,
+                rc=rc,
+                stderr=stderr,
+                intermediate=True,
+                rg_guinier_nm=rg,
+            )
+            cand["log10_alpha"] = float(log_a)
+            trials.append(cand)
+            if event_bus and (done % 50 == 0 or done == n_total):
+                event_bus.publish(
+                    EventType.MESSAGE,
+                    {"text": f"GNOM (fit_sizes): Shannon×α progress {done}/{n_total}…"},
+                )
 
-    if best_rmax is None:
+    # Prefer non-suspicious among equal-ish scores: filter then argmax.
+    ok_trials = [t for t in trials if not _is_suspicious_candidate(t)] or list(trials)
+    best = pick_best_by_score(ok_trials, shape_tight_extent_score_dr)
+    if best is None:
+        shutil.rmtree(work_dir, ignore_errors=True)
         raise RuntimeError(
-            "fit_sizes: rmax optimization produced no successful GNOM trial within 30 s."
+            "fit_sizes: Shannon×α GNOM search produced no successful trial "
+            f"({len(failures)} failures)."
         )
-    return float(best_rmax), trials, failures
+    best["search_workdir"] = work_dir
+    grid_meta["n_ok"] = len(trials)
+    grid_meta["n_fail"] = len(failures)
+    return best, trials, failures, grid_meta
+
+
+def _optimize_rmax_nm(*_a, **_k):  # pragma: no cover - removed path
+    raise RuntimeError(
+        "fit_sizes: 1D rmax optimization was replaced by Shannon×α GNOM + "
+        "shape_tight_extent_dr; use _search_shannon_alpha_dr."
+    )

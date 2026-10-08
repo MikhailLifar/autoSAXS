@@ -437,7 +437,7 @@ def test_fit_sizes_contract(monkeypatch):
 
 
 
-def test_fit_sizes_score_te_minus_nf():
+def test_fit_sizes_score_shape_tight_prefers_nonneg():
     from autosaxs.skill.fit_sizes.optimize import _candidate_from_gnom_out
 
     out_hi = _fake_gnom_out_text(total_estimate=0.9, neg_d_fraction=0.0)
@@ -457,6 +457,7 @@ def test_fit_sizes_score_te_minus_nf():
         rc=0,
         stderr="",
         intermediate=True,
+        rg_guinier_nm=3.0,
     )
     c_lo = _candidate_from_gnom_out(
         out_lo,
@@ -473,17 +474,18 @@ def test_fit_sizes_score_te_minus_nf():
         rc=0,
         stderr="",
         intermediate=True,
+        rg_guinier_nm=3.0,
     )
     assert c_hi["score"] > c_lo["score"]
 
 
 
-def test_fit_sizes_rmax_optimization_invoked(monkeypatch):
+def test_fit_sizes_shannon_search_invoked(monkeypatch):
     import subprocess as _sp
 
     _stub_atsas_installed(monkeypatch)
     guinier_calls = []
-    optimize_calls = []
+    search_calls = []
 
     def _fake_guinier_profile(q_nm, I, sigma, atsas_dat_path):
         guinier_calls.append(True)
@@ -497,9 +499,16 @@ def test_fit_sizes_rmax_optimization_invoked(monkeypatch):
             "quality_class": "good",
         }
 
-    def _fake_optimize(**kwargs):
-        optimize_calls.append(kwargs)
-        return 7.5, [{"rmax_nm": 7.5, "score": 0.7, "intermediate": True}], []
+    def _fake_search(**kwargs):
+        search_calls.append(kwargs)
+        best = {
+            "rmax_nm": 7.5,
+            "alpha": 1.0,
+            "score": -0.1,
+            "ok": True,
+            "search_workdir": None,
+        }
+        return best, [best], [], {"n_ok": 1, "n_fail": 0}
 
     monkeypatch.setattr("autosaxs.skill.fit_sizes.sizes._guinier_from_profile", _fake_guinier_profile)
 
@@ -514,7 +523,7 @@ def test_fit_sizes_rmax_optimization_invoked(monkeypatch):
         return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("autosaxs.core.atsas_gnom.subprocess.run", _fake_run)
-    monkeypatch.setattr("autosaxs.skill.fit_sizes.sizes._optimize_rmax_nm", _fake_optimize)
+    monkeypatch.setattr("autosaxs.skill.fit_sizes.sizes._search_shannon_alpha_dr", _fake_search)
 
     with tempfile.TemporaryDirectory() as tmp:
         q = np.linspace(0.05, 2.0, 60)
@@ -528,8 +537,8 @@ def test_fit_sizes_rmax_optimization_invoked(monkeypatch):
             use_cache=False,
         )
         assert len(guinier_calls) == 1
-        assert len(optimize_calls) == 1
-        assert optimize_calls[0]["rg_max_nm"] == pytest.approx(2.5)
+        assert len(search_calls) == 1
+        assert search_calls[0]["rg_guinier_nm"] == pytest.approx(2.0)
         best_out = Path(str(out["best_gnom_out_path"]))
         assert best_out.name == "gnom_best.out"
         assert best_out.is_file()
@@ -1086,7 +1095,7 @@ def test_analyze_kratky_raises_without_profile():
 
 
 
-def test_fit_distances_score_te_minus_nf():
+def test_fit_distances_legacy_candidate_score_te_minus_nf():
     from autosaxs.core.gnom import candidate_score
 
     c_high = {"total_estimate": 0.9, "neg_frac": 0.1, "suspicious": False}
@@ -1108,13 +1117,13 @@ def test_fit_distances_score_te_minus_nf():
 
 
 
-def test_fit_distances_rg_optimization_invoked(monkeypatch):
-    """When rg_nm is omitted, fit_guinier and bounded Rg optimization run."""
+def test_fit_distances_shannon_search_invoked(monkeypatch):
+    """When dmax_nm is omitted, fit_guinier and Shannon×α search run."""
     import subprocess as _sp
 
     _stub_atsas_installed(monkeypatch)
     guinier_calls = []
-    optimize_calls = []
+    search_calls = []
 
     def _fake_guinier(q_nm, I, sigma, atsas_dat_path=None):
         guinier_calls.append(True)
@@ -1127,9 +1136,17 @@ def test_fit_distances_rg_optimization_invoked(monkeypatch):
             "quality_class": "good",
         }
 
-    def _fake_optimize(**kwargs):
-        optimize_calls.append(kwargs)
-        return 2.2, [{"rg_nm": 2.2, "score": 0.7, "intermediate": True}], []
+    def _fake_search(**kwargs):
+        search_calls.append(kwargs)
+        best = {
+            "dmax_nm": 8.0,
+            "rmax_nm": 8.0,
+            "alpha": 1.0,
+            "score": -0.1,
+            "ok": True,
+            "search_workdir": None,
+        }
+        return best, [best], [], {"n_ok": 1, "n_fail": 0}
 
     with tempfile.TemporaryDirectory() as tmp:
         q = np.linspace(0.05, 2.0, 60)
@@ -1148,15 +1165,16 @@ def test_fit_distances_rg_optimization_invoked(monkeypatch):
             "autosaxs.skill.fit_distances.optimize.run_guinier_analysis", _fake_guinier
         )
         monkeypatch.setattr(
-            "autosaxs.skill.fit_distances.distances._optimize_rg_nm", _fake_optimize
+            "autosaxs.skill.fit_distances.distances._search_shannon_alpha_pr", _fake_search
         )
         monkeypatch.setattr("autosaxs.skill.fit_distances.runners.subprocess.run", _fake_run)
+        monkeypatch.setattr("autosaxs.core.atsas_gnom.subprocess.run", _fake_run)
 
         out_dir = os.path.join(tmp, "distances")
         fit_distances(profile_path, output_dir=out_dir, first=None, rg_nm=None, use_cache=False)
         assert len(guinier_calls) == 1
-        assert len(optimize_calls) == 1
-        assert optimize_calls[0]["rg_max_nm"] == pytest.approx(2.5)
+        assert len(search_calls) == 1
+        assert search_calls[0]["rg_guinier_nm"] == pytest.approx(2.0)
 
 
 

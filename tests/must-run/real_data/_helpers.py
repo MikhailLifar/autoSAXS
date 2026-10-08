@@ -629,8 +629,8 @@ def run_monodisperse_skills() -> Dict[str, Any]:
     """
     Light E2E monodisperse stage on regenerated subtracted curves.
 
-    Order: Guinier → Kratky → DATGNOM smoke (all samples) → pinned GNOM refine
-    (protocol refine keys). Heavy ``model_dam`` is a separate stage.
+    Order: Guinier → Kratky → Shannon×α ``fit_distances`` smoke (all samples) →
+    pinned GNOM refine (protocol refine keys). Heavy ``model_dam`` is a separate stage.
     """
     manifest = _load_mono_manifest()
     samples_meta: Dict[str, Any] = manifest.get("samples") or {}
@@ -673,7 +673,7 @@ def run_monodisperse_skills() -> Dict[str, Any]:
             "results_path": _as_scalar(out_k.get("results_path")),
         }
 
-    # --- DATGNOM smoke (all) ---
+    # --- fit_distances auto smoke (Shannon×α + shape_tight_extent; all samples) ---
     smoke_out_by_stem: Dict[str, Dict[str, Any]] = {}
     for sub in sub_paths:
         stem = _sample_stem_from_sub_path(sub)
@@ -686,7 +686,7 @@ def run_monodisperse_skills() -> Dict[str, Any]:
         )
         best = _as_scalar(out_fd.get("best_gnom_out_path"))
         if not best or not os.path.isfile(str(best)):
-            raise RuntimeError(f"DATGNOM smoke produced no .out for {stem}")
+            raise RuntimeError(f"fit_distances auto smoke produced no .out for {stem}")
         smoke_out_by_stem[stem] = out_fd
 
     # --- pinned GNOM refine (protocol refine keys only) ---
@@ -899,7 +899,7 @@ def compare_monodisperse_to_reference(run_state: Dict[str, Any]):
 
     n_smoke = len(run_state["smoke_out_by_stem"])
     if n_smoke < 1:
-        failures.append("DATGNOM smoke: no samples")
+        failures.append("fit_distances auto smoke: no samples")
 
     ok = len(failures) == 0
     return ok, failures, {

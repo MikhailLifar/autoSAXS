@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -35,7 +34,7 @@ from .ensemble import GNOM_BEST_OUT, cleanup_legacy_best_outs, clear_ensemble_di
 from .optimize import (
     _candidate_from_gnom_out,
     _guinier_from_profile,
-    _optimize_rmax_nm,
+    _search_shannon_alpha_dr,
 )
 from autosaxs.skill.gnom_fit_common import (
     N_SHANNON_CAP_FIT_SIZES,
@@ -71,22 +70,26 @@ def fit_sizes(
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     r"""
-    SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtain a size distribution function \(D(R)\) for a polydisperse system from a 1D SAXS curve.
+    SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtain a size distribution function \(D(R)\) / \(D_v(R)\) for a polydisperse system from a 1D SAXS curve.
+
+    **Auto path** (when `rmax_nm` is omitted): Guinier \(R_g\) (scale tool) → Shannon-bound \(R_{\max}\) grid \(\times\) \(\log_{10}\alpha\) joint GNOM search → pick by **`shape_tight_extent_dr`** (same soft-taper / non‑neg / low-wiggle / χ² philosophy as monodisperse `fit_distances`, with an adapted \(R_{\max}/R_g\) extent band for size distributions). Units: \(q\) in nm⁻¹, lengths in nm.
+
+    **Refine path** (when `rmax_nm` is set): single GNOM `--rmax` at the given Rmax, plus Rmax±10% close-fits ensemble unless `minimal=True`.
 
     ### Arguments
 
     - `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
     - `output_dir` (str, default `.`): Directory where the outputs are written (one subdirectory per input profile).
     - `shape` (str, default `spheres`): Polydisperse system model. Options: `spheres` (GNOM `--system=1` volume distribution for solid spheres), `rods` (GNOM `--system=5` length distribution for long cylinders, requires `rad56_nm` cylinder radius, deprecated), `ellipsoids` (accepted for API compatibility but **not supported by GNOM command-line** (GNOM system 2 is interactive-only), the skill will raise a clear error if selected).
-    - `rg_nm` (float | None): Optional metadata only (not passed to GNOM); recorded in outputs if set.
-    - `rmin_nm` (float | None): GNOM `--rmin` (nm). If omitted, not passed to GNOM.
-    - `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, optimized in `[ε, 3 × rg_max]` from in-process `fit_guinier` (30 s max). When set, skip Rmax search but still write the Rmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
+    - `rg_nm` (float | None): Optional Guinier Rg (nm) recorded in outputs. Auto search uses in-process `fit_guinier` Rg when `rmax_nm` is omitted (this argument alone does not drive the grid).
+    - `rmin_nm` (float | None): GNOM `--rmin` (nm). If omitted, not passed to GNOM. When set on the auto path, also floors the Shannon Rmax grid.
+    - `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, Shannon×α search (see above). When set, skip Rmax search but still write the Rmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
     - `rad56_nm` (float | None): GNOM `--rad56` for `shape=rods` (nm cylinder radius), deprecated. Ignored for spheres.
     - `first` (int | None): GNOM `--first` (1-based). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
     - `last` (int | None): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
     - `q_min` (float | None): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
     - `q_max` (float | None): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`. When both `last` and `q_max` are omitted, a silent safer default is applied.
-    - `alpha` (float | None): GNOM `--alpha`. If omitted, not passed to GNOM.
+    - `alpha` (float | None): GNOM `--alpha`. On auto path: if omitted, searched on \(\log_{10}\alpha\in[-1,2.5]\); if set, Rmax is still Shannon-gridded at that fixed α. On refine path: passed through (GNOM auto if omitted).
     - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
     - `force_zero_rmin` (str | None): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
     - `force_zero_rmax` (str | None): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y`.
@@ -96,8 +99,8 @@ def fit_sizes(
     ### Short parameter list
 
     - shape: shape of the polydisperse system particles, currently only spheres supported
-    - rad56_nm: depricated, has no effect
-    - alpha: regularization parameter, auto-optimized if not set
+    - rad56_nm: deprecated, has no effect for spheres
+    - alpha: regularization parameter; joint-searched on auto path if unset
     - nr: number of fitted points, stick to the default
 
     ### Returns
@@ -381,43 +384,12 @@ def _fit_sizes_paths(
     candidates: List[Dict[str, Any]] = []
     rmax_trials: List[Dict[str, Any]] = []
 
-    eval_tmp_path: Optional[str] = None
+    search_workdir: Optional[str] = None
+    alpha_final: Optional[float] = None if alpha is None else float(alpha)
     if user_rmax_nm is None:
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                delete=False,
-                dir=output_dir,
-                prefix="gnom_eval_",
-                suffix=".out",
-            ) as tf:
-                eval_tmp_path = tf.name
-        except OSError as e:
-            raise RuntimeError(f"fit_sizes: failed to create temporary GNOM output file: {e}")
-        assert guinier_info is not None
-        try:
-            best_rmax_nm, rmax_trials, rmax_failures = _optimize_rmax_nm(
-                atsas_dat_path=atsas_dat_path,
-                output_dir=output_dir,
-                system=system,
-                shape=shape,
-                rg_max_nm=float(guinier_info["rg_max"]),
-                rmin_nm=rmin_nm,
-                rad56_nm=rad56_nm,
-                first=first_pt,
-                last=last_pt,
-                alpha=alpha,
-                nr=nr,
-                eval_tmp_path=eval_tmp_path,
-                timeout_s=30.0,
-                event_bus=event_bus,
-            )
-        except RuntimeError as exc:
-            if eval_tmp_path:
-                try:
-                    os.remove(eval_tmp_path)
-                except OSError:
-                    pass
+        if rg_guinier_nm_val is None or not (
+            np.isfinite(float(rg_guinier_nm_val)) and float(rg_guinier_nm_val) > 0
+        ):
             return _finalize_fit_sizes_failure(
                 output_dir=output_dir,
                 profile=profile,
@@ -425,7 +397,41 @@ def _fit_sizes_paths(
                 atsas_dat_path=atsas_dat_path,
                 shape=shape,
                 system=system,
-                failure_reason="rmax_optimization_no_success",
+                failure_reason="missing_rg_guinier",
+                failures=failures,
+                candidates=candidates,
+                guinier_summary=guinier_summary,
+                event_bus=event_bus,
+                detail="fit_sizes auto path requires Guinier Rg from fit_guinier.",
+                rg_guinier_nm=rg_guinier_nm_val,
+            )
+        try:
+            best_search, search_trials, search_failures, grid_meta = _search_shannon_alpha_dr(
+                atsas_dat_path=atsas_dat_path,
+                output_dir=output_dir,
+                q_nm=q_nm,
+                system=system,
+                shape=shape,
+                rg_guinier_nm=float(rg_guinier_nm_val),
+                rmin_nm=rmin_nm,
+                rad56_nm=rad56_nm,
+                first=first_pt,
+                last=last_pt,
+                nr=nr,
+                force_zero_rmin=fz_rmin,
+                force_zero_rmax=fz_rmax,
+                fixed_alpha=alpha_final,
+                event_bus=event_bus,
+            )
+        except RuntimeError as exc:
+            return _finalize_fit_sizes_failure(
+                output_dir=output_dir,
+                profile=profile,
+                base=base,
+                atsas_dat_path=atsas_dat_path,
+                shape=shape,
+                system=system,
+                failure_reason="shannon_alpha_search_no_success",
                 failures=failures,
                 candidates=candidates,
                 guinier_summary=guinier_summary,
@@ -433,8 +439,29 @@ def _fit_sizes_paths(
                 detail=str(exc),
                 rg_guinier_nm=rg_guinier_nm_val,
             )
-        failures.extend(rmax_failures)
+        failures.extend(search_failures)
+        rmax_trials = [
+            {
+                "rmax_nm": t.get("rmax_nm"),
+                "log10_alpha": t.get("log10_alpha"),
+                "alpha": t.get("alpha"),
+                "score": t.get("score"),
+                "total_estimate": t.get("total_estimate"),
+                "neg_frac": t.get("neg_frac"),
+                "chi2_med": t.get("chi2_med"),
+                "d_over_rg": t.get("d_over_rg"),
+                "intermediate": True,
+            }
+            for t in search_trials
+        ]
         candidates.extend(rmax_trials)
+        best_rmax_nm = float(best_search["rmax_nm"])
+        try:
+            alpha_final = float(best_search["alpha"]) if best_search.get("alpha") is not None else alpha_final
+        except (TypeError, ValueError):
+            pass
+        search_workdir = best_search.get("search_workdir")
+        _ = grid_meta
     else:
         best_rmax_nm = float(user_rmax_nm)
 
@@ -445,12 +472,13 @@ def _fit_sizes_paths(
 
     if event_bus:
         last_msg = f" --last={last_pt}" if last_pt is not None else " (no --last)"
+        alpha_msg = f" --alpha={alpha_final:.6g}" if alpha_final is not None else " (auto alpha)"
         event_bus.publish(
             EventType.MESSAGE,
             {
                 "text": (
                     f"GNOM (fit_sizes): final run system={system} --first={first_pt}{last_msg} "
-                    f"rmax={best_rmax_nm:.4f} nm…"
+                    f"rmax={best_rmax_nm:.4f} nm{alpha_msg}…"
                 ),
             },
         )
@@ -465,13 +493,20 @@ def _fit_sizes_paths(
         rad56_nm=rad56_nm,
         first=first_pt,
         last=last_pt,
-        alpha=alpha,
+        alpha=alpha_final,
         nr=nr,
         out_path=best_gnom_out_path,
         force_zero_rmin=fz_rmin,
         force_zero_rmax=fz_rmax,
     )
     cleanup_legacy_best_outs(output_dir, keep=best_gnom_out_path)
+    if search_workdir:
+        try:
+            import shutil
+
+            shutil.rmtree(search_workdir, ignore_errors=True)
+        except OSError:
+            pass
     if not ok:
         failures.append(
             {
@@ -508,12 +543,13 @@ def _fit_sizes_paths(
         rad56_nm=rad56_nm,
         first=first_pt,
         last=last_pt,
-        alpha=alpha,
+        alpha=alpha_final,
         nr=nr,
         out_path=best_gnom_out_path,
         rc=rc,
         stderr=stderr,
         intermediate=False,
+        rg_guinier_nm=rg_guinier_nm_val,
     )
     candidates.append(best)
 
@@ -566,7 +602,7 @@ def _fit_sizes_paths(
             rad56_nm=rad56_nm,
             first=first_pt,
             last=last_pt,
-            alpha=alpha,
+            alpha=alpha_final,
             nr=nr,
             best_parsed=best_parsed,
             event_bus=event_bus,
@@ -581,12 +617,6 @@ def _fit_sizes_paths(
         ensemble_info=ensemble_info,
         shape=shape,
     )
-
-    if eval_tmp_path:
-        try:
-            os.remove(eval_tmp_path)
-        except OSError:
-            pass
 
     return write_success_artifacts(
         profile=profile,
@@ -611,7 +641,7 @@ def _fit_sizes_paths(
         last_pt=last_pt,
         rmin_nm=rmin_nm,
         rad56_nm=rad56_nm,
-        alpha=alpha,
+        alpha=alpha_final,
         nr=nr,
         ensemble_info=ensemble_info,
         event_bus=event_bus,

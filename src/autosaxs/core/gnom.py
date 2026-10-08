@@ -292,7 +292,12 @@ def distribution_arrays(
     return r, values, err
 
 def candidate_score(cand: Dict[str, Any]) -> float:
-    """score = Total Estimate − neg_frac (higher is better)."""
+    """Legacy TE − neg_frac score (higher is better).
+
+    Still used for close-fit ensemble ranking. Auto ``fit_distances`` /
+    ``fit_sizes`` selection uses ``autosaxs.core.shape_score.shape_tight_extent*``
+    instead.
+    """
     te = cand.get("total_estimate")
     try:
         te_v = float(te) if te is not None else float("-inf")
