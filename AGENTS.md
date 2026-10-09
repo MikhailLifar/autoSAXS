@@ -106,6 +106,8 @@ autosaxs/
 | analyze_kratky | `skill/analyze_kratky.py` | Dimensionless Kratky conformation analysis |
 | fit_distances | `skill/fit_distances/` | DATGNOM monodisperse p(r); GNOM refine+ensemble when `dmax_nm` set (`minimal` skips ensemble) |
 | fit_sizes | `skill/fit_sizes/` | GNOM polydisperse D(R); refine+ensemble when `rmax_nm` set (`minimal` skips ensemble) |
+| calc_profile | `skill/calc_profile.py` | ATSAS CRYSOL I(q) from PDB/CIF/ENT; `.xyz` → pseudo-PDB adapter; q out in nm⁻¹ |
+| model_lc | `skill/model_lc.py` | Custom NNLS: experimental profile ≈ ≤3 nonnegative library curves (CSV or `.dat`s); no ATSAS |
 | model_mixture | `skill/model_mixture/` | ATSAS MIXTURE (`fit_mixture` deprecated alias) |
 | model_bodies | `skill/model_bodies.py` | ATSAS BODIES (`fit_bodies` deprecated alias) |
 | model_dam | `skill/model_dam.py` | DAMMIF ab initio (+ DAMAVER when n_runs>1) |
@@ -356,7 +358,7 @@ Cloud Agent VMs do not have the lab conda env (`/home/mikl/.conda/envs/dev_autos
 
 Launch GUIs from a writable directory (for example `/tmp/saxs-watch`). `guisaxs-liveview` treats the current directory as the watch folder when it is writable.
 
-`autosaxs doctor` is the health check. It exits 0 when core dependencies are present. ATSAS is proprietary and is not installed here; doctor reports it as an optional warning. Skills that call ATSAS (`fit_distances`, `fit_sizes`, `model_bodies`, `model_dam`, `model_mixture`, `process_monodisperse`, `process_polydisperse`) will not run. Calibration, integration, subtraction, Guinier, plots, DENSS, and McSAS do not need ATSAS.
+`autosaxs doctor` is the health check. It exits 0 when core dependencies are present. ATSAS is proprietary and is not installed here; doctor reports it as an optional warning. Skills that call ATSAS (`fit_distances`, `fit_sizes`, `calc_profile`, `model_bodies`, `model_dam`, `model_mixture`, `process_monodisperse`, `process_polydisperse`) will not run. Calibration, integration, subtraction, Guinier, plots, DENSS, McSAS, and `model_lc` do not need ATSAS.
 
 `tests/must-run/skills/` is the suite that runs without external beamline fixtures. Two mixture contract tests still call the ATSAS gate and fail until ATSAS is on `PATH`. Real-data and liveview commit-gate tests expect validation data from `scripts/setup_validation_data.py` under a sibling `validation/` tree that is not in this repository. `helpers/run_tests.sh` hardcodes the lab conda path and lab checkout; on Cloud Agents invoke pytest with the venv Python instead.
 
