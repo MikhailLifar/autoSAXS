@@ -1622,3 +1622,255 @@ def test_process_polydisperse_multi_profile_batch(monkeypatch):
         assert len(out["samples"]) == 2
         assert isinstance(out["report_pdf_path"], list)
         assert len(out["report_pdf_path"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# calc_profile / model_lc
+# ---------------------------------------------------------------------------
+
+
+def test_calc_profile_and_model_lc_registered_and_cli_description(capsys):
+    from autosaxs.cli import main as cli_main
+    from autosaxs.skill import list_skills, SKILL_ORDER
+
+    skills = list_skills()
+    assert "calc_profile" in skills
+    assert "model_lc" in skills
+    assert "calc_profile" in SKILL_ORDER
+    assert "model_lc" in SKILL_ORDER
+    assert SKILL_ORDER.index("calc_profile") < SKILL_ORDER.index("model_mixture")
+    assert SKILL_ORDER.index("model_lc") < SKILL_ORDER.index("model_mixture")
+
+    rc = cli_main(["calc-profile", "--description"])
+    assert rc == 0
+    out = capsys.readouterr().out.lower()
+    assert "crysol" in out
+    assert "nm" in out
+
+    rc = cli_main(["model-lc", "--description"])
+    assert rc == 0
+    out = capsys.readouterr().out.lower()
+    assert "nnls" in out
+    assert "oligomer" in out or "library" in out
+
+
+def test_xyz_to_pseudo_pdb_writes_elements():
+    from autosaxs.skill.calc_profile import xyz_to_pseudo_pdb
+
+    with tempfile.TemporaryDirectory() as tmp:
+        xyz = os.path.join(tmp, "t.xyz")
+        pdb = os.path.join(tmp, "t.pdb")
+        Path(xyz).write_text("2\ntest\nC 0 0 0\nAu 1 0 0\n", encoding="utf-8")
+        xyz_to_pseudo_pdb(xyz, pdb)
+        text = Path(pdb).read_text(encoding="utf-8")
+        assert "ATOM" in text
+        assert "Au" in text
+        assert text.strip().endswith("END")
+
+
+def test_calc_profile_contract_with_mock_crysol(monkeypatch):
+    """Contract test without requiring a successful CRYSOL binary run."""
+    import subprocess as _sp
+
+    from autosaxs.skill import calc_profile as calc_profile_mod
+
+    _stub_atsas_installed(monkeypatch)
+    monkeypatch.setattr(calc_profile_mod, "_require_crysol", lambda: "/fake/bin/crysol")
+
+    def _fake_run(cmd, cwd=None, capture_output=False, text=False):
+        _ = capture_output, text
+        cwd = cwd or "."
+        prefix = "crysol"
+        # Minimal .int: s[A^-1], I, …
+        int_path = os.path.join(cwd, f"{prefix}.int")
+        with open(int_path, "w", encoding="utf-8") as f:
+            f.write(" header line Dro: 0.03\n")
+            for i in range(20):
+                s = 0.01 * i
+                f.write(f"{s:.6f}  {100.0 * np.exp(-(10 * s) ** 2):.6f}  1 1 1\n")
+        Path(os.path.join(cwd, f"{prefix}.log")).write_text(
+            "Rg from the slope of net intensity [A] ............... : 12.34\n",
+            encoding="utf-8",
+        )
+        Path(os.path.join(cwd, f"{prefix}.abs")).write_text(
+            "I_abs\n0.0 1e-3\n", encoding="utf-8"
+        )
+        return _sp.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(calc_profile_mod.subprocess, "run", _fake_run)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pdb = os.path.join(tmp, "toy.pdb")
+        Path(pdb).write_text(
+            "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00 20.00           C\nEND\n",
+            encoding="utf-8",
+        )
+        out_dir = os.path.join(tmp, "out")
+        result = calc_profile_mod.calc_profile(pdb, output_dir=out_dir, use_cache=False, n_points=20, smax_nm=4.0)
+
+        for key in (
+            "profile_path",
+            "int_path",
+            "abs_path",
+            "log_path",
+            "fit_path",
+            "fit_plot_path",
+            "structure_used_path",
+            "output_subdir",
+        ):
+            assert key in result, f"calc_profile must return {key}"
+
+        profile_path = str(result["profile_path"])
+        assert os.path.isfile(profile_path)
+        q, I, _, meta = read_saxs(profile_path)
+        assert len(q) == 20
+        assert float(np.max(q)) == pytest.approx(1.9, rel=1e-3)  # 0.19 A^-1 * 10
+        assert meta.get("source") == "crysol"
+        assert result["fit_path"] == ""
+
+
+def test_calc_profile_xyz_uses_pseudo_pdb(monkeypatch):
+    import subprocess as _sp
+
+    from autosaxs.skill import calc_profile as calc_profile_mod
+
+    _stub_atsas_installed(monkeypatch)
+    monkeypatch.setattr(calc_profile_mod, "_require_crysol", lambda: "/fake/bin/crysol")
+    seen = {}
+
+    def _fake_run(cmd, cwd=None, capture_output=False, text=False):
+        _ = capture_output, text
+        seen["cmd"] = list(cmd)
+        seen["cwd"] = cwd
+        prefix = "crysol"
+        int_path = os.path.join(cwd, f"{prefix}.int")
+        with open(int_path, "w", encoding="utf-8") as f:
+            for i in range(10):
+                s = 0.02 * i
+                f.write(f"{s:.6f}  {50.0}\n")
+        Path(os.path.join(cwd, f"{prefix}.log")).write_text("ok\n", encoding="utf-8")
+        return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(calc_profile_mod.subprocess, "run", _fake_run)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        xyz = os.path.join(tmp, "cluster.xyz")
+        Path(xyz).write_text("3\nc\nC 0 0 0\nC 1 0 0\nC 0 1 0\n", encoding="utf-8")
+        result = calc_profile_mod.calc_profile(xyz, output_dir=os.path.join(tmp, "o"), use_cache=False)
+        assert "--implicit-hydrogen=0" in seen["cmd"]
+        used = str(result["structure_used_path"])
+        assert used.endswith(".pdb")
+        assert os.path.isfile(used)
+
+
+@pytest.mark.skipif(
+    __import__("shutil").which("crysol") is None,
+    reason="CRYSOL not on PATH",
+)
+def test_calc_profile_real_crysol_smoke():
+    from autosaxs.skill.calc_profile import calc_profile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pdb = os.path.join(tmp, "toy.pdb")
+        Path(pdb).write_text(
+            "\n".join(
+                [
+                    "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00 20.00           C",
+                    "ATOM      2  CA  ALA A   2       3.800   0.000   0.000  1.00 20.00           C",
+                    "ATOM      3  CA  ALA A   3       1.900   3.300   0.000  1.00 20.00           C",
+                    "END",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        out = calc_profile(pdb, output_dir=os.path.join(tmp, "crysol"), n_points=31, smax_nm=4.0, use_cache=False)
+        q, I, _, _ = read_saxs(str(out["profile_path"]))
+        assert len(q) == 31
+        assert float(np.max(q)) == pytest.approx(4.0, rel=1e-3)
+        assert np.all(I > 0)
+
+
+def test_model_lc_fast_path_recovers_weights():
+    from autosaxs.skill.model_lc import model_lc
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.1, 2.0, 80)
+        c1 = np.exp(-((q / 0.8) ** 2))
+        c2 = np.exp(-((q / 1.5) ** 2))
+        true_w = np.array([0.7, 0.3])
+        I = true_w[0] * c1 + true_w[1] * c2
+        sigma = 0.01 * np.abs(I) + 1e-6
+
+        lib = os.path.join(tmp, "lib")
+        os.makedirs(lib)
+        write_saxs(os.path.join(lib, "a.dat"), q, c1, None, {"type": "lib"})
+        write_saxs(os.path.join(lib, "b.dat"), q, c2, None, {"type": "lib"})
+        profile = os.path.join(tmp, "exp.dat")
+        write_saxs(profile, q, I, sigma, {"type": "exp"})
+
+        out = model_lc(profile, lib, output_dir=os.path.join(tmp, "lc"), n_components=2, use_cache=False)
+        for key in ("fit_path", "residual_path", "weights_path", "plot_path", "components_used", "chi2", "output_subdir"):
+            assert key in out
+        assert os.path.isfile(str(out["fit_path"]))
+        assert os.path.isfile(str(out["weights_path"]))
+        wtxt = Path(str(out["weights_path"])).read_text(encoding="utf-8")
+        assert "a" in wtxt and "b" in wtxt
+        # Parse weights
+        rows = [r for r in wtxt.splitlines() if r and r[0].isdigit()]
+        weights = {}
+        for r in rows:
+            parts = r.split(",")
+            weights[parts[1]] = float(parts[2])
+        assert weights["a"] == pytest.approx(0.7, rel=5e-2)
+        assert weights["b"] == pytest.approx(0.3, rel=5e-2)
+
+
+def test_model_lc_combination_search_picks_true_pair():
+    from autosaxs.skill.model_lc import fit_nnls_sparse
+
+    rng = np.random.default_rng(0)
+    n_q = 60
+    q = np.linspace(0.1, 2.0, n_q)
+    # 5 library curves; truth = cols 1 and 3
+    A = np.column_stack([np.exp(-((q / s) ** 2)) for s in (0.5, 0.9, 1.2, 1.8, 2.5)])
+    w_true = np.array([0.0, 0.55, 0.0, 0.45, 0.0])
+    y = A @ w_true + rng.normal(0, 1e-4, size=n_q)
+    w, yhat, chi2, idxs = fit_nnls_sparse(A, y, n_components=2)
+    assert set(idxs) == {1, 3}
+    assert w[1] == pytest.approx(0.55, rel=1e-1)
+    assert w[3] == pytest.approx(0.45, rel=1e-1)
+    assert chi2 < 1.0
+
+
+def test_model_lc_csv_database():
+    from autosaxs.skill.model_lc import model_lc
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.1, 2.0, 50)
+        c1 = np.exp(-(q**2))
+        c2 = np.exp(-((q / 2) ** 2))
+        I = 0.4 * c1 + 0.6 * c2
+        csv_path = os.path.join(tmp, "lib.csv")
+        with open(csv_path, "w", encoding="utf-8") as f:
+            f.write("q,c1,c2\n")
+            for i in range(len(q)):
+                f.write(f"{q[i]},{c1[i]},{c2[i]}\n")
+        profile = os.path.join(tmp, "exp.dat")
+        write_saxs(profile, q, I, 0.01 * I, {})
+        out = model_lc(profile, csv_path, output_dir=os.path.join(tmp, "o"), n_components=2, use_cache=False)
+        assert "col1" in str(out["components_used"]) or "col2" in str(out["components_used"])
+        assert os.path.isfile(str(out["fit_path"]))
+
+
+def test_model_lc_rejects_bad_n_components():
+    from autosaxs.skill.model_lc import model_lc
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.1, 1.0, 20)
+        p = os.path.join(tmp, "p.dat")
+        write_saxs(p, q, np.ones_like(q), None, {})
+        lib = os.path.join(tmp, "l.dat")
+        write_saxs(lib, q, np.ones_like(q), None, {})
+        with pytest.raises(ValueError, match="n_components"):
+            model_lc(p, lib, output_dir=tmp, n_components=4, use_cache=False)
