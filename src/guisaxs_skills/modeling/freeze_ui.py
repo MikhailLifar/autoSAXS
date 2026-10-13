@@ -7,6 +7,8 @@ from typing import Any, Optional
 from PyQt5.QtCore import QEvent, QObject, Qt
 from PyQt5.QtWidgets import QLabel, QMainWindow, QVBoxLayout, QWidget
 
+from guisaxs_skills.ui.style import mark_font_role
+
 
 _FREEZE_MSG = (
     "Modeling job is still running.\n"
@@ -33,7 +35,8 @@ class ContextFreezeOverlay(QWidget):
         lab = QLabel(_FREEZE_MSG)
         lab.setAlignment(Qt.AlignCenter)
         lab.setWordWrap(True)
-        lab.setStyleSheet("color: #222; font-size: 14px; background: transparent;")
+        lab.setStyleSheet("color: #222; background: transparent;")
+        mark_font_role(lab, delta_pt=2, bold=True)
         lay.addStretch(1)
         lay.addWidget(lab, 0, Qt.AlignCenter)
         lay.addStretch(1)

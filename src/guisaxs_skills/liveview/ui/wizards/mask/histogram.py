@@ -46,7 +46,7 @@ class IntensityHistogramPanel(QWidget):
         self._lbl_hi = QLabel("hi: 0.00")
         self._lbl_neg = QLabel("")
         for lbl in (self._lbl_lo, self._lbl_hi, self._lbl_neg):
-            lbl.setStyleSheet("color: #c8d0d8; font-size: 11px;")
+            lbl.setStyleSheet("color: #c8d0d8;")
 
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)

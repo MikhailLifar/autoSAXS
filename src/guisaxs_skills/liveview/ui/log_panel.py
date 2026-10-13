@@ -6,6 +6,8 @@ from datetime import datetime
 
 from PyQt5.QtWidgets import QLabel, QPlainTextEdit, QTabWidget, QVBoxLayout, QWidget
 
+from guisaxs_skills.ui.style import mark_font_role
+
 
 class LiveviewLogPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -15,9 +17,7 @@ class LiveviewLogPanel(QWidget):
         for w in (self._full, self._app):
             w.setReadOnly(True)
             w.setLineWrapMode(QPlainTextEdit.NoWrap)
-            f = w.font()
-            f.setFamily("monospace")
-            w.setFont(f)
+            mark_font_role(w, mono=True)
 
         self._tabs = QTabWidget()
         self._tabs.addTab(self._full, "Full")
