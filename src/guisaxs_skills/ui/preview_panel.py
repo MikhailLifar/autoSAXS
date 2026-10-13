@@ -391,7 +391,15 @@ class PreviewPanel(QWidget):
         path_label_visible: bool = True,
         q_min: Any = None,
         q_max: Any = None,
+        viewer_path: Optional[str] = None,
     ) -> None:
+        """
+        Show a thumbnail for ``path``.
+
+        Click-through uses ``viewer_path`` when set (e.g. calibration_curve.png
+        thumbnail + calibration_curve.dat → DatCurveViewerDialog with matplotlib
+        toolbar). Otherwise the same ``path`` is opened.
+        """
         self._cleanup_temp_preview()
         self._source_path_for_viewer = None
         self._preview_q_min = q_min
@@ -407,7 +415,11 @@ class PreviewPanel(QWidget):
         if not path or not os.path.exists(path):
             return
         p = Path(path)
-        self._source_path_for_viewer = str(p)
+        vp = (viewer_path or "").strip()
+        if vp and os.path.exists(vp):
+            self._source_path_for_viewer = vp
+        else:
+            self._source_path_for_viewer = str(p)
         short, full = contracted_path_label(p)
         if path_label_visible:
             self._label.setText(short)

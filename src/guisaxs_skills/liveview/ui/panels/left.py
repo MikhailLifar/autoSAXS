@@ -56,6 +56,35 @@ def pick_calibration_curve_image_path(result: Dict[str, Any]) -> str:
     return ""
 
 
+def sibling_calibration_curve_dat_path(image_path: str) -> str:
+    """
+    Resolve the interactive .dat for a calibration curve raster.
+
+    ``calibrate`` writes ``calibration_curve.png`` and ``calibration_curve.dat``
+    side by side; PreviewPanel needs the .dat to open DatCurveViewerDialog
+    (matplotlib toolbar) instead of the legacy ImageViewerDialog.
+    """
+    p = (image_path or "").strip()
+    if not p:
+        return ""
+    path = Path(p)
+    if path.suffix.lower() == ".dat" and path.is_file():
+        return str(path)
+    if path.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp"):
+        sib = path.with_suffix(".dat")
+        if sib.is_file():
+            return str(sib)
+    return ""
+
+
+def pick_calibration_curve_dat_path(result: Dict[str, Any], *, image_path: str = "") -> str:
+    """Return path to the calibration curve .dat from a skill result or PNG sibling."""
+    p = result.get("calibration_curve_dat_path")
+    if isinstance(p, str) and os.path.isfile(p):
+        return p
+    return sibling_calibration_curve_dat_path(image_path)
+
+
 class LiveviewLeftPanel(QWidget):
     calibration_changed = pyqtSignal()
     calibration_cancel_requested = pyqtSignal()
@@ -654,7 +683,14 @@ class LiveviewLeftPanel(QWidget):
         if self._cal_wizard is not None:
             self._cal_wizard.set_running(bool(running))
 
-    def set_calibration_preview_path(self, path: str) -> None:
+    def set_calibration_preview_path(self, path: str, *, viewer_path: str = "") -> None:
+        """
+        Show the calibration curve thumbnail (usually PNG with peak overlays).
+
+        Click opens the standard DatCurveViewerDialog when a .dat is available
+        (``viewer_path`` or sibling of the PNG); otherwise falls back to the
+        raster ImageViewerDialog.
+        """
         p = (path or "").strip()
         if not p or not os.path.isfile(p):
             self._cal_preview.show_path("")
@@ -663,7 +699,10 @@ class LiveviewLeftPanel(QWidget):
             self.refresh_calibration_coach()
             return
         self._cal_hint.setVisible(False)
-        self._cal_preview.show_path(p)
+        vp = (viewer_path or "").strip()
+        if not vp or not os.path.isfile(vp):
+            vp = sibling_calibration_curve_dat_path(p)
+        self._cal_preview.show_path(p, viewer_path=vp or None)
         if self._cal_wizard is not None and self._cal_wizard.isVisible():
             self._cal_wizard.arm_close_coach()
         self.refresh_calibration_coach()
