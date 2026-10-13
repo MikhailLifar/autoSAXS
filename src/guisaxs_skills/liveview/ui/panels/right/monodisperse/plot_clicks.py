@@ -4,21 +4,17 @@ import os
 from pathlib import Path
 from typing import Callable, Optional
 
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QWidget
 
-from ....widgets.plots import DatCurveViewerDialog, mpl_navigation_toolbar, open_dat_curve_dialog
+from ....widgets.plots import DatCurveViewerDialog, MplToolbarViewerDialog, open_dat_curve_dialog
 from .plots import GnomFitPlot, PrPlot, ShapeFitPlot
 
 
-class _MonodisperseFirViewerDialog(QDialog):
+class _MonodisperseFirViewerDialog(MplToolbarViewerDialog):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Shape fit")
-        self.resize(1000, 600)
-        self._plot = ShapeFitPlot(figsize=(5.0, 3.5))
-        lay = QVBoxLayout(self)
-        lay.addWidget(mpl_navigation_toolbar(self._plot, self))
-        lay.addWidget(self._plot, 1)
+        plot = ShapeFitPlot(figsize=(5.0, 3.5))
+        super().__init__(parent, title="Shape fit", plot=plot, size=(1000, 600))
+        self._plot = plot
 
     def show_fir(self, path: str, *, label: str = "fit") -> None:
         short = Path(path).name
