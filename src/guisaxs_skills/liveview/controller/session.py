@@ -9,7 +9,7 @@ from ..services.skills import normalize_fit_request, profile_path_exists
 from ...logic.runner_qprocess import RunOutcome
 from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
 from ...core.paths import latest_stderr_path
-from ..ui.panels.left import pick_calibration_curve_image_path
+from ..ui.panels.left import pick_calibration_curve_dat_path, pick_calibration_curve_image_path
 
 if TYPE_CHECKING:
     from .controller import LiveviewController
@@ -333,7 +333,10 @@ class LiveviewSkillOutcomesHandler:
         img = pick_calibration_curve_image_path(result)
         if img:
             state.calibration_curve_plot_path = Path(img)
-            left.set_calibration_preview_path(img)
+            left.set_calibration_preview_path(
+                img,
+                viewer_path=pick_calibration_curve_dat_path(result, image_path=img),
+            )
         else:
             state.calibration_curve_plot_path = None
             left.set_calibration_preview_path("")
