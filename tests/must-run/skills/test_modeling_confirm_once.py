@@ -1,9 +1,9 @@
-"""Regression: pipeline Confirm must not re-run modeling after a Confirm already started."""
+"""ModelingChildManager Confirm protocol: open+Auto gate, pending only while busy."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
@@ -18,6 +18,7 @@ class _FakeHandle(QObject):
     confirmed = pyqtSignal(dict)
     finished_run = pyqtSignal(dict)
     busy_changed = pyqtSignal(bool)
+    auto_changed = pyqtSignal(bool)
     ready_for_context = pyqtSignal()
     process_exited = pyqtSignal(int)
     ready = pyqtSignal()
@@ -63,64 +64,95 @@ def _attach_fake_shape(mgr: ModelingChildManager, *, sample_id: str, tmp_path: P
     return fake
 
 
-def test_user_confirm_clears_pending_pipeline_confirm(tmp_path: Path):
-    """Trace A: pending Confirm + user Confirm must not send_confirm again on idle."""
+def test_case1_closed_child_ignores_confirm(tmp_path: Path):
+    """Child closed / not running → ignore (no pending)."""
     mgr = _manager(tmp_path)
-    fake = _attach_fake_shape(mgr, sample_id="samp-1", tmp_path=tmp_path)
-
-    # Pipeline asked while child looked busy → pending kept.
-    mgr._shape_busy = True  # noqa: SLF001
     mgr.request_confirm_shape()
-    assert mgr._shape_confirm_pending_key == "samp-1"  # noqa: SLF001
+    assert mgr._shape_confirm_pending is False  # noqa: SLF001
+
+    fake = _attach_fake_shape(mgr, sample_id="samp-1", tmp_path=tmp_path)
+    fake._running = False
+    fake.auto_changed.emit(True)
+    mgr.request_confirm_shape()
     assert fake.confirms == []
-
-    # User Confirm starts a run (child emits confirmed) — pending must be consumed.
-    fake.confirmed.emit({"mode": "dammif", "options": {"n_runs": 1}})
-    assert mgr._shape_confirm_pending_key is None  # noqa: SLF001
-
-    # Finish cycle previously double-flushed; must not send another Confirm.
-    fake.busy_changed.emit(False)
-    fake.finished_run.emit({"success": True, "result": {}})
-    assert fake.confirms == []
+    assert mgr._shape_confirm_pending is False  # noqa: SLF001
 
 
-def test_pipeline_confirm_skipped_after_same_analysis_confirmed(tmp_path: Path):
-    """Trace C: pipeline confirm after user Confirm for the same fingerprint is a no-op."""
+def test_case2_open_manual_ignores_confirm(tmp_path: Path):
+    """Open + Auto off → ignore (no pending)."""
     mgr = _manager(tmp_path)
     fake = _attach_fake_shape(mgr, sample_id="samp-2", tmp_path=tmp_path)
+    assert mgr._shape_auto is False  # noqa: SLF001
 
-    fake.confirmed.emit({"mode": "dammif", "options": {"n_runs": 1}})
     mgr.request_confirm_shape()
     assert fake.confirms == []
-    assert mgr._shape_confirm_pending_key is None  # noqa: SLF001
+    assert mgr._shape_confirm_pending is False  # noqa: SLF001
 
 
-def test_new_analysis_fingerprint_allows_another_confirm(tmp_path: Path):
-    """New GNOM path is a new analysis — pipeline Confirm may fire once."""
+def test_case3_open_auto_idle_sends_immediately(tmp_path: Path):
+    """Open + Auto on + idle → send_confirm() immediately."""
     mgr = _manager(tmp_path)
     fake = _attach_fake_shape(mgr, sample_id="samp-3", tmp_path=tmp_path)
+    fake.auto_changed.emit(True)
 
-    fake.confirmed.emit({"mode": "dammif", "options": {"n_runs": 1}})
-    assert fake.confirms == []
-
-    # Updated GNOM → different fingerprint → one pipeline Confirm allowed.
-    assert mgr._shape_push is not None  # noqa: SLF001
-    mgr._shape_push["gnom_path"] = str(tmp_path / "datgnom_refined.out")  # noqa: SLF001
     mgr.request_confirm_shape()
     assert fake.confirms == ["confirm"]
+    assert mgr._shape_confirm_pending is False  # noqa: SLF001
 
 
-def test_finished_run_does_not_flush_confirm(tmp_path: Path):
-    """finished_run alone must not send_confirm (busy=False owns idle flush)."""
+def test_case4_open_auto_busy_defers_then_flushes_once(tmp_path: Path):
+    """Open + Auto on + busy → pending; busy=False flushes once; finished_run does not."""
     mgr = _manager(tmp_path)
     fake = _attach_fake_shape(mgr, sample_id="samp-4", tmp_path=tmp_path)
+    fake.auto_changed.emit(True)
+    fake.busy_changed.emit(True)
 
-    mgr._shape_confirm_pending_key = "samp-4"  # noqa: SLF001
-    mgr._shape_busy = False  # noqa: SLF001
+    mgr.request_confirm_shape()
+    mgr.request_confirm_shape()  # latest wins — still one slot
+    assert fake.confirms == []
+    assert mgr._shape_confirm_pending is True  # noqa: SLF001
+
     fake.finished_run.emit({"success": True, "result": {}})
     assert fake.confirms == []
-    # Pending still there for busy=False to deliver (or confirmed to clear).
-    assert mgr._shape_confirm_pending_key == "samp-4"  # noqa: SLF001
+    assert mgr._shape_confirm_pending is True  # noqa: SLF001
 
     fake.busy_changed.emit(False)
     assert fake.confirms == ["confirm"]
+    assert mgr._shape_confirm_pending is False  # noqa: SLF001
+
+    # Second idle flush must not re-send.
+    fake.busy_changed.emit(False)
+    assert fake.confirms == ["confirm"]
+
+
+def test_discard_pending_on_manual(tmp_path: Path):
+    """Auto → Manual discards pending; idle flush must not send."""
+    mgr = _manager(tmp_path)
+    fake = _attach_fake_shape(mgr, sample_id="samp-5", tmp_path=tmp_path)
+    fake.auto_changed.emit(True)
+    fake.busy_changed.emit(True)
+    mgr.request_confirm_shape()
+    assert mgr._shape_confirm_pending is True  # noqa: SLF001
+
+    fake.auto_changed.emit(False)
+    assert mgr._shape_confirm_pending is False  # noqa: SLF001
+    assert mgr._shape_auto is False  # noqa: SLF001
+
+    fake.busy_changed.emit(False)
+    assert fake.confirms == []
+
+
+def test_discard_pending_on_close(tmp_path: Path):
+    """Child exit discards pending; no flush-on-ready / pending-when-closed."""
+    mgr = _manager(tmp_path)
+    fake = _attach_fake_shape(mgr, sample_id="samp-6", tmp_path=tmp_path)
+    fake.auto_changed.emit(True)
+    fake.busy_changed.emit(True)
+    mgr.request_confirm_shape()
+    assert mgr._shape_confirm_pending is True  # noqa: SLF001
+
+    fake.process_exited.emit(0)
+    assert mgr._shape is None  # noqa: SLF001
+    assert mgr._shape_confirm_pending is False  # noqa: SLF001
+    assert mgr._shape_auto is False  # noqa: SLF001
+    assert fake.confirms == []
