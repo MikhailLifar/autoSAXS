@@ -33,6 +33,7 @@ from .style import (
     apply_font_point_size,
     clamp_font_point_size,
     load_font_point_size,
+    mark_font_role,
 )
 
 
@@ -49,10 +50,7 @@ class _AppearancePage(QWidget):
         root.setSpacing(14)
 
         title = QLabel("Appearance")
-        title_font = QFont(title.font())
-        title_font.setPointSize(max(title_font.pointSize() + 4, 16))
-        title_font.setBold(True)
-        title.setFont(title_font)
+        mark_font_role(title, delta_pt=4, bold=True)
         root.addWidget(title)
 
         blurb = QLabel("Choose a comfortable reading size for menus, labels, forms, and panels.")
@@ -76,9 +74,7 @@ class _AppearancePage(QWidget):
         section_lay.setSpacing(12)
 
         heading = QLabel("Font size")
-        heading_font = QFont(heading.font())
-        heading_font.setBold(True)
-        heading.setFont(heading_font)
+        mark_font_role(heading, bold=True)
         section_lay.addWidget(heading)
 
         hint = QLabel("Preview updates as you adjust. Click Apply or OK to use the size app-wide.")
@@ -287,10 +283,7 @@ class SettingsDialog(QDialog):
         root.setContentsMargins(14, 14, 14, 12)
         root.setSpacing(12)
         header = QLabel("Settings")
-        header_font = QFont(header.font())
-        header_font.setPointSize(max(header_font.pointSize() + 2, 14))
-        header_font.setBold(True)
-        header.setFont(header_font)
+        mark_font_role(header, delta_pt=2, bold=True)
         root.addWidget(header)
         root.addLayout(body, 1)
         root.addWidget(buttons)
