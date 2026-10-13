@@ -215,6 +215,7 @@ class ShapeModelingWindow(QMainWindow):
         self._auto_mode = ModelingAutoMode(
             self, auto_btn=self._auto_btn, confirm_btn=self._confirm
         )
+        self._auto_mode.auto_changed.connect(self._on_auto_changed_ipc)
 
         pass_box = QGroupBox("Quality passport")
         pass_lay = QVBoxLayout(pass_box)
@@ -397,6 +398,10 @@ class ShapeModelingWindow(QMainWindow):
 
     def _options_for_confirm(self) -> Dict[str, Any]:
         return {"n_runs": int(self._n_runs.value())}
+
+    def _on_auto_changed_ipc(self, auto: bool) -> None:
+        if self._ipc is not None:
+            self._ipc.send_auto_changed(bool(auto))
 
     def _on_confirm_ipc(self) -> None:
         if not self._auto_mode.should_accept_ipc_confirm():

@@ -83,6 +83,10 @@ class ModelingIpcChild(QObject):
     def send_busy(self, busy: bool) -> None:
         self.send("busy", busy=bool(busy))
 
+    def send_auto_changed(self, auto: bool) -> None:
+        """Notify parent that the child's Auto/Manual coach flag changed."""
+        self.send("auto_changed", auto=bool(auto))
+
     def send_ready_for_context(self) -> None:
         """Ask parent to re-push ModelingContext after a deferred push during a busy job."""
         self.send("ready_for_context")
@@ -111,6 +115,7 @@ class ModelingChildHandle(QObject):
     finished_run = pyqtSignal(dict)
     failed = pyqtSignal(str)
     busy_changed = pyqtSignal(bool)
+    auto_changed = pyqtSignal(bool)
     ready_for_context = pyqtSignal()
     process_exited = pyqtSignal(int)
 
@@ -197,6 +202,8 @@ class ModelingChildHandle(QObject):
                 self.failed.emit(str(msg.get("message") or "failed"))
             elif t == "busy":
                 self.busy_changed.emit(bool(msg.get("busy")))
+            elif t == "auto_changed":
+                self.auto_changed.emit(bool(msg.get("auto")))
             elif t == "ready_for_context":
                 self.ready_for_context.emit()
 
