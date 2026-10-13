@@ -6,25 +6,17 @@ import os
 from pathlib import Path
 from typing import Callable, Optional
 
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QWidget
 
-from ..widgets.plots import mpl_navigation_toolbar
+from ..widgets.plots import MplToolbarViewerDialog
 from ..panels.right.gnom_residuals_plot import GnomResidualsPlot
 
 
-class _MplViewerDialog(QDialog):
-    def __init__(self, *, title: str, plot: QWidget, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.resize(1000, 600)
-        self._plot = plot
-        lay = QVBoxLayout(self)
-        lay.addWidget(mpl_navigation_toolbar(self._plot, self))
-        lay.addWidget(self._plot, 1)
+class _MplViewerDialog(MplToolbarViewerDialog):
+    """Enlarged GNOM-adjust plot viewer (toolbar + F11 fullscreen)."""
 
-    @property
-    def plot(self):
-        return self._plot
+    def __init__(self, *, title: str, plot: QWidget, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent, title=title, plot=plot, size=(1000, 600))
 
 
 class AdjustPlotClickRouter:
