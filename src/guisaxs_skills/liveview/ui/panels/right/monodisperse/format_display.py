@@ -4,6 +4,9 @@ import math
 from typing import Any, Mapping, Optional
 
 from guisaxs_skills.ui.passport_format import (
+    D_MAX,
+    S_MAX,
+    S_MIN,
     format_display_number,
     format_metric_label,
     format_value_with_class,
@@ -231,7 +234,7 @@ def format_gnom_passport_rows(
     Passport rows as ``(metric, value, poor)``.
 
     ``poor`` marks rows that indicate failure (for per-line red styling).
-    ``compact`` omits wiggle index, s_max, and I(0) (analysis-pane preview).
+    ``compact`` omits wiggle index, ``S_MAX``, and I(0) (analysis-pane preview).
     Numeric metrics stay numeric; overall status is a separate Status row.
     """
     from autosaxs.core.gnom_quality import PrQualityThresholds
@@ -285,12 +288,12 @@ def format_gnom_passport_rows(
             n_s = math.floor(float(n_s))
         except (TypeError, ValueError):
             pass
-        rows.append(("n_shannon", format_display_number(n_s), False))
+        rows.append(("N Shannon", format_display_number(n_s), False))
 
     if not compact:
         s_max = scalar_value(result.get("shannon_s_max"))
         if s_max is not None and s_max not in ("", None):
-            rows.append(("s_max", format_display_number(s_max), False))
+            rows.append((S_MAX, format_display_number(s_max), False))
 
         wig = scalar_value(result.get("wiggle_index"))
         wig_class = str(scalar_value(result.get("wiggle_class")) or "unknown")
@@ -298,7 +301,7 @@ def format_gnom_passport_rows(
             wig_poor = wig_class.lower() == "high"
             rows.append(
                 (
-                    "wiggle_index",
+                    "Wiggle index",
                     format_value_with_class(wig, wig_class),
                     wig_poor,
                 )
@@ -310,7 +313,7 @@ def format_gnom_passport_rows(
     if s_min is not None and s_min not in ("", None):
         rows.append(
             (
-                "s_min",
+                S_MIN,
                 format_display_number(s_min),
                 shannon_row_poor(shannon_ok=result.get("shannon_ok"), shannon_class=s_class),
             )
@@ -318,7 +321,7 @@ def format_gnom_passport_rows(
     if s_class and s_class.lower() != "unknown":
         rows.append(
             (
-                "shannon_class",
+                "Shannon class",
                 s_class,
                 s_class.lower() in ("unreliable", "failed", "fail"),
             )
@@ -329,23 +332,22 @@ def format_gnom_passport_rows(
         rg_g = handoff.get("rg")
     if rg_g is not None and scalar_value(rg_g) not in ("", None):
         rows.append(
-            ("Rg_guinier", f"{format_display_number(rg_g)} nm", False)
+            ("Rg (Guinier)", f"{format_display_number(rg_g)} nm", False)
         )
     if not compact:
         i0_g = handoff.get("i0")
         if i0_g is not None and scalar_value(i0_g) not in ("", None):
             rows.append(
-                ("I(0)_guinier", format_display_number(i0_g), False)
+                ("I(0) (Guinier)", format_display_number(i0_g), False)
             )
 
     rg_pr = result.get("rg_pr_nm")
     if rg_pr is not None and scalar_value(rg_pr) not in ("", None):
-        rows.append(("Rg_P(r)", f"{format_display_number(rg_pr)} nm", False))
+        rows.append(("Rg (P(r))", f"{format_display_number(rg_pr)} nm", False))
     if not compact:
         i0_pr = result.get("i0_pr")
         if i0_pr is not None and scalar_value(i0_pr) not in ("", None):
-            rows.append(("I0_P(r)", format_display_number(i0_pr), False))
-
+            rows.append(("I(0) (P(r))", format_display_number(i0_pr), False))
     drg = scalar_value(result.get("delta_rg_pct"))
     if drg is not None and drg not in ("", None):
         try:
@@ -367,7 +369,7 @@ def format_gnom_passport_rows(
         )
 
     if dmax is not None and dmax not in ("", None):
-        rows.append(("Dmax", f"{format_display_number(dmax)} nm", False))
+        rows.append((D_MAX, f"{format_display_number(dmax)} nm", False))
 
     return rows
 

@@ -29,6 +29,7 @@ from autosaxs.core.gnom import parse_gnom_out
 from autosaxs.core.gnom_quality import analyze_dr_quality
 from autosaxs.core.utils import ensure_q_nm, load_saxs_1d_any, write_saxs_atsas_format
 
+from ....ui.passport_format import Q_MAX, Q_MIN, R_MAX, R_MAX_CAP, R_MIN
 from ....ui.style import COLOR_QUALITY_POOR
 from ....ui.widgets.spin_sliders import AlphaSpinSlider, LengthNmSpinSlider
 from ..panels.right.gnom_residuals_plot import GnomResidualsPlot
@@ -138,7 +139,7 @@ class SizesAdjustWizardDialog(QDialog):
         self._alpha = AlphaSpinSlider()
         self._d0 = QCheckBox("D(0) = 0")
         self._d0.setChecked(True)
-        self._drmax = QCheckBox("D(Rmax) = 0")
+        self._drmax = QCheckBox(f"D({R_MAX_CAP}) = 0")
         self._drmax.setChecked(True)
         self._btn_restore = QPushButton("Restore auto")
         self._btn_restore.clicked.connect(self._on_restore_auto)
@@ -157,10 +158,10 @@ class SizesAdjustWizardDialog(QDialog):
         self._passport_table = PassportTableWidget()
 
         form = QFormLayout()
-        form.addRow("q-min (nm⁻¹)", self._q_min)
-        form.addRow("q-max (nm⁻¹)", self._q_max)
-        form.addRow("rmin (nm)", self._rmin)
-        form.addRow("rmax (nm)", self._rmax)
+        form.addRow(f"{Q_MIN} (nm⁻¹)", self._q_min)
+        form.addRow(f"{Q_MAX} (nm⁻¹)", self._q_max)
+        form.addRow(f"{R_MIN} (nm)", self._rmin)
+        form.addRow(f"{R_MAX} (nm)", self._rmax)
         form.addRow("alpha", self._alpha)
 
         passport_col = QVBoxLayout()
@@ -448,7 +449,7 @@ class SizesAdjustWizardDialog(QDialog):
                 q_max=params.get("q_max"),
             )
         except (TypeError, ValueError, RuntimeError) as exc:
-            self.set_passport(text=f"Invalid q-min/q-max: {exc}", poor=True)
+            self.set_passport(text=f"Invalid {Q_MIN}/{Q_MAX}: {exc}", poor=True)
             return
         alpha = params.get("alpha")
         rmin = params.get("rmin_nm")
