@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt5.QtCore import QTimer, Qt
-from PyQt5.QtGui import QKeySequence
+from PyQt5.QtCore import QEvent, QObject, QTimer, Qt
+from PyQt5.QtGui import QKeyEvent, QKeySequence
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -12,7 +12,6 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
-    QShortcut,
     QSplitter,
     QTextEdit,
     QVBoxLayout,
@@ -113,6 +112,7 @@ class LiveviewMainWindow(QMainWindow):
         self._enforce_column_width_ratio()
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._uninstall_auto_manual_shortcuts()
         try:
             self._left.shutdown_ui()
         except Exception:
@@ -313,13 +313,48 @@ class LiveviewMainWindow(QMainWindow):
         self._middle.set_process_mode(manual=self._controller.session.is_stopped)
 
     def _wire_auto_manual_shortcuts(self) -> None:
-        """Ctrl+X Auto→Manual; Ctrl+P Manual→Auto. Skip when typing in a text field."""
-        sc_manual = QShortcut(QKeySequence("Ctrl+X"), self)
-        sc_manual.setContext(Qt.WindowShortcut)
-        sc_manual.activated.connect(self._on_shortcut_switch_to_manual)
-        sc_auto = QShortcut(QKeySequence("Ctrl+P"), self)
-        sc_auto.setContext(Qt.WindowShortcut)
-        sc_auto.activated.connect(self._on_shortcut_switch_to_auto)
+        """Ctrl+X Auto→Manual; Ctrl+P Manual→Auto for the whole liveview app.
+
+        QApplication event filter (not WindowShortcut): works while any liveview
+        wizard has focus — modeless Qt.Window chrome (mono/poly, calib, …) and
+        ApplicationModal dialogs. Window-parented QShortcut / ApplicationShortcut
+        is blocked when a modal dialog freezes the main window.
+
+        Skip when typing in a text field. Process stays click-only; Ctrl+P only
+        resumes Auto (same as Resume), never Process.
+        """
+        app = QApplication.instance()
+        if app is None:
+            return
+        # Replace any prior filter from a previous main window in this process.
+        prev = getattr(app, "_guisaxs_liveview_auto_manual_filter", None)
+        if prev is not None:
+            try:
+                app.removeEventFilter(prev)
+            except Exception:
+                pass
+        app.installEventFilter(self)
+        setattr(app, "_guisaxs_liveview_auto_manual_filter", self)
+
+    def _uninstall_auto_manual_shortcuts(self) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        if getattr(app, "_guisaxs_liveview_auto_manual_filter", None) is self:
+            try:
+                app.removeEventFilter(self)
+            except Exception:
+                pass
+            setattr(app, "_guisaxs_liveview_auto_manual_filter", None)
+
+    def _widget_belongs_to_liveview(self, w: QWidget | None) -> bool:
+        """True if *w* is under this main window (including top-level child wizards)."""
+        cur: QWidget | None = w
+        while cur is not None:
+            if cur is self:
+                return True
+            cur = cur.parentWidget()
+        return False
 
     @staticmethod
     def _focus_is_text_edit() -> bool:
@@ -330,15 +365,29 @@ class LiveviewMainWindow(QMainWindow):
             w = w.parentWidget()
         return False
 
-    def _on_shortcut_switch_to_manual(self) -> None:
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # noqa: N802
+        if event.type() != QEvent.KeyPress or not isinstance(event, QKeyEvent):
+            return super().eventFilter(obj, event)
+        if event.isAutoRepeat():
+            return super().eventFilter(obj, event)
+        mods = event.modifiers() & (
+            Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier | Qt.MetaModifier
+        )
+        if mods != Qt.ControlModifier:
+            return super().eventFilter(obj, event)
+        key = event.key()
+        if key not in (Qt.Key_X, Qt.Key_P):
+            return super().eventFilter(obj, event)
+        target = obj if isinstance(obj, QWidget) else QApplication.focusWidget()
+        if not self._widget_belongs_to_liveview(target):
+            return super().eventFilter(obj, event)
         if self._focus_is_text_edit():
-            return
-        self._controller.shortcut_switch_to_manual()
-
-    def _on_shortcut_switch_to_auto(self) -> None:
-        if self._focus_is_text_edit():
-            return
+            return super().eventFilter(obj, event)
+        if key == Qt.Key_X:
+            self._controller.shortcut_switch_to_manual()
+            return True
         self._controller.shortcut_switch_to_auto()
+        return True
 
     def _open_subtraction_wizard(self) -> None:
         buf = self._state.buffer_dat_path
