@@ -48,6 +48,10 @@ class ModelingChildManager(QObject):
         # Sample key for a deferred Confirm (pipeline asked while child was busy).
         self._shape_confirm_pending_key: Optional[str] = None
         self._dr_confirm_pending_key: Optional[str] = None
+        # Fingerprint of the last Confirm that actually started a run (user or IPC).
+        # Drops a stale pipeline confirm for the same analysis so modeling runs once.
+        self._shape_last_confirmed_fp: Optional[str] = None
+        self._dr_last_confirmed_fp: Optional[str] = None
 
     def shape_child(self) -> Optional[ModelingChildHandle]:
         """Active guisaxs-shape handle (tests / diagnostics)."""
@@ -80,6 +84,7 @@ class ModelingChildManager(QObject):
         if self._shape is not None and self._shape.is_running():
             self._shape.send_context(ctx)
             self._shape.send_focus()
+            self._flush_shape_confirm()
             return
         self._shape = start_modeling_child(
             app="shape",
@@ -88,6 +93,8 @@ class ModelingChildManager(QObject):
             cwd=self._state.watchdir,
         )
         self._wire_shape_handle(self._shape)
+        # Deliver a Confirm that arrived before the child process existed.
+        self._shape.ready.connect(self._flush_shape_confirm)
 
     def start_dr(
         self,
@@ -113,6 +120,7 @@ class ModelingChildManager(QObject):
         if self._dr is not None and self._dr.is_running():
             self._dr.send_context(ctx)
             self._dr.send_focus()
+            self._flush_dr_confirm()
             return
         self._dr = start_modeling_child(
             app="dr",
@@ -121,6 +129,8 @@ class ModelingChildManager(QObject):
             cwd=self._state.watchdir,
         )
         self._wire_dr_handle(self._dr)
+        # Deliver a Confirm that arrived before the child process existed.
+        self._dr.ready.connect(self._flush_dr_confirm)
 
     def shutdown(self) -> None:
         """Stop supervised modeling children before liveview tears down Qt objects."""
@@ -132,6 +142,8 @@ class ModelingChildManager(QObject):
         self._dr_push = None
         self._shape_confirm_pending_key = None
         self._dr_confirm_pending_key = None
+        self._shape_last_confirmed_fp = None
+        self._dr_last_confirmed_fp = None
         if self._shape_busy:
             self._shape_busy = False
             self.modeling_busy_changed.emit("shape", False)
@@ -206,6 +218,11 @@ class ModelingChildManager(QObject):
         key = self._push_key(self._shape_push)
         if not key:
             return
+        # Same analysis already Confirmed (user click or prior IPC) — do not re-run.
+        fp = self._push_fingerprint(self._shape_push)
+        if fp and fp == self._shape_last_confirmed_fp:
+            self._shape_confirm_pending_key = None
+            return
         self._shape_confirm_pending_key = key
         self._flush_shape_confirm()
 
@@ -213,6 +230,10 @@ class ModelingChildManager(QObject):
         """Pipeline step: Confirm for the sample last pushed to the DR child."""
         key = self._push_key(self._dr_push)
         if not key:
+            return
+        fp = self._push_fingerprint(self._dr_push)
+        if fp and fp == self._dr_last_confirmed_fp:
+            self._dr_confirm_pending_key = None
             return
         self._dr_confirm_pending_key = key
         self._flush_dr_confirm()
@@ -258,12 +279,12 @@ class ModelingChildManager(QObject):
             self._flush_dr_confirm()
 
     def _on_shape_finished_run(self, _msg: dict) -> None:
+        # Preview only — idle Confirm flush is owned by busy_changed(False) to avoid
+        # a double send_confirm in the same finish (busy=false then finished).
         self.preview_refresh_requested.emit("shape")
-        self._flush_shape_confirm()
 
     def _on_dr_finished_run(self, _msg: dict) -> None:
         self.preview_refresh_requested.emit("dr")
-        self._flush_dr_confirm()
 
     @staticmethod
     def _push_key(push: Optional[Dict[str, Any]]) -> str:
@@ -274,6 +295,40 @@ class ModelingChildManager(QObject):
             return sid
         return str(push.get("stem") or "").strip()
 
+    @staticmethod
+    def _push_fingerprint(push: Optional[Dict[str, Any]]) -> str:
+        """Identity of one Confirm-worthy analysis (sample + paths)."""
+        if not push:
+            return ""
+        key = ModelingChildManager._push_key(push)
+        if not key:
+            return ""
+        return "|".join(
+            [
+                key,
+                str(push.get("profile_path") or "").strip(),
+                str(push.get("gnom_path") or "").strip(),
+                str(push.get("output_root") or "").strip(),
+            ]
+        )
+
+    def _note_shape_confirmed(self) -> None:
+        """User or IPC Confirm started a run — drop matching pending pipeline Confirm."""
+        fp = self._push_fingerprint(self._shape_push)
+        if fp:
+            self._shape_last_confirmed_fp = fp
+        key = self._push_key(self._shape_push)
+        if key and self._shape_confirm_pending_key == key:
+            self._shape_confirm_pending_key = None
+
+    def _note_dr_confirmed(self) -> None:
+        fp = self._push_fingerprint(self._dr_push)
+        if fp:
+            self._dr_last_confirmed_fp = fp
+        key = self._push_key(self._dr_push)
+        if key and self._dr_confirm_pending_key == key:
+            self._dr_confirm_pending_key = None
+
     def _flush_shape_confirm(self) -> None:
         pending = self._shape_confirm_pending_key
         if not pending:
@@ -281,6 +336,10 @@ class ModelingChildManager(QObject):
         current = self._push_key(self._shape_push)
         if current != pending:
             # Context moved (e.g. history browse) — drop stale Confirm.
+            self._shape_confirm_pending_key = None
+            return
+        fp = self._push_fingerprint(self._shape_push)
+        if fp and fp == self._shape_last_confirmed_fp:
             self._shape_confirm_pending_key = None
             return
         if self._shape is None or not self._shape.is_running() or self._shape_busy:
@@ -294,6 +353,10 @@ class ModelingChildManager(QObject):
             return
         current = self._push_key(self._dr_push)
         if current != pending:
+            self._dr_confirm_pending_key = None
+            return
+        fp = self._push_fingerprint(self._dr_push)
+        if fp and fp == self._dr_last_confirmed_fp:
             self._dr_confirm_pending_key = None
             return
         if self._dr is None or not self._dr.is_running() or self._dr_busy:
@@ -470,6 +533,8 @@ class ModelingChildManager(QObject):
         )
 
     def _on_shape_confirmed(self, msg: dict) -> None:
+        # Consume pending pipeline Confirm for this analysis (avoids run-twice on idle flush).
+        self._note_shape_confirmed()
         mode = str(msg.get("mode") or "none").lower()
         try:
             self._state.monodisperse_shape_mode = MonodisperseShapeMode(mode)
@@ -499,6 +564,7 @@ class ModelingChildManager(QObject):
         self.preview_refresh_requested.emit("shape")
 
     def _on_dr_confirmed(self, msg: dict) -> None:
+        self._note_dr_confirmed()
         mode = str(msg.get("mode") or "none").lower()
         try:
             self._state.polydisperse_mixture_mode = PolydisperseMixtureMode(mode)
