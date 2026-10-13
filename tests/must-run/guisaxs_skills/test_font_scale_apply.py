@@ -82,3 +82,38 @@ def test_apply_font_scales_sticky_and_role_widgets(qapp):
     assert titled.font().pointSize() == clamp_font_point_size(size2 + 4)
 
     win.close()
+
+
+def test_apply_font_scales_liveview_widget_tree(qapp, tmp_path):
+    """Full liveview chrome: after Apply, no QWidget keeps a foreign point size."""
+    from guisaxs_skills.liveview.window import LiveviewMainWindow
+    from guisaxs_skills.ui.style import _should_skip_font_walk
+
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    window = LiveviewMainWindow(watchdir=watch)
+    window.show()
+    qapp.processEvents()
+
+    size = 15
+    apply_font_point_size(qapp, point_size=size, persist=False)
+    qapp.processEvents()
+
+    bad = []
+    for w in qapp.allWidgets():
+        if w is None or _should_skip_font_walk(w):
+            continue
+        # Role deltas are clamped into the allowed band; base widgets must match size.
+        delta = w.property("_autosaxs_font_delta_pt")
+        try:
+            delta_i = int(delta) if delta is not None else 0
+        except (TypeError, ValueError):
+            delta_i = 0
+        expect = clamp_font_point_size(size + delta_i)
+        got = w.font().pointSize()
+        if got != expect:
+            bad.append((type(w).__name__, got, expect))
+            if len(bad) >= 25:
+                break
+    window.close()
+    assert not bad, f"liveview widgets off-size after Apply (sample): {bad}"
