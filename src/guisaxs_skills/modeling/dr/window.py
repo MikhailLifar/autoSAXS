@@ -79,13 +79,21 @@ class DrModelingWindow(QMainWindow):
         self._plot_clicks = ModelingPlotClickRouter(self)
         self._build_ui()
         install_context_freeze(self)
-        self.apply_context(ctx)
+        # First bind may seed session-owned run knobs; later IPC pushes must not.
+        self.apply_context(ctx, seed_controls=True)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._auto_mode.shutdown()
         super().closeEvent(event)
 
-    def apply_context(self, ctx: ModelingContext) -> None:
+    def apply_context(self, ctx: ModelingContext, *, seed_controls: bool = False) -> None:
+        """Bind sample paths/artifacts from liveview.
+
+        User run controls (max_nph, r_max, q-range, init guesses, Auto/Manual) are
+        owned by this modeling-app session. Sample switch / ModelingContext push
+        updates paths and catalogs only — never clobber knobs or rewrite run-params
+        to liveview/disk defaults. Confirm always reads the current UI values.
+        """
         if self._runtime.is_running():
             enter_context_freeze(self)
             return
@@ -103,32 +111,37 @@ class DrModelingWindow(QMainWindow):
             else:
                 self._pf_outdir.set_text("")
             self._sync_outdir_to_mode("mixture")
-            opts = normalize_model_mixture_options(self._ctx.options or {})
-            # Keep init_* from context even if normalize already included them.
-            for key in ("init_radii_nm", "init_fractions", "init_poly_nm"):
-                raw = (self._ctx.options or {}).get(key)
-                if raw is not None and raw != "":
-                    opts[key] = raw
-            had_max_nph = "max_nph" in opts
-            for key, spin in (
-                ("max_nph", self._sp_max_nph),
-                ("r_max", self._sp_r_max),
-                ("poly_max", self._sp_poly_max),
-                ("q_min_nm", self._q_min),
-                ("q_max_nm", self._q_max),
-            ):
-                if key in opts and opts[key] is not None:
-                    try:
-                        spin.setValue(float(opts[key]) if spin is not self._sp_max_nph else int(opts[key]))
-                    except (TypeError, ValueError):
-                        pass
-            self._apply_init_options(opts)
-            disk = self._apply_run_params_from_disk()
-            if isinstance(disk, dict) and "max_nph" in disk:
-                had_max_nph = True
-            self._apply_fit_sizes_component_guesses(opts_had_max_nph=had_max_nph)
+            if seed_controls:
+                self._seed_run_controls_from_context()
         self._try_load_existing_artifacts()
         self._update_confirm_enabled()
+
+    def _seed_run_controls_from_context(self) -> None:
+        """One-shot launch seed for mixture knobs (ctx options, disk, fit_sizes hints)."""
+        opts = normalize_model_mixture_options(self._ctx.options or {})
+        # Keep init_* from context even if normalize already included them.
+        for key in ("init_radii_nm", "init_fractions", "init_poly_nm"):
+            raw = (self._ctx.options or {}).get(key)
+            if raw is not None and raw != "":
+                opts[key] = raw
+        had_max_nph = "max_nph" in opts
+        for key, spin in (
+            ("max_nph", self._sp_max_nph),
+            ("r_max", self._sp_r_max),
+            ("poly_max", self._sp_poly_max),
+            ("q_min_nm", self._q_min),
+            ("q_max_nm", self._q_max),
+        ):
+            if key in opts and opts[key] is not None:
+                try:
+                    spin.setValue(float(opts[key]) if spin is not self._sp_max_nph else int(opts[key]))
+                except (TypeError, ValueError):
+                    pass
+        self._apply_init_options(opts)
+        disk = self._apply_run_params_from_disk()
+        if isinstance(disk, dict) and "max_nph" in disk:
+            had_max_nph = True
+        self._apply_fit_sizes_component_guesses(opts_had_max_nph=had_max_nph)
 
     def _fit_sizes_handoff_path(self) -> Optional[Path]:
         """Locate fit_sizes YAML that owns D(R) peak / n_phases suggestions."""

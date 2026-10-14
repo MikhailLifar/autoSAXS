@@ -8,7 +8,13 @@ from typing import Any, Dict, Optional
 
 @dataclass
 class ModelingContext:
-    """Semantic paths + engine prefs for PathField hints / Confirm."""
+    """Sample paths (+ optional launch seed prefs) from liveview/CLI into modeling apps.
+
+    After the modeling window is open, user run controls (n_runs, mixture knobs,
+    Auto/Manual) are owned by the app session — IPC context push must not rewrite
+    them from ``options`` / disk defaults. ``options`` seeds Confirm knobs only on
+    first bind (``apply_context(..., seed_controls=True)``).
+    """
 
     profile_path: str = ""
     gnom_path: str = ""

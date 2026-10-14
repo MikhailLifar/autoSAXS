@@ -76,13 +76,21 @@ class ShapeModelingWindow(QMainWindow):
         self._gnom_watcher.fileChanged.connect(self._on_gnom_file_changed)
         self._build_ui()
         install_context_freeze(self)
-        self.apply_context(ctx)
+        # First bind may seed session-owned run knobs; later IPC pushes must not.
+        self.apply_context(ctx, seed_controls=True)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._auto_mode.shutdown()
         super().closeEvent(event)
 
-    def apply_context(self, ctx: ModelingContext) -> None:
+    def apply_context(self, ctx: ModelingContext, *, seed_controls: bool = False) -> None:
+        """Bind sample paths/artifacts from liveview.
+
+        User run controls (``n_runs``, Auto/Manual) are owned by this modeling-app
+        session. Sample switch / ModelingContext push updates paths and catalogs only —
+        never clobber knobs or rewrite run-params to liveview/disk defaults. Confirm
+        always reads the current UI values.
+        """
         if self._runtime.is_running():
             # Keep paths honest for the active job; liveview will re-push after finish.
             enter_context_freeze(self)
@@ -108,19 +116,24 @@ class ShapeModelingWindow(QMainWindow):
                 self._pf_outdir.set_text("")
             # DAMMIF-only: ignore ctx mode / other engines.
             self._sync_outdir_to_mode("dammif")
-            opts = self._ctx.options or {}
-            if "n_runs" in opts:
-                try:
-                    self._n_runs.setValue(int(opts["n_runs"]))
-                except (TypeError, ValueError):
-                    pass
-            self._apply_run_params_from_disk()
+            if seed_controls:
+                self._seed_run_controls_from_context()
         self._update_confirm_enabled()
         self._watch_gnom_path(self._gnom())
         self._try_load_existing_artifacts()
 
+    def _seed_run_controls_from_context(self) -> None:
+        """One-shot launch seed for ``n_runs`` (ctx options, then disk / CIF legacy)."""
+        opts = self._ctx.options or {}
+        if "n_runs" in opts:
+            try:
+                self._n_runs.setValue(int(opts["n_runs"]))
+            except (TypeError, ValueError):
+                pass
+        self._apply_run_params_from_disk()
+
     def _apply_run_params_from_disk(self) -> None:
-        """Restore Confirm controls from skill ``*_run_params.yml`` (and legacy CIF count)."""
+        """Seed Confirm controls from skill ``*_run_params.yml`` (and legacy CIF count)."""
         out = self._outdir()
         if not out:
             return
