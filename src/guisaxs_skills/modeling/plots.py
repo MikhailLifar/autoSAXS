@@ -78,7 +78,7 @@ class FitResidualsPlot(FigureCanvas):
 
 
 class MplViewerDialog(MplToolbarViewerDialog):
-    """Non-modal enlarged plot with matplotlib navigation toolbar + F11 fullscreen."""
+    """Non-modal enlarged plot with matplotlib navigation toolbar + title-bar maximize."""
 
     def __init__(self, *, title: str, plot: QWidget, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent, title=title, plot=plot, size=(1000, 600))

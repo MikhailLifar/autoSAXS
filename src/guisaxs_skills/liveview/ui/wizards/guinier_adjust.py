@@ -36,7 +36,7 @@ _Q_SLIDER_CAP_NM = 2.0
 
 
 class _MplViewerDialog(MplToolbarViewerDialog):
-    """Enlarged Guinier-adjust plot viewer (toolbar + F11 fullscreen)."""
+    """Enlarged Guinier-adjust plot viewer (toolbar + title-bar maximize)."""
 
     def __init__(self, *, title: str, plot: QWidget, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent, title=title, plot=plot, size=(1000, 600))
