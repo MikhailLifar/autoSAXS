@@ -10,7 +10,6 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from .....session.state import LiveviewSessionState, LiveviewWatchMode
 from .artifact_presenter import PolydisperseArtifactPresenter
 from .config_sync import PolydisperseConfigSync
-from .format_display import format_sizes_passport_html
 
 
 class PolydisperseCoordinator(QObject):
@@ -141,7 +140,7 @@ class PolydisperseCoordinator(QObject):
         from autosaxs.core.atsas_gnom import normalize_force_zero
         from autosaxs.core.gnom import parse_gnom_out
 
-        from ......ui.style import COLOR_QUALITY_POOR
+        from ..monodisperse.format_display import scalar_value
 
         if self._sizes_adjust is None:
             return
@@ -164,6 +163,17 @@ class PolydisperseCoordinator(QObject):
         }
         disk: Dict[str, Any] = {}
         gnom_out = self._presenter.last_gnom_out
+        quality = dict(getattr(self._presenter, "last_sizes_result", None) or {})
+
+        def _set_float(key: str, raw: object) -> None:
+            v = scalar_value(raw)
+            if v is None or v in ("", None):
+                return
+            try:
+                disk[key] = float(v)
+            except (TypeError, ValueError):
+                pass
+
         if gnom_out and os.path.isfile(gnom_out):
             try:
                 parsed = parse_gnom_out(gnom_out)
@@ -177,14 +187,18 @@ class PolydisperseCoordinator(QObject):
                     except (TypeError, ValueError):
                         pass
                 if parsed.get("real_space_rmax") is not None:
-                    disk["rmax_nm"] = float(parsed["real_space_rmax"])
+                    _set_float("rmax_nm", parsed.get("real_space_rmax"))
                 if parsed.get("current_alpha") is not None:
-                    disk["alpha"] = float(parsed["current_alpha"])
+                    _set_float("alpha", parsed.get("current_alpha"))
                 for key in ("force_zero_rmin", "force_zero_rmax"):
                     if parsed.get(key) is not None:
                         disk[key] = normalize_force_zero(parsed.get(key))
             except Exception:
                 pass
+        _set_float("rmax_nm", quality.get("rmax_nm") or quality.get("dmax_nm"))
+        _set_float("q_min", quality.get("q_min_fit_nm"))
+        _set_float("q_max", quality.get("q_max_fit_nm"))
+        # Disk/quality win; session only fills gaps.
         working = dict(disk)
         for k, v in session.items():
             working.setdefault(k, v)
@@ -192,21 +206,14 @@ class PolydisperseCoordinator(QObject):
             working.pop("first", None)
         if working.get("q_max") is not None:
             working.pop("last", None)
-        passport_html = ""
-        quality = getattr(self._presenter, "last_sizes_result", None) or {}
-        if quality:
-            passport_html = format_sizes_passport_html(quality, poor_color=COLOR_QUALITY_POOR)
-        if not passport_html or passport_html == "—":
-            try:
-                passport_html = self._window.sizes_pane._lbl_diagnostics.text()  # noqa: SLF001
-            except Exception:
-                passport_html = ""
         self._sizes_adjust.set_context(
             profile_path=self._presenter.profile_path,
             auto_snapshot=auto,
             working_params=working,
             gnom_out_path=gnom_out,
-            passport_html=passport_html if passport_html and passport_html != "—" else "",
+            passport_text="",
+            passport_html="",
+            passport_quality=quality or None,
         )
 
     def open_sizes_adjust_wizard(self) -> None:

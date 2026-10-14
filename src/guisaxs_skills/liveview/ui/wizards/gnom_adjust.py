@@ -377,21 +377,13 @@ class GnomAdjustWizardDialog(QDialog):
         return out
 
     def set_passport(self, *, text: str = "", poor: bool = False, html_text: str = "") -> None:
-        _ = html_text  # legacy callers; prefer set_passport_from_quality
-        if text:
-            self._passport_table.set_message(text, poor=poor, poor_color=COLOR_QUALITY_POOR)
-        elif html_text:
-            # Fall back: strip tags roughly for a single message cell.
-            plain = html_text
-            for tag in ("<br/>", "<br>", "</span>", "<span"):
-                plain = plain.replace(tag, " " if tag.startswith("<br") else "")
-            # Keep a readable error when only html_text is supplied.
-            import re
-
-            plain = re.sub(r"<[^>]+>", "", plain).strip() or "—"
-            self._passport_table.set_message(plain, poor=poor or COLOR_QUALITY_POOR in html_text)
-        else:
-            self._passport_table.set_rows([])
+        """Short errors via ``text``; legacy HTML tables are re-hydrated into rows (never one blob)."""
+        self._passport_table.set_from_html_or_message(
+            html_text,
+            text=text,
+            poor=poor,
+            poor_color=COLOR_QUALITY_POOR,
+        )
 
     def set_passport_from_quality(self, quality: Mapping[str, Any]) -> None:
         rows = format_gnom_passport_rows(quality, guinier_handoff=self._guinier_handoff)
