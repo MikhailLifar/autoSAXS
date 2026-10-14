@@ -228,6 +228,15 @@ class MonodisperseCoordinator(QObject):
         auto = dict(wp.get("gnom_auto") or {})
         working = self._disk_gnom_working_params()
         quality = dict(getattr(self._presenter, "last_gnom_result", None) or {})
+        passport_html = ""
+        if not quality:
+            # Last resort: pane may still hold a rendered HTML table (never flatten it).
+            try:
+                passport_html = self._wizard.gnom_pane._lbl_diagnostics.text()  # noqa: SLF001
+            except Exception:
+                passport_html = ""
+            if passport_html == "—":
+                passport_html = ""
         self._gnom_adjust.set_context(
             profile_path=self._presenter.profile_path,
             guinier_handoff=self._presenter.last_guinier_handoff,
@@ -235,7 +244,7 @@ class MonodisperseCoordinator(QObject):
             working_params=working,
             gnom_out_path=self._presenter.last_gnom_out,
             passport_text="",
-            passport_html="",
+            passport_html=passport_html,
             passport_quality=quality or None,
         )
 
