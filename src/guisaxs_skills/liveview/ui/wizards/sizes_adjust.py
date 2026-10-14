@@ -245,6 +245,13 @@ class SizesAdjustWizardDialog(QDialog):
         passport_html: str = "",
         passport_text: str = "",
     ) -> None:
+        """
+        Bind sizes Adjust to one analysis identity (profile + disk GNOM ``.out``).
+
+        Prefer ``passport_quality`` (same dict the poly right pane uses). Legacy
+        HTML is re-hydrated into Metric/Value rows — never flattened into one cell.
+        Live ``_run_preview`` starts only after the user edits parameters.
+        """
         self._preview_debounce.stop()
         self._profile_path = str(profile_path or "").strip()
         self._auto_snapshot = dict(auto_snapshot or {})
