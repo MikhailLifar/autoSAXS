@@ -13,7 +13,7 @@ from ..panels.right.gnom_residuals_plot import GnomResidualsPlot
 
 
 class _MplViewerDialog(MplToolbarViewerDialog):
-    """Enlarged GNOM-adjust plot viewer (toolbar + F11 fullscreen)."""
+    """Enlarged GNOM-adjust plot viewer (toolbar + title-bar maximize)."""
 
     def __init__(self, *, title: str, plot: QWidget, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent, title=title, plot=plot, size=(1000, 600))

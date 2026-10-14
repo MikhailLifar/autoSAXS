@@ -11,16 +11,7 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 from matplotlib.figure import Figure
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QKeySequence
-from PyQt5.QtWidgets import (
-    QDialog,
-    QHBoxLayout,
-    QShortcut,
-    QSizePolicy,
-    QToolButton,
-    QVBoxLayout,
-    QWidget,
-)
+from PyQt5.QtWidgets import QDialog, QSizePolicy, QVBoxLayout, QWidget
 
 from ....logic.path_display import contracted_path_label
 
@@ -33,7 +24,7 @@ def mpl_navigation_toolbar(canvas: FigureCanvas, parent: QWidget) -> NavigationT
 class MplToolbarViewerDialog(QDialog):
     """
     Standard liveview/data plot viewer: matplotlib NavigationToolbar (zoom, pan, home, save)
-    plus F11 / button fullscreen that restores the prior window geometry on exit.
+    with normal window chrome including the title-bar maximize control (not F11 / true fullscreen).
     """
 
     def __init__(
@@ -46,76 +37,28 @@ class MplToolbarViewerDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
+        # Same flags as liveview wizards: min/max/close in the title bar.
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.WindowTitleHint
+            | Qt.WindowSystemMenuHint
+            | Qt.WindowCloseButtonHint
+            | Qt.WindowMinMaxButtonsHint
+        )
         self.resize(int(size[0]), int(size[1]))
         self._plot = plot
-        self._fs_geometry = None
-        self._fs_was_maximized = False
 
         lay = QVBoxLayout(self)
-        toolbar_row = QHBoxLayout()
-        toolbar_row.setContentsMargins(0, 0, 0, 0)
-        toolbar_row.setSpacing(4)
         if isinstance(plot, FigureCanvas):
             self._toolbar = mpl_navigation_toolbar(plot, self)
-            toolbar_row.addWidget(self._toolbar, 1)
+            lay.addWidget(self._toolbar)
         else:
             self._toolbar = None
-            toolbar_row.addStretch(1)
-        self._fs_btn = QToolButton(self)
-        self._fs_btn.setText("Fullscreen")
-        self._fs_btn.setToolTip("Toggle fullscreen (F11). Esc exits fullscreen.")
-        self._fs_btn.setAutoRaise(True)
-        self._fs_btn.clicked.connect(self.toggle_fullscreen)
-        toolbar_row.addWidget(self._fs_btn, 0)
-        lay.addLayout(toolbar_row)
         lay.addWidget(plot, 1)
-
-        # WindowShortcut so F11 works while the matplotlib canvas has focus.
-        sc = QShortcut(QKeySequence(Qt.Key_F11), self)
-        sc.setContext(Qt.WindowShortcut)
-        sc.activated.connect(self.toggle_fullscreen)
 
     @property
     def plot(self) -> QWidget:
         return self._plot
-
-    def is_viewer_fullscreen(self) -> bool:
-        return bool(self.isFullScreen())
-
-    def toggle_fullscreen(self) -> None:
-        if self.isFullScreen():
-            self.exit_fullscreen()
-        else:
-            self.enter_fullscreen()
-
-    def enter_fullscreen(self) -> None:
-        if self.isFullScreen():
-            return
-        self._fs_was_maximized = bool(self.isMaximized())
-        self._fs_geometry = self.geometry()
-        self.showFullScreen()
-        self._fs_btn.setText("Exit fullscreen")
-        self._fs_btn.setToolTip("Exit fullscreen (F11 or Esc)")
-
-    def exit_fullscreen(self) -> None:
-        if not self.isFullScreen():
-            return
-        self.showNormal()
-        if self._fs_was_maximized:
-            self.showMaximized()
-        elif self._fs_geometry is not None:
-            self.setGeometry(self._fs_geometry)
-        self._fs_geometry = None
-        self._fs_was_maximized = False
-        self._fs_btn.setText("Fullscreen")
-        self._fs_btn.setToolTip("Toggle fullscreen (F11). Esc exits fullscreen.")
-
-    def reject(self) -> None:  # type: ignore[override]
-        # QDialog maps Esc → reject(); leave fullscreen first instead of closing.
-        if self.isFullScreen():
-            self.exit_fullscreen()
-            return
-        super().reject()
 
 
 def _is_tif_path(path: str) -> bool:
@@ -706,7 +649,7 @@ class DatCurveViewerDialog(MplToolbarViewerDialog):
     """
     Full-window interactive SAXS curve view: matplotlib NavigationToolbar (zoom, pan, home, save) + LogCurvePlot.
     Used for .dat artifacts; thumbnails elsewhere stay rasterized for speed.
-    F11 / Fullscreen button toggles true fullscreen; Esc restores the prior layout.
+    Title-bar maximize uses the standard window control (WindowMinMaxButtonsHint).
     """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -1089,7 +1032,7 @@ class Image2DViewerDialog(MplToolbarViewerDialog):
     """
     Full-window interactive 2D TIFF view: matplotlib NavigationToolbar + Image2DPlot.
     Used when the liveview center canvas is clicked; thumbnails stay toolbar-free.
-    F11 / Fullscreen button toggles true fullscreen; Esc restores the prior layout.
+    Title-bar maximize uses the standard window control (WindowMinMaxButtonsHint).
     """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
