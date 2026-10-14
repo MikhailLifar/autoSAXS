@@ -10,7 +10,6 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from .....session.state import LiveviewSessionState, LiveviewWatchMode
 from .artifact_presenter import PolydisperseArtifactPresenter
 from .config_sync import PolydisperseConfigSync
-from .format_display import format_sizes_passport_html
 
 
 class PolydisperseCoordinator(QObject):
@@ -137,8 +136,6 @@ class PolydisperseCoordinator(QObject):
     def open_sizes_adjust_wizard(self) -> None:
         from ....wizards.sizes_adjust import SizesAdjustWizardDialog
 
-        from ......ui.style import COLOR_QUALITY_POOR
-
         if self._sizes_adjust is None:
             parent = self._window.window() if self._window is not None else None
             self._sizes_adjust = SizesAdjustWizardDialog(parent)
@@ -174,21 +171,23 @@ class PolydisperseCoordinator(QObject):
                         working[key] = normalize_force_zero(parsed.get(key))
             except Exception:
                 pass
-        passport_html = ""
         quality = getattr(self._presenter, "last_sizes_result", None) or {}
-        if quality:
-            passport_html = format_sizes_passport_html(quality, poor_color=COLOR_QUALITY_POOR)
-        if not passport_html or passport_html == "—":
+        passport_html = ""
+        if not quality:
+            # Last resort: pane may still hold a rendered HTML table (never flatten it).
             try:
                 passport_html = self._window.sizes_pane._lbl_diagnostics.text()  # noqa: SLF001
             except Exception:
+                passport_html = ""
+            if passport_html == "—":
                 passport_html = ""
         self._sizes_adjust.set_context(
             profile_path=prof,
             auto_snapshot=auto,
             working_params=working,
             gnom_out_path=gnom_out,
-            passport_html=passport_html if passport_html and passport_html != "—" else "",
+            passport_quality=quality if isinstance(quality, dict) and quality else None,
+            passport_html=passport_html,
         )
         self._sizes_adjust.show()
         self._sizes_adjust.raise_()

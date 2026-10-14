@@ -184,21 +184,14 @@ class MonodisperseCoordinator(QObject):
                         working[key] = normalize_force_zero(parsed.get(key))
             except Exception:
                 pass
-        passport_html = ""
         quality = getattr(self._presenter, "last_gnom_result", None) or {}
-        if quality:
-            from .format_display import format_gnom_passport_html
-            from ......ui.style import COLOR_QUALITY_POOR
-
-            passport_html = format_gnom_passport_html(
-                quality,
-                guinier_handoff=self._presenter.last_guinier_handoff,
-                poor_color=COLOR_QUALITY_POOR,
-            )
-        if not passport_html or passport_html == "—":
+        passport_html = ""
+        if not quality:
             try:
                 passport_html = self._wizard.gnom_pane._lbl_diagnostics.text()  # noqa: SLF001
             except Exception:
+                passport_html = ""
+            if passport_html == "—":
                 passport_html = ""
         self._gnom_adjust.set_context(
             profile_path=prof,
@@ -206,8 +199,9 @@ class MonodisperseCoordinator(QObject):
             auto_snapshot=auto,
             working_params=working,
             gnom_out_path=gnom_out,
+            passport_quality=quality if isinstance(quality, dict) and quality else None,
             passport_text="",
-            passport_html=passport_html if passport_html and passport_html != "—" else "",
+            passport_html=passport_html,
         )
         self._gnom_adjust.show()
         self._gnom_adjust.raise_()
