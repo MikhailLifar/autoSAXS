@@ -233,7 +233,10 @@ class MonodisperseArtifactPresenter:
                 poor=True,
             )
             return
-        prof = self._effective_profile_path()
+        from ..gnom_overlays import gnom_owned_curve_path
+
+        # I(q) exp must match the intensity identity of this .out (sibling *_atsas.dat).
+        prof = gnom_owned_curve_path(gnom_out) or self._effective_profile_path()
         self._wizard.gnom_pane.show_gnom(prof, gnom_out)
         self._wizard.gnom_pane.set_diagnostics(
             quality=result,

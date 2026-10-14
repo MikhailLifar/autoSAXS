@@ -293,6 +293,7 @@ class PrPlot(_BaseMplPlot):
         overlay_path = (overlay_gnom_out or "").strip()
         if overlay_path and same_gnom_path(overlay_path, gnom_out_path):
             overlay_path = ""
+        drew_overlay = False
         if overlay_path and os.path.isfile(overlay_path):
             try:
                 ov_arr = distribution_arrays(parse_gnom_out(overlay_path).get("distribution"))
@@ -301,6 +302,7 @@ class PrPlot(_BaseMplPlot):
             if ov_arr is not None:
                 rr, pp, _ee = ov_arr
                 self._ax.plot(rr, pp, color="C1", lw=1.0, alpha=0.55, zorder=1, label="best (disk)")
+                drew_overlay = True
 
         if err is not None:
             e = np.asarray(err, dtype=float)
@@ -316,7 +318,7 @@ class PrPlot(_BaseMplPlot):
                     zorder=2,
                     label=r"$\pm\sigma$",
                 )
-        primary_label = "current" if overlay_path else "best"
+        primary_label = "current" if drew_overlay else "best"
         self._ax.plot(r[m], pr[m], "C0-", lw=1.2, zorder=3, label=primary_label)
         self._ax.set_xlabel("r (nm)")
         self._ax.set_ylabel("P(r)")

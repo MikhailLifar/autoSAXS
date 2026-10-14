@@ -207,7 +207,11 @@ class PolydisperseArtifactPresenter:
         gnom_out = self._resolve_result_path(result.get("best_gnom_out_path"))
         if gnom_out:
             self._last_gnom_out = gnom_out
-        prof = self._effective_profile_path()
+        from ..gnom_overlays import gnom_owned_curve_path
+
+        prof = (
+            gnom_owned_curve_path(gnom_out) if gnom_out else ""
+        ) or self._effective_profile_path()
         if gnom_out and os.path.isfile(gnom_out):
             self._window.sizes_pane.show_sizes(prof, gnom_out)
         else:

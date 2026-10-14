@@ -36,7 +36,20 @@ Map SSOT: [`nodes.yaml`](nodes.yaml).
 
 **Session wizard params** (`monodisperse_wizard_params`, `polydisperse_window_params`) are defaults / committed refine bags — **not** the source of truth for which sample’s I(q)/P(r) an open Adjust plots.
 
+## GNOM-owned intensity curve
+
+**Invariant:** While a disk GNOM `.out` is bound (mono/poly right pane or Adjust), I(q) experimental overlay and Adjust live preview must use the **intensity curve that produced that `.out`**, not a differently scaled session `subtracted/sub_*.dat`.
+
+| Concept | Owner |
+|---------|--------|
+| GNOM `.out` + sibling `*_atsas.dat` | On-disk fit_distances / fit_sizes result |
+| Session analysis profile (`subtracted/sub_*.dat`) | Presenter / `resolve_analysis_profile` — may be newer or differently buffered |
+
+Helper: `gnom_owned_curve_path` in `ui/panels/right/gnom_overlays.py`.  
+If session profile and owned `*_atsas.dat` disagree in absolute scale, painting session profile under the disk `.out` yields fake “current vs best (disk)” P(r) mismatch and I(0) Guinier vs P(r) disagreement until a preview/rebind uses the owned curve.
+
 ## Related bug writeup
 
 Project store: `docs/mono-vs-gnom-iq-plot.md` (Adjust on ihs27 while mono showed ihs29).  
-Code: `ui/panels/right/monodisperse/coordinator.py` (`_disk_gnom_working_params`, `_push_gnom_adjust_context`); poly twin `_push_sizes_adjust_context`.
+Deeper first-paint scale bug: `docs/gnom-adjust-owned-curve.md`.  
+Code: `ui/panels/right/monodisperse/coordinator.py` (`_disk_gnom_working_params`, `_push_gnom_adjust_context`); poly twin `_push_sizes_adjust_context`; `gnom_owned_curve_path`.
