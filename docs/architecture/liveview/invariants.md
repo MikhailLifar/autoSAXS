@@ -36,20 +36,22 @@ Map SSOT: [`nodes.yaml`](nodes.yaml).
 
 **Session wizard params** (`monodisperse_wizard_params`, `polydisperse_window_params`) are defaults / committed refine bags — **not** the source of truth for which sample’s I(q)/P(r) an open Adjust plots.
 
-## GNOM-owned intensity curve
+## Analysis profile intensity SSOT
 
-**Invariant:** While a disk GNOM `.out` is bound (mono/poly right pane or Adjust), I(q) experimental overlay and Adjust live preview must use the **intensity curve that produced that `.out`**, not a differently scaled session `subtracted/sub_*.dat`.
+**Invariant:** Sample-tied I(q) experimental overlay and Adjust live preview use the **presenter/session subtracted profile** (`subtracted/sub_*.dat` via `resolve_analysis_profile` / `_effective_profile_path` / Adjust `profile_path`). That is the sole intensity identity for UI.
 
 | Concept | Owner |
 |---------|--------|
-| GNOM `.out` + sibling `*_atsas.dat` | On-disk fit_distances / fit_sizes result |
-| Session analysis profile (`subtracted/sub_*.dat`) | Presenter / `resolve_analysis_profile` — may be newer or differently buffered |
+| Live I(q) / Adjust bind intensity | Presenter / session `sub_*.dat` |
+| GNOM `.out` (P(r) / D(R) / fit curve) | On-disk fit result — may be **stale** after re-subtraction until re-fit |
+| `*_atsas.dat` | ATSAS CLI 3-col serialization only (write/regenerate for invoke) — **not** UI identity |
 
-Helper: `gnom_owned_curve_path` in `ui/panels/right/gnom_overlays.py`.  
-If session profile and owned `*_atsas.dat` disagree in absolute scale, painting session profile under the disk `.out` yields fake “current vs best (disk)” P(r) mismatch and I(0) Guinier vs P(r) disagreement until a preview/rebind uses the owned curve.
+**Forbidden:** Preferring sibling `*_atsas.dat` (former `gnom_owned_curve_path`) as the I(q)/Adjust curve owner. That papers over re-subtraction drift by binding plots to a fit-time snapshot.
+
+When `sub_*` changes and disk `.out` still reflects an older intensity, UI must follow `sub_*`; P(r) “current vs best (disk)” mismatch until re-fit is correct staleness, not a dual-curve ownership bug.
 
 ## Related bug writeup
 
 Project store: `docs/mono-vs-gnom-iq-plot.md` (Adjust on ihs27 while mono showed ihs29).  
-Deeper first-paint scale bug: `docs/gnom-adjust-owned-curve.md`.  
-Code: `ui/panels/right/monodisperse/coordinator.py` (`_disk_gnom_working_params`, `_push_gnom_adjust_context`); poly twin `_push_sizes_adjust_context`; `gnom_owned_curve_path`.
+Retracted wrong atsas-ownership fix: Project store `docs/gnom-adjust-owned-curve.md`.  
+Code: `ui/panels/right/monodisperse/coordinator.py` (`_disk_gnom_working_params`, `_push_gnom_adjust_context`); poly twin `_push_sizes_adjust_context`.
