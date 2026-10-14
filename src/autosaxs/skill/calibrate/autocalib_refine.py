@@ -8,6 +8,7 @@ from scipy.stats import mannwhitneyu
 from pyFAI.calibrant import CALIBRANT_FACTORY
 from pyFAI.geometryRefinement import GeometryRefinement
 
+from autosaxs.core.calibrant import theoretical_peaks_q_nm_inv
 from autosaxs.core.integrator import IntegratorExtended
 from autosaxs.core.utils import get_detector
 
@@ -243,8 +244,7 @@ def refine(
     q_cal, I_cal, sigma = integrator.integrate1d(calib_data, npt=npt)
     print(f"INFO: 1D integration complete. q array length: {len(q_cal)}")
 
-    tth_theor = np.array(calibrant.get_2th())
-    q_theor = 4 * np.pi * np.sin(tth_theor / 2) / wavelength * 1e-9
+    q_theor = theoretical_peaks_q_nm_inv(calibrant_name, float(wavelength))
 
     return {
         "integrator": integrator,

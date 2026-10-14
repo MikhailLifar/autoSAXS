@@ -689,7 +689,8 @@ class LiveviewLeftPanel(QWidget):
 
         Click opens the standard DatCurveViewerDialog when a .dat is available
         (``viewer_path`` or sibling of the PNG); otherwise falls back to the
-        raster ImageViewerDialog.
+        raster ImageViewerDialog. Theoretical Bragg peaks come from autoSAXS
+        ``theoretical_peaks_q_nm_inv`` via calibrant type + refined wavelength.
         """
         p = (path or "").strip()
         if not p or not os.path.isfile(p):
@@ -702,7 +703,25 @@ class LiveviewLeftPanel(QWidget):
         vp = (viewer_path or "").strip()
         if not vp or not os.path.isfile(vp):
             vp = sibling_calibration_curve_dat_path(p)
-        self._cal_preview.show_path(p, viewer_path=vp or None)
+        peak_q_nm: list[float] = []
+        if vp and os.path.isfile(vp):
+            from ...services.calibration.peaks import (
+                peaks_in_curve_q_window,
+                theoretical_peak_q_nm_for_calibration_curve,
+            )
+
+            refined = self._state.calibration_refined_yml_path
+            peaks = theoretical_peak_q_nm_for_calibration_curve(
+                vp,
+                refined_yml=refined if refined is not None and refined.is_file() else None,
+            )
+            peak_q_nm = peaks_in_curve_q_window(peaks, vp)
+        self._cal_preview.show_path(
+            p,
+            viewer_path=vp or None,
+            peak_q_nm=peak_q_nm or None,
+            viewer_window_title="Calibration curve" if vp else None,
+        )
         if self._cal_wizard is not None and self._cal_wizard.isVisible():
             self._cal_wizard.arm_close_coach()
         self.refresh_calibration_coach()

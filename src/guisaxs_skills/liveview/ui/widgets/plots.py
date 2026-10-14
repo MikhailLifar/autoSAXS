@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -247,6 +247,7 @@ class LogCurvePlot(FigureCanvas):
         label: Optional[str] = None,
         q_min: Any = None,
         q_max: Any = None,
+        peak_q_nm: Optional[Sequence[float]] = None,
     ) -> None:
         from autosaxs.core.utils import read_saxs
 
@@ -298,8 +299,20 @@ class LogCurvePlot(FigureCanvas):
                 )
             else:
                 self._ax.scatter(qq, ii, s=10, alpha=0.9, label=label or short)
-        if label:
-            self._ax.legend(fontsize=8)
+        # Match calibrate PNG overlay: red dashed Bragg lines (q in nm^-1).
+        if peak_q_nm:
+            for q_val in peak_q_nm:
+                try:
+                    x = float(q_val)
+                except (TypeError, ValueError):
+                    continue
+                if not np.isfinite(x):
+                    continue
+                self._ax.axvline(x=x, color="r", linestyle="--", label="Theoretical Peaks")
+        handles, labels = self._ax.get_legend_handles_labels()
+        if handles:
+            by_label = dict(zip(labels, handles))
+            self._ax.legend(by_label.values(), by_label.keys(), fontsize=8)
         self._ax.set_title(short)
         self._ax.set_xlabel(self._x_label)
         self._ax.set_ylabel("I (a.u.)")
@@ -668,6 +681,7 @@ class DatCurveViewerDialog(MplToolbarViewerDialog):
         window_title: Optional[str] = None,
         q_min: Any = None,
         q_max: Any = None,
+        peak_q_nm: Optional[Sequence[float]] = None,
     ) -> None:
         short, full = contracted_path_label(path)
         tip = full
@@ -680,7 +694,13 @@ class DatCurveViewerDialog(MplToolbarViewerDialog):
         if x_label is not None:
             self._plot.set_x_label(x_label)
         try:
-            self._plot.plot_dat(path, label=curve_label, q_min=q_min, q_max=q_max)
+            self._plot.plot_dat(
+                path,
+                label=curve_label,
+                q_min=q_min,
+                q_max=q_max,
+                peak_q_nm=peak_q_nm,
+            )
         except Exception:
             self._plot.clear()
             if self._plot.figure.axes:
@@ -719,6 +739,7 @@ def open_dat_curve_dialog(
     window_title: Optional[str] = None,
     q_min: Any = None,
     q_max: Any = None,
+    peak_q_nm: Optional[Sequence[float]] = None,
 ) -> Optional[DatCurveViewerDialog]:
     """Open or refresh an interactive .dat curve viewer (matplotlib zoom/pan toolbar)."""
     p = (path or "").strip()
@@ -732,6 +753,7 @@ def open_dat_curve_dialog(
         window_title=window_title,
         q_min=q_min,
         q_max=q_max,
+        peak_q_nm=peak_q_nm,
     )
     dlg.show()
     dlg.raise_()
