@@ -45,6 +45,10 @@ _MIXTURE_SKILL_OPTION_KEYS = frozenset(
         "plot_I_q",
         "plot_logI_logq",
         "plot_logI_q",
+        # Comma-separated component starts (skill CLI strings; see coerce_float_sequence).
+        "init_radii_nm",
+        "init_fractions",
+        "init_poly_nm",
     }
 )
 _MIXTURE_OPTION_SKIP = frozenset(

@@ -14,4 +14,12 @@ Session `model_mixture_options`, DR Confirm opts, and `polydisperse_pipeline.mod
 
 ## Component init
 
-`fit_sizes` handoff `model_mixture.peak_positions_nm` seeds MIXTURE phase `Rout` starts inside the skill (`mixture._phase_init_radii_ang`). Peaks are not CLI options. DR window surfaces the same hints and may prefill `max_nph` from `n_phases_suggested` when unset.
+Skill CLI/API (comma-separated strings, nm / fractions):
+
+- `init_radii_nm` — per-phase ATSAS MIXTURE `Rout` starts
+- `init_fractions` — volume fractions (normalized to 1)
+- `init_poly_nm` — per-phase polydispersity starts
+
+Priority inside the skill: explicit `init_*` → `fit_sizes` handoff `peak_positions_nm` (radii only) → defaults. ATSAS also fixes inner radius/contrast, outer contrast, sticky=0; hard-sphere radius is derived from Rout (not a separate user input).
+
+`normalize_model_mixture_options` keeps these as skill keys. DR advanced section edits them before Confirm; run-params YAML persists the same strings.

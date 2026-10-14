@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import yaml
 
@@ -142,6 +142,44 @@ def _discover_fit_sizes_handoff(profile: str, output_dir: str) -> Optional[str]:
     return None
 
 
+def coerce_float_sequence(raw: Any) -> Optional[List[float]]:
+    """
+    Parse component initial-guess sequences from CLI/API/YAML.
+
+    Accepts a comma/semicolon-separated string (``"1.5,3.0"``), a list/tuple of
+    numbers, or a single number. Returns ``None`` when empty / unparseable.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        parts = [p.strip() for p in text.replace(";", ",").split(",") if p.strip()]
+        values: List[float] = []
+        for p in parts:
+            try:
+                values.append(float(p))
+            except (TypeError, ValueError):
+                continue
+        return values or None
+    if isinstance(raw, (int, float)):
+        return [float(raw)]
+    if isinstance(raw, Sequence) and not isinstance(raw, (bytes, bytearray)):
+        values = []
+        for item in raw:
+            try:
+                values.append(float(item))
+            except (TypeError, ValueError):
+                continue
+        return values or None
+    return None
+
+
+def _format_float_seq(values: Sequence[float]) -> str:
+    return ",".join(f"{float(v):.6g}" for v in values)
+
+
 def _init_radii_ang_from_hints(
     hints: Optional[Dict[str, Any]],
     *,
@@ -201,12 +239,15 @@ def _resolve_mixture_radius_params(
     user_r_max: Optional[float] = None,
     user_poly_min: Optional[float] = None,
     user_poly_max: Optional[float] = None,
+    user_init_radii_nm: Optional[Sequence[float]] = None,
+    user_init_fractions: Optional[Sequence[float]] = None,
+    user_init_poly_nm: Optional[Sequence[float]] = None,
 ) -> Dict[str, Any]:
     """
-    Resolve MIXTURE radius bounds and optional component init radii.
+    Resolve MIXTURE radius bounds and optional component init guesses.
 
     Inputs/defaults in nm; returned ``r_*`` / ``poly_*`` in Å for ATSAS.
-    ``init_radii_ang`` (optional) comes from fit_sizes ``peak_positions_nm``.
+    Explicit ``user_init_*`` win over fit_sizes ``peak_positions_nm``.
     """
     sizes_handoff_path = ""
     if user_r_max is not None:
@@ -251,15 +292,33 @@ def _resolve_mixture_radius_params(
         "poly_min": _nm_to_angstrom(poly_min_nm),
         "poly_max": _nm_to_angstrom(poly_max_nm),
     }
-    init = _init_radii_ang_from_hints(hints, r_min_ang=r_min_ang, r_max_ang=r_max_ang)
-    if init:
-        out["init_radii_ang"] = init
-        if event_bus:
-            peaks_nm = ", ".join(f"{_angstrom_to_nm(v):.3g}" for v in init)
+
+    explicit_radii = coerce_float_sequence(user_init_radii_nm)
+    if explicit_radii:
+        out["init_radii_ang"] = [_nm_to_angstrom(v) for v in explicit_radii if float(v) > 0]
+        if event_bus and out["init_radii_ang"]:
+            peaks_nm = ", ".join(f"{v:.3g}" for v in explicit_radii if float(v) > 0)
             event_bus.publish(
                 EventType.MESSAGE,
-                {"text": f"model_mixture: seeding phase radii from D(R) peaks [{peaks_nm}] nm"},
+                {"text": f"model_mixture: using explicit init radii [{peaks_nm}] nm"},
             )
+    else:
+        init = _init_radii_ang_from_hints(hints, r_min_ang=r_min_ang, r_max_ang=r_max_ang)
+        if init:
+            out["init_radii_ang"] = init
+            if event_bus:
+                peaks_nm = ", ".join(f"{_angstrom_to_nm(v):.3g}" for v in init)
+                event_bus.publish(
+                    EventType.MESSAGE,
+                    {"text": f"model_mixture: seeding phase radii from D(R) peaks [{peaks_nm}] nm"},
+                )
+
+    fractions = coerce_float_sequence(user_init_fractions)
+    if fractions:
+        out["init_fractions"] = fractions
+    poly_nm = coerce_float_sequence(user_init_poly_nm)
+    if poly_nm:
+        out["init_poly_ang"] = [_nm_to_angstrom(v) for v in poly_nm if float(v) >= 0]
     return out
 
 
@@ -279,6 +338,9 @@ def model_mixture(
     plot_I_q: Optional[bool] = None,
     plot_logI_logq: Optional[bool] = None,
     plot_logI_q: Optional[bool] = None,
+    init_radii_nm: Optional[str] = None,
+    init_fractions: Optional[str] = None,
+    init_poly_nm: Optional[str] = None,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
@@ -299,11 +361,16 @@ def model_mixture(
     - `r_max` (float | None): Maximum radius (nm). Defaults to `rmax_nm` from in-process `fit_sizes`.
     - `poly_min` (float | None): Minimum polydispersity (nm). Defaults to `0.05`.
     - `poly_max` (float | None): Maximum polydispersity (nm). Defaults to `0.5 × r_max`.
+    - `init_radii_nm` (str | None): Comma-separated per-phase outer-radius starts in nm
+      (ATSAS MIXTURE ``Rout``). Example: ``"2.5,5.0"``. Overrides D(R) peak seeding.
+    - `init_fractions` (str | None): Comma-separated per-phase volume-fraction starts
+      (normalized to sum 1). Example: ``"0.7,0.3"``.
+    - `init_poly_nm` (str | None): Comma-separated per-phase polydispersity starts in nm.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
-    Component init: when a `fit_sizes` handoff is available (auto-run or discovered
-    beside the mixture outdir), D(R) ``peak_positions_nm`` seed MIXTURE phase
-    ``Rout`` starts. Bounds remain the skill inputs above; peaks are not CLI flags.
+    Component init priority: explicit ``init_*`` → fit_sizes ``peak_positions_nm`` (radii
+    only) → skill defaults. ATSAS MIXTURE also fixes inner radius/contrast, outer
+    contrast, sticky=0, and derives hard-sphere radius from Rout (not user-settable).
 
     ### Short parameter list
 
@@ -314,6 +381,9 @@ def model_mixture(
     - r_max: size upper bound
     - poly_min: spread lower bound
     - poly_max: spread upper bound
+    - init_radii_nm: comma-separated Rout starts (nm)
+    - init_fractions: comma-separated volume fractions
+    - init_poly_nm: comma-separated poly starts (nm)
 
     ### Returns
 
@@ -368,6 +438,9 @@ def model_mixture(
         plot_I_q=plot_I_q,
         plot_logI_logq=plot_logI_logq,
         plot_logI_q=plot_logI_q,
+        init_radii_nm=init_radii_nm,
+        init_fractions=init_fractions,
+        init_poly_nm=init_poly_nm,
     )
     required = ("maxit", "max_nph")
     missing = [k for k in required if k not in merged or merged[k] is None]
@@ -392,6 +465,16 @@ def model_mixture(
     for key in ("r_min", "r_max", "poly_min", "poly_max"):
         if key in merged and merged[key] is not None:
             mixture_param_overrides[key] = float(merged[key])
+    # Explicit component starts: prefer call kwargs, else merged config.
+    for key, call_val in (
+        ("init_radii_nm", init_radii_nm),
+        ("init_fractions", init_fractions),
+        ("init_poly_nm", init_poly_nm),
+    ):
+        raw = call_val if call_val is not None else merged.get(key)
+        seq = coerce_float_sequence(raw)
+        if seq:
+            mixture_param_overrides[key] = seq
     return _model_mixture_paths(
         input_paths=input_batch[0] if len(input_batch) == 1 else input_batch,
         output_dir=output_dir,
@@ -442,8 +525,13 @@ def _model_mixture_paths(
         user_r_max=mixture_param_overrides.get("r_max"),
         user_poly_min=mixture_param_overrides.get("poly_min"),
         user_poly_max=mixture_param_overrides.get("poly_max"),
+        user_init_radii_nm=mixture_param_overrides.get("init_radii_nm"),
+        user_init_fractions=mixture_param_overrides.get("init_fractions"),
+        user_init_poly_nm=mixture_param_overrides.get("init_poly_nm"),
     )
     init_radii_ang = radius_params.pop("init_radii_ang", None)
+    init_fractions = radius_params.pop("init_fractions", None)
+    init_poly_ang = radius_params.pop("init_poly_ang", None)
     mixture_params = {
         "maxit": int(mixture_param_overrides["maxit"]),
         "max_nph": int(mixture_param_overrides["max_nph"]),
@@ -468,6 +556,8 @@ def _model_mixture_paths(
         plot_logI_logq=bool(mixture_param_overrides.get("plot_logI_logq", False)),
         plot_logI_q=bool(mixture_param_overrides.get("plot_logI_q", True)),
         init_radii_ang=init_radii_ang,
+        init_fractions=init_fractions,
+        init_poly_ang=init_poly_ang,
     )
     if result is None:
         raise RuntimeError("model_mixture failed")
@@ -505,23 +595,31 @@ def _model_mixture_paths(
         "".join(md_parts),
         summary_references=summary_refs,
     )
+    run_params: Dict[str, Any] = {
+        "skill": "model_mixture",
+        "max_nph": int(mixture_params["max_nph"]),
+        "maxit": int(mixture_params["maxit"]),
+        "r_min_nm": _angstrom_to_nm(mixture_params["r_min"]),
+        "r_max_nm": _angstrom_to_nm(mixture_params["r_max"]),
+        "poly_min_nm": _angstrom_to_nm(mixture_params["poly_min"]),
+        "poly_max_nm": _angstrom_to_nm(mixture_params["poly_max"]),
+        "profile": str(profile),
+    }
+    # Persist explicit component starts in skill input units (nm / fractions).
+    if init_radii_ang:
+        run_params["init_radii_nm"] = _format_float_seq(
+            [_angstrom_to_nm(v) for v in init_radii_ang]
+        )
+    if init_fractions:
+        run_params["init_fractions"] = _format_float_seq(init_fractions)
+    if init_poly_ang:
+        run_params["init_poly_nm"] = _format_float_seq(
+            [_angstrom_to_nm(v) for v in init_poly_ang]
+        )
     run_params_path = os.path.join(dest_dir, "model_mixture_run_params.yml")
     with open(run_params_path, "w", encoding="utf-8") as fp:
-        yaml.dump(
-            {
-                "skill": "model_mixture",
-                "max_nph": int(mixture_params["max_nph"]),
-                "maxit": int(mixture_params["maxit"]),
-                "r_min_nm": _angstrom_to_nm(mixture_params["r_min"]),
-                "r_max_nm": _angstrom_to_nm(mixture_params["r_max"]),
-                "poly_min_nm": _angstrom_to_nm(mixture_params["poly_min"]),
-                "poly_max_nm": _angstrom_to_nm(mixture_params["poly_max"]),
-                "profile": str(profile),
-            },
-            fp,
-            default_flow_style=False,
-        )
-    return {
+        yaml.dump(run_params, fp, default_flow_style=False)
+    out: Dict[str, Union[str, List[str]]] = {
         "output_subdir": result["output_subdir"],
         "comparison_path": result.get("comparison_path", ""),
         "comparison_loglog_path": result.get("comparison_loglog_path", ""),
@@ -534,6 +632,13 @@ def _model_mixture_paths(
         "poly_min_nm": _angstrom_to_nm(mixture_params["poly_min"]),
         "poly_max_nm": _angstrom_to_nm(mixture_params["poly_max"]),
     }
+    if "init_radii_nm" in run_params:
+        out["init_radii_nm"] = run_params["init_radii_nm"]
+    if "init_fractions" in run_params:
+        out["init_fractions"] = run_params["init_fractions"]
+    if "init_poly_nm" in run_params:
+        out["init_poly_nm"] = run_params["init_poly_nm"]
+    return out
 
 
 def _first_comparison_basename(result: Dict[str, Any]) -> str:

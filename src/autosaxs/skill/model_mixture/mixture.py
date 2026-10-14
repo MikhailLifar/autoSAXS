@@ -76,7 +76,7 @@ def _phase_init_radii_ang(
     """
     Starting Rout (Å) per phase.
 
-    Prefer D(R) / fit_sizes peak positions when provided; otherwise linspace + jitter
+    Prefer explicit / D(R) peak positions when provided; otherwise linspace + jitter
     inside ``[r_min, r_max]``. Peaks outside bounds are clipped; missing phases are
     filled from the linspace ladder so multi-phase cmds stay well-posed.
     """
@@ -125,6 +125,77 @@ def _phase_init_radii_ang(
     return np.asarray(out[:n_phases], dtype=float)
 
 
+def _phase_init_volumes(
+    n_phases: int,
+    init_fractions: Optional[Sequence[float]] = None,
+) -> np.ndarray:
+    """
+    Starting volume fractions per phase (sum → 1).
+
+    Explicit fractions win; otherwise a deterministic exponential ladder breaks
+    multi-phase symmetry (ATSAS MIXTURE volume-fraction starts).
+    """
+    if init_fractions:
+        vals: list[float] = []
+        for raw in init_fractions:
+            try:
+                v = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(v) and v >= 0:
+                vals.append(float(v))
+        if vals:
+            if len(vals) < n_phases:
+                # Pad remaining mass equally across missing phases.
+                rem = max(0.0, 1.0 - float(np.sum(vals)))
+                pad_n = n_phases - len(vals)
+                vals.extend([rem / pad_n] * pad_n)
+            vals = vals[:n_phases]
+            arr = np.asarray(vals, dtype=float)
+            s = float(np.sum(arr))
+            if s > 0:
+                return arr / s
+    w = np.exp(-0.9 * np.arange(n_phases, dtype=float))
+    return w / np.sum(w)
+
+
+def _phase_init_poly_ang(
+    n_phases: int,
+    *,
+    poly_min: float,
+    poly_max: float,
+    init_poly_ang: Optional[Sequence[float]] = None,
+) -> np.ndarray:
+    """Starting polydispersity (Å) per phase within ``[poly_min, poly_max]``."""
+    poly_min_f, poly_max_f = float(poly_min), float(poly_max)
+    poly_base = 5.0
+    ladder = np.empty(n_phases, dtype=float)
+    for k in range(n_phases):
+        if n_phases == 1:
+            ladder[k] = float(np.clip(poly_base, poly_min_f, poly_max_f))
+        else:
+            t = k / (n_phases - 1)
+            ladder[k] = float(
+                np.clip(poly_min_f * (poly_max_f / max(poly_min_f, 1e-12)) ** t, poly_min_f, poly_max_f)
+            )
+    if not init_poly_ang:
+        return ladder
+    out: list[float] = []
+    for raw in init_poly_ang:
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(v) or v < 0:
+            continue
+        out.append(float(np.clip(v, poly_min_f, poly_max_f)))
+    if not out:
+        return ladder
+    while len(out) < n_phases:
+        out.append(float(ladder[len(out)]))
+    return np.asarray(out[:n_phases], dtype=float)
+
+
 def _build_mixture_cmd(
     n_phases: int,
     dist_type: int,
@@ -137,20 +208,19 @@ def _build_mixture_cmd(
     poly_min: float,
     poly_max: float,
     init_radii_ang: Optional[Sequence[float]] = None,
+    init_fractions: Optional[Sequence[float]] = None,
+    init_poly_ang: Optional[Sequence[float]] = None,
 ) -> str:
     dist_name = "Gauss" if dist_type == 1 else "Schultz"
-    # Non-uniform initial volumes to break symmetry in global-bounds fits.
-    # Deterministic pattern (no RNG) so runs are reproducible.
-    w = np.exp(-0.9 * np.arange(n_phases, dtype=float))
-    vols = w / np.sum(w)
+    vols = _phase_init_volumes(n_phases, init_fractions=init_fractions)
     r_min_f, r_max_f = float(r_min), float(r_max)
     poly_min_f, poly_max_f = float(poly_min), float(poly_max)
     r_centers = _phase_init_radii_ang(
         n_phases, r_min=r_min_f, r_max=r_max_f, init_radii_ang=init_radii_ang
     )
-    # poly_init = 0.5 * (poly_min + poly_max)
-    # poly_init = 130.0
-    poly_base = 5.0
+    poly_starts = _phase_init_poly_ang(
+        n_phases, poly_min=poly_min_f, poly_max=poly_max_f, init_poly_ang=init_poly_ang
+    )
     lines = [
         "i                        !! init",
         "!!!!!!!!!!!!!!!!!!       !! init",
@@ -162,18 +232,12 @@ def _build_mixture_cmd(
         f"{SYSTEM_CONCENTRATION}                     !! system concentration",
     ]
     for k in range(n_phases):
-        v, r = vols[k], float(r_centers[k])
+        v, r = float(vols[k]), float(r_centers[k])
         # Global radius bounds for every phase (no local ±25 Å window).
         r_lo, r_hi = r_min_f, r_max_f
         # Keep per-phase hard-sphere lower bound consistent with current phase radius.
         rhs_lo, rhs_hi = max(r_lo + RHS_MARGIN, float(r) + RHS_MARGIN), r_hi + 30
-        # Strongly non-uniform starting polydispersity per phase (still within global bounds).
-        # Use a geometric ladder to cover narrow→broad.
-        if n_phases == 1:
-            poly_init = float(np.clip(poly_base, poly_min_f, poly_max_f))
-        else:
-            t = k / (n_phases - 1)
-            poly_init = float(np.clip(poly_min_f * (poly_max_f / poly_min_f) ** t, poly_min_f, poly_max_f))
+        poly_init = float(poly_starts[k])
         lines.extend(
             _sphere_block(
                 v,
@@ -310,6 +374,8 @@ def _run_all_fits(
     poly_min: float,
     poly_max: float,
     init_radii_ang: Optional[Sequence[float]] = None,
+    init_fractions: Optional[Sequence[float]] = None,
+    init_poly_ang: Optional[Sequence[float]] = None,
 ) -> list[dict]:
     results = []
     for n_phases in range(1, max_nph + 1):
@@ -331,6 +397,8 @@ def _run_all_fits(
                 poly_min=poly_min,
                 poly_max=poly_max,
                 init_radii_ang=init_radii_ang,
+                init_fractions=init_fractions,
+                init_poly_ang=init_poly_ang,
             )
             proc = _run_mixture(work_dir, dat_basename, cmd_content)
             fit_path = work_dir / dat_basename.replace(".dat", ".fit")
@@ -534,6 +602,8 @@ def fit_mixtures(
     plot_logI_logq: bool = False,
     plot_logI_q: bool = True,
     init_radii_ang: Optional[Sequence[float]] = None,
+    init_fractions: Optional[Sequence[float]] = None,
+    init_poly_ang: Optional[Sequence[float]] = None,
 ) -> dict[str, Any] | None:
     """
     Run 6 MIXTURE fits (1-, 2-, 3-phase × Gaussian, Schultz–Zimm; SPHERE-only),
@@ -625,6 +695,8 @@ def fit_mixtures(
         poly_min=poly_min,
         poly_max=poly_max,
         init_radii_ang=init_radii_ang,
+        init_fractions=init_fractions,
+        init_poly_ang=init_poly_ang,
     )
 
     for r in results:

@@ -14,4 +14,5 @@
 - Scenario overlays (bug/fix): `scenario-mono-adjust-bug`, `scenario-mono-adjust-fix` (`emphasize: broken|fixed` in renderer).
 - I(q)/Adjust intensity SSOT: presenter/session `sub_*.dat` (never sibling `*_atsas.dat` as UI owner). See `docs/architecture/liveview/invariants.md`.
 - Code root: `src/guisaxs_skills/liveview/`.
-- Mixture option names / init peaks: `.agent/liveview/model-mixture-options.md`.
+- Mixture option names / component init (`init_radii_nm` / fractions / poly): `.agent/liveview/model-mixture-options.md`.
+- DR results navigation: `modeling/catalogs/mixture_models.py` (ensemble fit browser; same role as `dam_models` for shape).

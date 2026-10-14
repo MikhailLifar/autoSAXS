@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from PyQt5.QtWidgets import (
+    QComboBox,
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
@@ -21,11 +22,13 @@ from PyQt5.QtWidgets import (
 )
 
 from ...liveview.ui.panels.right.polydisperse.plots import MixtureDistPlot, MixtureFitPlot
+from ...ui.os_open import open_path_in_file_manager
 from ...ui.passport_table import PassportTableWidget
 from ...ui.path_field import PathField
 from ...ui.in_progress_overlay import InProgressOverlay
 from ...ui.run_status_bar import RunStatusBar
 from ..auto_mode import ModelingAutoMode
+from ..catalogs.mixture_models import MixtureModelCatalog, build_mixture_model_catalog
 from ..context import ModelingContext
 from ..freeze_ui import (
     enter_context_freeze,
@@ -44,6 +47,12 @@ from ..run_params import (
 )
 from ..progress_parse import ProgressStderrBuffer
 from ..runtime import ModelingRuntime
+
+_MAX_INIT_COMPONENTS = 3
+
+
+def _format_init_csv(values: List[float]) -> str:
+    return ",".join(f"{float(v):.6g}" for v in values)
 
 
 class DrModelingWindow(QMainWindow):
@@ -65,6 +74,7 @@ class DrModelingWindow(QMainWindow):
         self._runtime.stderr.connect(self._on_stderr)
         self._progress_buf = ProgressStderrBuffer()
         self._rows: List[Dict[str, Any]] = []
+        self._catalog = MixtureModelCatalog()
         self._analysis_root: Optional[Path] = None
         self._plot_clicks = ModelingPlotClickRouter(self)
         self._build_ui()
@@ -94,6 +104,11 @@ class DrModelingWindow(QMainWindow):
                 self._pf_outdir.set_text("")
             self._sync_outdir_to_mode("mixture")
             opts = normalize_model_mixture_options(self._ctx.options or {})
+            # Keep init_* from context even if normalize already included them.
+            for key in ("init_radii_nm", "init_fractions", "init_poly_nm"):
+                raw = (self._ctx.options or {}).get(key)
+                if raw is not None and raw != "":
+                    opts[key] = raw
             had_max_nph = "max_nph" in opts
             for key, spin in (
                 ("max_nph", self._sp_max_nph),
@@ -107,6 +122,7 @@ class DrModelingWindow(QMainWindow):
                         spin.setValue(float(opts[key]) if spin is not self._sp_max_nph else int(opts[key]))
                     except (TypeError, ValueError):
                         pass
+            self._apply_init_options(opts)
             disk = self._apply_run_params_from_disk()
             if isinstance(disk, dict) and "max_nph" in disk:
                 had_max_nph = True
@@ -152,9 +168,8 @@ class DrModelingWindow(QMainWindow):
         """
         Surface fit_sizes component guesses in the DR UI.
 
-        Prefills max_nph from ``n_phases_suggested`` only when the session/disk
-        options did not already set it. Init radii themselves are owned by the
-        ``model_mixture`` skill (seeded from the same peaks at run time).
+        Prefills max_nph from ``n_phases_suggested`` when unset. Prefills advanced
+        init-radius spins from D(R) peaks when those spins are still empty.
         """
         path = self._fit_sizes_handoff_path()
         if path is None:
@@ -183,12 +198,14 @@ class DrModelingWindow(QMainWindow):
             parts.append(f"n_ph≈{n_ph}")
         if dist:
             parts.append(str(dist))
+        peak_vals: List[float] = []
         if isinstance(peaks, list) and peaks:
             try:
-                peak_txt = ", ".join(f"{float(p):.3g}" for p in peaks[:3])
+                peak_vals = [float(p) for p in peaks[:_MAX_INIT_COMPONENTS]]
+                peak_txt = ", ".join(f"{p:.3g}" for p in peak_vals)
                 parts.append(f"peaks [{peak_txt}] nm")
             except (TypeError, ValueError):
-                pass
+                peak_vals = []
         if parts:
             self._lbl_init_hint.setText("D(R) init: " + "; ".join(parts))
         else:
@@ -198,6 +215,61 @@ class DrModelingWindow(QMainWindow):
                 self._sp_max_nph.setValue(int(max(1, min(3, int(n_ph)))))
             except (TypeError, ValueError):
                 pass
+        if peak_vals and not self._init_radii_have_values():
+            self._set_init_component_values(radii_nm=peak_vals)
+
+    def _init_radii_have_values(self) -> bool:
+        return any(float(sp.value()) > 0.0 for sp in self._init_r)
+
+    def _set_init_component_values(
+        self,
+        *,
+        radii_nm: Optional[List[float]] = None,
+        fractions: Optional[List[float]] = None,
+        poly_nm: Optional[List[float]] = None,
+    ) -> None:
+        for i in range(_MAX_INIT_COMPONENTS):
+            if radii_nm is not None:
+                self._init_r[i].setValue(float(radii_nm[i]) if i < len(radii_nm) else 0.0)
+            if fractions is not None:
+                self._init_f[i].setValue(float(fractions[i]) if i < len(fractions) else 0.0)
+            if poly_nm is not None:
+                self._init_p[i].setValue(float(poly_nm[i]) if i < len(poly_nm) else 0.0)
+
+    def _collect_init_options(self) -> Dict[str, str]:
+        """Serialize advanced component starts to skill CLI strings (omit empties)."""
+        from autosaxs.skill.model_mixture import coerce_float_sequence
+
+        radii = [float(sp.value()) for sp in self._init_r if float(sp.value()) > 0.0]
+        fracs = [float(sp.value()) for sp in self._init_f if float(sp.value()) > 0.0]
+        polys = [float(sp.value()) for sp in self._init_p if float(sp.value()) > 0.0]
+        out: Dict[str, str] = {}
+        if radii:
+            out["init_radii_nm"] = _format_init_csv(radii)
+        if fracs:
+            out["init_fractions"] = _format_init_csv(fracs)
+        if polys:
+            out["init_poly_nm"] = _format_init_csv(polys)
+        # Validate parse round-trip (skill owns coerce).
+        for key in list(out):
+            if not coerce_float_sequence(out[key]):
+                out.pop(key, None)
+        return out
+
+    def _apply_init_options(self, params: Dict[str, Any]) -> None:
+        from autosaxs.skill.model_mixture import coerce_float_sequence
+
+        radii = coerce_float_sequence(params.get("init_radii_nm"))
+        fracs = coerce_float_sequence(params.get("init_fractions"))
+        polys = coerce_float_sequence(params.get("init_poly_nm"))
+        if radii or fracs or polys:
+            self._set_init_component_values(
+                radii_nm=radii or None,
+                fractions=fracs or None,
+                poly_nm=polys or None,
+            )
+            # Open advanced when disk/session already customized starts.
+            self._adv_box.setChecked(True)
 
     def _apply_run_params_from_disk(self) -> Optional[Dict[str, Any]]:
         raw = (self._pf_outdir.text() or "").strip()
@@ -209,7 +281,15 @@ class DrModelingWindow(QMainWindow):
             self._pf_outdir.set_text(out)
         if not os.path.isdir(out):
             return None
-        params = normalize_model_mixture_options(read_run_params(out, profile_path=prof))
+        # read_run_params may include init_* strings; normalize keeps skill keys.
+        disk_raw = read_run_params(out, profile_path=prof)
+        params = normalize_model_mixture_options(disk_raw)
+        # normalize drops unknown aliases but keeps init_*; merge back if present on disk.
+        for key in ("init_radii_nm", "init_fractions", "init_poly_nm"):
+            if key in disk_raw and key not in params:
+                params[key] = disk_raw[key]
+            elif key in disk_raw:
+                params[key] = disk_raw[key]
         if not params and not (Path(out) / "mixture_results.csv").is_file():
             return None
         if "max_nph" in params:
@@ -237,11 +317,19 @@ class DrModelingWindow(QMainWindow):
                 self._q_max.setValue(float(params["q_max_nm"]))
             except (TypeError, ValueError):
                 pass
+        self._apply_init_options(params)
         return params
 
     def _clear_result_views(self) -> None:
         """Wipe fit/Δ/D(R)/passport so a sample without MIXTURE results is not misleading."""
         self._rows = []
+        self._catalog = MixtureModelCatalog()
+        self._fit_combo.blockSignals(True)
+        try:
+            self._fit_combo.clear()
+        finally:
+            self._fit_combo.blockSignals(False)
+        self._open_folder_btn.setEnabled(False)
         try:
             self._fit.clear_plot()
         except Exception:
@@ -255,7 +343,7 @@ class DrModelingWindow(QMainWindow):
         except Exception:
             pass
         try:
-            self._passport.set_message("—")
+            self._passport.set_rows([])
         except Exception:
             pass
 
@@ -273,25 +361,15 @@ class DrModelingWindow(QMainWindow):
         csv = Path(out) / "mixture_results.csv"
         if not csv.is_file():
             return
-        # Prefer BIC_log / best_label from run params / CSV via ingest.
         params = read_run_params(out, profile_path=prof)
         self._ingest_result(
             {
                 "output_subdir": out,
                 "results_csv_path": str(csv),
-                "best_fit_path": self._discover_best_fit(out),
                 "best_label": str(params.get("best_label") or ""),
                 "BIC_log": params.get("BIC_log"),
             }
         )
-
-    def _discover_best_fit(self, outdir: str) -> str:
-        sd = Path(outdir)
-        for pat in ("*_best.fit", "*.fit", "*_fit.dat"):
-            cands = sorted(sd.glob(pat), key=lambda p: p.stat().st_mtime, reverse=True)
-            if cands:
-                return str(cands[0])
-        return ""
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -378,6 +456,62 @@ class DrModelingWindow(QMainWindow):
         self._lbl_init_hint.setWordWrap(True)
         self._lbl_init_hint.setStyleSheet("color: #555;")
         ctrl.addWidget(self._lbl_init_hint)
+
+        # Results navigation (shape-app parity: browse ensemble fits + open artifacts).
+        ctrl.addWidget(QLabel("Results model"))
+        self._fit_combo = QComboBox()
+        self._fit_combo.setEnabled(False)
+        self._fit_combo.currentIndexChanged.connect(self._on_fit_combo_changed)
+        ctrl.addWidget(self._fit_combo)
+        self._open_folder_btn = QPushButton("Open artifacts folder…")
+        self._open_folder_btn.setEnabled(False)
+        self._open_folder_btn.clicked.connect(self._on_open_artifacts_folder)
+        ctrl.addWidget(self._open_folder_btn)
+
+        # Advanced: editable MIXTURE component initial guesses (collapsed by default).
+        self._adv_box = QGroupBox("Advanced: component initial guesses")
+        self._adv_box.setCheckable(True)
+        self._adv_box.setChecked(False)
+        adv_lay = QVBoxLayout(self._adv_box)
+        adv_lay.addWidget(
+            QLabel("Per-phase starts for ATSAS MIXTURE (Rout, volume fraction, poly). Empty = skill default / D(R) peaks.")
+        )
+        adv_form = QFormLayout()
+        self._init_r: List[QDoubleSpinBox] = []
+        self._init_f: List[QDoubleSpinBox] = []
+        self._init_p: List[QDoubleSpinBox] = []
+        for i in range(_MAX_INIT_COMPONENTS):
+            row = QHBoxLayout()
+            sp_r = QDoubleSpinBox()
+            sp_r.setRange(0.0, 1e6)
+            sp_r.setDecimals(4)
+            sp_r.setSpecialValueText("(auto)")
+            sp_r.setValue(0.0)
+            sp_f = QDoubleSpinBox()
+            sp_f.setRange(0.0, 1.0)
+            sp_f.setDecimals(4)
+            sp_f.setSpecialValueText("(auto)")
+            sp_f.setValue(0.0)
+            sp_p = QDoubleSpinBox()
+            sp_p.setRange(0.0, 1e6)
+            sp_p.setDecimals(4)
+            sp_p.setSpecialValueText("(auto)")
+            sp_p.setValue(0.0)
+            row.addWidget(QLabel("R"))
+            row.addWidget(sp_r, 1)
+            row.addWidget(QLabel("φ"))
+            row.addWidget(sp_f, 1)
+            row.addWidget(QLabel("poly"))
+            row.addWidget(sp_p, 1)
+            wrap = QWidget()
+            wrap.setLayout(row)
+            adv_form.addRow(f"phase {i + 1}", wrap)
+            self._init_r.append(sp_r)
+            self._init_f.append(sp_f)
+            self._init_p.append(sp_p)
+        adv_lay.addLayout(adv_form)
+        ctrl.addWidget(self._adv_box)
+
         self._confirm = QPushButton("Confirm")
         self._confirm.clicked.connect(lambda: self._on_confirm(quiet=False))
         ctrl.addWidget(self._confirm)
@@ -417,6 +551,9 @@ class DrModelingWindow(QMainWindow):
             self._sp_poly_max,
             self._q_min,
             self._q_max,
+            *self._init_r,
+            *self._init_f,
+            *self._init_p,
         ):
             spin.valueChanged.connect(self._auto_mode.on_control_changed)
 
@@ -499,6 +636,7 @@ class DrModelingWindow(QMainWindow):
                 "poly_max": float(self._sp_poly_max.value()) if self._sp_poly_max.value() > 0 else None,
                 "q_min_nm": float(self._q_min.value()) if self._q_min.value() > 0 else None,
                 "q_max_nm": float(self._q_max.value()) if self._q_max.value() > 0 else None,
+                **self._collect_init_options(),
             }
         )
         opts: Dict[str, Any] = {
@@ -556,53 +694,91 @@ class DrModelingWindow(QMainWindow):
         notify_ready_for_context_if_deferred(self, self._ipc)
 
     def _ingest_result(self, result: Dict[str, Any]) -> None:
-        fit = result.get("best_fit_path") or result.get("fit_path")
-        if isinstance(fit, str) and os.path.isfile(fit):
+        out = str(result.get("output_subdir") or "").strip()
+        if not out:
+            csv_path = str(result.get("results_csv_path") or "").strip()
+            if csv_path:
+                out = str(Path(csv_path).parent)
+        if not out:
+            out = (self._pf_outdir.text() or "").strip()
+        best_label = str(result.get("best_label") or "").strip()
+        self._catalog = build_mixture_model_catalog(out, best_label=best_label)
+        self._rows = [dict(e.row) for e in self._catalog.entries]
+        self._sync_fit_combo(select_key=self._catalog.best_key)
+        self._open_folder_btn.setEnabled(bool(self._catalog.output_subdir) and Path(self._catalog.output_subdir).is_dir())
+        self._show_catalog_entry(self._catalog.best())
+
+    def _sync_fit_combo(self, *, select_key: str = "") -> None:
+        self._fit_combo.blockSignals(True)
+        try:
+            self._fit_combo.clear()
+            for entry in self._catalog.entries:
+                tip = entry.label
+                if entry.bic_log is not None:
+                    tip = f"{entry.label}  (BIC_log={entry.bic_log:.4g})"
+                self._fit_combo.addItem(tip, entry.key)
+            self._fit_combo.setEnabled(bool(self._catalog.entries))
+            if select_key:
+                for i in range(self._fit_combo.count()):
+                    if self._fit_combo.itemData(i) == select_key:
+                        self._fit_combo.setCurrentIndex(i)
+                        break
+            elif self._fit_combo.count():
+                self._fit_combo.setCurrentIndex(0)
+        finally:
+            self._fit_combo.blockSignals(False)
+
+    def _on_fit_combo_changed(self, *_args) -> None:
+        key = self._fit_combo.currentData()
+        entry = self._catalog.by_key(str(key or ""))
+        self._show_catalog_entry(entry)
+
+    def _on_open_artifacts_folder(self) -> None:
+        folder = self._catalog.output_subdir or (self._pf_outdir.text() or "").strip()
+        if folder:
+            open_path_in_file_manager(folder)
+
+    def _show_catalog_entry(self, entry: Optional[Any]) -> None:
+        if entry is None:
+            return
+        fit = str(getattr(entry, "fit_path", "") or "")
+        if fit and os.path.isfile(fit):
             self._fit.plot_from_fit(fit)
-            # Mixture .fit may not match fir residual layout; try anyway.
-            self._delta.plot_from_fir(fit)
-        csv_path = result.get("results_csv_path") or result.get("distributions_path")
-        row = None
-        if isinstance(csv_path, str) and os.path.isfile(csv_path) and csv_path.endswith(".csv"):
             try:
-                import csv
-
-                with open(csv_path, newline="", encoding="utf-8", errors="replace") as fh:
-                    reader = csv.DictReader(fh)
-                    rows = list(reader)
-                best_label = str(result.get("best_label") or "").strip()
-                if best_label and rows:
-                    for r in rows:
-                        if str(r.get("label") or "").strip() == best_label:
-                            row = r
-                            break
-                if row is None and rows and "BIC_log" in (rows[0] or {}):
-                    def _bic(r: dict) -> float:
-                        try:
-                            return float(r.get("BIC_log"))
-                        except (TypeError, ValueError):
-                            return float("inf")
-
-                    row = min(rows, key=_bic)
-                elif row is None and rows:
-                    row = rows[0]
+                self._delta.plot_from_fir(fit)
             except Exception:
-                row = None
-        if isinstance(row, dict):
-            self._dist.plot_from_model_row(row, label=str(row.get("label") or "best"))
-        self._passport.set_rows(self._passport_rows_for_result(result, row=row if isinstance(row, dict) else None))
+                pass
+        row = dict(getattr(entry, "row", {}) or {})
+        if row:
+            self._dist.plot_from_model_row(row, label=str(getattr(entry, "label", "") or "fit"))
+        self._passport.set_rows(
+            self._passport_rows_for_result(
+                {
+                    "best_label": self._catalog.best_key,
+                    "BIC_log": getattr(entry, "bic_log", None),
+                    "chi2": getattr(entry, "chi2", None),
+                },
+                row=row,
+                selected_label=str(getattr(entry, "label", "") or ""),
+            )
+        )
 
     def _passport_rows_for_result(
         self,
         result: Dict[str, Any],
         *,
         row: Optional[Dict[str, Any]] = None,
+        selected_label: str = "",
     ) -> list[tuple[str, str, str]]:
         """Quality passport from MIXTURE metrics (not paths / mode labels)."""
         rows: list[tuple[str, str, str]] = []
-        label = str(result.get("best_label") or (row or {}).get("label") or "").strip()
-        if label:
-            rows.append(("best model", label, "ok"))
+        best = str(result.get("best_label") or "").strip()
+        selected = (selected_label or str((row or {}).get("label") or "")).strip()
+        if selected:
+            mark = " (best)" if best and selected == best else ""
+            rows.append(("selected model", f"{selected}{mark}", "ok"))
+        elif best:
+            rows.append(("best model", best, "ok"))
 
         def _add(metric: str, raw: object) -> None:
             if raw is None or raw == "":
@@ -617,7 +793,7 @@ class DrModelingWindow(QMainWindow):
             rows.append((metric, f"{v:.4g}", "ok"))
 
         src = row or {}
-        _add("BIC_log", result.get("BIC_log", src.get("BIC_log")))
+        _add("BIC_log", src.get("BIC_log") if src.get("BIC_log") is not None else result.get("BIC_log"))
         _add("χ²", src.get("chi2") if src.get("chi2") is not None else result.get("chi2"))
         _add("R²_log", src.get("R2_log"))
         return rows

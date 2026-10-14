@@ -279,12 +279,14 @@ class SizesAdjustWizardDialog(QDialog):
         if gnom_out_path and os.path.isfile(gnom_out_path):
             self._fit_plot.plot_from_dat_and_gnom_out(self._profile_path, gnom_out_path)
             self._plot_dr_adjust(gnom_out_path)
-        if passport_quality:
-            self.set_passport_from_quality(passport_quality)
-        elif passport_html or passport_text:
-            self.set_passport(text=passport_text, html_text=passport_html)
+        self._bind_passport(
+            passport_quality=passport_quality,
+            passport_html=passport_html,
+            passport_text=passport_text,
+            gnom_out_path=gnom_out_path,
+        )
         self._confirm.set_committed(self.sizes_params())
-        # Disk .out + passport only on bind; live preview starts on user edits.
+        # Disk .out + passport on bind; live preview starts on user edits.
 
     def _apply_rmax_slider_span(self) -> None:
         """Slider domain 0 … 4× best-auto Rmax (fallback: current Rmax); spin can exceed."""
@@ -379,10 +381,67 @@ class SizesAdjustWizardDialog(QDialog):
         )
 
     def set_passport_from_quality(self, quality: Mapping[str, Any]) -> None:
-        self._passport_table.set_rows(
-            format_sizes_passport_rows(quality),
-            poor_color=COLOR_QUALITY_POOR,
-        )
+        rows = format_sizes_passport_rows(quality)
+        if rows:
+            self._passport_table.set_rows(rows, poor_color=COLOR_QUALITY_POOR)
+            return
+        # Empty quality dict must not leave a stale blob — show placeholder.
+        self._passport_table.set_rows([])
+
+    def _quality_from_gnom_out(
+        self,
+        gnom_out_path: str,
+        *,
+        first: Optional[int] = None,
+        last: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Same quality owner as live preview — Metric/Value rows from a bound ``.out``."""
+        if not gnom_out_path or not os.path.isfile(gnom_out_path):
+            return None
+        try:
+            out_text = Path(gnom_out_path).read_text(errors="replace")
+            parsed = parse_gnom_out(out_text)
+            return analyze_dr_quality(
+                parsed,
+                atsas_fit_ok=True,
+                rg_guinier_nm=None,
+                shape="spheres",
+                q_nm=self._q_nm,
+                first_pt_1based=first,
+                last_pt_1based=last,
+            )
+        except Exception:
+            return None
+
+    def _bind_passport(
+        self,
+        *,
+        passport_quality: Optional[Mapping[str, Any]] = None,
+        passport_html: str = "",
+        passport_text: str = "",
+        gnom_out_path: str = "",
+    ) -> None:
+        """
+        Passport on open (never delayed/empty/blob):
+
+        1. Presenter quality dict → ``set_passport_from_quality`` (Metric/Value rows)
+        2. Else derive from bound ``.out`` via the same ``analyze_dr_quality`` as preview
+        3. Else legacy HTML/text rehydrate
+        4. Else empty placeholder
+        """
+        if passport_quality:
+            rows = format_sizes_passport_rows(passport_quality)
+            if rows:
+                self._passport_table.set_rows(rows, poor_color=COLOR_QUALITY_POOR)
+                return
+        derived = self._quality_from_gnom_out(gnom_out_path)
+        if derived:
+            self.set_passport_from_quality(derived)
+            return
+        if passport_html or passport_text:
+            self.set_passport(text=passport_text, html_text=passport_html)
+            return
+        self._passport_table.set_rows([])
 
     def show_from_gnom_out(self, gnom_out_path: str) -> None:
         if gnom_out_path and os.path.isfile(gnom_out_path):
@@ -473,20 +532,11 @@ class SizesAdjustWizardDialog(QDialog):
             self._plot_dr_adjust(out_path)
         except Exception:
             pass
-        try:
-            parsed = parse_gnom_out(out_text)
-            quality = analyze_dr_quality(
-                parsed,
-                atsas_fit_ok=True,
-                rg_guinier_nm=None,
-                shape="spheres",
-                q_nm=self._q_nm,
-                first_pt_1based=first,
-                last_pt_1based=last,
-            )
+        quality = self._quality_from_gnom_out(out_path, first=first, last=last)
+        if quality:
             self.set_passport_from_quality(quality)
-        except Exception as exc:
-            self.set_passport(text=f"Passport update failed: {exc}", poor=True)
+        else:
+            self.set_passport(text="Passport update failed: could not analyze GNOM .out", poor=True)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if not self._confirm.confirm_close_if_dirty():

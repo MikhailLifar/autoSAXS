@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 from pathlib import Path
 from typing import Optional
 
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ....logic.path_display import contracted_path_label
+from ....ui.os_open import open_path_in_file_manager
 from ....ui.saxs_interactive_3d import Interactive3DViewerDialog, SaxsInteractive3DWidget
 from ...services.dam_models import DamModelCatalog
 from ...services.denss_models import DenssModelCatalog, DenssModelEntry
@@ -254,15 +252,6 @@ class LiveviewViewer3D(QWidget):
 
     def _on_open_folder(self) -> None:
         folder = self._open_folder
-        if folder is None or not folder.is_dir():
+        if folder is None:
             return
-        path = str(folder.resolve())
-        try:
-            if sys.platform == "darwin":
-                subprocess.Popen(["open", path])
-            elif sys.platform.startswith("win"):
-                os.startfile(path)  # type: ignore[attr-defined]
-            else:
-                subprocess.Popen(["xdg-open", path])
-        except Exception:
-            pass
+        open_path_in_file_manager(folder)
