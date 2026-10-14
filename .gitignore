@@ -14,3 +14,7 @@ guisaxs_temp/
 # Keep any future blanket *.tif ignore from excluding this tree.
 !examples/**/*.tif
 !examples/**/*.tiff
+
+# Architecture map PNGs (regenerate via scripts/render_arch.py); keep .gitkeep
+docs/architecture/**/generated/*
+!docs/architecture/**/generated/.gitkeep

@@ -1,0 +1,15 @@
+%% Sample-tied right presentation
+%% generated from nodes.yaml — do not edit by hand
+flowchart TB
+  sample_store["SampleStore"]
+  session["LiveviewSession"]
+  present_right["present_right"]
+  mono_presenter["Mono artifact presenter<br/>→ gnom-adjust-bind"]
+  ui_right["Right panel (mono/poly)<br/>→ gnom-adjust-bind"]
+  mono_coordinator["Mono coordinator<br/>→ gnom-adjust-bind"]
+  sample_store -->|state: current stem only| present_right
+  session -->|state: shape mode prefs (not identity)| present_right
+  present_right -->|data: discover_* / LIVE ingest| mono_presenter
+  mono_presenter -->|data: plots + passport| ui_right
+  mono_presenter -->|state: profile / .out / quality| mono_coordinator
+  mono_coordinator -->|signal: apply_bundle / load_from_disk| mono_presenter

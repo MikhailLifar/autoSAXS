@@ -5,6 +5,7 @@ How **guisaxs-liveview** is structured: concepts and ownership, how that maps on
 **Code SSOT:** `guisaxs_skills.liveview` (paths below are relative to `src/guisaxs_skills/liveview/`).  
 **Product / UX contract:** [`guisaxs_liveview_spec.md`](guisaxs_liveview_spec.md).  
 **Ownership cheat sheet:** [`liveview_session_sample_plan.md`](liveview_session_sample_plan.md).  
+**Extraction maps (YAML → Mermaid/Graphviz):** [`architecture/README.md`](architecture/README.md) (Adjust rebind invariant: [`architecture/liveview/invariants.md`](architecture/liveview/invariants.md)).  
 **Package map:** [`../AGENTS.md`](../AGENTS.md).
 
 The installable entry package `guisaxs_liveview` is a thin launcher only (`__main__.py` → `app.run_liveview_app()`). Help HTML lives under `autosaxs/resources/help/guisaxs_liveview/`.
