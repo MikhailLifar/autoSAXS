@@ -37,6 +37,7 @@ from ..plots import FitResidualsPlot, ModelingPlotClickRouter
 from ..run_params import (
     analysis_root_from_modeling_path,
     conventional_sample_modeling_dir,
+    normalize_model_mixture_options,
     read_run_params,
     resolve_sample_modeling_dir,
     skill_batch_output_dir,
@@ -92,61 +93,151 @@ class DrModelingWindow(QMainWindow):
             else:
                 self._pf_outdir.set_text("")
             self._sync_outdir_to_mode("mixture")
-            opts = self._ctx.options or {}
+            opts = normalize_model_mixture_options(self._ctx.options or {})
+            had_max_nph = "max_nph" in opts
             for key, spin in (
                 ("max_nph", self._sp_max_nph),
-                ("r_max_nm", self._sp_r_max),
-                ("poly_max_nm", self._sp_poly_max),
-                ("q_min", self._q_min),
-                ("q_max", self._q_max),
+                ("r_max", self._sp_r_max),
+                ("poly_max", self._sp_poly_max),
+                ("q_min_nm", self._q_min),
+                ("q_max_nm", self._q_max),
             ):
                 if key in opts and opts[key] is not None:
                     try:
                         spin.setValue(float(opts[key]) if spin is not self._sp_max_nph else int(opts[key]))
                     except (TypeError, ValueError):
                         pass
-            self._apply_run_params_from_disk()
+            disk = self._apply_run_params_from_disk()
+            if isinstance(disk, dict) and "max_nph" in disk:
+                had_max_nph = True
+            self._apply_fit_sizes_component_guesses(opts_had_max_nph=had_max_nph)
         self._try_load_existing_artifacts()
         self._update_confirm_enabled()
 
-    def _apply_run_params_from_disk(self) -> None:
+    def _fit_sizes_handoff_path(self) -> Optional[Path]:
+        """Locate fit_sizes YAML that owns D(R) peak / n_phases suggestions."""
+        prof = (self._pf_profile.text() or "").strip()
+        if not prof:
+            return None
+        from autosaxs.core.utils import _strip_sub_int_prefix
+
+        stem = _strip_sub_int_prefix(Path(prof).stem)
+        name = f"{stem}_fit_sizes.yml"
+        out_raw = (self._pf_outdir.text() or "").strip()
+        roots: List[Path] = []
+        if self._analysis_root is not None:
+            roots.append(Path(self._analysis_root))
+        if out_raw:
+            out = Path(resolve_sample_modeling_dir(out_raw, profile_path=prof))
+            root = analysis_root_from_modeling_path(str(out))
+            if root is not None:
+                roots.append(Path(root))
+            roots.append(out)
+            roots.append(out.parent)
+        seen: set[str] = set()
+        for root in roots:
+            for cand in (
+                root / "fit_sizes" / stem / name,
+                root / "_fit_sizes_defaults" / stem / name,
+            ):
+                key = str(cand)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if cand.is_file():
+                    return cand
+        return None
+
+    def _apply_fit_sizes_component_guesses(self, *, opts_had_max_nph: bool) -> None:
+        """
+        Surface fit_sizes component guesses in the DR UI.
+
+        Prefills max_nph from ``n_phases_suggested`` only when the session/disk
+        options did not already set it. Init radii themselves are owned by the
+        ``model_mixture`` skill (seeded from the same peaks at run time).
+        """
+        path = self._fit_sizes_handoff_path()
+        if path is None:
+            self._lbl_init_hint.setText("")
+            return
+        try:
+            import yaml
+
+            doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            self._lbl_init_hint.setText("")
+            return
+        mm = doc.get("model_mixture") if isinstance(doc, dict) else None
+        if not isinstance(mm, dict):
+            mm = {}
+        quality = doc.get("quality") if isinstance(doc, dict) else None
+        if not isinstance(quality, dict):
+            quality = {}
+        n_ph = mm.get("n_phases_suggested")
+        if n_ph is None:
+            n_ph = quality.get("n_components_suggested")
+        peaks = mm.get("peak_positions_nm") or quality.get("dr_peak_positions_nm") or []
+        dist = mm.get("mixture_dist_hint") or ""
+        parts: List[str] = []
+        if n_ph is not None:
+            parts.append(f"n_ph≈{n_ph}")
+        if dist:
+            parts.append(str(dist))
+        if isinstance(peaks, list) and peaks:
+            try:
+                peak_txt = ", ".join(f"{float(p):.3g}" for p in peaks[:3])
+                parts.append(f"peaks [{peak_txt}] nm")
+            except (TypeError, ValueError):
+                pass
+        if parts:
+            self._lbl_init_hint.setText("D(R) init: " + "; ".join(parts))
+        else:
+            self._lbl_init_hint.setText("")
+        if not opts_had_max_nph and n_ph is not None:
+            try:
+                self._sp_max_nph.setValue(int(max(1, min(3, int(n_ph)))))
+            except (TypeError, ValueError):
+                pass
+
+    def _apply_run_params_from_disk(self) -> Optional[Dict[str, Any]]:
         raw = (self._pf_outdir.text() or "").strip()
         if not raw:
-            return
+            return None
         prof = (self._pf_profile.text() or "").strip()
         out = str(resolve_sample_modeling_dir(raw, profile_path=prof))
         if out != raw:
             self._pf_outdir.set_text(out)
         if not os.path.isdir(out):
-            return
-        params = read_run_params(out, profile_path=prof)
+            return None
+        params = normalize_model_mixture_options(read_run_params(out, profile_path=prof))
         if not params and not (Path(out) / "mixture_results.csv").is_file():
-            return
+            return None
         if "max_nph" in params:
             try:
                 self._sp_max_nph.setValue(int(params["max_nph"]))
             except (TypeError, ValueError):
                 pass
-        if params.get("r_max_nm") is not None:
+        if params.get("r_max") is not None:
             try:
-                self._sp_r_max.setValue(float(params["r_max_nm"]))
+                self._sp_r_max.setValue(float(params["r_max"]))
             except (TypeError, ValueError):
                 pass
-        if params.get("poly_max_nm") is not None:
+        if params.get("poly_max") is not None:
             try:
-                self._sp_poly_max.setValue(float(params["poly_max_nm"]))
+                self._sp_poly_max.setValue(float(params["poly_max"]))
             except (TypeError, ValueError):
                 pass
-        if params.get("q_min") is not None:
+        if params.get("q_min_nm") is not None:
             try:
-                self._q_min.setValue(float(params["q_min"]))
+                self._q_min.setValue(float(params["q_min_nm"]))
             except (TypeError, ValueError):
                 pass
-        if params.get("q_max") is not None:
+        if params.get("q_max_nm") is not None:
             try:
-                self._q_max.setValue(float(params["q_max"]))
+                self._q_max.setValue(float(params["q_max_nm"]))
             except (TypeError, ValueError):
                 pass
+        return params
 
     def _clear_result_views(self) -> None:
         """Wipe fit/Δ/D(R)/passport so a sample without MIXTURE results is not misleading."""
@@ -283,6 +374,10 @@ class DrModelingWindow(QMainWindow):
         form.addRow("q_min (nm⁻¹)", self._q_min)
         form.addRow("q_max (nm⁻¹)", self._q_max)
         ctrl.addWidget(self._mixture_params)
+        self._lbl_init_hint = QLabel("")
+        self._lbl_init_hint.setWordWrap(True)
+        self._lbl_init_hint.setStyleSheet("color: #555;")
+        ctrl.addWidget(self._lbl_init_hint)
         self._confirm = QPushButton("Confirm")
         self._confirm.clicked.connect(lambda: self._on_confirm(quiet=False))
         ctrl.addWidget(self._confirm)
@@ -395,19 +490,22 @@ class DrModelingWindow(QMainWindow):
             if not quiet:
                 QMessageBox.warning(self, "Confirm", str(exc))
             return
+        # Skill CLI owns --r-max / --poly-max / --q-*-nm (values in nm). Never pass
+        # disk handoff names (r_max_nm) here — RunRequest maps keys to CLI flags 1:1.
+        skill_opts = normalize_model_mixture_options(
+            {
+                "max_nph": int(self._sp_max_nph.value()),
+                "r_max": float(self._sp_r_max.value()) if self._sp_r_max.value() > 0 else None,
+                "poly_max": float(self._sp_poly_max.value()) if self._sp_poly_max.value() > 0 else None,
+                "q_min_nm": float(self._q_min.value()) if self._q_min.value() > 0 else None,
+                "q_max_nm": float(self._q_max.value()) if self._q_max.value() > 0 else None,
+            }
+        )
         opts: Dict[str, Any] = {
             "output_dir": str(Path(batch_outdir).resolve()),
             "use_cache": False,
-            "max_nph": int(self._sp_max_nph.value()),
+            **skill_opts,
         }
-        if self._sp_r_max.value() > 0:
-            opts["r_max_nm"] = float(self._sp_r_max.value())
-        if self._sp_poly_max.value() > 0:
-            opts["poly_max_nm"] = float(self._sp_poly_max.value())
-        if self._q_min.value() > 0:
-            opts["q_min"] = float(self._q_min.value())
-        if self._q_max.value() > 0:
-            opts["q_max"] = float(self._q_max.value())
 
         if self._ipc is not None:
             self._ipc.send_confirmed(

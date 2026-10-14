@@ -115,6 +115,83 @@ def _load_fit_sizes_hints(handoff_path: str) -> Optional[Dict[str, Any]]:
     return doc
 
 
+def _profile_stem(profile: str) -> str:
+    from autosaxs.core.utils import _strip_sub_int_prefix
+
+    return _strip_sub_int_prefix(Path(profile).stem)
+
+
+def _discover_fit_sizes_handoff(profile: str, output_dir: str) -> Optional[str]:
+    """
+    Locate an existing fit_sizes handoff without re-running GNOM.
+
+    Prefer mixture's own ``_fit_sizes_defaults`` scratch, then sibling ``fit_sizes/``
+    under the analysis root (liveview layout).
+    """
+    stem = _profile_stem(profile)
+    name = f"{stem}_fit_sizes.yml"
+    out = Path(output_dir)
+    candidates = [
+        out / "_fit_sizes_defaults" / stem / name,
+        out.parent / "fit_sizes" / stem / name,
+        out.parent.parent / "fit_sizes" / stem / name,
+    ]
+    for path in candidates:
+        if path.is_file():
+            return str(path.resolve())
+    return None
+
+
+def _init_radii_ang_from_hints(
+    hints: Optional[Dict[str, Any]],
+    *,
+    r_min_ang: float,
+    r_max_ang: float,
+) -> Optional[List[float]]:
+    """
+    D(R) peak positions (nm) → MIXTURE Rout init guesses (Å).
+
+    Keep only peaks strictly inside ``(r_min, r_max)`` — do not clip outliers onto
+    the bounds (that piles starts at the wall and defeats multi-phase seeding).
+    Cap to ``n_phases_suggested`` (≤3) when the peak list is an unfiltered local-maxima dump.
+    """
+    if not isinstance(hints, dict):
+        return None
+    peaks = hints.get("peak_positions_nm")
+    if not isinstance(peaks, list) or not peaks:
+        return None
+    lo = float(r_min_ang) + 1.0
+    hi = max(lo + 1.0, float(r_max_ang) - 1.0)
+    out: List[float] = []
+    for raw in peaks:
+        try:
+            nm = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if not (nm > 0):
+            continue
+        ang = _nm_to_angstrom(nm)
+        if ang <= lo or ang >= hi:
+            continue
+        out.append(float(ang))
+    if not out:
+        return None
+    n_cap = 3
+    raw_n = hints.get("n_phases_suggested")
+    try:
+        if raw_n is not None:
+            n_cap = max(1, min(3, int(raw_n)))
+    except (TypeError, ValueError):
+        pass
+    if len(out) > n_cap:
+        # Evenly keep n_cap representatives across the in-bounds peak ladder.
+        import numpy as np
+
+        idx = np.linspace(0, len(out) - 1, n_cap)
+        out = [out[int(round(i))] for i in idx]
+    return out
+
+
 def _resolve_mixture_radius_params(
     *,
     profile: str,
@@ -124,11 +201,17 @@ def _resolve_mixture_radius_params(
     user_r_max: Optional[float] = None,
     user_poly_min: Optional[float] = None,
     user_poly_max: Optional[float] = None,
-) -> Dict[str, float]:
-    """Resolve MIXTURE radius bounds: inputs/defaults in nm, returned values in Å for ATSAS."""
+) -> Dict[str, Any]:
+    """
+    Resolve MIXTURE radius bounds and optional component init radii.
+
+    Inputs/defaults in nm; returned ``r_*`` / ``poly_*`` in Å for ATSAS.
+    ``init_radii_ang`` (optional) comes from fit_sizes ``peak_positions_nm``.
+    """
     sizes_handoff_path = ""
     if user_r_max is not None:
         r_max_nm = float(user_r_max)
+        sizes_handoff_path = _discover_fit_sizes_handoff(profile, output_dir) or ""
     else:
         r_max_nm, sizes_handoff_path = _rmax_nm_from_fit_sizes(profile, output_dir, event_bus)
 
@@ -143,6 +226,9 @@ def _resolve_mixture_radius_params(
 
     if user_poly_max is not None:
         poly_max_nm = float(user_poly_max)
+    elif user_r_max is not None:
+        # User overrode r_max: do not reuse handoff poly_max tied to another Rmax.
+        poly_max_nm = 0.5 * r_max_nm
     elif hints and hints.get("poly_max_nm") is not None:
         poly_max_nm = float(hints["poly_max_nm"])
     else:
@@ -150,16 +236,31 @@ def _resolve_mixture_radius_params(
 
     if user_poly_min is not None:
         poly_min_nm = float(user_poly_min)
+    elif user_r_max is not None:
+        poly_min_nm = 0.05
     elif hints and hints.get("poly_min_nm") is not None:
         poly_min_nm = float(hints["poly_min_nm"])
     else:
         poly_min_nm = 0.05
-    return {
-        "r_min": _nm_to_angstrom(r_min_nm),
-        "r_max": _nm_to_angstrom(r_max_nm),
+
+    r_min_ang = _nm_to_angstrom(r_min_nm)
+    r_max_ang = _nm_to_angstrom(r_max_nm)
+    out: Dict[str, Any] = {
+        "r_min": r_min_ang,
+        "r_max": r_max_ang,
         "poly_min": _nm_to_angstrom(poly_min_nm),
         "poly_max": _nm_to_angstrom(poly_max_nm),
     }
+    init = _init_radii_ang_from_hints(hints, r_min_ang=r_min_ang, r_max_ang=r_max_ang)
+    if init:
+        out["init_radii_ang"] = init
+        if event_bus:
+            peaks_nm = ", ".join(f"{_angstrom_to_nm(v):.3g}" for v in init)
+            event_bus.publish(
+                EventType.MESSAGE,
+                {"text": f"model_mixture: seeding phase radii from D(R) peaks [{peaks_nm}] nm"},
+            )
+    return out
 
 
 def model_mixture(
@@ -199,6 +300,10 @@ def model_mixture(
     - `poly_min` (float | None): Minimum polydispersity (nm). Defaults to `0.05`.
     - `poly_max` (float | None): Maximum polydispersity (nm). Defaults to `0.5 × r_max`.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+    Component init: when a `fit_sizes` handoff is available (auto-run or discovered
+    beside the mixture outdir), D(R) ``peak_positions_nm`` seed MIXTURE phase
+    ``Rout`` starts. Bounds remain the skill inputs above; peaks are not CLI flags.
 
     ### Short parameter list
 
@@ -338,6 +443,7 @@ def _model_mixture_paths(
         user_poly_min=mixture_param_overrides.get("poly_min"),
         user_poly_max=mixture_param_overrides.get("poly_max"),
     )
+    init_radii_ang = radius_params.pop("init_radii_ang", None)
     mixture_params = {
         "maxit": int(mixture_param_overrides["maxit"]),
         "max_nph": int(mixture_param_overrides["max_nph"]),
@@ -361,6 +467,7 @@ def _model_mixture_paths(
         plot_I_q=bool(mixture_param_overrides.get("plot_I_q", False)),
         plot_logI_logq=bool(mixture_param_overrides.get("plot_logI_logq", False)),
         plot_logI_q=bool(mixture_param_overrides.get("plot_logI_q", True)),
+        init_radii_ang=init_radii_ang,
     )
     if result is None:
         raise RuntimeError("model_mixture failed")

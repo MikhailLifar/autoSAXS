@@ -471,6 +471,7 @@ class ModelingChildManager(QObject):
         from .ingest.curve_classify import usable_analysis_curve_path
         from ..modeling.run_params import (
             apply_disk_params_to_session_state,
+            normalize_model_mixture_options,
             profile_sample_stem,
             read_run_params,
             sample_modeling_dir_for_family,
@@ -489,13 +490,12 @@ class ModelingChildManager(QObject):
         opts = dict(self._state.model_mixture_options or {})
         disk = read_run_params(out, profile_path=profile_path, stem=st) if st else {}
         if disk:
-            for key in ("max_nph", "r_max_nm", "poly_max_nm", "q_min", "q_max"):
-                if key in disk and disk[key] is not None:
-                    opts[key] = disk[key]
+            opts.update(normalize_model_mixture_options(disk))
             if mode_s == "none" and str(disk.get("skill") or "") == "model_mixture":
                 mode_s = "mixture"
         elif st and (out / "mixture_results.csv").is_file() and mode_s == "none":
             mode_s = "mixture"
+        opts = normalize_model_mixture_options(opts)
         self._state.model_mixture_options = dict(opts)
         return ModelingContext(
             profile_path=str(profile_path or ""),
@@ -540,7 +540,9 @@ class ModelingChildManager(QObject):
             self._state.polydisperse_mixture_mode = PolydisperseMixtureMode(mode)
         except ValueError:
             self._state.polydisperse_mixture_mode = PolydisperseMixtureMode.NONE
+        from ..modeling.run_params import normalize_model_mixture_options
+
         opts = msg.get("options") if isinstance(msg.get("options"), dict) else {}
-        self._state.model_mixture_options = dict(opts)
+        self._state.model_mixture_options = normalize_model_mixture_options(opts)
         self._state.polydisperse_armed = True
         self.preview_refresh_requested.emit("dr")

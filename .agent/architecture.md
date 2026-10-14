@@ -13,3 +13,4 @@
 - Adjust rebind drilldown: diagram id `gnom-adjust-bind` (mono; sizes twin).
 - Scenario overlays (bug/fix): `scenario-mono-adjust-bug`, `scenario-mono-adjust-fix` (`emphasize: broken|fixed` in renderer).
 - Code root: `src/guisaxs_skills/liveview/`.
+- Mixture option names / init peaks: `.agent/liveview/model-mixture-options.md`.
