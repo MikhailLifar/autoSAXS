@@ -78,13 +78,76 @@ def _esc_mmd(text: str) -> str:
     return text.replace('"', "'").replace("\n", " ")
 
 
-def _node_label(node: Mapping[str, Any], nid: str, *, diagram_id: str) -> str:
+def _node_label(
+    node: Mapping[str, Any],
+    nid: str,
+    *,
+    diagram_id: str,
+    overrides: Optional[Mapping[str, Any]] = None,
+) -> str:
+    ov = (overrides or {}).get(nid) if overrides else None
+    if isinstance(ov, Mapping) and ov.get("label"):
+        return str(ov["label"])
     label = str(node.get("label") or nid)
     drill = node.get("drilldown")
     # Only advertise drilldown when this diagram is not already that child.
     if drill and str(drill) != diagram_id:
         label = f"{label}\n→ {drill}"
     return label
+
+
+def _node_attrs(
+    nid: str,
+    *,
+    label: str,
+    overrides: Optional[Mapping[str, Any]] = None,
+) -> str:
+    """Build Graphviz node attribute list (label + optional fill/style)."""
+    parts = [f'label="{_esc_dot(label)}"']
+    ov = (overrides or {}).get(nid) if overrides else None
+    if isinstance(ov, Mapping):
+        if ov.get("fillcolor"):
+            parts.append(f'fillcolor="{_esc_dot(str(ov["fillcolor"]))}"')
+        if ov.get("color"):
+            parts.append(f'color="{_esc_dot(str(ov["color"]))}"')
+        if ov.get("penwidth") is not None:
+            parts.append(f'penwidth={ov["penwidth"]}')
+        if ov.get("style"):
+            # Caller may set style="rounded,filled,bold" etc.
+            parts.append(f'style="{_esc_dot(str(ov["style"]))}"')
+    return ", ".join(parts)
+
+
+# Scenario emphasize: broken ownership / corrected ownership (beyond kind colors).
+EMPHASIZE = {
+    "broken": {"color": "#d62728", "style": "dashed", "penwidth": "2.8"},
+    "fixed": {"color": "#2ca02c", "style": "solid", "penwidth": "2.8"},
+}
+
+
+def _edge_attrs(edge: Mapping[str, Any], meta: Mapping[str, Any]) -> str:
+    kind = str(edge.get("kind") or "data")
+    elabel = str(edge.get("label") or "")
+    color = kind_color(meta, kind)
+    style = str(edge.get("style") or "solid")
+    penwidth = str(edge.get("penwidth") or "1.2")
+    emp = edge.get("emphasize")
+    if emp:
+        preset = EMPHASIZE.get(str(emp))
+        if preset:
+            color = str(preset["color"])
+            style = str(preset["style"])
+            penwidth = str(preset["penwidth"])
+    if edge.get("color"):
+        color = str(edge["color"])
+    if edge.get("style"):
+        style = str(edge["style"])
+    if edge.get("penwidth") is not None:
+        penwidth = str(edge["penwidth"])
+    return (
+        f'color="{color}", fontcolor="{color}", style="{style}", '
+        f'penwidth={penwidth}, xlabel="{_esc_dot(elabel)}"'
+    )
 
 
 def render_dot(
@@ -99,6 +162,9 @@ def render_dot(
     include = list(diagram.get("include_nodes") or [])
     edges = list(diagram.get("edges") or [])
     clusters = list(diagram.get("clusters") or [])
+    overrides = diagram.get("node_overrides") or {}
+    if not isinstance(overrides, Mapping):
+        overrides = {}
 
     lines: List[str] = [
         "digraph {",
@@ -125,8 +191,11 @@ def render_dot(
                 continue
             clustered.add(nid)
             node = nodes.get(nid) or {}
-            label = _node_label(node, nid, diagram_id=diagram_id)
-            lines.append(f'    "{nid}" [label="{_esc_dot(label)}"];')
+            label = _node_label(
+                node, nid, diagram_id=diagram_id, overrides=overrides
+            )
+            attrs = _node_attrs(nid, label=label, overrides=overrides)
+            lines.append(f'    "{nid}" [{attrs}];')
         lines.append("  }")
         lines.append("")
 
@@ -134,22 +203,17 @@ def render_dot(
         if nid in clustered:
             continue
         node = nodes.get(nid) or {}
-        label = _node_label(node, nid, diagram_id=diagram_id)
-        lines.append(f'  "{nid}" [label="{_esc_dot(label)}"];')
+        label = _node_label(
+            node, nid, diagram_id=diagram_id, overrides=overrides
+        )
+        attrs = _node_attrs(nid, label=label, overrides=overrides)
+        lines.append(f'  "{nid}" [{attrs}];')
 
     lines.append("")
     for edge in edges:
         src = edge["from"]
         dst = edge["to"]
-        kind = str(edge.get("kind") or "data")
-        elabel = str(edge.get("label") or "")
-        color = kind_color(meta, kind)
-        # Prefer xlabel so the kind tag does not stack on the same baseline as the prose.
-        lines.append(
-            f'  "{src}" -> "{dst}" '
-            f'[color="{color}", fontcolor="{color}", '
-            f'xlabel="{_esc_dot(elabel)}"];'
-        )
+        lines.append(f'  "{src}" -> "{dst}" [{_edge_attrs(edge, meta)}];')
 
     # Legend
     lines.append("")
@@ -162,6 +226,16 @@ def render_dot(
         legend_rows.append(
             f'<tr><td><font color="{c}">━━</font></td>'
             f'<td align="left"><font color="{c}">{_esc_dot(kind_label(meta, kind))}</font></td></tr>'
+        )
+    # Scenario emphasis keys (optional; shown when any edge uses them).
+    if any(e.get("emphasize") for e in edges):
+        legend_rows.append(
+            '<tr><td><font color="#d62728">- -</font></td>'
+            '<td align="left"><font color="#d62728">broken (dashed)</font></td></tr>'
+        )
+        legend_rows.append(
+            '<tr><td><font color="#2ca02c">━━</font></td>'
+            '<td align="left"><font color="#2ca02c">fixed (thick)</font></td></tr>'
         )
     html = (
         '<<table border="0" cellborder="0" cellspacing="2">'
@@ -192,6 +266,9 @@ def render_mermaid(
         title = f"{title} [{edge_filter}]"
 
     direction = "LR" if rankdir.upper().startswith("L") else "TB"
+    overrides = diagram.get("node_overrides") or {}
+    if not isinstance(overrides, Mapping):
+        overrides = {}
     lines: List[str] = [
         f"%% {title}",
         f"%% generated from nodes.yaml — do not edit by hand",
@@ -199,10 +276,14 @@ def render_mermaid(
     ]
     for nid in include:
         node = nodes.get(nid) or {}
-        label = _esc_mmd(str(node.get("label") or nid))
-        drill = node.get("drilldown")
-        if drill and str(drill) != diagram_id:
-            label = f"{label}<br/>→ {drill}"
+        ov = overrides.get(nid) if isinstance(overrides.get(nid), Mapping) else None
+        if ov and ov.get("label"):
+            label = _esc_mmd(str(ov["label"]).replace("\n", "<br/>"))
+        else:
+            label = _esc_mmd(str(node.get("label") or nid))
+            drill = node.get("drilldown")
+            if drill and str(drill) != diagram_id:
+                label = f"{label}<br/>→ {drill}"
         lines.append(f'  {nid}["{label}"]')
 
     for edge in edges:
@@ -210,8 +291,12 @@ def render_mermaid(
         dst = edge["to"]
         kind = str(edge.get("kind") or "data")
         elabel = _esc_mmd(str(edge.get("label") or kind))
+        emp = edge.get("emphasize")
+        prefix = f"{kind}"
+        if emp:
+            prefix = f"{kind}/{emp}"
         # Mermaid cannot color edges as richly as Graphviz; encode kind in label.
-        lines.append(f"  {src} -->|{kind}: {elabel}| {dst}")
+        lines.append(f"  {src} -->|{prefix}: {elabel}| {dst}")
 
     return "\n".join(lines) + "\n"
 

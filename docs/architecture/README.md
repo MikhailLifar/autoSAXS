@@ -41,6 +41,9 @@ Graphviz PNGs color edges by kind (legend in each diagram). Mermaid encodes kind
 - **v1 drilldowns:**
   - `sample-presentation` — `SampleStore` → `present_right` → mono presenter / right pane
   - `gnom-adjust-bind` — Adjust rebind vs mono analysis identity (bug class); sizes Adjust noted as poly twin
+- **Scenario overlays** (same nodes; `emphasize: broken|fixed` on edges):
+  - `scenario-mono-adjust-bug` — sample switch / open Adjust: mono ihs29 vs Adjust ihs27 + auto preview clobber
+  - `scenario-mono-adjust-fix` — rebind from disk identity; session params gaps only; no auto `_run_preview` on bind
 
 Further tree nodes (ingest internals, planner phases, modeling IPC, …) are intentionally **not** built yet — add child diagrams when a bug or design task needs them.
 
@@ -69,3 +72,5 @@ After editing `nodes.yaml`, re-run the renderer and commit updated `diagrams/*.m
 | `top` | Watchdir → ingest → session/store → plan/exec → middle/right UI |
 | `sample-presentation` | Sample-tied right presentation chain |
 | `gnom-adjust-bind` | Mono presenter ↔ GNOM Adjust rebind (+ sizes twin) |
+| `scenario-mono-adjust-bug` | BUG overlay: missing rebind + session `_run_preview` clobber |
+| `scenario-mono-adjust-fix` | FIX overlay: disk rebind, gaps-only session params |

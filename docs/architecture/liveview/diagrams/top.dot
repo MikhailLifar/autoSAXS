@@ -40,30 +40,30 @@ digraph {
   }
 
 
-  "watchdir" -> "ingest_backends" [color="#1f77b4", fontcolor="#1f77b4", xlabel="frames / .dat"];
-  "ingest_backends" -> "settler" [color="#d62728", fontcolor="#d62728", xlabel="observe"];
-  "settler" -> "ingress" [color="#d62728", fontcolor="#d62728", xlabel="stable SampleRevision"];
-  "ingress" -> "sample_store" [color="#2ca02c", fontcolor="#2ca02c", xlabel="board / select"];
-  "ingress" -> "executor" [color="#ff7f0e", fontcolor="#ff7f0e", xlabel="admit job"];
-  "sample_store" -> "planner" [color="#2ca02c", fontcolor="#2ca02c", xlabel="current Sample"];
-  "session" -> "planner" [color="#2ca02c", fontcolor="#2ca02c", xlabel="facts / arming"];
-  "planner" -> "executor" [color="#ff7f0e", fontcolor="#ff7f0e", xlabel="PipelinePlan"];
-  "executor" -> "skill_runner" [color="#ff7f0e", fontcolor="#ff7f0e", xlabel="JobStep"];
-  "skill_runner" -> "present_right" [color="#1f77b4", fontcolor="#1f77b4", xlabel="skill result LIVE"];
-  "sample_store" -> "middle_sync" [color="#2ca02c", fontcolor="#2ca02c", xlabel="current stem"];
-  "session" -> "middle_sync" [color="#2ca02c", fontcolor="#2ca02c", xlabel="intake / buffer"];
-  "sample_store" -> "present_right" [color="#2ca02c", fontcolor="#2ca02c", xlabel="current stem"];
-  "present_right" -> "ui_right" [color="#1f77b4", fontcolor="#1f77b4", xlabel="artifact bundle"];
-  "middle_sync" -> "ui_middle" [color="#1f77b4", fontcolor="#1f77b4", xlabel="layout + paint"];
-  "controller" -> "session" [color="#d62728", fontcolor="#d62728", xlabel="Session API"];
-  "controller" -> "middle_sync" [color="#d62728", fontcolor="#d62728", xlabel="history sync"];
-  "controller" -> "present_right" [color="#d62728", fontcolor="#d62728", xlabel="DISK|LIVE present"];
-  "ui_left" -> "controller" [color="#7f7f7f", fontcolor="#7f7f7f", xlabel="calib / buffer / mask"];
-  "ui_right" -> "controller" [color="#7f7f7f", fontcolor="#7f7f7f", xlabel="arm / Adjust / Process"];
-  "session" -> "ui_left" [color="#2ca02c", fontcolor="#2ca02c", xlabel="session-tied chrome"];
-  "present_right" -> "modeling" [color="#2ca02c", fontcolor="#2ca02c", xlabel="sample ModelingContext"];
-  "watchdir" -> "session" [color="#1f77b4", fontcolor="#1f77b4", xlabel="session.yaml"];
-  "watchdir" -> "sample_store" [color="#1f77b4", fontcolor="#1f77b4", xlabel="history.yaml"];
+  "watchdir" -> "ingest_backends" [color="#1f77b4", fontcolor="#1f77b4", style="solid", penwidth=1.2, xlabel="frames / .dat"];
+  "ingest_backends" -> "settler" [color="#d62728", fontcolor="#d62728", style="solid", penwidth=1.2, xlabel="observe"];
+  "settler" -> "ingress" [color="#d62728", fontcolor="#d62728", style="solid", penwidth=1.2, xlabel="stable SampleRevision"];
+  "ingress" -> "sample_store" [color="#2ca02c", fontcolor="#2ca02c", style="solid", penwidth=1.2, xlabel="board / select"];
+  "ingress" -> "executor" [color="#ff7f0e", fontcolor="#ff7f0e", style="solid", penwidth=1.2, xlabel="admit job"];
+  "sample_store" -> "planner" [color="#2ca02c", fontcolor="#2ca02c", style="solid", penwidth=1.2, xlabel="current Sample"];
+  "session" -> "planner" [color="#2ca02c", fontcolor="#2ca02c", style="solid", penwidth=1.2, xlabel="facts / arming"];
+  "planner" -> "executor" [color="#ff7f0e", fontcolor="#ff7f0e", style="solid", penwidth=1.2, xlabel="PipelinePlan"];
+  "executor" -> "skill_runner" [color="#ff7f0e", fontcolor="#ff7f0e", style="solid", penwidth=1.2, xlabel="JobStep"];
+  "skill_runner" -> "present_right" [color="#1f77b4", fontcolor="#1f77b4", style="solid", penwidth=1.2, xlabel="skill result LIVE"];
+  "sample_store" -> "middle_sync" [color="#2ca02c", fontcolor="#2ca02c", style="solid", penwidth=1.2, xlabel="current stem"];
+  "session" -> "middle_sync" [color="#2ca02c", fontcolor="#2ca02c", style="solid", penwidth=1.2, xlabel="intake / buffer"];
+  "sample_store" -> "present_right" [color="#2ca02c", fontcolor="#2ca02c", style="solid", penwidth=1.2, xlabel="current stem"];
+  "present_right" -> "ui_right" [color="#1f77b4", fontcolor="#1f77b4", style="solid", penwidth=1.2, xlabel="artifact bundle"];
+  "middle_sync" -> "ui_middle" [color="#1f77b4", fontcolor="#1f77b4", style="solid", penwidth=1.2, xlabel="layout + paint"];
+  "controller" -> "session" [color="#d62728", fontcolor="#d62728", style="solid", penwidth=1.2, xlabel="Session API"];
+  "controller" -> "middle_sync" [color="#d62728", fontcolor="#d62728", style="solid", penwidth=1.2, xlabel="history sync"];
+  "controller" -> "present_right" [color="#d62728", fontcolor="#d62728", style="solid", penwidth=1.2, xlabel="DISK|LIVE present"];
+  "ui_left" -> "controller" [color="#7f7f7f", fontcolor="#7f7f7f", style="solid", penwidth=1.2, xlabel="calib / buffer / mask"];
+  "ui_right" -> "controller" [color="#7f7f7f", fontcolor="#7f7f7f", style="solid", penwidth=1.2, xlabel="arm / Adjust / Process"];
+  "session" -> "ui_left" [color="#2ca02c", fontcolor="#2ca02c", style="solid", penwidth=1.2, xlabel="session-tied chrome"];
+  "present_right" -> "modeling" [color="#2ca02c", fontcolor="#2ca02c", style="solid", penwidth=1.2, xlabel="sample ModelingContext"];
+  "watchdir" -> "session" [color="#1f77b4", fontcolor="#1f77b4", style="solid", penwidth=1.2, xlabel="session.yaml"];
+  "watchdir" -> "sample_store" [color="#1f77b4", fontcolor="#1f77b4", style="solid", penwidth=1.2, xlabel="history.yaml"];
 
   subgraph cluster_legend {
     label="edge kinds"; fontsize=10; style="dashed"; color="#aaaaaa";

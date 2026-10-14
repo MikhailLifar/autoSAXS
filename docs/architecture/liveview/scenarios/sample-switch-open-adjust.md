@@ -1,6 +1,11 @@
 # Scenario: sample switch while GNOM Adjust is open
 
-Maps: [`gnom-adjust-bind`](../diagrams/gnom-adjust-bind.mmd), invariants in [`../invariants.md`](../invariants.md).
+Maps:
+- Correct bind: [`gnom-adjust-bind`](../diagrams/gnom-adjust-bind.mmd)
+- BUG overlay: [`scenario-mono-adjust-bug`](../diagrams/scenario-mono-adjust-bug.mmd) / PNG `generated/scenario-mono-adjust-bug.png`
+- FIX overlay: [`scenario-mono-adjust-fix`](../diagrams/scenario-mono-adjust-fix.mmd) / PNG `generated/scenario-mono-adjust-fix.png`
+
+Invariants: [`../invariants.md`](../invariants.md).
 
 ## Setup
 
