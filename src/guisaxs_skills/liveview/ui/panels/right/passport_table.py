@@ -8,4 +8,5 @@ from guisaxs_skills.ui.passport_table import (  # noqa: F401
     PassportTableWidget,
     apply_passport_html_to_label,
     format_passport_table_html,
+    rows_from_passport_html,
 )

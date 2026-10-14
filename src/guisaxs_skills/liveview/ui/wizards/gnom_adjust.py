@@ -227,6 +227,7 @@ class GnomAdjustWizardDialog(QDialog):
         auto_snapshot: Optional[Mapping[str, Any]] = None,
         working_params: Optional[Mapping[str, Any]] = None,
         gnom_out_path: str = "",
+        passport_quality: Optional[Mapping[str, Any]] = None,
         passport_text: str = "",
         passport_html: str = "",
         passport_poor: bool = False,
@@ -266,12 +267,10 @@ class GnomAdjustWizardDialog(QDialog):
         if gnom_out_path and os.path.isfile(gnom_out_path):
             self._fit_plot.plot_from_dat_and_gnom_out(self._profile_path, gnom_out_path)
             self._plot_pr_adjust(gnom_out_path)
-        if passport_html:
-            # Legacy HTML from coordinator — convert via quality when possible.
-            self._passport_table.set_message("—")
-            self.set_passport(html_text=passport_html)
-        elif passport_text:
-            self.set_passport(text=passport_text)
+        if passport_quality:
+            self.set_passport_from_quality(passport_quality)
+        elif passport_html or passport_text:
+            self.set_passport(text=passport_text, html_text=passport_html)
         self._confirm.set_committed(self.gnom_params())
         # Refresh I(q)/P(r) for the loaded q-min/q-max (disk .out may differ).
         self._run_preview()
@@ -356,21 +355,13 @@ class GnomAdjustWizardDialog(QDialog):
         return out
 
     def set_passport(self, *, text: str = "", poor: bool = False, html_text: str = "") -> None:
-        _ = html_text  # legacy callers; prefer set_passport_from_quality
-        if text:
-            self._passport_table.set_message(text, poor=poor, poor_color=COLOR_QUALITY_POOR)
-        elif html_text:
-            # Fall back: strip tags roughly for a single message cell.
-            plain = html_text
-            for tag in ("<br/>", "<br>", "</span>", "<span"):
-                plain = plain.replace(tag, " " if tag.startswith("<br") else "")
-            # Keep a readable error when only html_text is supplied.
-            import re
-
-            plain = re.sub(r"<[^>]+>", "", plain).strip() or "—"
-            self._passport_table.set_message(plain, poor=poor or COLOR_QUALITY_POOR in html_text)
-        else:
-            self._passport_table.set_rows([])
+        """Short errors via ``text``; legacy HTML tables are re-hydrated into rows (never one blob)."""
+        self._passport_table.set_from_html_or_message(
+            html_text,
+            text=text,
+            poor=poor,
+            poor_color=COLOR_QUALITY_POOR,
+        )
 
     def set_passport_from_quality(self, quality: Mapping[str, Any]) -> None:
         rows = format_gnom_passport_rows(quality, guinier_handoff=self._guinier_handoff)

@@ -240,6 +240,7 @@ class SizesAdjustWizardDialog(QDialog):
         auto_snapshot: Optional[Mapping[str, Any]] = None,
         working_params: Optional[Mapping[str, Any]] = None,
         gnom_out_path: str = "",
+        passport_quality: Optional[Mapping[str, Any]] = None,
         passport_html: str = "",
         passport_text: str = "",
     ) -> None:
@@ -276,10 +277,10 @@ class SizesAdjustWizardDialog(QDialog):
         if gnom_out_path and os.path.isfile(gnom_out_path):
             self._fit_plot.plot_from_dat_and_gnom_out(self._profile_path, gnom_out_path)
             self._plot_dr_adjust(gnom_out_path)
-        if passport_html:
-            self.set_passport(html_text=passport_html)
-        elif passport_text:
-            self.set_passport(text=passport_text)
+        if passport_quality:
+            self.set_passport_from_quality(passport_quality)
+        elif passport_html or passport_text:
+            self.set_passport(text=passport_text, html_text=passport_html)
         self._confirm.set_committed(self.sizes_params())
         # Refresh I(q)/D(R) for the loaded q-min/q-max (disk .out may differ).
         self._run_preview()
@@ -368,16 +369,13 @@ class SizesAdjustWizardDialog(QDialog):
         return out
 
     def set_passport(self, *, text: str = "", poor: bool = False, html_text: str = "") -> None:
-        if text:
-            self._passport_table.set_message(text, poor=poor, poor_color=COLOR_QUALITY_POOR)
-        elif html_text:
-            import re
-
-            plain = re.sub(r"<[^>]+>", " ", html_text)
-            plain = " ".join(plain.split()) or "—"
-            self._passport_table.set_message(plain, poor=poor or COLOR_QUALITY_POOR in html_text)
-        else:
-            self._passport_table.set_rows([])
+        """Short errors via ``text``; legacy HTML tables are re-hydrated into rows (never one blob)."""
+        self._passport_table.set_from_html_or_message(
+            html_text,
+            text=text,
+            poor=poor,
+            poor_color=COLOR_QUALITY_POOR,
+        )
 
     def set_passport_from_quality(self, quality: Mapping[str, Any]) -> None:
         self._passport_table.set_rows(
