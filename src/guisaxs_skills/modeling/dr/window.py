@@ -48,12 +48,6 @@ from ..run_params import (
 from ..progress_parse import ProgressStderrBuffer
 from ..runtime import ModelingRuntime
 
-_MAX_INIT_COMPONENTS = 3
-
-
-def _format_init_csv(values: List[float]) -> str:
-    return ",".join(f"{float(v):.6g}" for v in values)
-
 
 class DrModelingWindow(QMainWindow):
     def __init__(
@@ -89,10 +83,10 @@ class DrModelingWindow(QMainWindow):
     def apply_context(self, ctx: ModelingContext, *, seed_controls: bool = False) -> None:
         """Bind sample paths/artifacts from liveview.
 
-        User run controls (max_nph, r_max, q-range, init guesses, Auto/Manual) are
-        owned by this modeling-app session. Sample switch / ModelingContext push
-        updates paths and catalogs only — never clobber knobs or rewrite run-params
-        to liveview/disk defaults. Confirm always reads the current UI values.
+        User run controls (max_nph, r_max, q-range, Auto/Manual) are owned by this
+        modeling-app session. Sample switch / ModelingContext push updates paths
+        and catalogs only — never clobber knobs or rewrite run-params to
+        liveview/disk defaults. Confirm always reads the current UI values.
         """
         if self._runtime.is_running():
             enter_context_freeze(self)
@@ -117,14 +111,8 @@ class DrModelingWindow(QMainWindow):
         self._update_confirm_enabled()
 
     def _seed_run_controls_from_context(self) -> None:
-        """One-shot launch seed for mixture knobs (ctx options, disk, fit_sizes hints)."""
+        """One-shot launch seed for mixture knobs (ctx options + disk run-params)."""
         opts = normalize_model_mixture_options(self._ctx.options or {})
-        # Keep init_* from context even if normalize already included them.
-        for key in ("init_radii_nm", "init_fractions", "init_poly_nm"):
-            raw = (self._ctx.options or {}).get(key)
-            if raw is not None and raw != "":
-                opts[key] = raw
-        had_max_nph = "max_nph" in opts
         for key, spin in (
             ("max_nph", self._sp_max_nph),
             ("r_max", self._sp_r_max),
@@ -137,152 +125,7 @@ class DrModelingWindow(QMainWindow):
                     spin.setValue(float(opts[key]) if spin is not self._sp_max_nph else int(opts[key]))
                 except (TypeError, ValueError):
                     pass
-        self._apply_init_options(opts)
-        disk = self._apply_run_params_from_disk()
-        if isinstance(disk, dict) and "max_nph" in disk:
-            had_max_nph = True
-        self._apply_fit_sizes_component_guesses(opts_had_max_nph=had_max_nph)
-
-    def _fit_sizes_handoff_path(self) -> Optional[Path]:
-        """Locate fit_sizes YAML that owns D(R) peak / n_phases suggestions."""
-        prof = (self._pf_profile.text() or "").strip()
-        if not prof:
-            return None
-        from autosaxs.core.utils import _strip_sub_int_prefix
-
-        stem = _strip_sub_int_prefix(Path(prof).stem)
-        name = f"{stem}_fit_sizes.yml"
-        out_raw = (self._pf_outdir.text() or "").strip()
-        roots: List[Path] = []
-        if self._analysis_root is not None:
-            roots.append(Path(self._analysis_root))
-        if out_raw:
-            out = Path(resolve_sample_modeling_dir(out_raw, profile_path=prof))
-            root = analysis_root_from_modeling_path(str(out))
-            if root is not None:
-                roots.append(Path(root))
-            roots.append(out)
-            roots.append(out.parent)
-        seen: set[str] = set()
-        for root in roots:
-            for cand in (
-                root / "fit_sizes" / stem / name,
-                root / "_fit_sizes_defaults" / stem / name,
-            ):
-                key = str(cand)
-                if key in seen:
-                    continue
-                seen.add(key)
-                if cand.is_file():
-                    return cand
-        return None
-
-    def _apply_fit_sizes_component_guesses(self, *, opts_had_max_nph: bool) -> None:
-        """
-        Surface fit_sizes component guesses in the DR UI.
-
-        Prefills max_nph from ``n_phases_suggested`` when unset. Prefills advanced
-        init-radius spins from D(R) peaks when those spins are still empty.
-        """
-        path = self._fit_sizes_handoff_path()
-        if path is None:
-            self._lbl_init_hint.setText("")
-            return
-        try:
-            import yaml
-
-            doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            self._lbl_init_hint.setText("")
-            return
-        mm = doc.get("model_mixture") if isinstance(doc, dict) else None
-        if not isinstance(mm, dict):
-            mm = {}
-        quality = doc.get("quality") if isinstance(doc, dict) else None
-        if not isinstance(quality, dict):
-            quality = {}
-        n_ph = mm.get("n_phases_suggested")
-        if n_ph is None:
-            n_ph = quality.get("n_components_suggested")
-        peaks = mm.get("peak_positions_nm") or quality.get("dr_peak_positions_nm") or []
-        dist = mm.get("mixture_dist_hint") or ""
-        parts: List[str] = []
-        if n_ph is not None:
-            parts.append(f"n_ph≈{n_ph}")
-        if dist:
-            parts.append(str(dist))
-        peak_vals: List[float] = []
-        if isinstance(peaks, list) and peaks:
-            try:
-                peak_vals = [float(p) for p in peaks[:_MAX_INIT_COMPONENTS]]
-                peak_txt = ", ".join(f"{p:.3g}" for p in peak_vals)
-                parts.append(f"peaks [{peak_txt}] nm")
-            except (TypeError, ValueError):
-                peak_vals = []
-        if parts:
-            self._lbl_init_hint.setText("D(R) init: " + "; ".join(parts))
-        else:
-            self._lbl_init_hint.setText("")
-        if not opts_had_max_nph and n_ph is not None:
-            try:
-                self._sp_max_nph.setValue(int(max(1, min(3, int(n_ph)))))
-            except (TypeError, ValueError):
-                pass
-        if peak_vals and not self._init_radii_have_values():
-            self._set_init_component_values(radii_nm=peak_vals)
-
-    def _init_radii_have_values(self) -> bool:
-        return any(float(sp.value()) > 0.0 for sp in self._init_r)
-
-    def _set_init_component_values(
-        self,
-        *,
-        radii_nm: Optional[List[float]] = None,
-        fractions: Optional[List[float]] = None,
-        poly_nm: Optional[List[float]] = None,
-    ) -> None:
-        for i in range(_MAX_INIT_COMPONENTS):
-            if radii_nm is not None:
-                self._init_r[i].setValue(float(radii_nm[i]) if i < len(radii_nm) else 0.0)
-            if fractions is not None:
-                self._init_f[i].setValue(float(fractions[i]) if i < len(fractions) else 0.0)
-            if poly_nm is not None:
-                self._init_p[i].setValue(float(poly_nm[i]) if i < len(poly_nm) else 0.0)
-
-    def _collect_init_options(self) -> Dict[str, str]:
-        """Serialize advanced component starts to skill CLI strings (omit empties)."""
-        from autosaxs.skill.model_mixture import coerce_float_sequence
-
-        radii = [float(sp.value()) for sp in self._init_r if float(sp.value()) > 0.0]
-        fracs = [float(sp.value()) for sp in self._init_f if float(sp.value()) > 0.0]
-        polys = [float(sp.value()) for sp in self._init_p if float(sp.value()) > 0.0]
-        out: Dict[str, str] = {}
-        if radii:
-            out["init_radii_nm"] = _format_init_csv(radii)
-        if fracs:
-            out["init_fractions"] = _format_init_csv(fracs)
-        if polys:
-            out["init_poly_nm"] = _format_init_csv(polys)
-        # Validate parse round-trip (skill owns coerce).
-        for key in list(out):
-            if not coerce_float_sequence(out[key]):
-                out.pop(key, None)
-        return out
-
-    def _apply_init_options(self, params: Dict[str, Any]) -> None:
-        from autosaxs.skill.model_mixture import coerce_float_sequence
-
-        radii = coerce_float_sequence(params.get("init_radii_nm"))
-        fracs = coerce_float_sequence(params.get("init_fractions"))
-        polys = coerce_float_sequence(params.get("init_poly_nm"))
-        if radii or fracs or polys:
-            self._set_init_component_values(
-                radii_nm=radii or None,
-                fractions=fracs or None,
-                poly_nm=polys or None,
-            )
-            # Open advanced when disk/session already customized starts.
-            self._adv_box.setChecked(True)
+        self._apply_run_params_from_disk()
 
     def _apply_run_params_from_disk(self) -> Optional[Dict[str, Any]]:
         raw = (self._pf_outdir.text() or "").strip()
@@ -294,15 +137,7 @@ class DrModelingWindow(QMainWindow):
             self._pf_outdir.set_text(out)
         if not os.path.isdir(out):
             return None
-        # read_run_params may include init_* strings; normalize keeps skill keys.
-        disk_raw = read_run_params(out, profile_path=prof)
-        params = normalize_model_mixture_options(disk_raw)
-        # normalize drops unknown aliases but keeps init_*; merge back if present on disk.
-        for key in ("init_radii_nm", "init_fractions", "init_poly_nm"):
-            if key in disk_raw and key not in params:
-                params[key] = disk_raw[key]
-            elif key in disk_raw:
-                params[key] = disk_raw[key]
+        params = normalize_model_mixture_options(read_run_params(out, profile_path=prof))
         if not params and not (Path(out) / "mixture_results.csv").is_file():
             return None
         if "max_nph" in params:
@@ -330,7 +165,6 @@ class DrModelingWindow(QMainWindow):
                 self._q_max.setValue(float(params["q_max_nm"]))
             except (TypeError, ValueError):
                 pass
-        self._apply_init_options(params)
         return params
 
     def _clear_result_views(self) -> None:
@@ -465,10 +299,6 @@ class DrModelingWindow(QMainWindow):
         form.addRow("q_min (nm⁻¹)", self._q_min)
         form.addRow("q_max (nm⁻¹)", self._q_max)
         ctrl.addWidget(self._mixture_params)
-        self._lbl_init_hint = QLabel("")
-        self._lbl_init_hint.setWordWrap(True)
-        self._lbl_init_hint.setStyleSheet("color: #555;")
-        ctrl.addWidget(self._lbl_init_hint)
 
         # Results navigation (shape-app parity: browse ensemble fits + open artifacts).
         ctrl.addWidget(QLabel("Results model"))
@@ -480,50 +310,6 @@ class DrModelingWindow(QMainWindow):
         self._open_folder_btn.setEnabled(False)
         self._open_folder_btn.clicked.connect(self._on_open_artifacts_folder)
         ctrl.addWidget(self._open_folder_btn)
-
-        # Advanced: editable MIXTURE component initial guesses (collapsed by default).
-        self._adv_box = QGroupBox("Advanced: component initial guesses")
-        self._adv_box.setCheckable(True)
-        self._adv_box.setChecked(False)
-        adv_lay = QVBoxLayout(self._adv_box)
-        adv_lay.addWidget(
-            QLabel("Per-phase starts for ATSAS MIXTURE (Rout, volume fraction, poly). Empty = skill default / D(R) peaks.")
-        )
-        adv_form = QFormLayout()
-        self._init_r: List[QDoubleSpinBox] = []
-        self._init_f: List[QDoubleSpinBox] = []
-        self._init_p: List[QDoubleSpinBox] = []
-        for i in range(_MAX_INIT_COMPONENTS):
-            row = QHBoxLayout()
-            sp_r = QDoubleSpinBox()
-            sp_r.setRange(0.0, 1e6)
-            sp_r.setDecimals(4)
-            sp_r.setSpecialValueText("(auto)")
-            sp_r.setValue(0.0)
-            sp_f = QDoubleSpinBox()
-            sp_f.setRange(0.0, 1.0)
-            sp_f.setDecimals(4)
-            sp_f.setSpecialValueText("(auto)")
-            sp_f.setValue(0.0)
-            sp_p = QDoubleSpinBox()
-            sp_p.setRange(0.0, 1e6)
-            sp_p.setDecimals(4)
-            sp_p.setSpecialValueText("(auto)")
-            sp_p.setValue(0.0)
-            row.addWidget(QLabel("R"))
-            row.addWidget(sp_r, 1)
-            row.addWidget(QLabel("φ"))
-            row.addWidget(sp_f, 1)
-            row.addWidget(QLabel("poly"))
-            row.addWidget(sp_p, 1)
-            wrap = QWidget()
-            wrap.setLayout(row)
-            adv_form.addRow(f"phase {i + 1}", wrap)
-            self._init_r.append(sp_r)
-            self._init_f.append(sp_f)
-            self._init_p.append(sp_p)
-        adv_lay.addLayout(adv_form)
-        ctrl.addWidget(self._adv_box)
 
         self._confirm = QPushButton("Confirm")
         self._confirm.clicked.connect(lambda: self._on_confirm(quiet=False))
@@ -564,9 +350,6 @@ class DrModelingWindow(QMainWindow):
             self._sp_poly_max,
             self._q_min,
             self._q_max,
-            *self._init_r,
-            *self._init_f,
-            *self._init_p,
         ):
             spin.valueChanged.connect(self._auto_mode.on_control_changed)
 
@@ -649,7 +432,6 @@ class DrModelingWindow(QMainWindow):
                 "poly_max": float(self._sp_poly_max.value()) if self._sp_poly_max.value() > 0 else None,
                 "q_min_nm": float(self._q_min.value()) if self._q_min.value() > 0 else None,
                 "q_max_nm": float(self._q_max.value()) if self._q_max.value() > 0 else None,
-                **self._collect_init_options(),
             }
         )
         opts: Dict[str, Any] = {
