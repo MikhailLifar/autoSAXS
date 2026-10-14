@@ -103,13 +103,17 @@ def test_apply_font_scales_liveview_widget_tree(qapp, tmp_path):
     for w in qapp.allWidgets():
         if w is None or _should_skip_font_walk(w):
             continue
-        # Role deltas are clamped into the allowed band; base widgets must match size.
-        delta = w.property("_autosaxs_font_delta_pt")
-        try:
-            delta_i = int(delta) if delta is not None else 0
-        except (TypeError, ValueError):
-            delta_i = 0
-        expect = clamp_font_point_size(size + delta_i)
+        # Absolute preview pins win; else role deltas; else base Apply size.
+        absolute = w.property("_autosaxs_font_absolute_pt")
+        if absolute is not None:
+            expect = clamp_font_point_size(absolute)
+        else:
+            delta = w.property("_autosaxs_font_delta_pt")
+            try:
+                delta_i = int(delta) if delta is not None else 0
+            except (TypeError, ValueError):
+                delta_i = 0
+            expect = clamp_font_point_size(size + delta_i)
         got = w.font().pointSize()
         if got != expect:
             bad.append((type(w).__name__, got, expect))
