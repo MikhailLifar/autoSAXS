@@ -41,6 +41,8 @@ _SPIN_ARROW = QColor("#e7eef6")
 PROP_FONT_DELTA_PT = "_autosaxs_font_delta_pt"
 PROP_FONT_BOLD = "_autosaxs_font_bold"
 PROP_FONT_MONO = "_autosaxs_font_mono"
+# Absolute override (Settings Appearance live preview): wins over app base + delta.
+PROP_FONT_ABSOLUTE_PT = "_autosaxs_font_absolute_pt"
 # Skip forcing font on these Qt class name prefixes (matplotlib dig deep).
 _FONT_WALK_SKIP_PREFIXES = (
     "FigureCanvas",
@@ -97,6 +99,7 @@ def mark_font_role(
     Use instead of absolute ``setPointSize`` / ``font-size: Npx`` so Settings →
     Appearance can scale *all* chrome consistently.
     """
+    widget.setProperty(PROP_FONT_ABSOLUTE_PT, None)
     widget.setProperty(PROP_FONT_DELTA_PT, int(delta_pt))
     widget.setProperty(PROP_FONT_BOLD, bool(bold))
     widget.setProperty(PROP_FONT_MONO, bool(mono))
@@ -106,14 +109,47 @@ def mark_font_role(
         widget.setFont(_widget_font_for_size(app.font(), widget, size))
 
 
+def mark_font_absolute(widget, point_size: int) -> int:
+    """
+    Pin a widget to an absolute point size (Appearance live preview).
+
+    Survives Apply force-walk. Pair with a widget stylesheet ``font-size`` so
+    app QSS ``QWidget { font-size: …pt }`` cannot hide the selection.
+    """
+    size = clamp_font_point_size(point_size)
+    widget.setProperty(PROP_FONT_ABSOLUTE_PT, size)
+    app = QApplication.instance()
+    if app is not None:
+        widget.setFont(_widget_font_for_size(app.font(), widget, size))
+    else:
+        font = QFont(widget.font())
+        font.setPointSize(size)
+        widget.setFont(font)
+    return size
+
+
+def _absolute_font_pt(widget) -> int | None:
+    raw = widget.property(PROP_FONT_ABSOLUTE_PT)
+    if raw is None:
+        return None
+    try:
+        return clamp_font_point_size(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _widget_font_for_size(base: QFont, widget, size: int) -> QFont:
     font = QFont(base)
-    delta = widget.property(PROP_FONT_DELTA_PT)
-    try:
-        delta_i = int(delta) if delta is not None else 0
-    except (TypeError, ValueError):
-        delta_i = 0
-    font.setPointSize(clamp_font_point_size(size + delta_i))
+    absolute = _absolute_font_pt(widget)
+    if absolute is not None:
+        font.setPointSize(absolute)
+    else:
+        delta = widget.property(PROP_FONT_DELTA_PT)
+        try:
+            delta_i = int(delta) if delta is not None else 0
+        except (TypeError, ValueError):
+            delta_i = 0
+        font.setPointSize(clamp_font_point_size(size + delta_i))
     if bool(widget.property(PROP_FONT_BOLD)):
         font.setBold(True)
     if bool(widget.property(PROP_FONT_MONO)):
@@ -328,7 +364,8 @@ class _FontRoleFilter(QObject):
     def eventFilter(self, obj, event):  # noqa: N802 - Qt naming
         if event.type() == QEvent.Polish and isinstance(obj, QWidget):
             if (
-                obj.property(PROP_FONT_DELTA_PT) is not None
+                obj.property(PROP_FONT_ABSOLUTE_PT) is not None
+                or obj.property(PROP_FONT_DELTA_PT) is not None
                 or bool(obj.property(PROP_FONT_BOLD))
                 or bool(obj.property(PROP_FONT_MONO))
             ):
