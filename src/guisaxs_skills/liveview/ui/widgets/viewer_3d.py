@@ -130,28 +130,28 @@ class LiveviewViewer3D(QWidget):
             elif pp.is_dir():
                 self._open_folder = pp.resolve()
 
-        if p and os.path.isfile(p) and p.lower().endswith(".cif"):
+        if pp is not None and pp.is_file() and pp.suffix.lower() == ".cif":
             self._denss_catalog = None
-            self._cif_path = p
-            short, full = contracted_path_label(p)
+            self._cif_path = str(pp)
+            short, full = contracted_path_label(self._cif_path)
             self._open_btn.setEnabled(True)
             self._open_btn.setToolTip(full)
             self._plot.setToolTip(full)
-            ok = self._plot.load_cif(p, title=short)
+            ok = self._plot.load_cif(self._cif_path, title=short)
             if not ok:
                 self._hint.setText("Could not load this model. Open folder for files.")
             else:
                 self._hint.setText("Click preview for interactive 3D.")
             return
         self._plot.clear()
-        if p and os.path.isfile(p):
-            _, full = contracted_path_label(p)
+        if pp is not None and pp.is_file():
+            _, full = contracted_path_label(str(pp))
             self._plot.setToolTip(full)
             self._open_btn.setToolTip(full)
             self._open_btn.setEnabled(self._open_folder is not None and self._open_folder.is_dir())
             self._hint.setText("Not a .cif — open folder for outputs.")
-        elif p and os.path.isdir(p):
-            _, full = contracted_path_label(p)
+        elif pp is not None and pp.is_dir():
+            _, full = contracted_path_label(str(pp))
             self._plot.setToolTip(full)
             self._open_btn.setToolTip(full)
             self._open_btn.setEnabled(True)
@@ -212,9 +212,10 @@ class LiveviewViewer3D(QWidget):
                 return
         else:
             p = self._cif_path
-            if p and os.path.isfile(p) and p.lower().endswith(".cif"):
-                short, _full = contracted_path_label(p)
-                self._full_3d.set_cif_path(p, window_title=f"3D — {short}")
+            cif = Path(p) if p else None
+            if cif is not None and cif.is_file() and cif.suffix.lower() == ".cif":
+                short, _full = contracted_path_label(str(cif))
+                self._full_3d.set_cif_path(str(cif), window_title=f"3D — {short}")
             elif self._bodies_shape is not None and self._bodies_params is not None:
                 self._full_3d.set_bodies_analytical(
                     self._bodies_shape,
@@ -223,21 +224,22 @@ class LiveviewViewer3D(QWidget):
                 )
             else:
                 mrc, sig = self._plot.mrc_model()
-                if mrc and os.path.isfile(mrc):
+                mrc_path = Path(mrc) if mrc else None
+                if mrc_path is not None and mrc_path.is_file():
                     self._full_3d.set_denss_catalog(
                         DenssModelCatalog(
                             entries=[
                                 DenssModelEntry(
                                     key="primary",
-                                    label=Path(mrc).name,
-                                    mrc_path=mrc,
+                                    label=mrc_path.name,
+                                    mrc_path=str(mrc_path),
                                     kind="density",
                                     sigma_path=sig,
                                     is_primary=True,
                                 )
                             ],
                             best_key="primary",
-                            output_subdir=str(Path(mrc).parent),
+                            output_subdir=str(mrc_path.parent),
                         )
                     )
                 else:
