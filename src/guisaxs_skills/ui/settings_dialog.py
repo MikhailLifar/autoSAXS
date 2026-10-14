@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QDialog,
@@ -33,6 +32,8 @@ from .style import (
     apply_font_point_size,
     clamp_font_point_size,
     load_font_point_size,
+    mark_font_absolute,
+    mark_font_role,
 )
 
 
@@ -49,10 +50,7 @@ class _AppearancePage(QWidget):
         root.setSpacing(14)
 
         title = QLabel("Appearance")
-        title_font = QFont(title.font())
-        title_font.setPointSize(max(title_font.pointSize() + 4, 16))
-        title_font.setBold(True)
-        title.setFont(title_font)
+        mark_font_role(title, delta_pt=4, bold=True)
         root.addWidget(title)
 
         blurb = QLabel("Choose a comfortable reading size for menus, labels, forms, and panels.")
@@ -76,9 +74,7 @@ class _AppearancePage(QWidget):
         section_lay.setSpacing(12)
 
         heading = QLabel("Font size")
-        heading_font = QFont(heading.font())
-        heading_font.setBold(True)
-        heading.setFont(heading_font)
+        mark_font_role(heading, bold=True)
         section_lay.addWidget(heading)
 
         hint = QLabel("Preview updates as you adjust. Click Apply or OK to use the size app-wide.")
@@ -125,20 +121,10 @@ class _AppearancePage(QWidget):
         section_lay.addLayout(fine_row)
 
         self._preview = QLabel()
+        self._preview.setObjectName("appearanceFontPreview")
         self._preview.setWordWrap(True)
         self._preview.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._preview.setMinimumHeight(88)
-        self._preview.setStyleSheet(
-            f"""
-            QLabel {{
-                background: #141c26;
-                border: 1px solid #2a3646;
-                border-radius: 10px;
-                padding: 12px 14px;
-                color: #e7eef6;
-            }}
-            """
-        )
         section_lay.addWidget(self._preview)
 
         root.addWidget(section)
@@ -175,9 +161,22 @@ class _AppearancePage(QWidget):
             "Menus · Labels · Buttons · Forms · Liveview panels"
         )
         self._preview.setText(sample)
-        font = QFont(self._preview.font())
-        font.setPointSize(self._current)
-        self._preview.setFont(font)
+        # App QSS ``QWidget { font-size: …pt }`` overrides bare setFont; pin
+        # font-size on the widget stylesheet and mark absolute so Apply's
+        # force-walk cannot snap the preview back to the last Applied size.
+        self._preview.setStyleSheet(
+            f"""
+            QLabel#appearanceFontPreview {{
+                background: #141c26;
+                border: 1px solid #2a3646;
+                border-radius: 10px;
+                padding: 12px 14px;
+                color: #e7eef6;
+                font-size: {self._current}pt;
+            }}
+            """
+        )
+        mark_font_absolute(self._preview, self._current)
 
     def _sync_presets(self) -> None:
         for btn in self._preset_group.buttons():
@@ -217,7 +216,10 @@ class _AppearancePage(QWidget):
 
     def apply_current(self) -> int:
         """Persist and apply the selected size app-wide via style SSOT."""
-        return apply_font_point_size(point_size=self._current, persist=True)
+        applied = apply_font_point_size(point_size=self._current, persist=True)
+        # Re-assert preview after force-walk + app stylesheet rebuild.
+        self._refresh_preview()
+        return applied
 
 
 class SettingsDialog(QDialog):
@@ -287,10 +289,7 @@ class SettingsDialog(QDialog):
         root.setContentsMargins(14, 14, 14, 12)
         root.setSpacing(12)
         header = QLabel("Settings")
-        header_font = QFont(header.font())
-        header_font.setPointSize(max(header_font.pointSize() + 2, 14))
-        header_font.setBold(True)
-        header.setFont(header_font)
+        mark_font_role(header, delta_pt=2, bold=True)
         root.addWidget(header)
         root.addLayout(body, 1)
         root.addWidget(buttons)

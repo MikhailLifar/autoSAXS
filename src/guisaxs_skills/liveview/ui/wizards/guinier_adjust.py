@@ -28,26 +28,18 @@ from ..panels.right.guinier_residuals_plot import GuinierResidualsPlot
 from ..panels.right.monodisperse.format_display import format_guinier_passport_rows
 from ..panels.right.monodisperse.plots import GuinierCurvePlot
 from ..panels.right.passport_table import PassportTableWidget
-from ..widgets.plots import mpl_navigation_toolbar
+from ..widgets.plots import MplToolbarViewerDialog
 from .adjust_confirm import AdjustConfirmController
 
 _PREVIEW_DEBOUNCE_MS = 100
 _Q_SLIDER_CAP_NM = 2.0
 
 
-class _MplViewerDialog(QDialog):
-    def __init__(self, *, title: str, plot: QWidget, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.resize(1000, 600)
-        self._plot = plot
-        lay = QVBoxLayout(self)
-        lay.addWidget(mpl_navigation_toolbar(self._plot, self))
-        lay.addWidget(self._plot, 1)
+class _MplViewerDialog(MplToolbarViewerDialog):
+    """Enlarged Guinier-adjust plot viewer (toolbar + title-bar maximize)."""
 
-    @property
-    def plot(self):
-        return self._plot
+    def __init__(self, *, title: str, plot: QWidget, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent, title=title, plot=plot, size=(1000, 600))
 
 
 class GuinierAdjustWizardDialog(QDialog):

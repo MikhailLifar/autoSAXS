@@ -7,15 +7,11 @@ from typing import Callable, Optional
 
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 from matplotlib.figure import Figure
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QWidget
 
-
-def mpl_navigation_toolbar(canvas: FigureCanvas, parent: QWidget) -> NavigationToolbar2QT:
-    """Same zoom / pan / home / save toolbar as GNOM adjust wizards."""
-    return NavigationToolbar2QT(canvas, parent)
+from ..liveview.ui.widgets.plots import MplToolbarViewerDialog
 
 
 class FitResidualsPlot(FigureCanvas):
@@ -81,23 +77,12 @@ class FitResidualsPlot(FigureCanvas):
         self.setCursor(Qt.PointingHandCursor)
 
 
-class MplViewerDialog(QDialog):
-    """Non-modal enlarged plot with matplotlib navigation toolbar (GNOM-wizard style)."""
+class MplViewerDialog(MplToolbarViewerDialog):
+    """Non-modal enlarged plot with matplotlib navigation toolbar + title-bar maximize."""
 
     def __init__(self, *, title: str, plot: QWidget, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.resize(1000, 600)
+        super().__init__(parent, title=title, plot=plot, size=(1000, 600))
         self.setAttribute(Qt.WA_DeleteOnClose, False)
-        self._plot = plot
-        lay = QVBoxLayout(self)
-        if isinstance(plot, FigureCanvas):
-            lay.addWidget(mpl_navigation_toolbar(plot, self))
-        lay.addWidget(plot, 1)
-
-    @property
-    def plot(self) -> QWidget:
-        return self._plot
 
     def present(self, *, title: Optional[str] = None) -> None:
         if title:

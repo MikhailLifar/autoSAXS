@@ -29,8 +29,10 @@ from autosaxs.core.gnom import parse_gnom_out
 from autosaxs.core.gnom_quality import analyze_pr_quality
 from autosaxs.core.utils import ensure_q_nm, load_saxs_1d_any, write_saxs_atsas_format
 
+from ....ui.passport_format import D_MAX, Q_MAX, Q_MIN
 from ....ui.style import COLOR_QUALITY_POOR
 from ....ui.widgets.spin_sliders import AlphaSpinSlider, LengthNmSpinSlider
+from ..panels.right.gnom_overlays import gnom_owned_curve_path
 from ..panels.right.gnom_residuals_plot import GnomResidualsPlot
 from ..panels.right.monodisperse.format_display import format_gnom_passport_rows
 from ..panels.right.monodisperse.plots import GnomFitPlot, PrPlot
@@ -80,6 +82,7 @@ class GnomAdjustWizardDialog(QDialog):
 
         self._profile_path: str = ""
         self._atsas_dat_path: str = ""
+        self._atsas_source_path: str = ""
         self._q_nm: Optional[np.ndarray] = None
         self._guinier_handoff: Dict[str, Any] = {}
         self._auto_snapshot: Dict[str, Any] = {}
@@ -134,7 +137,7 @@ class GnomAdjustWizardDialog(QDialog):
         self._alpha = AlphaSpinSlider()
         self._p0 = QCheckBox("P(0) = 0")
         self._p0.setChecked(True)
-        self._pdmax = QCheckBox("P(Dmax) = 0")
+        self._pdmax = QCheckBox(f"P({D_MAX}) = 0")
         self._pdmax.setChecked(True)
         self._btn_restore = QPushButton("Restore auto")
         self._btn_restore.clicked.connect(self._on_restore_auto)
@@ -153,9 +156,9 @@ class GnomAdjustWizardDialog(QDialog):
         self._passport_table = PassportTableWidget()
 
         form = QFormLayout()
-        form.addRow("q-min (nm⁻¹)", self._q_min)
-        form.addRow("q-max (nm⁻¹)", self._q_max)
-        form.addRow("Dmax (nm)", self._dmax)
+        form.addRow(f"{Q_MIN} (nm⁻¹)", self._q_min)
+        form.addRow(f"{Q_MAX} (nm⁻¹)", self._q_max)
+        form.addRow(f"{D_MAX} (nm)", self._dmax)
         form.addRow("alpha", self._alpha)
 
         passport_col = QVBoxLayout()
@@ -219,6 +222,13 @@ class GnomAdjustWizardDialog(QDialog):
         )
         self._resid_plot.plot_from_gnom_out(path)
 
+    def _curve_for_gnom(self) -> str:
+        """Intensity curve owned by the bound disk GNOM ``.out``, else session profile."""
+        owned = gnom_owned_curve_path(self._disk_best_gnom_out or self._auto_gnom_out)
+        if owned and os.path.isfile(owned):
+            return owned
+        return str(self._profile_path or "").strip()
+
     def set_context(
         self,
         *,
@@ -230,14 +240,24 @@ class GnomAdjustWizardDialog(QDialog):
         passport_text: str = "",
         passport_html: str = "",
         passport_poor: bool = False,
+        passport_quality: Optional[Mapping[str, Any]] = None,
     ) -> None:
+        """
+        Bind Adjust to one analysis identity (profile + disk GNOM ``.out``).
+
+        Plots and passport mirror the disk ``.out`` / quality the monodisperse pane
+        shows. Live ``_run_preview`` runs only after the user edits parameters so
+        opening Adjust cannot drift onto another sample's or stale session params.
+        """
         _ = passport_poor
+        self._preview_debounce.stop()
         self._profile_path = str(profile_path or "").strip()
         self._guinier_handoff = dict(guinier_handoff or {})
         self._auto_snapshot = dict(auto_snapshot or {})
         self._auto_gnom_out = str(gnom_out_path or "").strip()
         self._disk_best_gnom_out = self._auto_gnom_out
         self._atsas_dat_path = ""
+        self._atsas_source_path = ""
         self._q_nm = None
         self._pause_emitted = False
         self._ensure_atsas_dat()
@@ -264,18 +284,19 @@ class GnomAdjustWizardDialog(QDialog):
                 pass
         self._apply_dmax_slider_span()
         if gnom_out_path and os.path.isfile(gnom_out_path):
-            self._fit_plot.plot_from_dat_and_gnom_out(self._profile_path, gnom_out_path)
+            # I(q) exp must be the curve GNOM was fit to (sibling *_atsas.dat),
+            # not a differently scaled session subtracted/sub_*.dat.
+            self._fit_plot.plot_from_dat_and_gnom_out(self._curve_for_gnom(), gnom_out_path)
             self._plot_pr_adjust(gnom_out_path)
-        if passport_html:
+        if passport_quality:
+            self.set_passport_from_quality(passport_quality)
+        elif passport_html:
             # Legacy HTML from coordinator — convert via quality when possible.
             self._passport_table.set_message("—")
             self.set_passport(html_text=passport_html)
         elif passport_text:
             self.set_passport(text=passport_text)
         self._confirm.set_committed(self.gnom_params())
-        # Refresh I(q)/P(r) for the loaded q-min/q-max (disk .out may differ).
-        self._run_preview()
-
     def _apply_dmax_slider_span(self) -> None:
         """Slider domain 0 … 4× best-auto Dmax (fallback: current Dmax); spin can exceed."""
         auto_dmax = None
@@ -356,21 +377,13 @@ class GnomAdjustWizardDialog(QDialog):
         return out
 
     def set_passport(self, *, text: str = "", poor: bool = False, html_text: str = "") -> None:
-        _ = html_text  # legacy callers; prefer set_passport_from_quality
-        if text:
-            self._passport_table.set_message(text, poor=poor, poor_color=COLOR_QUALITY_POOR)
-        elif html_text:
-            # Fall back: strip tags roughly for a single message cell.
-            plain = html_text
-            for tag in ("<br/>", "<br>", "</span>", "<span"):
-                plain = plain.replace(tag, " " if tag.startswith("<br") else "")
-            # Keep a readable error when only html_text is supplied.
-            import re
-
-            plain = re.sub(r"<[^>]+>", "", plain).strip() or "—"
-            self._passport_table.set_message(plain, poor=poor or COLOR_QUALITY_POOR in html_text)
-        else:
-            self._passport_table.set_rows([])
+        """Short errors via ``text``; legacy HTML tables are re-hydrated into rows (never one blob)."""
+        self._passport_table.set_from_html_or_message(
+            html_text,
+            text=text,
+            poor=poor,
+            poor_color=COLOR_QUALITY_POOR,
+        )
 
     def set_passport_from_quality(self, quality: Mapping[str, Any]) -> None:
         rows = format_gnom_passport_rows(quality, guinier_handoff=self._guinier_handoff)
@@ -382,7 +395,7 @@ class GnomAdjustWizardDialog(QDialog):
             # Persist path may become the new auto reference after DATGNOM auto.
             if "datgnom" in os.path.basename(gnom_out_path).lower():
                 self._auto_gnom_out = gnom_out_path
-            self._fit_plot.plot_from_dat_and_gnom_out(self._profile_path, gnom_out_path)
+            self._fit_plot.plot_from_dat_and_gnom_out(self._curve_for_gnom(), gnom_out_path)
             self._plot_pr_adjust(gnom_out_path)
 
     def _on_restore_auto(self) -> None:
@@ -404,13 +417,38 @@ class GnomAdjustWizardDialog(QDialog):
         self.params_changed.emit()
 
     def _ensure_atsas_dat(self) -> bool:
-        if self._atsas_dat_path and os.path.isfile(self._atsas_dat_path) and self._q_nm is not None:
+        """
+        Build (or reuse) a temp ATSAS ``.dat`` for live GNOM preview.
+
+        Source intensity is the GNOM-owned curve when a disk ``.out`` is bound
+        (``*_atsas.dat`` sibling), otherwise the session ``profile_path``.
+        """
+        source = self._curve_for_gnom()
+        if (
+            self._atsas_dat_path
+            and os.path.isfile(self._atsas_dat_path)
+            and self._q_nm is not None
+            and self._atsas_source_path == source
+        ):
             return True
-        prof = self._profile_path
-        if not prof or not os.path.isfile(prof):
+        if not source or not os.path.isfile(source):
             return False
         try:
-            q_nm, I, sigma = load_saxs_1d_any(prof)
+            # Prefer the on-disk ATSAS file verbatim when it is already the owner.
+            if source.endswith("_atsas.dat"):
+                q_nm, I, sigma = load_saxs_1d_any(source)
+                q_nm, I, sigma = ensure_q_nm(q_nm, I, sigma)
+                self._q_nm = np.asarray(q_nm, dtype=float)
+                if self._preview_tmp and os.path.isfile(self._preview_tmp):
+                    try:
+                        os.remove(self._preview_tmp)
+                    except OSError:
+                        pass
+                self._preview_tmp = None
+                self._atsas_dat_path = source
+                self._atsas_source_path = source
+                return True
+            q_nm, I, sigma = load_saxs_1d_any(source)
             q_nm, I, sigma = ensure_q_nm(q_nm, I, sigma)
             q_nm = np.asarray(q_nm, dtype=float)
             self._q_nm = q_nm
@@ -424,6 +462,7 @@ class GnomAdjustWizardDialog(QDialog):
                     pass
             self._preview_tmp = tmp
             self._atsas_dat_path = tmp
+            self._atsas_source_path = source
             return True
         except Exception:
             return False
@@ -441,13 +480,26 @@ class GnomAdjustWizardDialog(QDialog):
                 q_max=params.get("q_max"),
             )
         except (TypeError, ValueError, RuntimeError) as exc:
-            self.set_passport(text=f"Invalid q-min/q-max: {exc}", poor=True)
+            self.set_passport(text=f"Invalid {Q_MIN}/{Q_MAX}: {exc}", poor=True)
             return
         alpha = params.get("alpha")
-        out_path = (self._preview_tmp or "") + ".out"
+        # When previewing against a verbatim disk *_atsas.dat, write .out beside a temp.
+        if self._preview_tmp:
+            out_path = self._preview_tmp + ".out"
+            out_dir = str(Path(out_path).parent)
+        else:
+            fd, tmp = tempfile.mkstemp(suffix="_preview.dat", prefix="gnom_wiz_")
+            os.close(fd)
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            out_path = tmp + ".out"
+            out_dir = str(Path(out_path).parent)
+            self._preview_tmp = tmp
         ok, _rc, stderr, out_text = run_gnom_pr(
             atsas_dat_path=self._atsas_dat_path,
-            output_dir=str(Path(out_path).parent),
+            output_dir=out_dir,
             rmax_nm=dmax,
             out_path=out_path,
             first=first,
@@ -461,7 +513,8 @@ class GnomAdjustWizardDialog(QDialog):
             self.set_passport(text=msg, poor=True)
             return
         try:
-            self._fit_plot.plot_from_dat_and_gnom_out(self._profile_path, out_path)
+            curve = self._curve_for_gnom()
+            self._fit_plot.plot_from_dat_and_gnom_out(curve, out_path)
             self._plot_pr_adjust(out_path)
         except Exception:
             pass

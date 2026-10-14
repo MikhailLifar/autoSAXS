@@ -1,0 +1,18 @@
+%% GNOM Adjust bind (poly sizes Adjust is the same pattern)
+%% generated from nodes.yaml — do not edit by hand
+flowchart TB
+  sample_store["SampleStore<br/>→ sample-presentation"]
+  present_right["present_right<br/>→ sample-presentation"]
+  mono_presenter["Mono artifact presenter"]
+  mono_coordinator["Mono coordinator"]
+  gnom_adjust["GNOM Adjust dialog"]
+  session["LiveviewSession"]
+  sizes_adjust["Sizes Adjust dialog"]
+  sample_store -->|state: SampleStore.current| present_right
+  present_right -->|data: DISK|LIVE bundle| mono_presenter
+  mono_presenter -->|state: profile_path / last_gnom_*| mono_coordinator
+  mono_coordinator -->|signal: _push_gnom_adjust_context| gnom_adjust
+  mono_presenter -->|data: disk .out + quality seed| gnom_adjust
+  session -->|state: wizard_params gaps only| mono_coordinator
+  gnom_adjust -->|state: params_changed → store working| session
+  present_right -->|signal: poly twin: _push_sizes_adjust_context| sizes_adjust

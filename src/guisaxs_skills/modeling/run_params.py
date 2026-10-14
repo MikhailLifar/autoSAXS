@@ -22,6 +22,60 @@ _MODE_TO_FAMILY = {
     "mixture": "mixture",
 }
 
+# model_mixture skill CLI/API input names (lengths in nm). Disk ``model_mixture_run_params.yml``
+# and skill return values use ``*_nm`` for resolved bounds; legacy DR used ``q_min``/``q_max``.
+_MIXTURE_OPTION_ALIASES = {
+    "r_max_nm": "r_max",
+    "r_min_nm": "r_min",
+    "poly_max_nm": "poly_max",
+    "poly_min_nm": "poly_min",
+    "q_min": "q_min_nm",
+    "q_max": "q_max_nm",
+}
+_MIXTURE_SKILL_OPTION_KEYS = frozenset(
+    {
+        "max_nph",
+        "maxit",
+        "r_min",
+        "r_max",
+        "poly_min",
+        "poly_max",
+        "q_min_nm",
+        "q_max_nm",
+        "plot_I_q",
+        "plot_logI_logq",
+        "plot_logI_q",
+    }
+)
+_MIXTURE_OPTION_SKIP = frozenset(
+    {"output_dir", "use_cache", "config_path", "skill", "profile", "positional"}
+)
+
+
+def normalize_model_mixture_options(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Map mixture options to ``model_mixture`` skill input names (CLI-safe).
+
+    Disk handoff / skill returns use ``r_max_nm`` etc.; the skill CLI expects ``--r-max``.
+    Prefer an already-correct skill key when both alias and skill name are present.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    for key, value in raw.items():
+        if value is None or key in _MIXTURE_OPTION_SKIP:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        skill_key = _MIXTURE_OPTION_ALIASES.get(str(key), str(key))
+        if skill_key not in _MIXTURE_SKILL_OPTION_KEYS:
+            continue
+        if skill_key in out and str(key) in _MIXTURE_OPTION_ALIASES:
+            # Keep explicit skill-key value already stored.
+            continue
+        out[skill_key] = value
+    return out
+
 
 def profile_sample_stem(profile_abs: str) -> str:
     """Match liveview ``profile_sample_stem`` (strip ``sub_`` / ``int_``)."""
@@ -318,10 +372,8 @@ def apply_disk_params_to_session_state(
 
     if params and str(params.get("skill") or "") == "model_mixture":
         opts = dict(getattr(state, "model_mixture_options", None) or {})
-        for key in ("max_nph", "r_max_nm", "poly_max_nm", "q_min", "q_max", "r_min_nm", "poly_min_nm"):
-            if key in params and params[key] is not None:
-                opts[key] = params[key]
+        opts.update(normalize_model_mixture_options(params))
         try:
-            state.model_mixture_options = opts
+            state.model_mixture_options = normalize_model_mixture_options(opts)
         except Exception:
             pass

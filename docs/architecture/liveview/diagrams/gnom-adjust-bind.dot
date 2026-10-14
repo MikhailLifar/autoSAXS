@@ -1,0 +1,28 @@
+digraph {
+  graph [rankdir=TB, labelloc="t", label="GNOM Adjust bind (poly sizes Adjust is the same pattern)", fontsize=16, nodesep=0.45, ranksep=0.55, splines=true, overlap=false];
+  node [shape=box, style="rounded,filled", fillcolor="#f7f7f7", fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=9];
+
+  "sample_store" [label="SampleStore\n→ sample-presentation"];
+  "present_right" [label="present_right\n→ sample-presentation"];
+  "mono_presenter" [label="Mono artifact presenter"];
+  "mono_coordinator" [label="Mono coordinator"];
+  "gnom_adjust" [label="GNOM Adjust dialog"];
+  "session" [label="LiveviewSession"];
+  "sizes_adjust" [label="Sizes Adjust dialog"];
+
+  "sample_store" -> "present_right" [color="#2ca02c", fontcolor="#2ca02c", style="solid", penwidth=1.2, xlabel="SampleStore.current"];
+  "present_right" -> "mono_presenter" [color="#1f77b4", fontcolor="#1f77b4", style="solid", penwidth=1.2, xlabel="DISK|LIVE bundle"];
+  "mono_presenter" -> "mono_coordinator" [color="#2ca02c", fontcolor="#2ca02c", style="solid", penwidth=1.2, xlabel="profile_path / last_gnom_*"];
+  "mono_coordinator" -> "gnom_adjust" [color="#d62728", fontcolor="#d62728", style="solid", penwidth=1.2, xlabel="_push_gnom_adjust_context"];
+  "mono_presenter" -> "gnom_adjust" [color="#1f77b4", fontcolor="#1f77b4", style="solid", penwidth=1.2, xlabel="disk .out + quality seed"];
+  "session" -> "mono_coordinator" [color="#2ca02c", fontcolor="#2ca02c", style="solid", penwidth=1.2, xlabel="wizard_params gaps only"];
+  "gnom_adjust" -> "session" [color="#2ca02c", fontcolor="#2ca02c", style="solid", penwidth=1.2, xlabel="params_changed → store working"];
+  "present_right" -> "sizes_adjust" [color="#d62728", fontcolor="#d62728", style="solid", penwidth=1.2, xlabel="poly twin: _push_sizes_adjust_context"];
+
+  subgraph cluster_legend {
+    label="edge kinds"; fontsize=10; style="dashed"; color="#aaaaaa";
+    node [shape=plaintext, fillcolor="white", style=""];
+    legend [label=<<table border="0" cellborder="0" cellspacing="2"><tr><td><font color="#1f77b4">━━</font></td><td align="left"><font color="#1f77b4">data</font></td></tr><tr><td><font color="#d62728">━━</font></td><td align="left"><font color="#d62728">signal/control</font></td></tr><tr><td><font color="#2ca02c">━━</font></td><td align="left"><font color="#2ca02c">state</font></td></tr><tr><td><font color="#ff7f0e">━━</font></td><td align="left"><font color="#ff7f0e">exec</font></td></tr><tr><td><font color="#7f7f7f">━━</font></td><td align="left"><font color="#7f7f7f">ui</font></td></tr></table>>];
+  }
+}

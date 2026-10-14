@@ -1,0 +1,43 @@
+%% LiveView top-level (black boxes)
+%% generated from nodes.yaml — do not edit by hand
+flowchart TB
+  watchdir["Watchdir + .guisaxs_liveview/"]
+  ingest_backends["Ingest backends"]
+  settler["RevisionSettler"]
+  ingress["RevisionIngress"]
+  sample_store["SampleStore<br/>→ sample-presentation"]
+  session["LiveviewSession"]
+  planner["plan_for"]
+  executor["LiveviewJobExecutor"]
+  skill_runner["SkillRunner"]
+  middle_sync["sync_middle_view"]
+  present_right["present_right<br/>→ sample-presentation"]
+  controller["LiveviewController"]
+  ui_left["Left panel"]
+  ui_middle["Middle panel"]
+  ui_right["Right panel (mono/poly)<br/>→ gnom-adjust-bind"]
+  modeling["ModelingChildManager"]
+  watchdir -->|data: frames / .dat| ingest_backends
+  ingest_backends -->|signal: observe| settler
+  settler -->|signal: stable SampleRevision| ingress
+  ingress -->|state: board / select| sample_store
+  ingress -->|exec: admit job| executor
+  sample_store -->|state: current Sample| planner
+  session -->|state: facts / arming| planner
+  planner -->|exec: PipelinePlan| executor
+  executor -->|exec: JobStep| skill_runner
+  skill_runner -->|data: skill result LIVE| present_right
+  sample_store -->|state: current stem| middle_sync
+  session -->|state: intake / buffer| middle_sync
+  sample_store -->|state: current stem| present_right
+  present_right -->|data: artifact bundle| ui_right
+  middle_sync -->|data: layout + paint| ui_middle
+  controller -->|signal: Session API| session
+  controller -->|signal: history sync| middle_sync
+  controller -->|signal: DISK|LIVE present| present_right
+  ui_left -->|ui: calib / buffer / mask| controller
+  ui_right -->|ui: arm / Adjust / Process| controller
+  session -->|state: session-tied chrome| ui_left
+  present_right -->|state: sample ModelingContext| modeling
+  watchdir -->|data: session.yaml| session
+  watchdir -->|data: history.yaml| sample_store

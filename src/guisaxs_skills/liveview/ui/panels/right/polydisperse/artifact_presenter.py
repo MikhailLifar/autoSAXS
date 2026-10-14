@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 import yaml
 
@@ -192,22 +192,68 @@ class PolydisperseArtifactPresenter:
         except Exception:
             pass
 
+    def _sizes_quality_is_thin(self, result: Mapping[str, Any]) -> bool:
+        """True when merge left no Metric/Value passport fields (paths-only payload)."""
+        for key in (
+            "overall_status",
+            "sizes_quality_class",
+            "total_estimate",
+            "chi2",
+            "shannon_s_min",
+            "d_avg_nm",
+        ):
+            v = result.get(key)
+            if v is not None and v != "":
+                return False
+        return True
+
+    def _quality_from_gnom_out(self, gnom_out: str, *, base: Optional[dict] = None) -> dict:
+        """Derive D(R) quality dict from a bound ``.out`` (same helper sizes Adjust preview uses)."""
+        from autosaxs.core.gnom import parse_gnom_out
+        from autosaxs.core.gnom_quality import analyze_dr_quality
+
+        out = dict(base or {})
+        try:
+            parsed = parse_gnom_out(Path(gnom_out).read_text(errors="replace"))
+            derived = analyze_dr_quality(
+                parsed,
+                atsas_fit_ok=True,
+                rg_guinier_nm=out.get("rg_guinier_nm"),
+                shape="spheres",
+            )
+            for k, v in derived.items():
+                if out.get(k) in (None, "", []) and v is not None:
+                    out[k] = v
+        except Exception:
+            pass
+        return out
+
     def _ingest_sizes(self, result: dict) -> None:
         result = merge_fit_sizes_quality_fields(dict(result or {}), watchdir=self._state.watchdir)
-        self._last_sizes_result = dict(result)
         sub = norm_artifact_path(result.get("output_subdir"))
         if sub:
             self._last_sizes_subdir = self._resolve_result_path(sub) or sub
-        if not is_atsas_fit_ok(result):
-            msg = failure_message_from_result(result, skill_id="fit_sizes")
-            self._window.sizes_pane.clear_view()
-            self._window.sizes_pane.set_diagnostics(text=msg, poor=True)
-            self._last_sizes_summary = msg
-            return
         gnom_out = self._resolve_result_path(result.get("best_gnom_out_path"))
         if gnom_out:
             self._last_gnom_out = gnom_out
-        prof = self._effective_profile_path()
+        # Mirror mono: always keep a quality dict for right pane + Adjust (never HTML-only).
+        if gnom_out and os.path.isfile(gnom_out) and self._sizes_quality_is_thin(result):
+            result = self._quality_from_gnom_out(gnom_out, base=result)
+        self._last_sizes_result = dict(result)
+        if not is_atsas_fit_ok(result):
+            msg = failure_message_from_result(result, skill_id="fit_sizes")
+            self._window.sizes_pane.clear_view()
+            if not self._sizes_quality_is_thin(result):
+                self._window.sizes_pane.set_diagnostics(quality=result)
+            else:
+                self._window.sizes_pane.set_diagnostics(text=msg, poor=True)
+            self._last_sizes_summary = msg
+            return
+        from ..gnom_overlays import gnom_owned_curve_path
+
+        prof = (
+            gnom_owned_curve_path(gnom_out) if gnom_out else ""
+        ) or self._effective_profile_path()
         if gnom_out and os.path.isfile(gnom_out):
             self._window.sizes_pane.show_sizes(prof, gnom_out)
         else:
@@ -469,3 +515,8 @@ class PolydisperseArtifactPresenter:
     @property
     def last_sizes_result(self) -> dict:
         return dict(self._last_sizes_result or {})
+
+    @property
+    def last_gnom_result(self) -> dict:
+        """Mono-named alias: poly stores D(R) quality under ``last_sizes_result``."""
+        return self.last_sizes_result

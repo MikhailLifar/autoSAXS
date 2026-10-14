@@ -1,0 +1,344 @@
+# LiveView architecture map SSOT (YAML → Mermaid + Graphviz).
+# Paths are relative to src/guisaxs_skills/liveview/ unless noted.
+# Edge kinds: data | signal | state | exec | ui
+# Regenerate: python scripts/render_arch.py
+
+meta:
+  title: LiveView architecture maps
+  package: guisaxs_skills.liveview
+  prose:
+    - docs/liveview_architecture.md
+    - docs/liveview_session_sample_plan.md
+  edge_kinds:
+    data: { color: "#1f77b4", label: "data" }
+    signal: { color: "#d62728", label: "signal/control" }
+    state: { color: "#2ca02c", label: "state" }
+    exec: { color: "#ff7f0e", label: "exec" }
+    ui: { color: "#7f7f7f", label: "ui" }
+
+nodes:
+  watchdir:
+    label: Watchdir + .guisaxs_liveview/
+    owns: [workdir files, session.yaml, history.yaml]
+    path: session/workdir.py
+  ingest_backends:
+    label: Ingest backends
+    owns: [watch / poll / tree / drop observations]
+    path: ingest/
+  settler:
+    label: RevisionSettler
+    owns: [FileStatSnapshot stability]
+    path: ingest/settle.py
+  ingress:
+    label: RevisionIngress
+    owns: [revision accept front door]
+    path: ingest/ingress.py
+  sample_store:
+    label: SampleStore
+    owns: [sample history, current sample identity]
+    path: session/sample_store.py
+    drilldown: sample-presentation
+  session:
+    label: LiveviewSession
+    owns: [session facts, safe mutations, wizard param bags]
+    path: session/api.py
+  planner:
+    label: plan_for
+    owns: [JobStep lists / PipelinePlan]
+    path: pipeline/plan.py
+  executor:
+    label: LiveviewJobExecutor
+    owns: [queues, current Job, skill step advance]
+    path: pipeline/executor.py
+  skill_runner:
+    label: SkillRunner
+    owns: [QProcess CLI skills --no-cache]
+    path: services/skills.py
+  middle_sync:
+    label: sync_middle_view
+    owns: [middle layout + paint]
+    path: services/history/middle_from_stem.py
+  present_right:
+    label: present_right
+    owns: [right LIVE|DISK presentation entry]
+    path: services/history/right_artifacts.py
+    drilldown: sample-presentation
+  controller:
+    label: LiveviewController
+    owns: [Qt signal fan-out / handlers]
+    path: controller/
+  ui_left:
+    label: Left panel
+    owns: [calib / buffer / mask UX]
+    path: ui/panels/
+  ui_middle:
+    label: Middle panel
+    owns: [2D / 1D / sub views]
+    path: ui/panels/
+  ui_right:
+    label: Right panel (mono/poly)
+    owns: [analysis panes + slim wizards]
+    path: ui/panels/right/
+    drilldown: gnom-adjust-bind
+  mono_presenter:
+    label: Mono artifact presenter
+    owns: [profile_path, last_gnom_out, last_gnom_result, apply_bundle]
+    path: ui/panels/right/monodisperse/artifact_presenter.py
+    drilldown: gnom-adjust-bind
+  mono_coordinator:
+    label: Mono coordinator
+    owns: [_push_gnom_adjust_context, open Adjust]
+    path: ui/panels/right/monodisperse/coordinator.py
+    drilldown: gnom-adjust-bind
+  gnom_adjust:
+    label: GNOM Adjust dialog
+    owns: [preview plots, working params while open]
+    path: ui/wizards/gnom_adjust.py
+    drilldown: gnom-adjust-bind
+  sizes_adjust:
+    label: Sizes Adjust dialog
+    owns: [poly D(R) preview / working params]
+    path: ui/wizards/sizes_adjust.py
+  modeling:
+    label: ModelingChildManager
+    owns: [shape/DR child ModelingContext]
+    path: modeling_children.py
+
+diagrams:
+  top:
+    title: LiveView top-level (black boxes)
+    rankdir: TB
+    clusters:
+      - id: ingest
+        label: ingest
+        nodes: [watchdir, ingest_backends, settler, ingress]
+      - id: facts
+        label: session + sample identity
+        nodes: [session, sample_store, planner]
+      - id: run
+        label: execute
+        nodes: [executor, skill_runner]
+      - id: present
+        label: present
+        nodes: [middle_sync, present_right, modeling]
+      - id: ui
+        label: UI
+        nodes: [controller, ui_left, ui_middle, ui_right]
+    include_nodes:
+      - watchdir
+      - ingest_backends
+      - settler
+      - ingress
+      - sample_store
+      - session
+      - planner
+      - executor
+      - skill_runner
+      - middle_sync
+      - present_right
+      - controller
+      - ui_left
+      - ui_middle
+      - ui_right
+      - modeling
+    edges:
+      - { from: watchdir, to: ingest_backends, kind: data, label: "frames / .dat" }
+      - { from: ingest_backends, to: settler, kind: signal, label: "observe" }
+      - { from: settler, to: ingress, kind: signal, label: "stable SampleRevision" }
+      - { from: ingress, to: sample_store, kind: state, label: "board / select" }
+      - { from: ingress, to: executor, kind: exec, label: "admit job" }
+      - { from: sample_store, to: planner, kind: state, label: "current Sample" }
+      - { from: session, to: planner, kind: state, label: "facts / arming" }
+      - { from: planner, to: executor, kind: exec, label: "PipelinePlan" }
+      - { from: executor, to: skill_runner, kind: exec, label: "JobStep" }
+      - { from: skill_runner, to: present_right, kind: data, label: "skill result LIVE" }
+      - { from: sample_store, to: middle_sync, kind: state, label: "current stem" }
+      - { from: session, to: middle_sync, kind: state, label: "intake / buffer" }
+      - { from: sample_store, to: present_right, kind: state, label: "current stem" }
+      - { from: present_right, to: ui_right, kind: data, label: "artifact bundle" }
+      - { from: middle_sync, to: ui_middle, kind: data, label: "layout + paint" }
+      - { from: controller, to: session, kind: signal, label: "Session API" }
+      - { from: controller, to: middle_sync, kind: signal, label: "history sync" }
+      - { from: controller, to: present_right, kind: signal, label: "DISK|LIVE present" }
+      - { from: ui_left, to: controller, kind: ui, label: "calib / buffer / mask" }
+      - { from: ui_right, to: controller, kind: ui, label: "arm / Adjust / Process" }
+      - { from: session, to: ui_left, kind: state, label: "session-tied chrome" }
+      - { from: present_right, to: modeling, kind: state, label: "sample ModelingContext" }
+      - { from: watchdir, to: session, kind: data, label: "session.yaml" }
+      - { from: watchdir, to: sample_store, kind: data, label: "history.yaml" }
+
+  sample-presentation:
+    title: Sample-tied right presentation
+    rankdir: TB
+    include_nodes:
+      - sample_store
+      - session
+      - present_right
+      - mono_presenter
+      - ui_right
+      - mono_coordinator
+    edges:
+      - { from: sample_store, to: present_right, kind: state, label: "current stem only" }
+      - { from: session, to: present_right, kind: state, label: "shape mode prefs (not identity)" }
+      - { from: present_right, to: mono_presenter, kind: data, label: "discover_* / LIVE ingest" }
+      - { from: mono_presenter, to: ui_right, kind: data, label: "plots + passport" }
+      - { from: mono_presenter, to: mono_coordinator, kind: state, label: "profile / .out / quality" }
+      - { from: mono_coordinator, to: mono_presenter, kind: signal, label: "apply_bundle / load_from_disk" }
+
+  gnom-adjust-bind:
+    title: "GNOM Adjust bind (poly sizes Adjust is the same pattern)"
+    rankdir: TB
+    include_nodes:
+      - sample_store
+      - present_right
+      - mono_presenter
+      - mono_coordinator
+      - gnom_adjust
+      - session
+      - sizes_adjust
+    edges:
+      - { from: sample_store, to: present_right, kind: state, label: "SampleStore.current" }
+      - { from: present_right, to: mono_presenter, kind: data, label: "DISK|LIVE bundle" }
+      - { from: mono_presenter, to: mono_coordinator, kind: state, label: "profile_path / last_gnom_*" }
+      - { from: mono_coordinator, to: gnom_adjust, kind: signal, label: "_push_gnom_adjust_context" }
+      - { from: mono_presenter, to: gnom_adjust, kind: data, label: "disk .out + quality seed" }
+      - { from: session, to: mono_coordinator, kind: state, label: "wizard_params gaps only" }
+      - { from: gnom_adjust, to: session, kind: state, label: "params_changed → store working" }
+      # Sibling pattern (poly coordinator owns this push; not mono):
+      - { from: present_right, to: sizes_adjust, kind: signal, label: "poly twin: _push_sizes_adjust_context" }
+
+  # Scenario: mono pane vs GNOM Adjust I(q) drift (ihs29 vs ihs27).
+  # See scenarios/sample-switch-open-adjust.md and Project store docs/mono-vs-gnom-iq-plot.md
+  scenario-mono-adjust-bug:
+    title: "BUG — sample switch / open Adjust: mono ihs29 vs Adjust ihs27"
+    rankdir: TB
+    clusters:
+      - id: mono_ok
+        label: "mono path OK (follows SampleStore.current)"
+        nodes: [sample_store, present_right, mono_presenter, ui_right]
+      - id: adjust_stale
+        label: "Adjust stuck / clobbered"
+        nodes: [mono_coordinator, gnom_adjust, session]
+    include_nodes:
+      - sample_store
+      - present_right
+      - mono_presenter
+      - ui_right
+      - mono_coordinator
+      - gnom_adjust
+      - session
+    node_overrides:
+      sample_store:
+        label: "SampleStore.current\n→ ihs29"
+      present_right:
+        label: "present_right"
+      mono_presenter:
+        label: "Mono presenter\nprofile / .out / quality = ihs29"
+        fillcolor: "#e8f5e9"
+      ui_right:
+        label: "Mono right pane\nI(q) = ihs29 disk GNOM"
+        fillcolor: "#e8f5e9"
+      mono_coordinator:
+        label: "Mono coordinator"
+      gnom_adjust:
+        label: "GNOM Adjust (open)\nstill ihs27 identity\n+ auto _run_preview"
+        fillcolor: "#ffebee"
+        color: "#d62728"
+        penwidth: 2.5
+        style: "rounded,filled,bold"
+      session:
+        label: "LiveviewSession\nmonodisperse_wizard_params\n(from prior ihs27 refine)"
+        fillcolor: "#fff3e0"
+    edges:
+      - { from: sample_store, to: present_right, kind: state, label: "current → ihs29" }
+      - { from: present_right, to: mono_presenter, kind: data, label: "DISK|LIVE bundle" }
+      - { from: mono_presenter, to: ui_right, kind: data, label: "plots + passport ihs29" }
+      - { from: mono_presenter, to: mono_coordinator, kind: state, label: "apply_bundle / load_from_disk" }
+      - {
+          from: mono_coordinator,
+          to: gnom_adjust,
+          kind: signal,
+          emphasize: broken,
+          label: "MISSING _push_gnom_adjust_context",
+        }
+      - {
+          from: session,
+          to: gnom_adjust,
+          kind: state,
+          emphasize: broken,
+          label: "wizard_params → set_context → auto _run_preview clobber",
+        }
+
+  scenario-mono-adjust-fix:
+    title: "FIX — Adjust rebinds from disk identity; no auto preview on bind"
+    rankdir: TB
+    clusters:
+      - id: mono_ok
+        label: "mono path (SampleStore.current)"
+        nodes: [sample_store, present_right, mono_presenter, ui_right]
+      - id: adjust_bound
+        label: "Adjust rebound to same identity"
+        nodes: [mono_coordinator, gnom_adjust, session]
+    include_nodes:
+      - sample_store
+      - present_right
+      - mono_presenter
+      - ui_right
+      - mono_coordinator
+      - gnom_adjust
+      - session
+    node_overrides:
+      sample_store:
+        label: "SampleStore.current\n→ ihs29"
+      present_right:
+        label: "present_right"
+      mono_presenter:
+        label: "Mono presenter\nprofile / .out / quality = ihs29"
+        fillcolor: "#e8f5e9"
+      ui_right:
+        label: "Mono right pane\nI(q) = ihs29 disk GNOM"
+        fillcolor: "#e8f5e9"
+      mono_coordinator:
+        label: "Mono coordinator"
+      gnom_adjust:
+        label: "GNOM Adjust\nbound to ihs29 disk\n(no auto _run_preview)"
+        fillcolor: "#e8f5e9"
+        color: "#2ca02c"
+        penwidth: 2.5
+        style: "rounded,filled,bold"
+      session:
+        label: "LiveviewSession\nmonodisperse_wizard_params\n(gaps only)"
+        fillcolor: "#f5f5f5"
+    edges:
+      - { from: sample_store, to: present_right, kind: state, label: "current → ihs29" }
+      - { from: present_right, to: mono_presenter, kind: data, label: "DISK|LIVE bundle" }
+      - { from: mono_presenter, to: ui_right, kind: data, label: "plots + passport ihs29" }
+      - { from: mono_presenter, to: mono_coordinator, kind: state, label: "apply_bundle / load_from_disk" }
+      - {
+          from: mono_coordinator,
+          to: gnom_adjust,
+          kind: signal,
+          emphasize: fixed,
+          label: "_push_gnom_adjust_context (if visible)",
+        }
+      - {
+          from: mono_presenter,
+          to: gnom_adjust,
+          kind: data,
+          emphasize: fixed,
+          label: "disk .out + quality seed",
+        }
+      - {
+          from: session,
+          to: mono_coordinator,
+          kind: state,
+          emphasize: fixed,
+          label: "wizard_params fill gaps only",
+        }
+
+edges_global_notes:
+  - "Blue data = artifacts / profiles / skill results."
+  - "Red signal = control / rebind / UI events."
+  - "Green state = ownership of identity or facts."
+  - "Orange exec = job / skill execution."
+  - "Gray ui = panel chrome interactions."

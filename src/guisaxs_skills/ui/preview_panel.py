@@ -371,6 +371,8 @@ class PreviewPanel(QWidget):
         self._dat_curve_viewer: Optional["DatCurveViewerDialog"] = None
         self._preview_q_min: Any = None
         self._preview_q_max: Any = None
+        self._peak_q_nm: Optional[list[float]] = None
+        self._viewer_window_title: Optional[str] = None
         self._image_click_handler = None
 
         lay = QVBoxLayout(self)
@@ -391,11 +393,26 @@ class PreviewPanel(QWidget):
         path_label_visible: bool = True,
         q_min: Any = None,
         q_max: Any = None,
+        viewer_path: Optional[str] = None,
+        peak_q_nm: Optional[list[float]] = None,
+        viewer_window_title: Optional[str] = None,
     ) -> None:
+        """
+        Show a thumbnail for ``path``.
+
+        Click-through uses ``viewer_path`` when set (e.g. calibration_curve.png
+        thumbnail + calibration_curve.dat → DatCurveViewerDialog with matplotlib
+        toolbar). Otherwise the same ``path`` is opened.
+
+        ``peak_q_nm`` overlays theoretical Bragg lines (nm⁻¹) on the interactive
+        DatCurveViewer when the click-through target is a ``.dat``.
+        """
         self._cleanup_temp_preview()
         self._source_path_for_viewer = None
         self._preview_q_min = q_min
         self._preview_q_max = q_max
+        self._peak_q_nm = list(peak_q_nm) if peak_q_nm else None
+        self._viewer_window_title = (viewer_window_title or "").strip() or None
         self._label.setText("")
         self._label.setToolTip("")
         self._image.clear()
@@ -407,7 +424,11 @@ class PreviewPanel(QWidget):
         if not path or not os.path.exists(path):
             return
         p = Path(path)
-        self._source_path_for_viewer = str(p)
+        vp = (viewer_path or "").strip()
+        if vp and os.path.exists(vp):
+            self._source_path_for_viewer = vp
+        else:
+            self._source_path_for_viewer = str(p)
         short, full = contracted_path_label(p)
         if path_label_visible:
             self._label.setText(short)
@@ -502,6 +523,8 @@ class PreviewPanel(QWidget):
                 reuse=self._dat_curve_viewer,
                 q_min=self._preview_q_min,
                 q_max=self._preview_q_max,
+                peak_q_nm=self._peak_q_nm,
+                window_title=self._viewer_window_title,
             )
             return
         if not self._current_image_path:

@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
 from .....session.state import LiveviewSessionState, LiveviewWatchMode
 from .artifact_presenter import PolydisperseArtifactPresenter
 from .config_sync import PolydisperseConfigSync
-from .format_display import format_sizes_passport_html
 
 
 class PolydisperseCoordinator(QObject):
@@ -134,20 +133,20 @@ class PolydisperseCoordinator(QObject):
         self._guinier_adjust.raise_()
         self._guinier_adjust.activateWindow()
 
-    def open_sizes_adjust_wizard(self) -> None:
-        from ....wizards.sizes_adjust import SizesAdjustWizardDialog
+    def _push_sizes_adjust_context(self) -> None:
+        """Rebind open sizes Adjust to the presenter's current sample identity."""
+        import os
 
-        from ......ui.style import COLOR_QUALITY_POOR
+        from autosaxs.core.atsas_gnom import normalize_force_zero
+        from autosaxs.core.gnom import parse_gnom_out
+
+        from ..monodisperse.format_display import scalar_value
 
         if self._sizes_adjust is None:
-            parent = self._window.window() if self._window is not None else None
-            self._sizes_adjust = SizesAdjustWizardDialog(parent)
-            self._sizes_adjust.editing_started.connect(self.intervention_requested.emit)
-            self._sizes_adjust.params_changed.connect(self._on_sizes_adjust_params_changed)
-        prof = self._presenter.profile_path
+            return
         wp = dict(self._state.polydisperse_window_params or {})
         auto = dict(wp.get("sizes_auto") or {})
-        working = {
+        session = {
             k: wp[k]
             for k in (
                 "first",
@@ -162,38 +161,73 @@ class PolydisperseCoordinator(QObject):
             )
             if k in wp
         }
+        disk: Dict[str, Any] = {}
         gnom_out = self._presenter.last_gnom_out
-        if gnom_out:
-            try:
-                from autosaxs.core.atsas_gnom import normalize_force_zero
-                from autosaxs.core.gnom import parse_gnom_out
+        quality = dict(getattr(self._presenter, "last_sizes_result", None) or {})
 
+        def _set_float(key: str, raw: object) -> None:
+            v = scalar_value(raw)
+            if v is None or v in ("", None):
+                return
+            try:
+                disk[key] = float(v)
+            except (TypeError, ValueError):
+                pass
+
+        if gnom_out and os.path.isfile(gnom_out):
+            try:
                 parsed = parse_gnom_out(gnom_out)
+                ar = parsed.get("angular_range")
+                if isinstance(ar, (tuple, list)) and len(ar) == 2:
+                    try:
+                        q0, q1 = float(ar[0]), float(ar[1])
+                        if q0 > 0 and q1 > q0:
+                            disk["q_min"] = q0
+                            disk["q_max"] = q1
+                    except (TypeError, ValueError):
+                        pass
+                if parsed.get("real_space_rmax") is not None:
+                    _set_float("rmax_nm", parsed.get("real_space_rmax"))
+                if parsed.get("current_alpha") is not None:
+                    _set_float("alpha", parsed.get("current_alpha"))
                 for key in ("force_zero_rmin", "force_zero_rmax"):
-                    if key not in working and parsed.get(key) is not None:
-                        working[key] = normalize_force_zero(parsed.get(key))
+                    if parsed.get(key) is not None:
+                        disk[key] = normalize_force_zero(parsed.get(key))
             except Exception:
                 pass
-        passport_html = ""
-        quality = getattr(self._presenter, "last_sizes_result", None) or {}
-        if quality:
-            passport_html = format_sizes_passport_html(quality, poor_color=COLOR_QUALITY_POOR)
-        if not passport_html or passport_html == "—":
-            try:
-                passport_html = self._window.sizes_pane._lbl_diagnostics.text()  # noqa: SLF001
-            except Exception:
-                passport_html = ""
+        _set_float("rmax_nm", quality.get("rmax_nm") or quality.get("dmax_nm"))
+        _set_float("q_min", quality.get("q_min_fit_nm"))
+        _set_float("q_max", quality.get("q_max_fit_nm"))
+        # Disk/quality win; session only fills gaps.
+        working = dict(disk)
+        for k, v in session.items():
+            working.setdefault(k, v)
+        if working.get("q_min") is not None:
+            working.pop("first", None)
+        if working.get("q_max") is not None:
+            working.pop("last", None)
         self._sizes_adjust.set_context(
-            profile_path=prof,
+            profile_path=self._presenter.profile_path,
             auto_snapshot=auto,
             working_params=working,
             gnom_out_path=gnom_out,
-            passport_html=passport_html if passport_html and passport_html != "—" else "",
+            passport_text="",
+            passport_html="",
+            passport_quality=quality or None,
         )
+
+    def open_sizes_adjust_wizard(self) -> None:
+        from ....wizards.sizes_adjust import SizesAdjustWizardDialog
+
+        if self._sizes_adjust is None:
+            parent = self._window.window() if self._window is not None else None
+            self._sizes_adjust = SizesAdjustWizardDialog(parent)
+            self._sizes_adjust.editing_started.connect(self.intervention_requested.emit)
+            self._sizes_adjust.params_changed.connect(self._on_sizes_adjust_params_changed)
+        self._push_sizes_adjust_context()
         self._sizes_adjust.show()
         self._sizes_adjust.raise_()
         self._sizes_adjust.activateWindow()
-
     def _on_guinier_adjust_params_changed(self) -> None:
         if self._guinier_adjust is not None:
             p = self._guinier_adjust.guinier_params()
@@ -306,15 +340,12 @@ class PolydisperseCoordinator(QObject):
     def ingest_skill_result(self, result: dict, *, skill_name: str = "") -> None:
         self._presenter.ingest_skill_result(result, skill_name=skill_name)
         if self._sizes_adjust is not None and self._sizes_adjust.isVisible():
-            gnom_out = self._presenter.last_gnom_out
-            if gnom_out:
-                self._sizes_adjust.show_from_gnom_out(gnom_out)
-            quality = getattr(self._presenter, "last_sizes_result", None) or {}
-            if quality:
-                self._sizes_adjust.set_passport_from_quality(quality)
+            self._push_sizes_adjust_context()
 
     def apply_bundle(self, bundle: object) -> None:
         self._presenter.apply_bundle(bundle)
+        if self._sizes_adjust is not None and self._sizes_adjust.isVisible():
+            self._push_sizes_adjust_context()
 
     def load_from_disk(
         self,
@@ -330,6 +361,8 @@ class PolydisperseCoordinator(QObject):
             tiff_path=tiff_path,
             watch_mode=watch_mode,
         )
+        if self._sizes_adjust is not None and self._sizes_adjust.isVisible():
+            self._push_sizes_adjust_context()
 
     def summary_text(self) -> tuple[str, str]:
         return self._presenter.summary_text()

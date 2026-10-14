@@ -80,26 +80,19 @@ def model_mixture_opts(
 ) -> dict:
     outdir = mixture_dir(output_root)
     outdir.mkdir(parents=True, exist_ok=True)
+    from ...modeling.run_params import normalize_model_mixture_options
+
     opts: Dict[str, Any] = {"output_dir": str(outdir.resolve()), "use_cache": False}
+    merged: Dict[str, Any] = {}
     raw = state.model_mixture_options
     if isinstance(raw, dict):
-        skip = frozenset({"output_dir", "use_cache", "config_path"})
-        for key, value in raw.items():
-            if key in skip or value is None:
-                continue
-            if isinstance(value, str) and not value.strip():
-                continue
-            opts[str(key)] = value
+        merged.update(raw)
     wp = state.polydisperse_window_params
     if isinstance(wp, dict):
         mix = wp.get("mixture")
         if isinstance(mix, dict):
-            for key, value in mix.items():
-                if value is None:
-                    continue
-                if isinstance(value, str) and not value.strip():
-                    continue
-                opts[str(key)] = value
+            merged.update(mix)
+    opts.update(normalize_model_mixture_options(merged))
     return opts
 
 

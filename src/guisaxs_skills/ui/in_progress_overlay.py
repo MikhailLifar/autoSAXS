@@ -77,7 +77,8 @@ class InProgressOverlay(QWidget):
         p.fillRect(band, grad)
 
         font = QFont(p.font())
-        font.setPointSize(max(11, font.pointSize() + 1))
+        # Relative to current app font — no absolute pt floor that ignores Settings.
+        font.setPointSize(max(1, font.pointSize() + 1))
         font.setBold(True)
         p.setFont(font)
         p.setPen(QPen(QColor("#e7eef6")))

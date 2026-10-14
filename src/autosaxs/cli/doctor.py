@@ -21,6 +21,7 @@ from autosaxs.skill.skill_wrap import (
 SKILLS_NEED_ATSAS: Tuple[str, ...] = (
     "fit_distances",
     "fit_sizes",
+    "calc_profile",
     "model_bodies",
     "model_dam",
     "model_mixture",
@@ -40,6 +41,7 @@ SKILLS_WITHOUT_ATSAS: Tuple[str, ...] = (
     "fit_guinier",
     "analyze_kratky",
     "model_dr_mc",
+    "model_lc",
     "model_density",
     "report_individual",
     "report_summary",

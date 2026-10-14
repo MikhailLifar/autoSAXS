@@ -37,6 +37,7 @@ from ..plots import FitResidualsPlot, ModelingPlotClickRouter
 from ..run_params import (
     analysis_root_from_modeling_path,
     conventional_sample_modeling_dir,
+    normalize_model_mixture_options,
     read_run_params,
     resolve_sample_modeling_dir,
     skill_batch_output_dir,
@@ -92,13 +93,13 @@ class DrModelingWindow(QMainWindow):
             else:
                 self._pf_outdir.set_text("")
             self._sync_outdir_to_mode("mixture")
-            opts = self._ctx.options or {}
+            opts = normalize_model_mixture_options(self._ctx.options or {})
             for key, spin in (
                 ("max_nph", self._sp_max_nph),
-                ("r_max_nm", self._sp_r_max),
-                ("poly_max_nm", self._sp_poly_max),
-                ("q_min", self._q_min),
-                ("q_max", self._q_max),
+                ("r_max", self._sp_r_max),
+                ("poly_max", self._sp_poly_max),
+                ("q_min_nm", self._q_min),
+                ("q_max_nm", self._q_max),
             ):
                 if key in opts and opts[key] is not None:
                     try:
@@ -109,44 +110,45 @@ class DrModelingWindow(QMainWindow):
         self._try_load_existing_artifacts()
         self._update_confirm_enabled()
 
-    def _apply_run_params_from_disk(self) -> None:
+    def _apply_run_params_from_disk(self) -> Optional[Dict[str, Any]]:
         raw = (self._pf_outdir.text() or "").strip()
         if not raw:
-            return
+            return None
         prof = (self._pf_profile.text() or "").strip()
         out = str(resolve_sample_modeling_dir(raw, profile_path=prof))
         if out != raw:
             self._pf_outdir.set_text(out)
         if not os.path.isdir(out):
-            return
-        params = read_run_params(out, profile_path=prof)
+            return None
+        params = normalize_model_mixture_options(read_run_params(out, profile_path=prof))
         if not params and not (Path(out) / "mixture_results.csv").is_file():
-            return
+            return None
         if "max_nph" in params:
             try:
                 self._sp_max_nph.setValue(int(params["max_nph"]))
             except (TypeError, ValueError):
                 pass
-        if params.get("r_max_nm") is not None:
+        if params.get("r_max") is not None:
             try:
-                self._sp_r_max.setValue(float(params["r_max_nm"]))
+                self._sp_r_max.setValue(float(params["r_max"]))
             except (TypeError, ValueError):
                 pass
-        if params.get("poly_max_nm") is not None:
+        if params.get("poly_max") is not None:
             try:
-                self._sp_poly_max.setValue(float(params["poly_max_nm"]))
+                self._sp_poly_max.setValue(float(params["poly_max"]))
             except (TypeError, ValueError):
                 pass
-        if params.get("q_min") is not None:
+        if params.get("q_min_nm") is not None:
             try:
-                self._q_min.setValue(float(params["q_min"]))
+                self._q_min.setValue(float(params["q_min_nm"]))
             except (TypeError, ValueError):
                 pass
-        if params.get("q_max") is not None:
+        if params.get("q_max_nm") is not None:
             try:
-                self._q_max.setValue(float(params["q_max"]))
+                self._q_max.setValue(float(params["q_max_nm"]))
             except (TypeError, ValueError):
                 pass
+        return params
 
     def _clear_result_views(self) -> None:
         """Wipe fit/Δ/D(R)/passport so a sample without MIXTURE results is not misleading."""
@@ -292,6 +294,7 @@ class DrModelingWindow(QMainWindow):
         self._auto_mode = ModelingAutoMode(
             self, auto_btn=self._auto_btn, confirm_btn=self._confirm
         )
+        self._auto_mode.auto_changed.connect(self._on_auto_changed_ipc)
 
         pass_box = QGroupBox("Quality passport")
         pass_lay = QVBoxLayout(pass_box)
@@ -362,6 +365,10 @@ class DrModelingWindow(QMainWindow):
         out = (self._pf_outdir.text() or "").strip()
         self._confirm.setEnabled(bool(prof) and os.path.isfile(prof) and bool(out))
 
+    def _on_auto_changed_ipc(self, auto: bool) -> None:
+        if self._ipc is not None:
+            self._ipc.send_auto_changed(bool(auto))
+
     def _on_confirm_ipc(self) -> None:
         if not self._auto_mode.should_accept_ipc_confirm():
             return
@@ -390,19 +397,22 @@ class DrModelingWindow(QMainWindow):
             if not quiet:
                 QMessageBox.warning(self, "Confirm", str(exc))
             return
+        # Skill CLI owns --r-max / --poly-max / --q-*-nm (values in nm). Never pass
+        # disk handoff names (r_max_nm) here — RunRequest maps keys to CLI flags 1:1.
+        skill_opts = normalize_model_mixture_options(
+            {
+                "max_nph": int(self._sp_max_nph.value()),
+                "r_max": float(self._sp_r_max.value()) if self._sp_r_max.value() > 0 else None,
+                "poly_max": float(self._sp_poly_max.value()) if self._sp_poly_max.value() > 0 else None,
+                "q_min_nm": float(self._q_min.value()) if self._q_min.value() > 0 else None,
+                "q_max_nm": float(self._q_max.value()) if self._q_max.value() > 0 else None,
+            }
+        )
         opts: Dict[str, Any] = {
             "output_dir": str(Path(batch_outdir).resolve()),
             "use_cache": False,
-            "max_nph": int(self._sp_max_nph.value()),
+            **skill_opts,
         }
-        if self._sp_r_max.value() > 0:
-            opts["r_max_nm"] = float(self._sp_r_max.value())
-        if self._sp_poly_max.value() > 0:
-            opts["poly_max_nm"] = float(self._sp_poly_max.value())
-        if self._q_min.value() > 0:
-            opts["q_min"] = float(self._q_min.value())
-        if self._q_max.value() > 0:
-            opts["q_max"] = float(self._q_max.value())
 
         if self._ipc is not None:
             self._ipc.send_confirmed(

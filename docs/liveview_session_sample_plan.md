@@ -80,7 +80,7 @@ Arming mono/poly/shape/mixture mid-job therefore affects the current sample’s 
 - **Owner:** `LiveviewSession` → `state.auto_processing` (`stop` / `resume`).
 - **Executor:** reads the session flag plus transient busy/cancel guards.
 - **Process while Manual:** history Process resumes Auto (incoming promote only when Auto).
-- **Shortcuts:** Ctrl+X Auto→Manual; Ctrl+P Manual→Auto (main window; skipped while typing in text fields).
+- **Shortcuts:** Ctrl+X Auto→Manual; Ctrl+P Manual→Auto (application-wide via `LiveviewMainWindow` `QApplication` event filter, so mono/poly and other liveview wizards — modal or not — receive them; skipped while typing in text fields).
 
 ## Middle column
 

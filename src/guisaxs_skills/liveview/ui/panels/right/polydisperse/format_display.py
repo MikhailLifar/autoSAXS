@@ -6,6 +6,9 @@ import math
 from typing import Any, Mapping
 
 from guisaxs_skills.ui.passport_format import (
+    R_MAX_CAP,
+    S_MAX,
+    S_MIN,
     format_display_number,
     format_metric_label,
     format_value_with_class,
@@ -23,7 +26,7 @@ def format_sizes_passport_rows(
     """
     D(R) passport rows as ``(metric, value, poor)``.
 
-    ``compact`` omits wiggle index, s_max, and I(0)-style extras (analysis-pane preview).
+    ``compact`` omits wiggle index, ``S_MAX``, and I(0)-style extras (analysis-pane preview).
     Numeric metrics stay numeric; overall status is a separate Status row.
     """
     from autosaxs.core.gnom_quality import DrQualityThresholds
@@ -81,12 +84,12 @@ def format_sizes_passport_rows(
             n_s = math.floor(float(n_s))
         except (TypeError, ValueError):
             pass
-        rows.append(("n_shannon", format_display_number(n_s), False))
+        rows.append(("N Shannon", format_display_number(n_s), False))
 
     if not compact:
         s_max = scalar_value(result.get("shannon_s_max"))
         if s_max is not None and s_max not in ("", None):
-            rows.append(("s_max", format_display_number(s_max), False))
+            rows.append((S_MAX, format_display_number(s_max), False))
 
         wig = scalar_value(result.get("wiggle_index"))
         wig_class = str(scalar_value(result.get("wiggle_class")) or "unknown")
@@ -94,7 +97,7 @@ def format_sizes_passport_rows(
             wig_poor = wig_class.lower() == "high"
             rows.append(
                 (
-                    "wiggle_index",
+                    "Wiggle index",
                     format_value_with_class(wig, wig_class),
                     wig_poor,
                 )
@@ -105,7 +108,7 @@ def format_sizes_passport_rows(
     if s_min is not None and s_min not in ("", None):
         rows.append(
             (
-                "s_min",
+                S_MIN,
                 format_display_number(s_min),
                 shannon_row_poor(shannon_ok=result.get("shannon_ok"), shannon_class=s_class),
             )
@@ -113,7 +116,7 @@ def format_sizes_passport_rows(
     if s_class and s_class.lower() != "unknown":
         rows.append(
             (
-                "shannon_class",
+                "Shannon class",
                 s_class,
                 s_class.lower() in ("unreliable", "failed", "fail"),
             )
@@ -146,7 +149,7 @@ def format_sizes_passport_rows(
     if dmax is None:
         dmax = scalar_value(result.get("rmax_nm"))
     if dmax is not None and dmax not in ("", None):
-        rows.append(("Rmax", f"{format_display_number(dmax)} nm", False))
+        rows.append((R_MAX_CAP, f"{format_display_number(dmax)} nm", False))
 
     return rows
 

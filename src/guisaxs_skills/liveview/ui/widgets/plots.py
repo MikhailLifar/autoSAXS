@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -19,6 +19,46 @@ from ....logic.path_display import contracted_path_label
 def mpl_navigation_toolbar(canvas: FigureCanvas, parent: QWidget) -> NavigationToolbar2QT:
     """Matplotlib zoom / pan / home / save toolbar for figure dialogs (same affordances everywhere)."""
     return NavigationToolbar2QT(canvas, parent)
+
+
+class MplToolbarViewerDialog(QDialog):
+    """
+    Standard liveview/data plot viewer: matplotlib NavigationToolbar (zoom, pan, home, save)
+    with normal window chrome including the title-bar maximize control (not F11 / true fullscreen).
+    """
+
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        *,
+        title: str = "Plot",
+        plot: QWidget,
+        size: tuple[int, int] = (1000, 600),
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        # Same flags as liveview wizards: min/max/close in the title bar.
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.WindowTitleHint
+            | Qt.WindowSystemMenuHint
+            | Qt.WindowCloseButtonHint
+            | Qt.WindowMinMaxButtonsHint
+        )
+        self.resize(int(size[0]), int(size[1]))
+        self._plot = plot
+
+        lay = QVBoxLayout(self)
+        if isinstance(plot, FigureCanvas):
+            self._toolbar = mpl_navigation_toolbar(plot, self)
+            lay.addWidget(self._toolbar)
+        else:
+            self._toolbar = None
+        lay.addWidget(plot, 1)
+
+    @property
+    def plot(self) -> QWidget:
+        return self._plot
 
 
 def _is_tif_path(path: str) -> bool:
@@ -207,6 +247,7 @@ class LogCurvePlot(FigureCanvas):
         label: Optional[str] = None,
         q_min: Any = None,
         q_max: Any = None,
+        peak_q_nm: Optional[Sequence[float]] = None,
     ) -> None:
         from autosaxs.core.utils import read_saxs
 
@@ -258,8 +299,20 @@ class LogCurvePlot(FigureCanvas):
                 )
             else:
                 self._ax.scatter(qq, ii, s=10, alpha=0.9, label=label or short)
-        if label:
-            self._ax.legend(fontsize=8)
+        # Match calibrate PNG overlay: red dashed Bragg lines (q in nm^-1).
+        if peak_q_nm:
+            for q_val in peak_q_nm:
+                try:
+                    x = float(q_val)
+                except (TypeError, ValueError):
+                    continue
+                if not np.isfinite(x):
+                    continue
+                self._ax.axvline(x=x, color="r", linestyle="--", label="Theoretical Peaks")
+        handles, labels = self._ax.get_legend_handles_labels()
+        if handles:
+            by_label = dict(zip(labels, handles))
+            self._ax.legend(by_label.values(), by_label.keys(), fontsize=8)
         self._ax.set_title(short)
         self._ax.set_xlabel(self._x_label)
         self._ax.set_ylabel("I (a.u.)")
@@ -605,23 +658,19 @@ class LogCurvePlot(FigureCanvas):
         self.setCursor(Qt.PointingHandCursor if m.any() else Qt.ArrowCursor)
 
 
-class DatCurveViewerDialog(QDialog):
+class DatCurveViewerDialog(MplToolbarViewerDialog):
     """
     Full-window interactive SAXS curve view: matplotlib NavigationToolbar (zoom, pan, home, save) + LogCurvePlot.
     Used for .dat artifacts; thumbnails elsewhere stay rasterized for speed.
+    Title-bar maximize uses the standard window control (WindowMinMaxButtonsHint).
     """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Curve")
-        self.resize(1100, 800)
-        self._plot = LogCurvePlot()
-        lay = QVBoxLayout(self)
-        lay.addWidget(mpl_navigation_toolbar(self._plot, self))
-        lay.addWidget(self._plot, 1)
+        plot = LogCurvePlot()
+        super().__init__(parent, title="Curve", plot=plot, size=(1100, 800))
 
     def plot_panel(self) -> LogCurvePlot:
-        return self._plot
+        return self._plot  # type: ignore[return-value]
 
     def show_single_dat(
         self,
@@ -632,6 +681,7 @@ class DatCurveViewerDialog(QDialog):
         window_title: Optional[str] = None,
         q_min: Any = None,
         q_max: Any = None,
+        peak_q_nm: Optional[Sequence[float]] = None,
     ) -> None:
         short, full = contracted_path_label(path)
         tip = full
@@ -644,7 +694,13 @@ class DatCurveViewerDialog(QDialog):
         if x_label is not None:
             self._plot.set_x_label(x_label)
         try:
-            self._plot.plot_dat(path, label=curve_label, q_min=q_min, q_max=q_max)
+            self._plot.plot_dat(
+                path,
+                label=curve_label,
+                q_min=q_min,
+                q_max=q_max,
+                peak_q_nm=peak_q_nm,
+            )
         except Exception:
             self._plot.clear()
             if self._plot.figure.axes:
@@ -683,6 +739,7 @@ def open_dat_curve_dialog(
     window_title: Optional[str] = None,
     q_min: Any = None,
     q_max: Any = None,
+    peak_q_nm: Optional[Sequence[float]] = None,
 ) -> Optional[DatCurveViewerDialog]:
     """Open or refresh an interactive .dat curve viewer (matplotlib zoom/pan toolbar)."""
     p = (path or "").strip()
@@ -696,6 +753,7 @@ def open_dat_curve_dialog(
         window_title=window_title,
         q_min=q_min,
         q_max=q_max,
+        peak_q_nm=peak_q_nm,
     )
     dlg.show()
     dlg.raise_()
@@ -992,23 +1050,19 @@ class DropTiffImageCanvas(Image2DPlot):
         event.accept()
 
 
-class Image2DViewerDialog(QDialog):
+class Image2DViewerDialog(MplToolbarViewerDialog):
     """
     Full-window interactive 2D TIFF view: matplotlib NavigationToolbar + Image2DPlot.
     Used when the liveview center canvas is clicked; thumbnails stay toolbar-free.
+    Title-bar maximize uses the standard window control (WindowMinMaxButtonsHint).
     """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Image")
-        self.resize(1100, 800)
-        self._plot = Image2DPlot()
-        lay = QVBoxLayout(self)
-        lay.addWidget(mpl_navigation_toolbar(self._plot, self))
-        lay.addWidget(self._plot, 1)
+        plot = Image2DPlot()
+        super().__init__(parent, title="Image", plot=plot, size=(1100, 800))
 
     def plot_panel(self) -> Image2DPlot:
-        return self._plot
+        return self._plot  # type: ignore[return-value]
 
     def show_tiff(self, path: str, *, window_title: Optional[str] = None) -> None:
         short, full = contracted_path_label(path)

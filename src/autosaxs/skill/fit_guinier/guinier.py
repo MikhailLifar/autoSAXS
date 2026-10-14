@@ -26,6 +26,7 @@ from autosaxs.core.guinier import (  # noqa: F401
     find_guinier_region,
     get_guinier_candidates,
     run_adaptive_guinier,
+    run_classical_guinier,
 )
 
 
@@ -148,7 +149,10 @@ def run_guinier_analysis(
     atsas_dat_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Run Guinier analyses (first5, first10, autorg, adaptive) and return a unified result dict.
+    Run Guinier analyses (first5, first10, autorg, adaptive, classical) and return a unified result dict.
+
+    Default ``chosen`` is the classical Shannon-style search/score (not a hybrid
+    with ATSAS autorg). Autorg and adaptive are still computed for comparison.
     """
     from autosaxs.core.utils import write_saxs_atsas_format
 
@@ -161,6 +165,7 @@ def run_guinier_analysis(
         "first10": None,
         "autorg": None,
         "adaptive": None,
+        "classical": None,
         "chosen": None,
         "chosen_Rg": None,
         "chosen_I0": None,
@@ -219,9 +224,15 @@ def run_guinier_analysis(
     except ValueError:
         out["adaptive"] = None
 
-    if out["adaptive"] is not None:
-        r = out["adaptive"]
-        out["chosen"] = "adaptive"
+    try:
+        out["classical"] = run_classical_guinier(q, I, sigma=sigma)
+    except ValueError:
+        out["classical"] = None
+
+    # Product default: classical only (no autorg-prefer / adaptive hybrid for chosen_*).
+    if out["classical"] is not None:
+        r = out["classical"]
+        out["chosen"] = "classical"
         out["chosen_Rg"] = r.get("Rg")
         out["chosen_I0"] = r.get("I0")
         out["chosen_quality"] = r.get("fit_quality")

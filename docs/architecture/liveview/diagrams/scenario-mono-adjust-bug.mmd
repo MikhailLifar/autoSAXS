@@ -1,0 +1,16 @@
+%% BUG — sample switch / open Adjust: mono ihs29 vs Adjust ihs27
+%% generated from nodes.yaml — do not edit by hand
+flowchart TB
+  sample_store["SampleStore.current<br/>→ ihs29"]
+  present_right["present_right<br/>→ sample-presentation"]
+  mono_presenter["Mono presenter<br/>profile / .out / quality = ihs29"]
+  ui_right["Mono right pane<br/>I(q) = ihs29 disk GNOM"]
+  mono_coordinator["Mono coordinator<br/>→ gnom-adjust-bind"]
+  gnom_adjust["GNOM Adjust (open)<br/>still ihs27 identity<br/>+ auto _run_preview"]
+  session["LiveviewSession<br/>monodisperse_wizard_params<br/>(from prior ihs27 refine)"]
+  sample_store -->|state: current → ihs29| present_right
+  present_right -->|data: DISK|LIVE bundle| mono_presenter
+  mono_presenter -->|data: plots + passport ihs29| ui_right
+  mono_presenter -->|state: apply_bundle / load_from_disk| mono_coordinator
+  mono_coordinator -->|signal/broken: MISSING _push_gnom_adjust_context| gnom_adjust
+  session -->|state/broken: wizard_params → set_context → auto _run_preview clobber| gnom_adjust

@@ -1,0 +1,17 @@
+%% FIX — Adjust rebinds from disk identity; no auto preview on bind
+%% generated from nodes.yaml — do not edit by hand
+flowchart TB
+  sample_store["SampleStore.current<br/>→ ihs29"]
+  present_right["present_right<br/>→ sample-presentation"]
+  mono_presenter["Mono presenter<br/>profile / .out / quality = ihs29"]
+  ui_right["Mono right pane<br/>I(q) = ihs29 disk GNOM"]
+  mono_coordinator["Mono coordinator<br/>→ gnom-adjust-bind"]
+  gnom_adjust["GNOM Adjust<br/>bound to ihs29 disk<br/>(no auto _run_preview)"]
+  session["LiveviewSession<br/>monodisperse_wizard_params<br/>(gaps only)"]
+  sample_store -->|state: current → ihs29| present_right
+  present_right -->|data: DISK|LIVE bundle| mono_presenter
+  mono_presenter -->|data: plots + passport ihs29| ui_right
+  mono_presenter -->|state: apply_bundle / load_from_disk| mono_coordinator
+  mono_coordinator -->|signal/fixed: _push_gnom_adjust_context (if visible)| gnom_adjust
+  mono_presenter -->|data/fixed: disk .out + quality seed| gnom_adjust
+  session -->|state/fixed: wizard_params fill gaps only| mono_coordinator

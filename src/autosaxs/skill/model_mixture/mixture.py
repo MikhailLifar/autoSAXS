@@ -10,7 +10,7 @@ import re
 import subprocess
 from io import StringIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -66,6 +66,65 @@ def _sphere_block(vol, vol_lo, vol_hi, rout, rout_lo, rout_hi, poly, poly_lo, po
     return lines
 
 
+def _phase_init_radii_ang(
+    n_phases: int,
+    *,
+    r_min: float,
+    r_max: float,
+    init_radii_ang: Optional[Sequence[float]] = None,
+) -> np.ndarray:
+    """
+    Starting Rout (Å) per phase.
+
+    Prefer D(R) / fit_sizes peak positions when provided; otherwise linspace + jitter
+    inside ``[r_min, r_max]``. Peaks outside bounds are clipped; missing phases are
+    filled from the linspace ladder so multi-phase cmds stay well-posed.
+    """
+    r_min_f, r_max_f = float(r_min), float(r_max)
+    lo = r_min_f + 1.0
+    hi = max(lo + 1.0, r_max_f - 1.0)
+    ladder = np.linspace(r_min_f + 10.0, r_max_f - 20.0, n_phases)
+    jitter_step = min(15.0, max(5.0, 0.10 * (r_max_f - r_min_f)))
+    jitter = (np.arange(n_phases, dtype=float) - 0.5 * (n_phases - 1)) * jitter_step
+    ladder = np.clip(ladder + jitter, lo, hi)
+
+    if not init_radii_ang:
+        return ladder
+
+    peaks: list[float] = []
+    for raw in init_radii_ang:
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(v) or v <= 0:
+            continue
+        peaks.append(float(np.clip(v, lo, hi)))
+    if not peaks:
+        return ladder
+
+    # Stable unique-ish order (ascending); keep first n_phases after sort.
+    peaks = sorted(peaks)
+    if len(peaks) >= n_phases:
+        if len(peaks) == n_phases:
+            chosen = peaks
+        else:
+            # Evenly subsample so 2-phase runs still see both small and large peaks.
+            idx = np.linspace(0, len(peaks) - 1, n_phases)
+            chosen = [peaks[int(round(i))] for i in idx]
+        return np.asarray(chosen, dtype=float)
+
+    out = list(peaks)
+    for v in ladder:
+        if len(out) >= n_phases:
+            break
+        if all(abs(float(v) - float(p)) > 1.0 for p in out):
+            out.append(float(v))
+    while len(out) < n_phases:
+        out.append(float(ladder[len(out)]))
+    return np.asarray(out[:n_phases], dtype=float)
+
+
 def _build_mixture_cmd(
     n_phases: int,
     dist_type: int,
@@ -77,22 +136,18 @@ def _build_mixture_cmd(
     r_max: float,
     poly_min: float,
     poly_max: float,
+    init_radii_ang: Optional[Sequence[float]] = None,
 ) -> str:
     dist_name = "Gauss" if dist_type == 1 else "Schultz"
     # Non-uniform initial volumes to break symmetry in global-bounds fits.
     # Deterministic pattern (no RNG) so runs are reproducible.
     w = np.exp(-0.9 * np.arange(n_phases, dtype=float))
     vols = w / np.sum(w)
-    # Local-window initialization (historically stable): start radii inside the bounds
-    # and allow each phase to refine in a ±25 Å window.
     r_min_f, r_max_f = float(r_min), float(r_max)
     poly_min_f, poly_max_f = float(poly_min), float(poly_max)
-    r_centers = np.linspace(r_min_f + 10.0, r_max_f - 20.0, n_phases)
-    # Small deterministic per-phase jitter to avoid symmetric starting points under global bounds.
-    # Keep jitter modest so we don't start on/near bounds.
-    jitter_step = min(15.0, max(5.0, 0.10 * (r_max_f - r_min_f)))
-    jitter = (np.arange(n_phases, dtype=float) - 0.5 * (n_phases - 1)) * jitter_step
-    r_centers = np.clip(r_centers + jitter, r_min_f + 1.0, r_max_f - 1.0)
+    r_centers = _phase_init_radii_ang(
+        n_phases, r_min=r_min_f, r_max=r_max_f, init_radii_ang=init_radii_ang
+    )
     # poly_init = 0.5 * (poly_min + poly_max)
     # poly_init = 130.0
     poly_base = 5.0
@@ -254,6 +309,7 @@ def _run_all_fits(
     r_max: float,
     poly_min: float,
     poly_max: float,
+    init_radii_ang: Optional[Sequence[float]] = None,
 ) -> list[dict]:
     results = []
     for n_phases in range(1, max_nph + 1):
@@ -274,6 +330,7 @@ def _run_all_fits(
                 r_max=r_max,
                 poly_min=poly_min,
                 poly_max=poly_max,
+                init_radii_ang=init_radii_ang,
             )
             proc = _run_mixture(work_dir, dat_basename, cmd_content)
             fit_path = work_dir / dat_basename.replace(".dat", ".fit")
@@ -476,6 +533,7 @@ def fit_mixtures(
     plot_I_q: bool = False,
     plot_logI_logq: bool = False,
     plot_logI_q: bool = True,
+    init_radii_ang: Optional[Sequence[float]] = None,
 ) -> dict[str, Any] | None:
     """
     Run 6 MIXTURE fits (1-, 2-, 3-phase × Gaussian, Schultz–Zimm; SPHERE-only),
@@ -566,6 +624,7 @@ def fit_mixtures(
         r_max=r_max,
         poly_min=poly_min,
         poly_max=poly_max,
+        init_radii_ang=init_radii_ang,
     )
 
     for r in results:

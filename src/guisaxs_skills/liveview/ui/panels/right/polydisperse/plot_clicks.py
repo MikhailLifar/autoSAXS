@@ -4,21 +4,17 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QWidget
 
-from ....widgets.plots import DatCurveViewerDialog, mpl_navigation_toolbar, open_dat_curve_dialog
+from ....widgets.plots import DatCurveViewerDialog, MplToolbarViewerDialog, open_dat_curve_dialog
 from .plots import DrPlot, GnomFitPlot, MixtureDistPlot, MixtureFitPlot
 
 
-class _PolyIqViewerDialog(QDialog):
+class _PolyIqViewerDialog(MplToolbarViewerDialog):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("I(q)")
-        self.resize(1000, 500)
-        self._plot = GnomFitPlot(figsize=(5.0, 3.5))
-        lay = QVBoxLayout(self)
-        lay.addWidget(mpl_navigation_toolbar(self._plot, self))
-        lay.addWidget(self._plot, 1)
+        plot = GnomFitPlot(figsize=(5.0, 3.5))
+        super().__init__(parent, title="I(q)", plot=plot, size=(1000, 500))
+        self._plot = plot
 
     def show_gnom_out(self, path: str) -> None:
         short = Path(path).name
@@ -26,15 +22,11 @@ class _PolyIqViewerDialog(QDialog):
         self._plot.plot_from_gnom_out(path)
 
 
-class _PolyDrViewerDialog(QDialog):
+class _PolyDrViewerDialog(MplToolbarViewerDialog):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("D(R)")
-        self.resize(1000, 500)
-        self._plot = DrPlot(figsize=(4.5, 3.2))
-        lay = QVBoxLayout(self)
-        lay.addWidget(mpl_navigation_toolbar(self._plot, self))
-        lay.addWidget(self._plot, 1)
+        plot = DrPlot(figsize=(4.5, 3.2))
+        super().__init__(parent, title="D(R)", plot=plot, size=(1000, 500))
+        self._plot = plot
 
     def show_gnom_out(self, path: str) -> None:
         short = Path(path).name
@@ -42,15 +34,11 @@ class _PolyDrViewerDialog(QDialog):
         self._plot.plot_from_gnom_out(path)
 
 
-class _PolyMixtureIqViewerDialog(QDialog):
+class _PolyMixtureIqViewerDialog(MplToolbarViewerDialog):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("MIXTURE I(q)")
-        self.resize(1000, 500)
-        self._plot = MixtureFitPlot(figsize=(5.0, 3.5))
-        lay = QVBoxLayout(self)
-        lay.addWidget(mpl_navigation_toolbar(self._plot, self))
-        lay.addWidget(self._plot, 1)
+        plot = MixtureFitPlot(figsize=(5.0, 3.5))
+        super().__init__(parent, title="MIXTURE I(q)", plot=plot, size=(1000, 500))
+        self._plot = plot
 
     def show_fit(self, path: str, *, label: str = "fit") -> None:
         short = Path(path).name
@@ -58,15 +46,11 @@ class _PolyMixtureIqViewerDialog(QDialog):
         self._plot.plot_from_fit(path, label=label)
 
 
-class _PolyMixtureDistViewerDialog(QDialog):
+class _PolyMixtureDistViewerDialog(MplToolbarViewerDialog):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("MIXTURE distribution")
-        self.resize(1000, 500)
-        self._plot = MixtureDistPlot(figsize=(4.5, 3.2))
-        lay = QVBoxLayout(self)
-        lay.addWidget(mpl_navigation_toolbar(self._plot, self))
-        lay.addWidget(self._plot, 1)
+        plot = MixtureDistPlot(figsize=(4.5, 3.2))
+        super().__init__(parent, title="MIXTURE distribution", plot=plot, size=(1000, 500))
+        self._plot = plot
 
     def show_model(
         self,

@@ -84,64 +84,65 @@ def format_display_number(value: Union[float, int, str, None]) -> str:
     return f"{sign}{intpart}.{''.join(out)}"
 
 
+# ---------------------------------------------------------------------------
+# Explicit quantity display labels (manual undertext).
+# Only known scientific symbols — never auto-convert arbitrary snake_case.
+# Plain = Unicode subscript for QTableWidget / plain text.
+# *_HTML = Qt rich-text <sub> for QLabel HTML tables.
+# ---------------------------------------------------------------------------
+S_MIN = "sₘᵢₙ"
+S_MAX = "sₘₐₓ"
+Q_MIN = "qₘᵢₙ"
+Q_MAX = "qₘₐₓ"
+R_MIN = "rₘᵢₙ"
+R_MAX = "rₘₐₓ"
+D_MAX = "Dₘₐₓ"
+R_MAX_CAP = "Rₘₐₓ"
 
-# True Unicode subscripts where available; modifier-letter fallbacks for letters
-# with no dedicated subscript code point (b/c/d/f/g/q/w/y/z).
-_SUBSCRIPT_CHARS: dict[str, str] = {
-    "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄",
-    "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
-    "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎",
-    "a": "ₐ", "b": "ᵦ", "c": "ᶜ", "d": "ᵈ", "e": "ₑ",
-    "f": "ᶠ", "g": "ᵍ", "h": "ₕ", "i": "ᵢ", "j": "ⱼ",
-    "k": "ₖ", "l": "ₗ", "m": "ₘ", "n": "ₙ", "o": "ₒ",
-    "p": "ₚ", "r": "ᵣ", "s": "ₛ", "t": "ₜ", "u": "ᵤ",
-    "v": "ᵥ", "w": "ʷ", "x": "ₓ", "y": "ʸ", "z": "ᶻ",
+S_MIN_HTML = "s<sub>min</sub>"
+S_MAX_HTML = "s<sub>max</sub>"
+Q_MIN_HTML = "q<sub>min</sub>"
+Q_MAX_HTML = "q<sub>max</sub>"
+R_MIN_HTML = "r<sub>min</sub>"
+R_MAX_HTML = "r<sub>max</sub>"
+D_MAX_HTML = "D<sub>max</sub>"
+R_MAX_CAP_HTML = "R<sub>max</sub>"
+
+_QUANTITY_PLAIN_TO_HTML: dict[str, str] = {
+    S_MIN: S_MIN_HTML,
+    S_MAX: S_MAX_HTML,
+    Q_MIN: Q_MIN_HTML,
+    Q_MAX: Q_MAX_HTML,
+    R_MIN: R_MIN_HTML,
+    R_MAX: R_MAX_HTML,
+    D_MAX: D_MAX_HTML,
+    R_MAX_CAP: R_MAX_CAP_HTML,
 }
-
-
-def _to_subscript(segment: str) -> str:
-    """Map a subscript segment to Unicode undertext (best-effort)."""
-    out: list[str] = []
-    for ch in segment:
-        if ch == "_":
-            continue
-        key = ch.lower() if ch.isalpha() else ch
-        out.append(_SUBSCRIPT_CHARS.get(key, ch))
-    return "".join(out)
 
 
 def format_metric_label(name: str) -> str:
     """
-    Passport/quantity metric label with undertext.
+    Passport metric label passthrough.
 
-    ``_`` introduces a subscript segment (``s_min`` → sₘᵢₙ, ``R_g`` → Rᵍ,
-    ``I_0`` → I₀). Only for passport-style quantity labels — do not pass file
-    paths, snake_case code ids, or menu names.
+    Callers must supply the final display string (e.g. ``S_MIN``,
+    ``"Wiggle index"``). No underscore→subscript conversion.
     """
-    token = str(name or "").strip().replace("-", "_")
-    if not token or "_" not in token:
-        return token
-    base, rest = token.split("_", 1)
-    if not rest:
-        return base
-    return f"{base}{_to_subscript(rest)}"
+    return str(name or "").strip()
 
 
 def format_metric_label_html(name: str) -> str:
     """
-    Rich-text passport metric label (``s_min`` → s<sub>min</sub>).
+    HTML-escape a passport metric label.
 
-    Same underscore→undertext rule as ``format_metric_label``; for QLabel HTML only.
+    Known quantity Unicode labels (``S_MIN``, …) upgrade to ``<sub>`` rich text.
     """
     import html as html_mod
 
-    token = str(name or "").strip().replace("-", "_")
-    if not token or "_" not in token:
-        return html_mod.escape(token)
-    base, rest = token.split("_", 1)
-    if not rest:
-        return html_mod.escape(base)
-    return f"{html_mod.escape(base)}<sub>{html_mod.escape(rest)}</sub>"
+    token = str(name or "").strip()
+    html = _QUANTITY_PLAIN_TO_HTML.get(token)
+    if html is not None:
+        return html
+    return html_mod.escape(token)
 
 
 def format_value_with_class(

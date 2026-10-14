@@ -36,7 +36,11 @@ def fit_guinier(
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     """
-    SAXS / small-angle x-ray scattering: Do Guinier analysis on a 1D profile (Rg, I(0), Rg span, Guinier interval, quality). 
+    SAXS / small-angle x-ray scattering: Do Guinier analysis on a 1D profile (Rg, I(0), Rg span, Guinier interval, quality).
+
+    Default (no ``first``/``last``): classical Shannon-style window search + interpretable score
+    (``q·Rg`` gate, linearity, low-q start, residual structure). ATSAS autorg and the older
+    adaptive scorer are still computed for comparison but do not select ``chosen_*``.
 
     ### Arguments
 
@@ -133,7 +137,10 @@ def _fit_guinier_paths(
     user_first = first
     user_last = last
     if (user_first is None) != (user_last is None):
-        raise ValueError("fit_guinier: provide both first and last for fixed-interval mode, or omit both for adaptive.")
+        raise ValueError(
+            "fit_guinier: provide both first and last for fixed-interval mode, "
+            "or omit both for automatic classical Guinier search."
+        )
     if user_first is not None and user_last is not None:
         guinier_results = run_fixed_interval_guinier(
             q_arr,
@@ -317,7 +324,7 @@ def _fit_guinier_paths(
                     f"  interval: Rg={rg_s} nm, n_points={np_s}, fit_quality={qq_s}, interval={int_s}, validation_r2={val_s} [CHOSEN]\n"
                 )
         else:
-            for method in ("first5", "first10", "autorg", "adaptive"):
+            for method in ("first5", "first10", "autorg", "adaptive", "classical"):
                 r = guinier_results.get(method)
                 mark = " [CHOSEN]" if guinier_results.get("chosen") == method else ""
                 if r is not None:
@@ -336,13 +343,18 @@ def _fit_guinier_paths(
                     )
                     val_s = f"{val_r2:.4f}" if val_r2 is not None else "N/A"
                     extra = ""
-                    if method == "adaptive":
+                    if method in ("adaptive", "classical"):
                         rmin, rmax = r.get("rg_min"), r.get("rg_max")
                         qc = r.get("quality_class")
                         if rmin is not None and rmax is not None:
                             extra += f", rg_span=[{rmin:.4g},{rmax:.4g}]"
                         if qc is not None:
                             extra += f", quality_class={qc}"
+                        if method == "classical" and r.get("score") is not None:
+                            try:
+                                extra += f", score={float(r['score']):.4f}"
+                            except (TypeError, ValueError):
+                                pass
                     f.write(
                         f"  {method}: Rg={rg_s} nm, n_points={np_s}, fit_quality={qq_s}, interval={int_s}, validation_r2={val_s}{extra}{mark}\n"
                     )
