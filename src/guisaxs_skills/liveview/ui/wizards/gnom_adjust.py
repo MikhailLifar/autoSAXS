@@ -231,8 +231,17 @@ class GnomAdjustWizardDialog(QDialog):
         passport_text: str = "",
         passport_html: str = "",
         passport_poor: bool = False,
+        passport_quality: Optional[Mapping[str, Any]] = None,
     ) -> None:
+        """
+        Bind Adjust to one analysis identity (profile + disk GNOM ``.out``).
+
+        Plots and passport mirror the disk ``.out`` / quality the monodisperse pane
+        shows. Live ``_run_preview`` runs only after the user edits parameters so
+        opening Adjust cannot drift onto another sample's or stale session params.
+        """
         _ = passport_poor
+        self._preview_debounce.stop()
         self._profile_path = str(profile_path or "").strip()
         self._guinier_handoff = dict(guinier_handoff or {})
         self._auto_snapshot = dict(auto_snapshot or {})
@@ -267,16 +276,15 @@ class GnomAdjustWizardDialog(QDialog):
         if gnom_out_path and os.path.isfile(gnom_out_path):
             self._fit_plot.plot_from_dat_and_gnom_out(self._profile_path, gnom_out_path)
             self._plot_pr_adjust(gnom_out_path)
-        if passport_html:
+        if passport_quality:
+            self.set_passport_from_quality(passport_quality)
+        elif passport_html:
             # Legacy HTML from coordinator — convert via quality when possible.
             self._passport_table.set_message("—")
             self.set_passport(html_text=passport_html)
         elif passport_text:
             self.set_passport(text=passport_text)
         self._confirm.set_committed(self.gnom_params())
-        # Refresh I(q)/P(r) for the loaded q-min/q-max (disk .out may differ).
-        self._run_preview()
-
     def _apply_dmax_slider_span(self) -> None:
         """Slider domain 0 … 4× best-auto Dmax (fallback: current Dmax); spin can exceed."""
         auto_dmax = None

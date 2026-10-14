@@ -244,6 +244,7 @@ class SizesAdjustWizardDialog(QDialog):
         passport_html: str = "",
         passport_text: str = "",
     ) -> None:
+        self._preview_debounce.stop()
         self._profile_path = str(profile_path or "").strip()
         self._auto_snapshot = dict(auto_snapshot or {})
         self._auto_gnom_out = str(gnom_out_path or "").strip()
@@ -282,8 +283,7 @@ class SizesAdjustWizardDialog(QDialog):
         elif passport_text:
             self.set_passport(text=passport_text)
         self._confirm.set_committed(self.sizes_params())
-        # Refresh I(q)/D(R) for the loaded q-min/q-max (disk .out may differ).
-        self._run_preview()
+        # Disk .out + passport only on bind; live preview starts on user edits.
 
     def _apply_rmax_slider_span(self) -> None:
         """Slider domain 0 … 4× best-auto Rmax (fallback: current Rmax); spin can exceed."""

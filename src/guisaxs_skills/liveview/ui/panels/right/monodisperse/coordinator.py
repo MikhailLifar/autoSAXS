@@ -144,6 +144,101 @@ class MonodisperseCoordinator(QObject):
         self._guinier_adjust.raise_()
         self._guinier_adjust.activateWindow()
 
+    _GNOM_ADJUST_PARAM_KEYS = (
+        "first",
+        "last",
+        "q_min",
+        "q_max",
+        "dmax_nm",
+        "alpha",
+        "force_zero_rmin",
+        "force_zero_rmax",
+        "rg_nm",
+    )
+
+    def _disk_gnom_working_params(self) -> Dict[str, Any]:
+        """
+        Working GNOM params for Adjust, seeded from the disk identity mono shows.
+
+        Prefer the current ``.out`` / quality over session ``monodisperse_wizard_params``
+        so a prior sample's refine (or global refine.conf bleed) cannot open Adjust on
+        a different analysis identity than the right pane.
+        """
+        import os
+
+        from autosaxs.core.atsas_gnom import normalize_force_zero
+        from autosaxs.core.gnom import parse_gnom_out
+        from .format_display import scalar_value
+
+        wp = dict(self._state.monodisperse_wizard_params or {})
+        session = {k: wp[k] for k in self._GNOM_ADJUST_PARAM_KEYS if k in wp}
+        disk: Dict[str, Any] = {}
+        gnom_out = self._presenter.last_gnom_out
+        quality = dict(getattr(self._presenter, "last_gnom_result", None) or {})
+
+        def _set_float(key: str, raw: object) -> None:
+            v = scalar_value(raw)
+            if v is None or v in ("", None):
+                return
+            try:
+                disk[key] = float(v)
+            except (TypeError, ValueError):
+                pass
+
+        if gnom_out and os.path.isfile(gnom_out):
+            try:
+                parsed = parse_gnom_out(gnom_out)
+                ar = parsed.get("angular_range")
+                if isinstance(ar, (tuple, list)) and len(ar) == 2:
+                    try:
+                        q0, q1 = float(ar[0]), float(ar[1])
+                        if q0 > 0 and q1 > q0:
+                            disk["q_min"] = q0
+                            disk["q_max"] = q1
+                    except (TypeError, ValueError):
+                        pass
+                if parsed.get("real_space_rmax") is not None:
+                    _set_float("dmax_nm", parsed.get("real_space_rmax"))
+                if parsed.get("current_alpha") is not None:
+                    _set_float("alpha", parsed.get("current_alpha"))
+                for key in ("force_zero_rmin", "force_zero_rmax"):
+                    if parsed.get(key) is not None:
+                        disk[key] = normalize_force_zero(parsed.get(key))
+            except Exception:
+                pass
+        _set_float("dmax_nm", quality.get("dmax_nm"))
+        _set_float("q_min", quality.get("q_min_fit_nm"))
+        _set_float("q_max", quality.get("q_max_fit_nm"))
+        _set_float("rg_nm", quality.get("rg_guinier_nm"))
+        # Disk wins; session only fills gaps (e.g. mid-refine keys not yet on disk).
+        working = dict(disk)
+        for k, v in session.items():
+            working.setdefault(k, v)
+        if working.get("q_min") is not None:
+            working.pop("first", None)
+        if working.get("q_max") is not None:
+            working.pop("last", None)
+        return working
+
+    def _push_gnom_adjust_context(self) -> None:
+        """Rebind open Adjust dial to the presenter's current sample identity."""
+        if self._gnom_adjust is None:
+            return
+        wp = dict(self._state.monodisperse_wizard_params or {})
+        auto = dict(wp.get("gnom_auto") or {})
+        working = self._disk_gnom_working_params()
+        quality = dict(getattr(self._presenter, "last_gnom_result", None) or {})
+        self._gnom_adjust.set_context(
+            profile_path=self._presenter.profile_path,
+            guinier_handoff=self._presenter.last_guinier_handoff,
+            auto_snapshot=auto,
+            working_params=working,
+            gnom_out_path=self._presenter.last_gnom_out,
+            passport_text="",
+            passport_html="",
+            passport_quality=quality or None,
+        )
+
     def open_gnom_adjust_wizard(self) -> None:
         from ....wizards.gnom_adjust import GnomAdjustWizardDialog
 
@@ -152,67 +247,10 @@ class MonodisperseCoordinator(QObject):
             self._gnom_adjust = GnomAdjustWizardDialog(parent)
             self._gnom_adjust.editing_started.connect(self.intervention_requested.emit)
             self._gnom_adjust.params_changed.connect(self._on_gnom_adjust_params_changed)
-        prof = self._presenter.profile_path
-        wp = dict(self._state.monodisperse_wizard_params or {})
-        auto = dict(wp.get("gnom_auto") or {})
-        working = {
-            k: wp[k]
-            for k in (
-                "first",
-                "last",
-                "q_min",
-                "q_max",
-                "dmax_nm",
-                "alpha",
-                "force_zero_rmin",
-                "force_zero_rmax",
-                "rg_nm",
-            )
-            if k in wp
-        }
-        gnom_out = self._presenter.last_gnom_out
-        # Fill missing boundary flags from the on-disk .out (do not override session
-        # values — those may be newer than disk while a refine job is still running).
-        if gnom_out:
-            try:
-                from autosaxs.core.atsas_gnom import normalize_force_zero
-                from autosaxs.core.gnom import parse_gnom_out
-
-                parsed = parse_gnom_out(gnom_out)
-                for key in ("force_zero_rmin", "force_zero_rmax"):
-                    if key not in working and parsed.get(key) is not None:
-                        working[key] = normalize_force_zero(parsed.get(key))
-            except Exception:
-                pass
-        passport_html = ""
-        quality = getattr(self._presenter, "last_gnom_result", None) or {}
-        if quality:
-            from .format_display import format_gnom_passport_html
-            from ......ui.style import COLOR_QUALITY_POOR
-
-            passport_html = format_gnom_passport_html(
-                quality,
-                guinier_handoff=self._presenter.last_guinier_handoff,
-                poor_color=COLOR_QUALITY_POOR,
-            )
-        if not passport_html or passport_html == "—":
-            try:
-                passport_html = self._wizard.gnom_pane._lbl_diagnostics.text()  # noqa: SLF001
-            except Exception:
-                passport_html = ""
-        self._gnom_adjust.set_context(
-            profile_path=prof,
-            guinier_handoff=self._presenter.last_guinier_handoff,
-            auto_snapshot=auto,
-            working_params=working,
-            gnom_out_path=gnom_out,
-            passport_text="",
-            passport_html=passport_html if passport_html and passport_html != "—" else "",
-        )
+        self._push_gnom_adjust_context()
         self._gnom_adjust.show()
         self._gnom_adjust.raise_()
         self._gnom_adjust.activateWindow()
-
     def _on_guinier_adjust_params_changed(self) -> None:
         if self._guinier_adjust is not None:
             p = self._guinier_adjust.guinier_params()
@@ -307,12 +345,8 @@ class MonodisperseCoordinator(QObject):
     def ingest_skill_result(self, result: dict, *, skill_name: str = "") -> None:
         self._presenter.ingest_skill_result(result, skill_name=skill_name)
         if self._gnom_adjust is not None and self._gnom_adjust.isVisible():
-            gnom_out = self._presenter.last_gnom_out
-            if gnom_out:
-                self._gnom_adjust.show_from_gnom_out(gnom_out)
-            quality = getattr(self._presenter, "last_gnom_result", None) or {}
-            if quality:
-                self._gnom_adjust.set_passport_from_quality(quality)
+            # Full rebind (profile + .out + passport + params) — not show_from_gnom_out alone.
+            self._push_gnom_adjust_context()
         sn = (skill_name or result.get("skill_name") or "").strip()
         if sn == "fit_distances" or result.get("best_gnom_out_path"):
             self._push_gnom_to_shape_child()
@@ -346,9 +380,13 @@ class MonodisperseCoordinator(QObject):
             tiff_path=tiff_path,
             watch_mode=watch_mode,
         )
+        if self._gnom_adjust is not None and self._gnom_adjust.isVisible():
+            self._push_gnom_adjust_context()
 
     def apply_bundle(self, bundle: object) -> None:
         self._presenter.apply_bundle(bundle)
+        if self._gnom_adjust is not None and self._gnom_adjust.isVisible():
+            self._push_gnom_adjust_context()
 
     def set_running(self, running: bool) -> None:
         if self._gnom_adjust is not None:
