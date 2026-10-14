@@ -94,7 +94,6 @@ class DrModelingWindow(QMainWindow):
                 self._pf_outdir.set_text("")
             self._sync_outdir_to_mode("mixture")
             opts = normalize_model_mixture_options(self._ctx.options or {})
-            had_max_nph = "max_nph" in opts
             for key, spin in (
                 ("max_nph", self._sp_max_nph),
                 ("r_max", self._sp_r_max),
@@ -107,97 +106,9 @@ class DrModelingWindow(QMainWindow):
                         spin.setValue(float(opts[key]) if spin is not self._sp_max_nph else int(opts[key]))
                     except (TypeError, ValueError):
                         pass
-            disk = self._apply_run_params_from_disk()
-            if isinstance(disk, dict) and "max_nph" in disk:
-                had_max_nph = True
-            self._apply_fit_sizes_component_guesses(opts_had_max_nph=had_max_nph)
+            self._apply_run_params_from_disk()
         self._try_load_existing_artifacts()
         self._update_confirm_enabled()
-
-    def _fit_sizes_handoff_path(self) -> Optional[Path]:
-        """Locate fit_sizes YAML that owns D(R) peak / n_phases suggestions."""
-        prof = (self._pf_profile.text() or "").strip()
-        if not prof:
-            return None
-        from autosaxs.core.utils import _strip_sub_int_prefix
-
-        stem = _strip_sub_int_prefix(Path(prof).stem)
-        name = f"{stem}_fit_sizes.yml"
-        out_raw = (self._pf_outdir.text() or "").strip()
-        roots: List[Path] = []
-        if self._analysis_root is not None:
-            roots.append(Path(self._analysis_root))
-        if out_raw:
-            out = Path(resolve_sample_modeling_dir(out_raw, profile_path=prof))
-            root = analysis_root_from_modeling_path(str(out))
-            if root is not None:
-                roots.append(Path(root))
-            roots.append(out)
-            roots.append(out.parent)
-        seen: set[str] = set()
-        for root in roots:
-            for cand in (
-                root / "fit_sizes" / stem / name,
-                root / "_fit_sizes_defaults" / stem / name,
-            ):
-                key = str(cand)
-                if key in seen:
-                    continue
-                seen.add(key)
-                if cand.is_file():
-                    return cand
-        return None
-
-    def _apply_fit_sizes_component_guesses(self, *, opts_had_max_nph: bool) -> None:
-        """
-        Surface fit_sizes component guesses in the DR UI.
-
-        Prefills max_nph from ``n_phases_suggested`` only when the session/disk
-        options did not already set it. Init radii themselves are owned by the
-        ``model_mixture`` skill (seeded from the same peaks at run time).
-        """
-        path = self._fit_sizes_handoff_path()
-        if path is None:
-            self._lbl_init_hint.setText("")
-            return
-        try:
-            import yaml
-
-            doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            self._lbl_init_hint.setText("")
-            return
-        mm = doc.get("model_mixture") if isinstance(doc, dict) else None
-        if not isinstance(mm, dict):
-            mm = {}
-        quality = doc.get("quality") if isinstance(doc, dict) else None
-        if not isinstance(quality, dict):
-            quality = {}
-        n_ph = mm.get("n_phases_suggested")
-        if n_ph is None:
-            n_ph = quality.get("n_components_suggested")
-        peaks = mm.get("peak_positions_nm") or quality.get("dr_peak_positions_nm") or []
-        dist = mm.get("mixture_dist_hint") or ""
-        parts: List[str] = []
-        if n_ph is not None:
-            parts.append(f"n_ph≈{n_ph}")
-        if dist:
-            parts.append(str(dist))
-        if isinstance(peaks, list) and peaks:
-            try:
-                peak_txt = ", ".join(f"{float(p):.3g}" for p in peaks[:3])
-                parts.append(f"peaks [{peak_txt}] nm")
-            except (TypeError, ValueError):
-                pass
-        if parts:
-            self._lbl_init_hint.setText("D(R) init: " + "; ".join(parts))
-        else:
-            self._lbl_init_hint.setText("")
-        if not opts_had_max_nph and n_ph is not None:
-            try:
-                self._sp_max_nph.setValue(int(max(1, min(3, int(n_ph)))))
-            except (TypeError, ValueError):
-                pass
 
     def _apply_run_params_from_disk(self) -> Optional[Dict[str, Any]]:
         raw = (self._pf_outdir.text() or "").strip()
@@ -374,10 +285,6 @@ class DrModelingWindow(QMainWindow):
         form.addRow("q_min (nm⁻¹)", self._q_min)
         form.addRow("q_max (nm⁻¹)", self._q_max)
         ctrl.addWidget(self._mixture_params)
-        self._lbl_init_hint = QLabel("")
-        self._lbl_init_hint.setWordWrap(True)
-        self._lbl_init_hint.setStyleSheet("color: #555;")
-        ctrl.addWidget(self._lbl_init_hint)
         self._confirm = QPushButton("Confirm")
         self._confirm.clicked.connect(lambda: self._on_confirm(quiet=False))
         ctrl.addWidget(self._confirm)
