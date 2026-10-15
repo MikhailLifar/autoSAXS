@@ -22,9 +22,14 @@ from PyQt5.QtWidgets import (
 
 from ...liveview.ui.panels.right.polydisperse.plots import MixtureDistPlot
 from ...ui.passport_format import format_display_number
-from ...ui.style import COLOR_MUTED_TEXT, configure_readonly_copyable_table
+from ...ui.style import COLOR_ACCENT, COLOR_MUTED_TEXT, configure_readonly_copyable_table
 from ..catalogs.mixture_models import MixtureModelCatalog, MixtureModelEntry, build_mixture_model_catalog
 from ..plots import MplViewerDialog
+
+# Match ``QListWidget::item:selected`` / panel chrome in ``ui/style.py`` (dark theme).
+_COLOR_SELECTION_SURFACE = "#1b2a3d"
+_COLOR_PANEL_BORDER = "#2a3646"
+_PREVIEW_OBJECT_NAME = "mixtureSelectablePreview"
 
 
 def _caption_table(rows: list[tuple[str, str]], parent: Optional[QWidget] = None) -> QTableWidget:
@@ -45,7 +50,7 @@ def _caption_table(rows: list[tuple[str, str]], parent: Optional[QWidget] = None
 
 
 class _SelectablePreview(QFrame):
-    """Clickable mixture/component preview with optional 3-row caption table."""
+    """Left-column mixture/component preview: click selects the right large view only."""
 
     def __init__(
         self,
@@ -56,6 +61,7 @@ class _SelectablePreview(QFrame):
     ) -> None:
         super().__init__(parent)
         self.view_key = view_key
+        self.setObjectName(_PREVIEW_OBJECT_NAME)
         self.setFrameShape(QFrame.StyledPanel)
         self.setCursor(Qt.PointingHandCursor)
         self._selected = False
@@ -74,13 +80,12 @@ class _SelectablePreview(QFrame):
         self._caption_lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._caption_host, 0)
         self._on_select = None
-        self._on_enlarge = None
         self.plot.mpl_connect("button_press_event", self._on_plot_click)
         self._apply_chrome()
 
-    def set_handlers(self, *, on_select, on_enlarge) -> None:
+    def set_handlers(self, *, on_select) -> None:
+        """Wire select-only; left previews must not open the standard enlarge viewer."""
         self._on_select = on_select
-        self._on_enlarge = on_enlarge
 
     def set_caption_rows(self, rows: list[tuple[str, str]]) -> None:
         while self._caption_lay.count():
@@ -96,13 +101,20 @@ class _SelectablePreview(QFrame):
         self._apply_chrome()
 
     def _apply_chrome(self) -> None:
+        # Object-name scoped so QSS does not cascade onto child QTableWidget (also a QFrame)
+        # or the matplotlib canvas — light ``QFrame { background: … }`` was whitening
+        # captions (invisible light text) and washing the selected card.
         if self._selected:
             self.setStyleSheet(
-                "QFrame { border: 2px solid #3a7bd5; border-radius: 4px; background: #eef5fc; }"
+                f"QFrame#{_PREVIEW_OBJECT_NAME} {{"
+                f" border: 2px solid {COLOR_ACCENT}; border-radius: 4px;"
+                f" background: {_COLOR_SELECTION_SURFACE}; }}"
             )
         else:
             self.setStyleSheet(
-                "QFrame { border: 1px solid #c8d0da; border-radius: 4px; background: transparent; }"
+                f"QFrame#{_PREVIEW_OBJECT_NAME} {{"
+                f" border: 1px solid {_COLOR_PANEL_BORDER}; border-radius: 4px;"
+                f" background: transparent; }}"
             )
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
@@ -115,11 +127,6 @@ class _SelectablePreview(QFrame):
             return
         if self._on_select is not None:
             self._on_select(self.view_key)
-        # Double-duty: single click selects; use dblclick-ish via modifiers? Spec says
-        # all previews clickable → open standard curve viewer. Open enlarge on click
-        # after select (same pattern as modeling plot enlarge).
-        if self._on_enlarge is not None:
-            self._on_enlarge(self.view_key)
 
 
 class MixtureAdvancedViewerDialog(QDialog):
@@ -264,7 +271,7 @@ class MixtureAdvancedViewerDialog(QDialog):
         row = entry.row
 
         mix = _SelectablePreview(title="Mixture D(R)", view_key="mixture", parent=self._left_body)
-        mix.set_handlers(on_select=self._select_view, on_enlarge=self._enlarge_view)
+        mix.set_handlers(on_select=self._select_view)
         mix.plot.plot_from_model_row(row, r_min_ang=r_min, r_max_ang=r_max, label=entry.csv_label)
         # Mixture caption: n_phases / dist / BIC_χ²
         mix_rows = []
@@ -286,7 +293,7 @@ class MixtureAdvancedViewerDialog(QDialog):
                 view_key=key,
                 parent=self._left_body,
             )
-            card.set_handlers(on_select=self._select_view, on_enlarge=self._enlarge_view)
+            card.set_handlers(on_select=self._select_view)
             self._plot_component(card.plot, c, label=f"φ{c['index']}")
             card.set_caption_rows(
                 [
