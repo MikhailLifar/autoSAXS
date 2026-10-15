@@ -12,6 +12,7 @@ from .dam_models import (
 )
 from .dammif_best import best_dammif_cif
 from .denss_models import DenssModelCatalog, DenssModelEntry, build_denss_model_catalog
+from .mixture_models import MixtureModelCatalog, MixtureModelEntry, build_mixture_model_catalog
 
 __all__ = [
     "OVERLAP_RGBA",
@@ -19,9 +20,12 @@ __all__ = [
     "DamModelEntry",
     "DenssModelCatalog",
     "DenssModelEntry",
+    "MixtureModelCatalog",
+    "MixtureModelEntry",
     "best_dammif_cif",
     "build_dam_model_catalog",
     "build_denss_model_catalog",
+    "build_mixture_model_catalog",
     "prepare_overlap_items",
     "read_cif_xyz_occupancy",
 ]

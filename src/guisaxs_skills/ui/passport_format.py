@@ -85,6 +85,28 @@ def format_display_number(value: Union[float, int, str, None]) -> str:
 
 
 
+# Explicit MIXTURE / polydisperse quantity display labels (no snake_case auto-proxy).
+# Plain = Unicode for QTableWidget; *_HTML = Qt rich-text for QLabel tables.
+BIC_CHI2 = "BIC_χ²"
+BIC_CHI2_HTML = "BIC<sub>χ²</sub>"
+R2_LOG = "R²ₗₒᵍ"
+R2_LOG_HTML = "R<sup>2</sup><sub>log</sub>"
+
+_QUANTITY_PLAIN_TO_HTML: dict[str, str] = {
+    BIC_CHI2: BIC_CHI2_HTML,
+    R2_LOG: R2_LOG_HTML,
+}
+
+# Machine / legacy tokens → final display (call sites should prefer BIC_CHI2 / R2_LOG).
+_MACHINE_METRIC_PLAIN: dict[str, str] = {
+    "BIC_chi2": BIC_CHI2,
+    "bic_chi2": BIC_CHI2,
+    "BIC_χ²": BIC_CHI2,
+    "R2_log": R2_LOG,
+    "R²_log": R2_LOG,
+    "R2_LOG": R2_LOG,
+}
+
 # True Unicode subscripts where available; modifier-letter fallbacks for letters
 # with no dedicated subscript code point (b/c/d/f/g/q/w/y/z).
 _SUBSCRIPT_CHARS: dict[str, str] = {
@@ -114,11 +136,17 @@ def format_metric_label(name: str) -> str:
     """
     Passport/quantity metric label with undertext.
 
-    ``_`` introduces a subscript segment (``s_min`` → sₘᵢₙ, ``R_g`` → Rᵍ,
-    ``I_0`` → I₀). Only for passport-style quantity labels — do not pass file
-    paths, snake_case code ids, or menu names.
+    Known MIXTURE metrics (``BIC_chi2``, ``R2_log``) use explicit Unicode constants.
+    Otherwise ``_`` introduces a subscript segment (``s_min`` → sₘᵢₙ). Only for
+    passport-style quantity labels — do not pass file paths or menu names.
     """
-    token = str(name or "").strip().replace("-", "_")
+    token = str(name or "").strip()
+    known = _MACHINE_METRIC_PLAIN.get(token) or _MACHINE_METRIC_PLAIN.get(token.replace("-", "_"))
+    if known is not None:
+        return known
+    if token in _QUANTITY_PLAIN_TO_HTML:
+        return token
+    token = token.replace("-", "_")
     if not token or "_" not in token:
         return token
     base, rest = token.split("_", 1)
@@ -131,16 +159,26 @@ def format_metric_label_html(name: str) -> str:
     """
     Rich-text passport metric label (``s_min`` → s<sub>min</sub>).
 
-    Same underscore→undertext rule as ``format_metric_label``; for QLabel HTML only.
+    Known quantity Unicode labels (``BIC_CHI2``, ``R2_LOG``, …) upgrade to
+    ``<sub>`` / ``<sup>`` rich text; otherwise same underscore rule as plain.
     """
     import html as html_mod
 
+    plain = format_metric_label(name)
+    html = _QUANTITY_PLAIN_TO_HTML.get(plain)
+    if html is not None:
+        return html
     token = str(name or "").strip().replace("-", "_")
     if not token or "_" not in token:
-        return html_mod.escape(token)
+        return html_mod.escape(plain or token)
     base, rest = token.split("_", 1)
     if not rest:
         return html_mod.escape(base)
+    # Prefer explicit plain when machine key was remapped (avoid double-mangling).
+    if plain != token and plain in _QUANTITY_PLAIN_TO_HTML:
+        return _QUANTITY_PLAIN_TO_HTML[plain]
+    if plain != token:
+        return html_mod.escape(plain)
     return f"{html_mod.escape(base)}<sub>{html_mod.escape(rest)}</sub>"
 
 

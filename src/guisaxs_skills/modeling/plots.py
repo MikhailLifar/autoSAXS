@@ -42,6 +42,10 @@ class FitResidualsPlot(FigureCanvas):
         if not fir_path or not os.path.isfile(fir_path):
             self.clear_plot()
             return
+        # MIXTURE .fit is 3-col (q_Å, I_exp, I_fit) — not DAMMIF/DENSS .fir layout.
+        if str(fir_path).lower().endswith(".fit"):
+            self.plot_from_mixture_fit(fir_path)
+            return
         try:
             from autosaxs.core.utils import ensure_q_nm
 
@@ -68,13 +72,95 @@ class FitResidualsPlot(FigureCanvas):
             return
         qq = q[m]
         resid = (i_exp[m] - i_fit[m]) / err[m]
-        self._click_path = fir_path
+        self._draw_residuals(fir_path, qq, resid, ylabel=r"$\Delta I/\sigma$")
+
+    def plot_from_mixture_fit(self, fit_path: str) -> None:
+        """
+        Residual plot for ATSAS MIXTURE ``.fit`` (q, I_exp, I_fit).
+
+        σ is taken from the sibling ``.dat`` when present (same q grid);
+        otherwise raw ΔI is shown.
+        """
+        if not fit_path or not os.path.isfile(fit_path):
+            self.clear_plot()
+            return
+        try:
+            from autosaxs.skill.model_mixture.mixture import parse_mixture_fit_file
+
+            parsed = parse_mixture_fit_file(fit_path)
+        except Exception:
+            self.clear_plot()
+            return
+        if parsed is None:
+            self.clear_plot()
+            return
+        q, i_exp, i_fit = (np.asarray(a, dtype=float) for a in parsed)
+        err = self._sigma_for_mixture_fit(fit_path, q)
+        m = np.isfinite(q) & np.isfinite(i_exp) & np.isfinite(i_fit)
+        if err is not None:
+            m = m & np.isfinite(err) & (err > 0)
+        if not m.any():
+            self.clear_plot()
+            return
+        qq = q[m]
+        if err is not None:
+            resid = (i_exp[m] - i_fit[m]) / err[m]
+            ylabel = r"$\Delta I/\sigma$"
+        else:
+            resid = i_exp[m] - i_fit[m]
+            ylabel = r"$\Delta I$"
+        self._draw_residuals(fit_path, qq, resid, ylabel=ylabel)
+
+    @staticmethod
+    def _sigma_for_mixture_fit(fit_path: str, q_fit: np.ndarray) -> Optional[np.ndarray]:
+        """Load σ from sibling exp.dat (or any *.dat) and interpolate onto fit q."""
+        from pathlib import Path
+
+        sd = Path(fit_path).parent
+        candidates = []
+        stem = Path(fit_path).stem
+        preferred = sd / f"{stem}.dat"
+        if preferred.is_file():
+            candidates.append(preferred)
+        candidates.extend(sorted(p for p in sd.glob("*.dat") if p != preferred))
+        for dat in candidates:
+            try:
+                data = np.loadtxt(dat, comments="#")
+            except Exception:
+                try:
+                    data = np.loadtxt(dat, skiprows=1)
+                except Exception:
+                    continue
+            if data.ndim == 1:
+                data = data.reshape(1, -1)
+            if data.shape[1] < 3:
+                continue
+            q_dat = np.asarray(data[:, 0], dtype=float)
+            sig = np.asarray(data[:, 2], dtype=float)
+            # MIXTURE workdir .dat is already nm⁻¹ (skill writes q in nm⁻¹).
+            if q_dat.size < 2 or not np.isfinite(sig).any():
+                continue
+            try:
+                return np.interp(np.asarray(q_fit, dtype=float), q_dat, sig)
+            except Exception:
+                continue
+        return None
+
+    def _draw_residuals(
+        self,
+        path: str,
+        qq: np.ndarray,
+        resid: np.ndarray,
+        *,
+        ylabel: str,
+    ) -> None:
+        self._click_path = path
         self._ax.clear()
         self._ax.scatter(qq, resid, s=8, alpha=0.7)
         self._ax.axhline(0.0, color="0.5", lw=0.8)
         self._ax.set_xlim(float(qq.min()), float(qq.max()))
         self._ax.set_xlabel("q (nm⁻¹)")
-        self._ax.set_ylabel(r"$\Delta I/\sigma$")
+        self._ax.set_ylabel(ylabel)
         self._ax.grid(True, alpha=0.2)
         self._fig.tight_layout()
         self.draw_idle()

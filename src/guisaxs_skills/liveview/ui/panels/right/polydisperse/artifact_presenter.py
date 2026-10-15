@@ -352,12 +352,17 @@ class PolydisperseArtifactPresenter:
             self._window.mixture_pane.set_status("Empty mixture results", poor=True)
             return
         best = str(result.get("best_label") or "").strip()
-        if not best and "BIC_log" in df.columns:
+        if not best:
             try:
-                idx = df["BIC_log"].astype(float).idxmin()
-                best = str(df.loc[idx, "label"])
+                from autosaxs.skill.model_mixture.mixture import select_best_mixture_row
+
+                picked = select_best_mixture_row(df.to_dict(orient="records"))
+                if picked is not None:
+                    best = str(picked.get("label") or "")
             except Exception:
-                best = str(df.iloc[0]["label"])
+                best = ""
+        if not best and len(df):
+            best = str(df.iloc[0]["label"])
         labels: list[str] = []
         rows: dict[str, dict[str, Any]] = {}
         fit_paths: dict[str, str] = {}
