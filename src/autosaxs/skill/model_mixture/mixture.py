@@ -1,6 +1,6 @@
 """
 MIXTURE-based fitting (ATSAS): 6 runs (1-, 2-, 3-phase × Gaussian, Schultz–Zimm; SPHERE-only).
-Selects model with lowest BIC_log; writes optional comparison plots, distribution plot, and results CSV.
+Selects model with lowest BIC_chi2; writes optional comparison plots, distribution plot, and results CSV.
 Invoked per selected profile in second (slow) processing.
 """
 
@@ -522,6 +522,27 @@ def _plot_distributions(results: list[dict], out_path: Path, *, r_min: float, r_
     plt.close(fig)
 
 
+def _spheres_from_model(model: dict) -> list[dict]:
+    """Normalize spheres list from a fit-result dict or CSV row."""
+    spheres = model.get("spheres")
+    if spheres:
+        return list(spheres)
+    out: list[dict] = []
+    for i in range(1, 8):
+        vol = model.get(f"vol_{i}")
+        rout = model.get(f"Rout_Ang_{i}")
+        drout = model.get(f"dRout_Ang_{i}")
+        if vol is None or rout is None or drout is None:
+            break
+        try:
+            if not (np.isfinite(float(vol)) and np.isfinite(float(rout)) and np.isfinite(float(drout))):
+                break
+        except (TypeError, ValueError):
+            break
+        out.append({"vol": float(vol), "Rout": float(rout), "dRout": float(drout)})
+    return out
+
+
 def distribution_curve_for_model(
     model: dict,
     *,
@@ -535,35 +556,70 @@ def distribution_curve_for_model(
     ``model`` may be a fit-result dict (with ``spheres`` list) or a CSV row
     (``dist``, ``vol_i``, ``Rout_Ang_i``, ``dRout_Ang_i``).
     """
+    comps = component_distribution_curves(
+        model, r_min_ang=r_min_ang, r_max_ang=r_max_ang, n_points=n_points
+    )
+    if not comps:
+        return None, None
+    R_nm = comps[0]["R_nm"]
+    total = np.zeros_like(R_nm, dtype=float)
+    for c in comps:
+        total = total + np.asarray(c["P"], dtype=float)
+    return R_nm, total
+
+
+def component_distribution_curves(
+    model: dict,
+    *,
+    r_min_ang: float = 5.0,
+    r_max_ang: float = 120.0,
+    n_points: int = 600,
+) -> list[dict[str, Any]]:
+    """
+    Per-component P(R) curves for one MIXTURE model.
+
+    Each item: ``index`` (1-based), ``R_nm``, ``P``, ``vol``, ``Rout_nm``, ``dRout_nm``.
+    """
     r_lo = max(0.0, float(r_min_ang))
     r_hi = max(r_lo + 1.0, float(r_max_ang))
     R_plot_Ang = np.linspace(max(1.0, r_lo), r_hi, int(n_points))
     R_plot_nm = R_plot_Ang / 10.0
     dist_name = str(model.get("dist") or model.get("dist_name") or "?")
-    spheres = model.get("spheres")
+    spheres = _spheres_from_model(model)
     if not spheres:
-        spheres = []
-        for i in range(1, 8):
-            vol = model.get(f"vol_{i}")
-            rout = model.get(f"Rout_Ang_{i}")
-            drout = model.get(f"dRout_Ang_{i}")
-            if vol is None or rout is None or drout is None:
-                break
-            try:
-                if not (np.isfinite(float(vol)) and np.isfinite(float(rout)) and np.isfinite(float(drout))):
-                    break
-            except (TypeError, ValueError):
-                break
-            spheres.append({"vol": float(vol), "Rout": float(rout), "dRout": float(drout)})
-    if not spheres:
-        return None, None
-    total = np.zeros_like(R_plot_Ang)
-    for s in spheres:
-        R0, dR, vol = s["Rout"], s["dRout"], s["vol"]
+        return []
+    out: list[dict[str, Any]] = []
+    for i, s in enumerate(spheres, start=1):
+        R0, dR, vol = float(s["Rout"]), float(s["dRout"]), float(s["vol"])
         y = gaussian_pdf(R_plot_Ang, R0, dR) if dist_name == "Gauss" else schultz_pdf(R_plot_Ang, R0, dR)
         y = y / (np.trapezoid(y, R_plot_Ang) + 1e-20) * vol
-        total += y
-    return R_plot_nm, total
+        out.append(
+            {
+                "index": i,
+                "R_nm": R_plot_nm.copy(),
+                "P": np.asarray(y, dtype=float),
+                "vol": vol,
+                "Rout_nm": R0 / 10.0,
+                "dRout_nm": dR / 10.0,
+            }
+        )
+    return out
+
+
+def select_best_mixture_row(rows: list[dict]) -> dict | None:
+    """Pick the row with lowest finite ``BIC_chi2`` (fallback: first row)."""
+    if not rows:
+        return None
+
+    def _score(r: dict) -> float:
+        try:
+            v = float(r.get("BIC_chi2"))
+        except (TypeError, ValueError):
+            return float("inf")
+        return v if np.isfinite(v) else float("inf")
+
+    best = min(rows, key=lambda r: (_score(r), str(r.get("label") or "")))
+    return best
 
 
 def _save_results_csv(results: list[dict], out_path: Path) -> None:
@@ -607,7 +663,7 @@ def fit_mixtures(
 ) -> dict[str, Any] | None:
     """
     Run 6 MIXTURE fits (1-, 2-, 3-phase × Gaussian, Schultz–Zimm; SPHERE-only),
-    select model with lowest BIC_log, write comparison plot, distribution plot, results CSV.
+    select model with lowest BIC_chi2, write comparison plot, distribution plot, results CSV.
     MIXTURE is invoked as the command `mixture` from the terminal (PATH).
 
     profile_path: path to 1D subtracted .dat (q in nm⁻¹, intensity, sigma).
@@ -619,8 +675,9 @@ def fit_mixtures(
     plot_logI_logq: if True, write log I vs log q comparison plot (fit labels show BIC_log).
     plot_logI_q: if True, write log I vs q comparison plot (linear q, log I; fit labels show chi2).
 
-    Returns dict with keys: output_subdir (path), best_label, BIC_log, comparison_path, comparison_loglog_path,
-        comparison_log_path, distributions_path, results_csv_path; or None on failure.
+    Returns dict with keys: output_subdir (path), best_label, BIC_chi2, BIC_log, best_fit_path,
+        comparison_path, comparison_loglog_path, comparison_log_path, distributions_path,
+        results_csv_path; or None on failure.
     """
     output_dir = Path(output_dir)
     profile_path = Path(profile_path)
@@ -648,17 +705,29 @@ def fit_mixtures(
         and results_csv_path.exists()
     ):
         df = pd.read_csv(results_csv_path)
-        if "BIC_log" in df.columns:
-            idx = df["BIC_log"].idxmin()
-            best_label = str(df.loc[idx, "label"])
-            bic_log = float(df.loc[idx, "BIC_log"])
-        else:
-            best_label = str(df.loc[0, "label"]) if len(df) else ""
+        rows = df.to_dict(orient="records")
+        best_row = select_best_mixture_row(rows) or {}
+        best_label = str(best_row.get("label") or (df.loc[0, "label"] if len(df) else "") or "")
+        try:
+            bic_chi2 = float(best_row.get("BIC_chi2", np.nan))
+        except (TypeError, ValueError):
+            bic_chi2 = np.nan
+        try:
+            bic_log = float(best_row.get("BIC_log", np.nan))
+        except (TypeError, ValueError):
             bic_log = np.nan
+        best_fit = ""
+        if best_label:
+            wd = work_base / best_label
+            fits = sorted(wd.glob("*.fit")) if wd.is_dir() else []
+            if fits:
+                best_fit = str(fits[0])
         return {
             "output_subdir": str(work_base),
             "best_label": best_label,
+            "BIC_chi2": bic_chi2,
             "BIC_log": bic_log,
+            "best_fit_path": best_fit,
             "comparison_path": str(comparison_path) if plot_I_q else "",
             "comparison_loglog_path": str(comparison_loglog_path) if plot_logI_logq else "",
             "comparison_log_path": str(comparison_log_path) if plot_logI_q else "",
@@ -749,11 +818,19 @@ def fit_mixtures(
     _plot_distributions(results, distributions_path, r_min=r_min, r_max=r_max)
     _save_results_csv(results, results_csv_path)
 
-    best = min(results, key=lambda r: (np.nan if not np.isfinite(r.get("BIC_log", np.nan)) else r["BIC_log"], r["label"]))
+    best = select_best_mixture_row(results) or results[0]
+    best_fit = ""
+    wd = best.get("work_dir")
+    if wd is not None:
+        fits = sorted(Path(wd).glob("*.fit"))
+        if fits:
+            best_fit = str(fits[0])
     return {
         "output_subdir": str(work_base),
         "best_label": best["label"],
+        "BIC_chi2": best.get("BIC_chi2", np.nan),
         "BIC_log": best.get("BIC_log", np.nan),
+        "best_fit_path": best_fit,
         "comparison_path": str(comparison_path) if plot_I_q else "",
         "comparison_loglog_path": str(comparison_loglog_path) if plot_logI_logq else "",
         "comparison_log_path": str(comparison_log_path) if plot_logI_q else "",

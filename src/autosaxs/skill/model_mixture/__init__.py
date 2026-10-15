@@ -572,7 +572,7 @@ def _model_mixture_paths(
     csvb = os.path.basename(result["results_csv_path"])
     md_parts = [
         "### MIXTURE (multi-phase spheres)\n",
-        f"Best model: **{result.get('best_label', '')}**; BIC_log = {result.get('BIC_log')}\n",
+        f"Best model: **{result.get('best_label', '')}**; BIC_χ² = {result.get('BIC_chi2')}\n",
     ]
     if comp:
         md_parts.append(f"![Comparison I(q)]({comp})\n")
@@ -583,7 +583,7 @@ def _model_mixture_paths(
             "path": csvb,
             "format": "csv",
             "row": 0,
-            "columns": ["label", "BIC_log", "n_phases"],
+            "columns": ["label", "BIC_chi2", "n_phases"],
         },
     ]
     if comp:
@@ -616,6 +616,8 @@ def _model_mixture_paths(
         run_params["init_poly_nm"] = _format_float_seq(
             [_angstrom_to_nm(v) for v in init_poly_ang]
         )
+    run_params["best_label"] = str(result.get("best_label") or "")
+    run_params["BIC_chi2"] = result.get("BIC_chi2")
     run_params_path = os.path.join(dest_dir, "model_mixture_run_params.yml")
     with open(run_params_path, "w", encoding="utf-8") as fp:
         yaml.dump(run_params, fp, default_flow_style=False)
@@ -627,6 +629,8 @@ def _model_mixture_paths(
         "distributions_path": result["distributions_path"],
         "results_csv_path": result["results_csv_path"],
         "best_label": result.get("best_label", ""),
+        "BIC_chi2": result.get("BIC_chi2", ""),
+        "best_fit_path": result.get("best_fit_path", ""),
         "r_min_nm": _angstrom_to_nm(mixture_params["r_min"]),
         "r_max_nm": _angstrom_to_nm(mixture_params["r_max"]),
         "poly_min_nm": _angstrom_to_nm(mixture_params["poly_min"]),

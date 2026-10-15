@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (
 
 from ...liveview.ui.panels.right.polydisperse.plots import MixtureDistPlot, MixtureFitPlot
 from ...ui.os_open import open_path_in_file_manager
+from ...ui.passport_format import BIC_CHI2, R2_LOG
 from ...ui.passport_table import PassportTableWidget
 from ...ui.path_field import PathField
 from ...ui.in_progress_overlay import InProgressOverlay
@@ -47,6 +48,7 @@ from ..run_params import (
 )
 from ..progress_parse import ProgressStderrBuffer
 from ..runtime import ModelingRuntime
+from .mixture_viewer import MixtureAdvancedViewerDialog
 
 
 class DrModelingWindow(QMainWindow):
@@ -59,7 +61,8 @@ class DrModelingWindow(QMainWindow):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("GUISAXS Distribution Modeling")
-        self.resize(1100, 720)
+        # Wider default so I(q) + ΔI share the bottom row without crushing the residual pane.
+        self.resize(1480, 780)
         self._ipc = ipc
         self._ctx = ModelingContext()
         self._runtime = ModelingRuntime(workdir=Path.cwd(), parent=self)
@@ -71,6 +74,11 @@ class DrModelingWindow(QMainWindow):
         self._catalog = MixtureModelCatalog()
         self._analysis_root: Optional[Path] = None
         self._plot_clicks = ModelingPlotClickRouter(self)
+        self._mixture_viewer: Optional[MixtureAdvancedViewerDialog] = None
+        self._last_mixture_subdir = ""
+        self._last_best_label = ""
+        self._last_r_min_ang = 5.0
+        self._last_r_max_ang = 120.0
         self._build_ui()
         install_context_freeze(self)
         # First bind may seed session-owned run knobs; later IPC pushes must not.
@@ -171,6 +179,8 @@ class DrModelingWindow(QMainWindow):
         """Wipe fit/Δ/D(R)/passport so a sample without MIXTURE results is not misleading."""
         self._rows = []
         self._catalog = MixtureModelCatalog()
+        self._last_mixture_subdir = ""
+        self._last_best_label = ""
         self._fit_combo.blockSignals(True)
         try:
             self._fit_combo.clear()
@@ -214,7 +224,9 @@ class DrModelingWindow(QMainWindow):
                 "output_subdir": out,
                 "results_csv_path": str(csv),
                 "best_label": str(params.get("best_label") or ""),
-                "BIC_log": params.get("BIC_log"),
+                "BIC_chi2": params.get("BIC_chi2"),
+                "r_min_nm": params.get("r_min_nm"),
+                "r_max_nm": params.get("r_max_nm"),
             }
         )
 
@@ -496,11 +508,36 @@ class DrModelingWindow(QMainWindow):
                 out = str(Path(csv_path).parent)
         if not out:
             out = (self._pf_outdir.text() or "").strip()
+        if out:
+            resolved = resolve_sample_modeling_dir(out, profile_path=self._pf_profile.text() or "")
+            if resolved:
+                self._pf_outdir.set_text(str(resolved))
+                out = str(resolved)
+            self._last_mixture_subdir = out
+        try:
+            if result.get("r_min_nm") is not None:
+                self._last_r_min_ang = float(result["r_min_nm"]) * 10.0
+            if result.get("r_max_nm") is not None:
+                self._last_r_max_ang = float(result["r_max_nm"]) * 10.0
+            elif self._sp_r_max.value() > 0:
+                self._last_r_max_ang = float(self._sp_r_max.value()) * 10.0
+        except (TypeError, ValueError):
+            pass
         best_label = str(result.get("best_label") or "").strip()
-        self._catalog = build_mixture_model_catalog(out, best_label=best_label)
+        self._last_best_label = best_label
+        self._catalog = build_mixture_model_catalog(
+            out,
+            best_label=best_label,
+            r_min_ang=self._last_r_min_ang,
+            r_max_ang=self._last_r_max_ang,
+        )
+        if self._catalog.best_key:
+            self._last_best_label = self._catalog.best_key
         self._rows = [dict(e.row) for e in self._catalog.entries]
         self._sync_fit_combo(select_key=self._catalog.best_key)
-        self._open_folder_btn.setEnabled(bool(self._catalog.output_subdir) and Path(self._catalog.output_subdir).is_dir())
+        self._open_folder_btn.setEnabled(
+            bool(self._catalog.output_subdir) and Path(self._catalog.output_subdir).is_dir()
+        )
         self._show_catalog_entry(self._catalog.best())
 
     def _sync_fit_combo(self, *, select_key: str = "") -> None:
@@ -508,10 +545,7 @@ class DrModelingWindow(QMainWindow):
         try:
             self._fit_combo.clear()
             for entry in self._catalog.entries:
-                tip = entry.label
-                if entry.bic_log is not None:
-                    tip = f"{entry.label}  (BIC_log={entry.bic_log:.4g})"
-                self._fit_combo.addItem(tip, entry.key)
+                self._fit_combo.addItem(entry.label, entry.key)
             self._fit_combo.setEnabled(bool(self._catalog.entries))
             if select_key:
                 for i in range(self._fit_combo.count()):
@@ -540,21 +574,27 @@ class DrModelingWindow(QMainWindow):
         if fit and os.path.isfile(fit):
             self._fit.plot_from_fit(fit)
             try:
-                self._delta.plot_from_fir(fit)
+                self._delta.plot_from_mixture_fit(fit)
             except Exception:
                 pass
         row = dict(getattr(entry, "row", {}) or {})
         if row:
-            self._dist.plot_from_model_row(row, label=str(getattr(entry, "label", "") or "fit"))
+            self._dist.plot_from_model_row(
+                row,
+                r_min_ang=float(getattr(self._catalog, "r_min_ang", self._last_r_min_ang) or self._last_r_min_ang),
+                r_max_ang=float(getattr(self._catalog, "r_max_ang", self._last_r_max_ang) or self._last_r_max_ang),
+                label=str(getattr(entry, "csv_label", None) or getattr(entry, "label", "") or "fit"),
+            )
+        selected = str(getattr(entry, "csv_label", None) or getattr(entry, "key", "") or "")
         self._passport.set_rows(
             self._passport_rows_for_result(
                 {
                     "best_label": self._catalog.best_key,
-                    "BIC_log": getattr(entry, "bic_log", None),
-                    "chi2": getattr(entry, "chi2", None),
+                    "BIC_chi2": getattr(entry, "bic_chi2", None),
+                    "chi2": row.get("chi2"),
                 },
                 row=row,
-                selected_label=str(getattr(entry, "label", "") or ""),
+                selected_label=selected,
             )
         )
 
@@ -588,9 +628,12 @@ class DrModelingWindow(QMainWindow):
             rows.append((metric, f"{v:.4g}", "ok"))
 
         src = row or {}
-        _add("BIC_log", src.get("BIC_log") if src.get("BIC_log") is not None else result.get("BIC_log"))
+        bic = result.get("BIC_chi2", src.get("BIC_chi2"))
+        if bic is None:
+            bic = result.get("BIC_log", src.get("BIC_log"))
+        _add(BIC_CHI2, bic)
         _add("χ²", src.get("chi2") if src.get("chi2") is not None else result.get("chi2"))
-        _add("R²_log", src.get("R2_log"))
+        _add(R2_LOG, src.get("R2_log"))
         return rows
 
     def _enlarge_fit(self, ev: object) -> None:
@@ -618,7 +661,7 @@ class DrModelingWindow(QMainWindow):
             return
 
         def _populate(plot: FitResidualsPlot) -> None:
-            plot.plot_from_fir(path)
+            plot.plot_from_mixture_fit(path)
 
         self._plot_clicks.open(
             key="delta",
@@ -628,27 +671,29 @@ class DrModelingWindow(QMainWindow):
         )
 
     def _enlarge_dist(self, ev: object) -> None:
+        """Open the advanced MIXTURE results viewer (model combo + components)."""
         if getattr(ev, "inaxes", None) is None or int(getattr(ev, "button", 0)) != 1:
             return
-        payload = getattr(self._dist, "_click_payload", None)
-        if not isinstance(payload, dict):
+        subdir = self._last_mixture_subdir or (self._pf_outdir.text() or "").strip()
+        if not subdir or not os.path.isdir(subdir):
             return
-        row = payload.get("row") or {}
-        r_min = float(payload.get("r_min_ang") or 5.0)
-        r_max = float(payload.get("r_max_ang") or 120.0)
-        label = str(payload.get("label") or "")
-
-        def _populate(plot: MixtureDistPlot) -> None:
-            plot.plot_from_model_row(
-                row,
-                r_min_ang=r_min,
-                r_max_ang=r_max,
-                label=label,
-            )
-
-        self._plot_clicks.open(
-            key="dist",
-            title=f"D(R) — {label or 'MIXTURE'}",
-            make_plot=lambda: MixtureDistPlot(figsize=(8, 6)),
-            populate=_populate,
+        if not (Path(subdir) / "mixture_results.csv").is_file():
+            return
+        payload = getattr(self._dist, "_click_payload", None)
+        r_min = self._last_r_min_ang
+        r_max = self._last_r_max_ang
+        if isinstance(payload, dict):
+            try:
+                r_min = float(payload.get("r_min_ang") or r_min)
+                r_max = float(payload.get("r_max_ang") or r_max)
+            except (TypeError, ValueError):
+                pass
+        if self._mixture_viewer is None:
+            self._mixture_viewer = MixtureAdvancedViewerDialog(self)
+        self._mixture_viewer.present(
+            subdir=subdir,
+            best_label=self._last_best_label,
+            r_min_ang=r_min,
+            r_max_ang=r_max,
+            select_key=self._last_best_label,
         )

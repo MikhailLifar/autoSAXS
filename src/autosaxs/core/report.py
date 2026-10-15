@@ -359,8 +359,9 @@ def build_report_pdf(report_data: Dict[str, Any], output_path: str) -> None:
         subtracted_plot_path: str — path to sub_<basename>.png
         descriptors_table: list of (label, value) or dict — Rg, I(0), Quality, Dmax (nm), MW from Rg (kDa), MW from DATMW (kDa)
         plot_figures: dict with keys guinier, kratky, loglog (paths) — plot figures only (no I vs q)
-        mixture_best_label: str — best MIXTURE model label (lowest BIC_log)
-        mixture_BIC_log: float — BIC on log(I) for best model
+        mixture_best_label: str — best MIXTURE model label (lowest BIC_chi2)
+        mixture_BIC_chi2: float — BIC on χ² for best model
+        mixture_BIC_log: float — legacy BIC on log(I); preferred key is mixture_BIC_chi2
         mixture_comparison_figure_path: str — MIXTURE comparison plot (I vs q and log I vs q)
         mixture_distributions_figure_path: str — MIXTURE size distributions (R in nm)
         mixture_results_csv_path: str — MIXTURE results CSV (optional summary table)
@@ -453,11 +454,14 @@ def build_report_pdf(report_data: Dict[str, Any], output_path: str) -> None:
             if path and os.path.isfile(path):
                 _add_image_if_exists(story, path, f"Plot {i + 1}", temp_paths, styles)
 
-    # (5b) Mixture — best model (lowest BIC_log), comparison plot, distribution plot, summary
+    # (5b) Mixture — best model (lowest BIC_chi2), comparison plot, distribution plot, summary
     mixture_comp = report_data.get('mixture_comparison_figure_path')
     mixture_dist = report_data.get('mixture_distributions_figure_path')
     mixture_best = report_data.get('mixture_best_label')
-    mixture_bic = report_data.get('mixture_BIC_log')
+    mixture_bic = report_data.get('mixture_BIC_chi2')
+    if mixture_bic is None:
+        mixture_bic = report_data.get('mixture_BIC_log')
+    bic_metric = "BIC_χ²" if report_data.get('mixture_BIC_chi2') is not None else "BIC_log"
     if mixture_best is not None or mixture_bic is not None:
         try:
             if mixture_bic is None:
@@ -468,7 +472,7 @@ def build_report_pdf(report_data: Dict[str, Any], output_path: str) -> None:
         except (TypeError, ValueError):
             bic_str = "—"
         story.append(Paragraph("Mixture (MIXTURE, spheres)", styles['Heading2']))
-        story.append(Paragraph(f"Best model: {mixture_best or '—'}; BIC_log: {bic_str}", styles['Normal']))
+        story.append(Paragraph(f"Best model: {mixture_best or '—'}; {bic_metric}: {bic_str}", styles['Normal']))
         story.append(Spacer(1, 0.3 * cm))
     if mixture_comp and os.path.isfile(mixture_comp):
         _add_image_if_exists(story, mixture_comp, "Mixture: comparison (I vs q, log I vs q)", temp_paths, styles)

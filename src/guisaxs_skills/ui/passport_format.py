@@ -98,6 +98,8 @@ R_MIN = "rₘᵢₙ"
 R_MAX = "rₘₐₓ"
 D_MAX = "Dₘₐₓ"
 R_MAX_CAP = "Rₘₐₓ"
+BIC_CHI2 = "BIC_χ²"
+R2_LOG = "R²ₗₒᵍ"
 
 S_MIN_HTML = "s<sub>min</sub>"
 S_MAX_HTML = "s<sub>max</sub>"
@@ -107,6 +109,8 @@ R_MIN_HTML = "r<sub>min</sub>"
 R_MAX_HTML = "r<sub>max</sub>"
 D_MAX_HTML = "D<sub>max</sub>"
 R_MAX_CAP_HTML = "R<sub>max</sub>"
+BIC_CHI2_HTML = "BIC<sub>χ²</sub>"
+R2_LOG_HTML = "R<sup>2</sup><sub>log</sub>"
 
 _QUANTITY_PLAIN_TO_HTML: dict[str, str] = {
     S_MIN: S_MIN_HTML,
@@ -117,32 +121,48 @@ _QUANTITY_PLAIN_TO_HTML: dict[str, str] = {
     R_MAX: R_MAX_HTML,
     D_MAX: D_MAX_HTML,
     R_MAX_CAP: R_MAX_CAP_HTML,
+    BIC_CHI2: BIC_CHI2_HTML,
+    R2_LOG: R2_LOG_HTML,
+}
+
+# Machine / legacy tokens → final display (call sites should prefer constants).
+_MACHINE_METRIC_PLAIN: dict[str, str] = {
+    "BIC_chi2": BIC_CHI2,
+    "bic_chi2": BIC_CHI2,
+    "BIC_χ²": BIC_CHI2,
+    "R2_log": R2_LOG,
+    "R²_log": R2_LOG,
+    "R2_LOG": R2_LOG,
 }
 
 
 def format_metric_label(name: str) -> str:
     """
-    Passport metric label passthrough.
+    Passport metric label passthrough with a few known machine-key remaps.
 
-    Callers must supply the final display string (e.g. ``S_MIN``,
-    ``"Wiggle index"``). No underscore→subscript conversion.
+    Callers should supply the final display string (e.g. ``S_MIN``, ``BIC_CHI2``).
+    No general underscore→subscript conversion.
     """
-    return str(name or "").strip()
+    token = str(name or "").strip()
+    known = _MACHINE_METRIC_PLAIN.get(token) or _MACHINE_METRIC_PLAIN.get(token.replace("-", "_"))
+    if known is not None:
+        return known
+    return token
 
 
 def format_metric_label_html(name: str) -> str:
     """
     HTML-escape a passport metric label.
 
-    Known quantity Unicode labels (``S_MIN``, …) upgrade to ``<sub>`` rich text.
+    Known quantity Unicode labels (``S_MIN``, ``BIC_CHI2``, …) upgrade to rich text.
     """
     import html as html_mod
 
-    token = str(name or "").strip()
-    html = _QUANTITY_PLAIN_TO_HTML.get(token)
+    plain = format_metric_label(name)
+    html = _QUANTITY_PLAIN_TO_HTML.get(plain)
     if html is not None:
         return html
-    return html_mod.escape(token)
+    return html_mod.escape(plain)
 
 
 def format_value_with_class(

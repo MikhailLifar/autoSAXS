@@ -1,4 +1,4 @@
-"""Catalog of MIXTURE ensemble fits (nph × distribution) for DR results navigation."""
+"""Catalog of MIXTURE model runs for the distribution modeling advanced viewer."""
 
 from __future__ import annotations
 
@@ -12,10 +12,15 @@ from typing import Any, Dict, List, Optional
 class MixtureModelEntry:
     key: str
     label: str
+    """Display label for combo (e.g. ``Gauss_nph2``)."""
+    csv_label: str
+    """On-disk / CSV label (e.g. ``nph2_Gauss``)."""
+    row: Dict[str, Any]
     fit_path: Optional[str] = None
-    row: Dict[str, Any] = field(default_factory=dict)
-    bic_log: Optional[float] = None
-    chi2: Optional[float] = None
+    bic_chi2: Optional[float] = None
+    n_phases: int = 0
+    dist: str = ""
+    is_best: bool = False
 
 
 @dataclass
@@ -23,7 +28,8 @@ class MixtureModelCatalog:
     entries: List[MixtureModelEntry] = field(default_factory=list)
     best_key: str = ""
     output_subdir: str = ""
-    results_csv_path: str = ""
+    r_min_ang: float = 5.0
+    r_max_ang: float = 120.0
 
     def by_key(self, key: str) -> Optional[MixtureModelEntry]:
         for e in self.entries:
@@ -32,11 +38,31 @@ class MixtureModelCatalog:
         return None
 
     def best(self) -> Optional[MixtureModelEntry]:
-        if self.best_key:
-            hit = self.by_key(self.best_key)
-            if hit is not None:
-                return hit
-        return self.entries[0] if self.entries else None
+        return self.by_key(self.best_key) or (self.entries[0] if self.entries else None)
+
+
+def _fmt_bic(bic: Optional[float]) -> str:
+    if bic is None:
+        return ""
+    try:
+        v = float(bic)
+    except (TypeError, ValueError):
+        return ""
+    if v != v:  # NaN
+        return ""
+    return f" (BIC_χ²={v:.3g})"
+
+
+def _display_label(csv_label: str, dist: str, n_phases: int) -> str:
+    """Prefer ``Gauss_nph2`` style; fall back to CSV label."""
+    d = (dist or "").strip()
+    if d and n_phases > 0:
+        return f"{d}_nph{int(n_phases)}"
+    # Parse nph2_Gauss → Gauss_nph2
+    parts = str(csv_label or "").split("_", 1)
+    if len(parts) == 2 and parts[0].startswith("nph") and parts[1]:
+        return f"{parts[1]}_{parts[0]}"
+    return str(csv_label or "model")
 
 
 def _float_or_none(raw: Any) -> Optional[float]:
@@ -46,73 +72,90 @@ def _float_or_none(raw: Any) -> Optional[float]:
         v = float(raw)
     except (TypeError, ValueError):
         return None
-    if v != v:  # NaN
+    if v != v:
         return None
     return v
-
-
-def _discover_fit_path(base: Path, label: str) -> Optional[str]:
-    work = base / label
-    if work.is_dir():
-        fits = sorted(work.glob("*.fit"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if fits:
-            return str(fits[0].resolve())
-    # Fallback: label-prefixed fits in the sample root.
-    cands = sorted(base.glob(f"{label}*.fit"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if cands:
-        return str(cands[0].resolve())
-    return None
 
 
 def build_mixture_model_catalog(
     subdir: Path | str,
     *,
     best_label: str = "",
+    r_min_ang: float = 5.0,
+    r_max_ang: float = 120.0,
 ) -> MixtureModelCatalog:
     """
-    Build a MIXTURE ensemble catalog from ``mixture_results.csv`` + per-label ``.fit`` files.
-
-    Same discovery shape liveview's mixture pane uses via ``set_fit_models``.
+    Build selectable MIXTURE models from ``mixture_results.csv`` + per-label ``*.fit``.
     """
     sd = Path(subdir)
-    cat = MixtureModelCatalog(output_subdir=str(sd.resolve()) if sd.is_dir() else str(sd))
-    if not sd.is_dir():
-        return cat
+    cat = MixtureModelCatalog(
+        output_subdir=str(sd.resolve()) if sd.is_dir() else str(sd),
+        r_min_ang=float(r_min_ang),
+        r_max_ang=float(r_max_ang),
+    )
     csv_path = sd / "mixture_results.csv"
     if not csv_path.is_file():
         return cat
-    cat.results_csv_path = str(csv_path.resolve())
-    rows: List[Dict[str, str]] = []
     try:
         with open(csv_path, newline="", encoding="utf-8", errors="replace") as fh:
             rows = list(csv.DictReader(fh))
     except Exception:
         return cat
+    if not rows:
+        return cat
+
+    from autosaxs.skill.model_mixture.mixture import select_best_mixture_row
+
+    best_row = select_best_mixture_row(rows)
+    resolved_best = (best_label or "").strip() or str((best_row or {}).get("label") or "").strip()
+
     entries: List[MixtureModelEntry] = []
-    best_bic = float("inf")
-    best_from_bic = ""
     for row in rows:
-        lab = str(row.get("label") or "").strip()
-        if not lab:
+        csv_lab = str(row.get("label") or "").strip()
+        if not csv_lab:
             continue
-        bic = _float_or_none(row.get("BIC_log"))
-        chi2 = _float_or_none(row.get("chi2"))
-        if bic is not None and bic < best_bic:
-            best_bic = bic
-            best_from_bic = lab
+        try:
+            n_phases = int(float(row.get("n_phases") or 0))
+        except (TypeError, ValueError):
+            n_phases = 0
+        dist = str(row.get("dist") or "").strip()
+        bic = _float_or_none(row.get("BIC_chi2"))
+        disp = _display_label(csv_lab, dist, n_phases)
+        is_best = csv_lab == resolved_best
+        fit_path = None
+        work = sd / csv_lab
+        if work.is_dir():
+            fits = sorted(work.glob("*.fit"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if fits:
+                fit_path = str(fits[0].resolve())
+        if fit_path is None:
+            cands = sorted(sd.glob(f"{csv_lab}*.fit"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if cands:
+                fit_path = str(cands[0].resolve())
+        key = csv_lab
+        label = f"{disp}{_fmt_bic(bic)}" + (" ★" if is_best else "")
         entries.append(
             MixtureModelEntry(
-                key=lab,
-                label=lab,
-                fit_path=_discover_fit_path(sd, lab),
-                row={str(k): row[k] for k in row},
-                bic_log=bic,
-                chi2=chi2,
+                key=key,
+                label=label,
+                csv_label=csv_lab,
+                row=dict(row),
+                fit_path=fit_path,
+                bic_chi2=bic,
+                n_phases=n_phases,
+                dist=dist,
+                is_best=is_best,
             )
         )
-    preferred = (best_label or "").strip() or best_from_bic
+    # Stable order: best first, then by BIC_chi2, then label.
+    def _rank(e: MixtureModelEntry) -> tuple:
+        bic = e.bic_chi2 if e.bic_chi2 is not None else float("inf")
+        return (0 if e.is_best else 1, bic, e.csv_label)
+
+    entries.sort(key=_rank)
     cat.entries = entries
-    cat.best_key = preferred if any(e.key == preferred for e in entries) else (
-        entries[0].key if entries else ""
-    )
+    if resolved_best:
+        cat.best_key = resolved_best
+    elif entries:
+        cat.best_key = entries[0].key
     return cat
