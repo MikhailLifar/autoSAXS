@@ -25,14 +25,17 @@ shape: linear / upturn / downturn / chaotic.</li>
 the <b>adaptive</b> result is the one used downstream when it succeeds.</li>
 </ol>
 
-<p>In liveview you may override <b>first</b> / <b>last</b> (1-based point indices) for a fixed-interval
-fit; that suspends auto-processing until you resume.</p>
+<p>In liveview, open the Guinier <b>Adjust</b> wizard to override <b>first</b> / <b>last</b>
+(1-based point indices) for a fixed-interval fit; confirming suspends auto-processing until you
+resume. The main Guinier pane shows a <b>Passport</b> table (not inline spin boxes).</p>
 
-<p><b>How to read the UI.</b> Fit quality / low-q classification / Rg summarize the selected interval.
+<p><b>How to read the UI.</b> The passport summarizes fit quality, low-q classification, Rg, q-range,
+and related diagnostics for the selected interval.
 Fit quality is one of: good, acceptable, weak in Guinier region, weak, degenerate.
 Low-q classification is one of: linear, upturn, downturn, chaotic.
 A “chaotic” or poor fit-quality means the low-<i>q</i> region is unreliable for Rg even if a number is
-shown — treat GNOM and shape steps with caution.</p>
+shown — treat GNOM and shape steps with caution. Passport rows may show a FAILED / warning status
+when quality checks do not pass.</p>
 
 <p><b>Engines.</b> Custom adaptive search (+ optional ATSAS AUTORG for comparison).</p>
 <p class="nav-top"><a href="subtract.html">← Buffer subtraction</a> ·

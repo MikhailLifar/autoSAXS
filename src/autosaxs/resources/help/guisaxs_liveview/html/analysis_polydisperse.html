@@ -9,24 +9,28 @@
 <p class="nav-top"><a href="main_window.html">← Main window</a> · Polydisperse</p>
 <h1>Polydisperse analysis</h1>
 
-<p>Open this window from the right-column polydisperse icon. While it stays open, new TIFFs run
+<p>Open this window from the right-column polydisperse icon. While it stays open, new samples run
 <b>Guinier → fit_sizes (D(R))</b> automatically. Closing the window disarms that chain.
-Guinier here is independent of the monodisperse window and is stored under <code>guinier_poly/</code>.
+Guinier here is independent of the monodisperse window and is stored under <code>guinier_poly/</code>.</p>
+
+<p>Each analysis pane shows plots, a <b>Passport</b> table, and <b>Adjust</b> (controls live in wizards).
 Optional MIXTURE modeling is launched with <b>Start modeling</b> into a separate Distribution Modeling
 app — press <b>Confirm</b> there to run.</p>
 
-<p>Polydisperse Guinier quality is often poor; that is expected and does not feed <code>fit_sizes</code>.
-Parameter edits (and confirming the D(R) Adjust wizard) pause auto-processing until you
+<p>Polydisperse Guinier quality is often poor; that is expected and does not feed <code>fit_sizes</code>
+as a hard constraint. Parameter edits (and confirming an Adjust wizard) pause auto-processing until you
 <b>Resume auto-processing</b> (<b>Ctrl+P</b>; <b>Ctrl+X</b> stops auto).</p>
 
 <p class="shot-wrap"><img class="shot" src="assets/poly_overview.png" alt="Polydisperse analysis window"/></p>
+
 <h2>Layout</h2>
 <ul>
-<li><b>Guinier</b> — independent display / quality (same style as monodisperse Guinier pane).</li>
+<li><b>Guinier</b> — independent display / passport / <b>Adjust</b> (same style as monodisperse Guinier).</li>
 <li><b>GNOM D(R)</b> — <b>I(q)</b> and <b>D(R)</b> plots, quality <b>Passport</b>, and <b>Adjust</b>
 (opens the D(R) / GNOM wizard).</li>
-<li><b>D(R)</b> mixture pane — <b>None</b> / <b>MIXTURE</b>; <b>Re-run D(R)</b> (sizes only);
-<b>Start modeling</b>; model browser and range controls; I(q) / Distribution previews.</li>
+<li><b>D(R)</b> mixture pane — <b>None</b> / <b>MIXTURE</b>; <b>Start modeling</b>; I(q) / Distribution
+previews after a MIXTURE run. (Older “Re-run D(R)” remains available for a sizes-only re-fit of the
+current profile.)</li>
 <li>Global — <b>Stop auto-processing</b> / <b>Resume auto-processing</b> (<b>Ctrl+X</b> / <b>Ctrl+P</b>).</li>
 </ul>
 
@@ -35,34 +39,42 @@ Parameter edits (and confirming the D(R) Adjust wizard) pause auto-processing un
 <div class="recipe">
 <h3>To arm polydisperse analysis</h3>
 <p>Main window right → polydisperse icon → window opens (armed while open).</p>
-<p class="shot-wrap"><img class="shot" src="assets/main_poly_icon.png" alt="Highlight polydisperse analysis icon"/></p>
+<p class="shot-wrap"><img class="shot" src="assets/main_poly_icon.png" alt="Main window with analysis icons"/></p>
+</div>
+
+<div class="recipe">
+<h3>To adjust Guinier (poly)</h3>
+<p>Click <b>Adjust</b> under the Guinier passport → edit first/last → <b>Confirm</b>. This does not pin
+fit_sizes; it only refreshes the poly Guinier display / <code>guinier_poly/</code> artifacts.</p>
 </div>
 
 <div class="recipe">
 <h3>To adjust D(R) / fit_sizes</h3>
-<p>Click <b>Adjust</b> (or either embedded GNOM plot) → edit first / last / rmin / rmax / alpha and
-boundary checkboxes in the wizard. Plots and passport update live; press <b>Confirm</b> to write
-parameters and re-run <code>fit_sizes</code> (pinned Rmax refine). Opening the wizard alone does not pause the
-queue — the first control change does. Use <b>Restore auto</b> to return to the last auto-fit snapshot.
+<p>Click <b>Adjust</b> (or either embedded GNOM plot) → edit q-range / rmin / rmax / alpha and boundary
+checkboxes in the wizard. Plots and passport update live; press <b>Confirm</b> to write parameters and
+re-run <code>fit_sizes</code> (pinned Rmax refine). Opening the wizard alone does not pause the queue —
+the first control change does. Use <b>Restore auto</b> to return to the last auto-fit snapshot.
 Click a wizard plot to open an enlarged viewer (matplotlib toolbar + title-bar maximize).
 Then <b>Resume auto-processing</b> when ready.</p>
+<p class="shot-wrap"><img class="shot" src="assets/poly_dr_adjust.png" alt="D(R) / GNOM adjust wizard"/></p>
 </div>
 
 <div class="recipe">
 <h3>To enable MIXTURE</h3>
-<p>Under the mixture pane, choose <b>MIXTURE</b> (vs <b>None</b>) → set model / ranges as needed →
+<p>Under the mixture pane, choose <b>MIXTURE</b> (vs <b>None</b>) →
 <b>Start modeling</b> → Distribution Modeling app opens → <b>Confirm</b> there to run
 <code>model_mixture</code>. When that app is open and auto is on, finishing D(R) can prompt Confirm on the
-modeling app. Use <b>Re-run D(R)</b> to re-fit sizes for the current profile (MIXTURE itself is Confirm-only
-in Distribution Modeling).</p>
+modeling app.</p>
+<p class="shot-wrap"><img class="shot" src="assets/poly_mixture_selected.png" alt="Polydisperse window with MIXTURE selected"/></p>
 </div>
 
 <div class="recipe">
 <h3>To browse MIXTURE results (advanced viewer)</h3>
 <p>In the Distribution Modeling app, after a successful MIXTURE run, click the <b>Distribution</b> plot
 to open the advanced MIXTURE viewer (model combo, mixture + component previews, BIC_χ²).
-Click the large plot there to enlarge further (title-bar maximize). Left-column component thumbnails
-select the large view only.</p>
+Left-column component thumbnails <b>select</b> the large view only (they do not open a separate window).
+Click the large plot to enlarge further (title-bar maximize).</p>
+<p class="shot-wrap"><img class="shot" src="assets/poly_mixture_advanced.png" alt="MIXTURE advanced results viewer"/></p>
 </div>
 
 <div class="recipe">
@@ -70,7 +82,7 @@ select the large view only.</p>
 <p><b>Stop auto-processing</b> (<b>Ctrl+X</b>) → <b>Resume auto-processing</b> (<b>Ctrl+P</b>) when ready.</p>
 </div>
 
-<h2>Outputs (per TIFF)</h2>
+<h2>Outputs (per sample)</h2>
 <ul>
 <li><code>guinier_poly/&lt;stem&gt;/</code> — Guinier region YAML</li>
 <li><code>fit_sizes/&lt;stem&gt;/</code> — GNOM <code>.out</code>, D(R) CSV, quality YAML</li>

@@ -9,23 +9,30 @@
 <p class="nav-top"><a href="main_window.html">← Main window</a> · Monodisperse</p>
 <h1>Monodisperse analysis</h1>
 
-<p>Open this window from the right-column monodisperse icon. While it stays open, new TIFFs that reach a
-calibrated (and optionally subtracted) 1D profile run <b>Guinier → P(r) / GNOM</b> automatically.
-Closing the window disarms that chain. Optional shape modeling (BODIES / DAMMIF / DENSS) is launched
-with <b>Start modeling</b> into a separate Shape Modeling app — press <b>Confirm</b> there to run.</p>
+<p>Open this window from the right-column monodisperse icon. While it stays open, new samples that
+reach a calibrated (and optionally subtracted) 1D profile run <b>Guinier → P(r) / GNOM</b>
+automatically. Closing the window disarms that chain.</p>
 
-<p>Manual edits in Guinier or confirming the P(r) Adjust wizard pause auto-processing until you
-<b>Resume auto-processing</b> (shortcut <b>Ctrl+P</b>; <b>Ctrl+X</b> stops auto).
+<p>Each pane shows a plot (or plots), a <b>Passport</b> table of quality metrics, and an
+<b>Adjust</b> button. Parameter controls live in dedicated adjust wizards — not on the main pane.
+Optional shape modeling (BODIES / DAMMIF / DENSS) is launched with <b>Start modeling</b> into a
+separate Shape Modeling app — press <b>Confirm</b> there to run.</p>
+
+<p>Opening an Adjust wizard and changing controls (or confirming) pauses auto-processing until you
+<b>Resume auto-processing</b> (<b>Ctrl+P</b>; <b>Ctrl+X</b> stops auto).
 Guinier artifacts for this window live under <code>guinier_mono/</code> (separate from polydisperse).</p>
 
 <p class="shot-wrap"><img class="shot" src="assets/mono_overview.png" alt="Monodisperse analysis window"/></p>
+
 <h2>Layout</h2>
 <ul>
-<li><b>Guinier</b> — plot; Quality / Classification / Rg; <b>first</b> / <b>last</b> (auto allowed).</li>
-<li><b>P(r)</b> — embedded <b>I(q)</b> and <b>P(r)</b> plots; quality passport; <b>Adjust</b> opens the GNOM wizard
-(or click either plot). Controls live only in that wizard.</li>
-<li><b>Shape</b> — <b>None</b> / <b>BODIES</b> / <b>DAMMIF</b> / <b>DENSS</b>; <b>Start modeling</b> opens the
-Shape Modeling app; I(q) fit and 3D preview; <b>Open model folder…</b> when artifacts exist.</li>
+<li><b>Guinier</b> — Guinier plot; <b>Passport</b> (fit quality, low-q classification, Rg, q-range, …);
+<b>Adjust</b> opens the Guinier adjust wizard (first/last live there).</li>
+<li><b>P(r)</b> — embedded <b>I(q)</b> and <b>P(r)</b> plots; <b>Passport</b> (status, Total est., χ²,
+Rg, D<sub>max</sub>, …); <b>Adjust</b> opens the P(r) / GNOM wizard (or click either plot).</li>
+<li><b>Shape</b> — <b>None</b> / <b>BODIES</b> / <b>DAMMIF</b> / <b>DENSS</b>; <b>Start modeling</b>
+opens the Shape Modeling app; I(q) fit and 3D preview; <b>Open model folder…</b> when artifacts exist;
+mode-specific knobs (e.g. DAMMIF <code>n_runs</code>, DENSS protocol) apply on the next modeling run.</li>
 <li>Global — <b>Stop auto-processing</b> / <b>Resume auto-processing</b> (<b>Ctrl+X</b> / <b>Ctrl+P</b>).</li>
 </ul>
 
@@ -34,22 +41,27 @@ Shape Modeling app; I(q) fit and 3D preview; <b>Open model folder…</b> when ar
 <div class="recipe">
 <h3>To arm monodisperse analysis</h3>
 <p>Main window right → monodisperse icon → window opens (armed while open).</p>
-<p class="shot-wrap"><img class="shot" src="assets/main_mono_icon.png" alt="Highlight monodisperse analysis icon"/></p>
+<p class="shot-wrap"><img class="shot" src="assets/main_mono_icon.png" alt="Main window with analysis icons"/></p>
 </div>
 
 <div class="recipe">
-<h3>To change Guinier limits</h3>
-<p>Edit <b>first</b> / <b>last</b> → auto-processing pauses → Guinier then GNOM re-run for the current
-profile → <b>Resume auto-processing</b> when ready for new files.</p>
+<h3>To adjust Guinier limits</h3>
+<p>Click <b>Adjust</b> under the Guinier passport (or the Guinier plot) → edit <b>first</b> / <b>last</b>
+in the wizard → plots and passport update live → <b>Confirm</b> to write parameters and re-run Guinier
+(then GNOM for the current profile). <b>Restore auto</b> returns to the auto-chosen interval.
+Click a wizard plot to open an enlarged viewer (matplotlib toolbar + title-bar maximize).</p>
+<p class="shot-wrap"><img class="shot" src="assets/mono_guinier_adjust.png" alt="Guinier adjust wizard"/></p>
 </div>
 
 <div class="recipe">
 <h3>To adjust P(r) / GNOM</h3>
-<p>Click <b>Adjust</b> (or the embedded P(r) / I(q) plots) → dedicated wizard with P(r), I(q) fit, first/last,
-Dmax, alpha, boundary checkboxes, and passport. Plots and passport update live as you edit; press
-<b>Confirm</b> to write parameters and re-run <code>fit_distances</code>. Use <b>Restore auto</b> to return to the
-auto-fit Dmax/alpha snapshot. Click a wizard plot to open an enlarged viewer (matplotlib toolbar +
-title-bar maximize). Resume auto-processing when ready; re-run shape modeling if needed.</p>
+<p>Click <b>Adjust</b> under the P(r) passport (or either embedded P(r) / I(q) plot) → dedicated wizard
+with P(r), I(q) fit, residuals, q<sub>min</sub>/q<sub>max</sub>, D<sub>max</sub>, alpha, boundary
+checkboxes, and passport. Plots and passport update live as you edit; press <b>Confirm</b> to write
+parameters and re-run <code>fit_distances</code>. Use <b>Restore auto</b> for the auto-fit Dmax/alpha
+snapshot. Click a wizard plot for an enlarged viewer (title-bar maximize). Resume auto-processing when
+ready; re-run shape modeling if needed.</p>
+<p class="shot-wrap"><img class="shot" src="assets/mono_gnom_adjust.png" alt="P(r) / GNOM adjust wizard"/></p>
 </div>
 
 <div class="recipe">
@@ -57,19 +69,21 @@ title-bar maximize). Resume auto-processing when ready; re-run shape modeling if
 <p>Under <b>Shape</b>, choose <b>BODIES</b>, <b>DAMMIF</b>, or <b>DENSS</b> (and options as needed) →
 <b>Start modeling</b> → Shape Modeling app opens → set run knobs → <b>Confirm</b> there.
 When the Shape Modeling app is open and auto is on, new profiles that finish GNOM can prompt Confirm
-on that app. Use <b>Open model folder…</b> for on-disk 3D outputs.</p>
+on that app. Use <b>Open model folder…</b> for on-disk 3D outputs. Click the 3D preview for an
+interactive viewer when a model exists.</p>
 </div>
 
 <div class="recipe">
 <h3>To pause or resume the auto chain</h3>
 <p><b>Stop auto-processing</b> (<b>Ctrl+X</b>) → new files skip analysis until
-<b>Resume auto-processing</b> (<b>Ctrl+P</b>).</p>
+<b>Resume auto-processing</b> (<b>Ctrl+P</b>). Editing/confirming an Adjust wizard also moves you into
+Manual until you resume.</p>
 </div>
 
-<h2>Outputs (per TIFF)</h2>
+<h2>Outputs (per sample)</h2>
 <ul>
 <li><code>guinier_mono/&lt;stem&gt;/</code> — Guinier region / quality</li>
-<li><code>fit_distances/&lt;stem&gt;/</code> — GNOM <code>.out</code>, p(r) / fit plots</li>
+<li><code>fit_distances/&lt;stem&gt;/</code> — GNOM <code>.out</code>, p(r) / fit plots, quality YAML</li>
 <li><code>model_bodies/</code>, <code>dammif/</code>, or <code>denss/</code> under the stem when shape modeling has run</li>
 </ul>
 

@@ -15,14 +15,18 @@ directory. You point it at a calibrant TIFF and optional mask; <b>Run</b> writes
 Until calibration succeeds, new TIFFs are integrated only in a coarse proxy mode.</p>
 
 <p>Mask is <b>optional</b>: leave the mask path empty to use the automatic mask. Edit masks in the
-shared <a href="mask.html">Mask</a> wizard (<b>View/Configure mask</b> here, or left-column <b>Set mask</b>).</p>
+shared <a href="mask.html">Mask</a> wizard (<b>Configure mask</b> here, or left-column <b>Set mask</b>).
+After a successful run, the right side shows a geometry results table (sample–detector distance,
+beam center, rotations, wavelength).</p>
 
 <p class="shot-wrap"><img class="shot" src="assets/cal_overview.png" alt="Calibration wizard overview"/></p>
 <h2>Layout</h2>
 <ul>
-<li><b>Left</b> — calibrant image viewer (drop a TIFF onto <b>Drop .tif</b>).</li>
-<li><b>Right</b> — skill form (<b>Inputs</b> / <b>Options</b>), including mask path and calibrant options;
-<b>View/Configure mask</b> above the form.</li>
+<li><b>Left</b> — calibrant image viewer (drop a TIFF onto the canvas, or set <b>calibrant_image</b>).
+Click the image (when not zooming/panning) to open the mask wizard on this frame.</li>
+<li><b>Right</b> — skill form (<b>Inputs</b> / options): calibrant, wavelength, optional mask path;
+geometry <b>results</b> table after a successful run.</li>
+<li><b>Top-right</b> — <b>Configure mask</b>.</li>
 <li><b>Bottom</b> — <b>Run</b> / status, <b>Reset</b>, <b>Close</b>.</li>
 </ul>
 
@@ -35,16 +39,16 @@ shared <a href="mask.html">Mask</a> wizard (<b>View/Configure mask</b> here, or 
 
 <div class="recipe">
 <h3>To create or edit a mask</h3>
-<p><b>View/Configure mask</b> → Mask wizard opens → edit / <b>Save mask</b> → return here (mask path updates).
+<p><b>Configure mask</b> → Mask wizard opens → edit / <b>Save mask</b> → return here (mask path updates).
 Full steps: <a href="mask.html">Mask</a>.</p>
-<p class="shot-wrap"><img class="shot" src="assets/cal_create_mask.png" alt="Highlight View/Configure mask"/></p>
+<p class="shot-wrap"><img class="shot" src="assets/cal_create_mask.png" alt="Calibration wizard with Configure mask"/></p>
 </div>
 
 <div class="recipe">
 <h3>To run calibration</h3>
 <p>Set <b>calibrant_image</b> (TIFF) → optionally set <b>mask</b> (or leave empty for auto-mask) →
-<b>Run</b> → wait until the wizard status is Idle → <b>Close</b>.</p>
-<p class="shot-wrap"><img class="shot" src="assets/cal_run.png" alt="Highlight Run"/></p>
+<b>Run</b> → wait until the wizard status is Idle → check the results table → <b>Close</b>.</p>
+<p class="shot-wrap"><img class="shot" src="assets/cal_run.png" alt="Calibration wizard Run controls"/></p>
 </div>
 
 <div class="recipe">

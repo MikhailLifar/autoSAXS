@@ -40,11 +40,12 @@ window stays open.</li>
 <li><b>Menu</b> — File (working directory, Advanced flat/tree, Exit),
 <b>Settings → Appearance…</b> (UI font size), Update, Help.</li>
 <li><b>project dir line</b> — <code>project dir: …</code> (contracted path; tooltip shows the full path).</li>
-<li><b>Left</b> — <b>Calibrate</b> / <b>Reset</b>; <b>Set mask</b> / <b>Reset</b>; <b>Set buffer</b> / <b>Reset</b>; previews
-(groups hidden when unused for the current intake).</li>
-<li><b>Middle</b> — queue status, <b>2D</b> (when intake is 2D) with
-<b>Drop .tif or .dat with SAXS data</b>, <b>1D</b> or <b>S + buffer</b> / <b>Sub</b>,
-history <b>&lt;</b> <b>&gt;</b> <b>Process</b>.</li>
+<li><b>Left</b> — <b>Calibrate</b> / <b>Reset</b> (with geometry preview after calibration);
+<b>Set mask</b> / <b>Reset</b> (mask preview); <b>Set buffer</b> / <b>Reset</b> (buffer curve preview);
+groups hidden when unused for the current intake.</li>
+<li><b>Middle</b> — history <b>&lt;</b> <b>&gt;</b> <b>Process</b>; queue status;
+<b>2D</b> (when intake is 2D) with drop hint <b>Drop .tif or .dat with SAXS data</b>;
+single <b>1D</b> canvas, or <b>S + buffer</b> / <b>Sub</b> once buffer is configured.</li>
 <li><b>Right</b> — <b>Intake</b> toggles (2D / 1D / Sub); Analysis icons (monodisperse / polydisperse);
 <b>Logs</b> (<b>Full</b> / <b>App</b>).</li>
 </ul>
@@ -56,7 +57,7 @@ history <b>&lt;</b> <b>&gt;</b> <b>Process</b>.</li>
 <p><b>Calibrate</b> (left) → wizard opens → set calibrant / optional mask / options → <b>Run</b> → wait for Idle →
 <b>Close</b>. Details: <a href="calibration.html">Calibration</a> (mask editing:
 <a href="mask.html">Mask</a>, also via left <b>Set mask</b>).</p>
-<p class="shot-wrap"><img class="shot" src="assets/main_set_calibration.png" alt="Highlight Calibrate"/></p>
+<p class="shot-wrap"><img class="shot" src="assets/main_set_calibration.png" alt="Main window after calibration"/></p>
 </div>
 
 <div class="recipe">
@@ -64,7 +65,7 @@ history <b>&lt;</b> <b>&gt;</b> <b>Process</b>.</li>
 <p>Choose <b>Intake</b> (right), then drop <code>.tif</code> / <code>.tiff</code> / <code>.dat</code> onto the middle stage
 (<b>Drop .tif or .dat with SAXS data</b>), or copy files into the watched location after the app has
 started. See also <a href="concepts.html">Concepts</a> (intake / feeding / queue / revision).</p>
-<p class="shot-wrap"><img class="shot" src="assets/main_drop_tif.png" alt="Highlight Drop .tif"/></p>
+<p class="shot-wrap"><img class="shot" src="assets/main_drop_tif.png" alt="Main window drop stage"/></p>
 </div>
 
 <div class="recipe">
@@ -74,7 +75,7 @@ started. See also <a href="concepts.html">Concepts</a> (intake / feeding / queue
 <p><b>Set buffer</b> (left) → wizard opens → choose <b>buffer_1d</b> <code>.dat</code> → set <b>q min</b> /
 <b>q max</b> (matching window for auto-scale) → <b>Apply subtraction settings</b> → <b>Close</b>.</p>
 <p>Settings stay in the session and apply to new samples. Outputs go under <code>subtracted/</code>.</p>
-<p class="shot-wrap"><img class="shot" src="assets/main_set_buffer.png" alt="Highlight Set buffer"/></p>
+<p class="shot-wrap"><img class="shot" src="assets/main_set_buffer.png" alt="Main window with buffer configured"/></p>
 <p class="shot-wrap"><img class="shot" src="assets/main_buffer_wizard.png" alt="Buffer wizard Apply subtraction settings"/></p>
 </div>
 
@@ -82,30 +83,34 @@ started. See also <a href="concepts.html">Concepts</a> (intake / feeding / queue
 <h3>To adjust subtraction for the current file</h3>
 <p>After buffer is configured and a sample has been subtracted (middle shows <b>S + buffer</b> / <b>Sub</b>):
 click the <b>S + buffer</b> plot → Subtraction wizard opens → change <b>Scaling factor</b> → <b>Apply</b>
-(rewrites the subtracted curve and may re-run analysis) → close the wizard.</p>
-<p class="shot-wrap"><img class="shot" src="assets/main_s_buffer.png" alt="Highlight S + buffer plot"/></p>
+(rewrites the subtracted curve and may re-run analysis) → close the wizard.
+Click either plot in the wizard (or main stage) for an enlarged curve viewer.</p>
+<p class="shot-wrap"><img class="shot" src="assets/main_s_buffer.png" alt="Main window S + buffer and Sub plots"/></p>
 <p class="shot-wrap"><img class="shot" src="assets/main_subtraction_wizard.png" alt="Subtraction wizard"/></p>
 </div>
 
 <div class="recipe">
 <h3>To revisit a processed file</h3>
 <p>Use history <b>&lt;</b> / <b>&gt;</b> to step through session files. <b>Process</b> re-enqueues the selected
-file through the live pipeline (same as a new upload). While auto-processing is stopped, <b>Process</b>
-also resumes Auto (shortcut <b>Ctrl+P</b>); <b>Ctrl+X</b> switches to Manual.</p>
+file through the live pipeline (same as a new upload). While auto-processing is stopped, clicking
+<b>Process</b> also resumes Auto so the re-queued sample can run. App-wide shortcuts:
+<b>Ctrl+P</b> resumes Auto; <b>Ctrl+X</b> switches to Manual (Process itself stays click-only).</p>
 <p class="shot-wrap"><img class="shot" src="assets/main_process_history.png" alt="History and Process"/></p>
 </div>
 
 <div class="recipe">
 <h3>To change UI font size</h3>
-<p><b>Settings → Appearance…</b> → choose a font size → <b>Apply</b> or <b>OK</b>.
-The scale applies to liveview chrome (and other guisaxs apps that share the same settings store).</p>
+<p><b>Settings → Appearance…</b> → choose a preset or fine-tune the point size (live preview) →
+<b>Apply</b> or <b>OK</b>. The scale applies to liveview chrome (and other guisaxs apps that share the
+same settings store). Cancel restores the last applied size.</p>
+<p class="shot-wrap"><img class="shot" src="assets/settings_appearance.png" alt="Settings Appearance font size"/></p>
 </div>
 
 <div class="recipe">
 <h3>To arm analysis</h3>
 <p>Right column → click the monodisperse or polydisperse icon → window opens and that chain is armed for
-new TIFFs while it stays open. Closing the window disarms that chain.</p>
-<p class="shot-wrap"><img class="shot" src="assets/main_analysis_icons.png" alt="Analysis icons"/></p>
+new samples while it stays open. Closing the window disarms that chain.</p>
+<p class="shot-wrap"><img class="shot" src="assets/main_analysis_icons.png" alt="Analysis icons on main window"/></p>
 </div>
 
 <p class="nav-top"><a href="calibration.html">Calibration →</a> ·
