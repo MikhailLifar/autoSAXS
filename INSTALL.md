@@ -62,7 +62,7 @@ Open **Help** in the top toolbar and follow the guidance.
 
 You do **not** need ATSAS to calibrate, integrate, subtract buffer, or use GUISAXS-LiveView for live processing.
 
-Install ATSAS when you want tools that call EMBL programs (for example pair-distance distribution p(r), DAMMIF, BODIES, MIXTURE, or `process-monodisperse`).
+Install ATSAS when you want tools that call EMBL programs (for example pair-distance distribution p(r), DAMMIF, BODIES, MIXTURE, CRYSOL / `calc-profile`, or `process-monodisperse`).
 
 Download and run the official installer, and ensure ATSAS programs (such as `dammif`) are on your PATH:
 
@@ -74,8 +74,8 @@ Recommended version for autoSAXS: **3.2.1**. After installing, you can check wit
 |---------------------|-------------|
 | calibrate, integrate, average, integrate_proxy, subtract | fit_distances (p(r)) |
 | plot, plot_2d, fit_guinier, analyze_kratky | fit_sizes (D(R) via GNOM) |
-| model_dr_mc (McSAS), model_density (DENSS) | model_dam, model_bodies, model_mixture |
-| report_individual, report_summary | process_monodisperse, process_polydisperse |
+| model_dr_mc (McSAS), model_density (DENSS), model_lc | model_dam, model_bodies, model_mixture |
+| report_individual, report_summary | calc_profile (CRYSOL), process_monodisperse, process_polydisperse |
 
 ---
 

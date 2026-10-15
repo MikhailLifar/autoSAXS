@@ -427,7 +427,11 @@ autosaxs plot-2d raw/sample_01.tif --output-dir plots_2d
 
 ## `fit_guinier`
 
-SAXS / small-angle x-ray scattering: Do Guinier analysis on a 1D profile (Rg, I(0), Rg span, Guinier interval, quality). 
+SAXS / small-angle x-ray scattering: Do Guinier analysis on a 1D profile (Rg, I(0), Rg span, Guinier interval, quality).
+
+Default (no ``first``/``last``): classical Shannon-style window search + interpretable score
+(``q·Rg`` gate, linearity, low-q start, residual structure). ATSAS autorg and the older
+adaptive scorer are still computed for comparison but do not select ``chosen_*``.
 
 ### Arguments
 
@@ -793,6 +797,135 @@ autosaxs model-dr-mc subtracted/sub_sample_01.dat --q-min-nm 0.1 --q-max-nm 5.0 
 
 ---
 
+## `calc_profile`
+
+SAXS / small-angle x-ray scattering: compute a theoretical I(q) from an atomic model via ATSAS CRYSOL.
+
+Accepts `.pdb` / `.cif` / `.ent` directly. For `.xyz`, writes a pseudo-PDB (element columns +
+`--implicit-hydrogen=0`) and then runs CRYSOL. Optional experimental `.dat` enables CRYSOL fit
+mode (`--units=2`, nm⁻¹).
+
+Output profile `.dat` uses autosaxs convention: **q in nm⁻¹**. CRYSOL subprocess I/O stays in
+Å / Å⁻¹ at the boundary (``smax`` is converted from ``smax_nm``).
+
+### Arguments
+
+- `structure` (str): Path expression for atomic coordinate file(s) (`.pdb`/`.cif`/`.ent`/`.xyz`).
+  Directories expand non-recursively to those extensions.
+- `output_dir` (str, default `.`): Directory where outputs are written.
+- `profile` (str | None, default `None`): Optional experimental 1D `.dat` for CRYSOL fit mode.
+- `config_path` (str | None, default `None`): Deprecated. Unused (reserved for skill-keyed config).
+- `n_points` (int, default `101`): CRYSOL `--ns` (number of calculated points).
+- `smax_nm` (float, default `5.0`): Maximum q in **nm⁻¹** (converted to Å⁻¹ for CRYSOL `--smax`).
+- `lm` (int, default `20`): Number of spherical harmonics (`--lm`).
+- `constant` (bool, default `False`): Enable CRYSOL constant subtraction when fitting.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict[str, str]` with:
+
+- `profile_path`: Theoretical I(q) as autosaxs `.dat` (q in nm⁻¹).
+- `int_path`: Raw CRYSOL `.int` (q in Å⁻¹).
+- `abs_path`: Raw CRYSOL `.abs` when present, else empty.
+- `log_path`: CRYSOL `.log`.
+- `fit_path`: Autosaxs-style fit comparison `.dat` when `profile` was given, else empty.
+- `fit_plot_path`: Overlay PNG when fitting, else empty.
+- `structure_used_path`: Coordinate file actually passed to CRYSOL (pseudo-PDB for `.xyz`).
+- `output_subdir`: Output directory for this sample.
+
+Requires ATSAS CRYSOL on `PATH` (see `autosaxs doctor`).
+
+### Python usage
+
+```python
+from autosaxs.skill import calc_profile
+
+out = calc_profile("model.pdb", output_dir="crysol_out", smax_nm=5.0)
+print(out["profile_path"])
+
+out_xyz = calc_profile("cluster.xyz", output_dir="crysol_xyz")
+out_fit = calc_profile("model.pdb", output_dir="crysol_fit", profile="exp.dat")
+```
+
+### CLI usage
+
+```bash
+autosaxs calc-profile model.pdb --output-dir crysol_out --smax-nm 5.0
+autosaxs calc-profile cluster.xyz -o crysol_xyz
+autosaxs calc-profile model.pdb --profile exp.dat -o crysol_fit
+```
+
+---
+
+## `model_lc`
+
+SAXS / small-angle x-ray scattering: fit an experimental profile as a nonnegative linear
+combination of library curves (custom NNLS — **not** ATSAS OLIGOMER).
+
+Library input is either:
+
+- one CSV: column 0 = q (nm⁻¹), remaining columns = component intensities; or
+- a path expression / directory / glob / comma-list of `.dat` curves.
+
+When the library has more curves than `n_components`, all combinations of size
+``k = 1..n_components`` are scored with NNLS and the lowest χ² wins.
+
+**Complexity:** for library size ``N`` and ``k_max = n_components``, the search evaluates
+``Σ_{k=1}^{k_max} C(N,k)`` NNLS problems, each roughly ``O(n_q · k²)``. Prefer
+``N ≲ 50`` for ``k_max=3`` (``C(50,3)=19600``). When ``N ≤ n_components``, a single
+NNLS on all columns is used (fast path).
+
+Curves are interpolated onto the experimental q grid (nm⁻¹). Points outside a component's
+q coverage are excluded from that component's column (set NaN → row dropped if any NaN).
+
+### Arguments
+
+- `profile` (str): Experimental 1D path expression (file/directory/glob → `.dat`).
+- `database` (str): Library CSV **or** `.dat` path expression / directory / glob / list.
+- `output_dir` (str, default `.`): Directory where outputs are written.
+- `config_path` (str | None, default `None`): Deprecated. Unused.
+- `n_components` (int, default `3`): Maximum number of library curves in the combination (1–3).
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict[str, str]` with:
+
+- `fit_path`: Fitted I(q) autosaxs `.dat` (q in nm⁻¹).
+- `residual_path`: Residual (I_exp − I_fit) `.dat`.
+- `weights_path`: CSV of chosen component names/indices and nonnegative weights.
+- `plot_path`: Overlay PNG (experiment vs fit ± components).
+- `components_used`: Comma-separated component labels chosen by the search.
+- `chi2`: Reduced χ² string (for CLI/path-dict stability).
+- `output_subdir`: Output directory for this sample.
+
+Does **not** require ATSAS.
+
+### Python usage
+
+```python
+from autosaxs.skill import model_lc
+
+out = model_lc(
+    profile="subtracted/sample.dat",
+    database="library/",           # dir of .dat
+    output_dir="lc_out",
+    n_components=3,
+)
+# or: database="ff_library.csv"
+print(out["weights_path"], out["components_used"])
+```
+
+### CLI usage
+
+```bash
+autosaxs model-lc subtracted/sample.dat library/ --output-dir lc_out --n-components 3
+autosaxs model-lc sample.dat ff_library.csv -o lc_out --n-components 2
+```
+
+---
+
 ## `model_mixture`
 
 SAXS / small-angle x-ray scattering: run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and write a comparison plot, size distribution plot, and results CSV.
@@ -812,7 +945,16 @@ SAXS / small-angle x-ray scattering: run MIXTURE fits on a 1D subtracted curve, 
 - `r_max` (float | None): Maximum radius (nm). Defaults to `rmax_nm` from in-process `fit_sizes`.
 - `poly_min` (float | None): Minimum polydispersity (nm). Defaults to `0.05`.
 - `poly_max` (float | None): Maximum polydispersity (nm). Defaults to `0.5 × r_max`.
+- `init_radii_nm` (str | None): Comma-separated per-phase outer-radius starts in nm
+  (ATSAS MIXTURE ``Rout``). Example: ``"2.5,5.0"``. Overrides D(R) peak seeding.
+- `init_fractions` (str | None): Comma-separated per-phase volume-fraction starts
+  (normalized to sum 1). Example: ``"0.7,0.3"``.
+- `init_poly_nm` (str | None): Comma-separated per-phase polydispersity starts in nm.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+Component init priority: explicit ``init_*`` → fit_sizes ``peak_positions_nm`` (radii
+only) → skill defaults. ATSAS MIXTURE also fixes inner radius/contrast, outer
+contrast, sticky=0, and derives hard-sphere radius from Rout (not user-settable).
 
 ### Short parameter list
 
@@ -823,6 +965,9 @@ SAXS / small-angle x-ray scattering: run MIXTURE fits on a 1D subtracted curve, 
 - r_max: size upper bound
 - poly_min: spread lower bound
 - poly_max: spread upper bound
+- init_radii_nm: comma-separated Rout starts (nm)
+- init_fractions: comma-separated volume fractions
+- init_poly_nm: comma-separated poly starts (nm)
 
 ### Returns
 

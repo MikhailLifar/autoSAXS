@@ -68,7 +68,16 @@ SAXS / small-angle x-ray scattering: run MIXTURE fits on a 1D subtracted curve, 
 - `r_max` (float | None): Maximum radius (nm). Defaults to `rmax_nm` from in-process `fit_sizes`.
 - `poly_min` (float | None): Minimum polydispersity (nm). Defaults to `0.05`.
 - `poly_max` (float | None): Maximum polydispersity (nm). Defaults to `0.5 × r_max`.
+- `init_radii_nm` (str | None): Comma-separated per-phase outer-radius starts in nm
+  (ATSAS MIXTURE ``Rout``). Example: ``"2.5,5.0"``. Overrides D(R) peak seeding.
+- `init_fractions` (str | None): Comma-separated per-phase volume-fraction starts
+  (normalized to sum 1). Example: ``"0.7,0.3"``.
+- `init_poly_nm` (str | None): Comma-separated per-phase polydispersity starts in nm.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+Component init priority: explicit ``init_*`` → fit_sizes ``peak_positions_nm`` (radii
+only) → skill defaults. ATSAS MIXTURE also fixes inner radius/contrast, outer
+contrast, sticky=0, and derives hard-sphere radius from Rout (not user-settable).
 
 ### Short parameter list
 
@@ -79,6 +88,9 @@ SAXS / small-angle x-ray scattering: run MIXTURE fits on a 1D subtracted curve, 
 - r_max: size upper bound
 - poly_min: spread lower bound
 - poly_max: spread upper bound
+- init_radii_nm: comma-separated Rout starts (nm)
+- init_fractions: comma-separated volume fractions
+- init_poly_nm: comma-separated poly starts (nm)
 
 ### Returns
 

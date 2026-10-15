@@ -105,14 +105,21 @@ pipeline runs without further clicks.</p>
 it. With neither open, only integrate (+ subtract if configured) runs. Both windows may be open;
 each keeps its own chain and output tree
 (<a href="analysis_monodisperse.html">Monodisperse</a> /
-<a href="analysis_polydisperse.html">Polydisperse</a>).</p>
+<a href="analysis_polydisperse.html">Polydisperse</a>).
+Guinier and GNOM (p(r) / D(R)) run in the liveview queue; shape / MIXTURE modeling runs in a separate
+app opened via <b>Start modeling</b>, then <b>Confirm</b> there.</p>
 <p><b>Pausing auto analysis.</b> On an analysis window, <b>Stop auto-processing</b> /
 <b>Resume auto-processing</b> suspend or restore automatic TIFF analysis (you can still run manual /
 wizard actions). Shortcuts: <b>Ctrl+X</b> Auto→Manual, <b>Ctrl+P</b> Manual→Auto. Editing Guinier / GNOM
-parameters or applying a new subtraction scale also moves you into a more manual posture until you resume.</p>
+parameters (and confirming an Adjust wizard) or applying a new subtraction scale also moves you into a
+more manual posture until you resume.</p>
 <p><b>Manual re-run of a file.</b> History <b>Process</b> re-enqueues the selected sample through the same
 live pipeline from its <b>boarding rung</b> — useful after changing calibration, buffer, or analysis settings.
 If you are in Manual, Process also resumes Auto so the re-queued sample can run.</p>
+
+<h2>Appearance (font size)</h2>
+<p><b>Settings → Appearance…</b> sets the shared UI font size (presets + fine control, with live preview).
+<b>Apply</b> / <b>OK</b> persist it; Cancel restores the last applied size.</p>
 
 <h2>Session history</h2>
 <p>After at least one sample finishes in this run, the middle column shows <b>&lt;</b> / <b>&gt;</b> and

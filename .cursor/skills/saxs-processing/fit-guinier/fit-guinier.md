@@ -51,7 +51,11 @@ See the docstring section **Returns** below.
 
 ## Autosaxs skill docstring
 
-SAXS / small-angle x-ray scattering: Do Guinier analysis on a 1D profile (Rg, I(0), Rg span, Guinier interval, quality). 
+SAXS / small-angle x-ray scattering: Do Guinier analysis on a 1D profile (Rg, I(0), Rg span, Guinier interval, quality).
+
+Default (no ``first``/``last``): classical Shannon-style window search + interpretable score
+(``q·Rg`` gate, linearity, low-q start, residual structure). ATSAS autorg and the older
+adaptive scorer are still computed for comparison but do not select ``chosen_*``.
 
 ### Arguments
 
