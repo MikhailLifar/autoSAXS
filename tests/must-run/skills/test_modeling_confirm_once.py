@@ -13,7 +13,7 @@ from guisaxs_skills.modeling.context import ModelingContext
 
 
 class _FakeHandle(QObject):
-    """Minimal ModelingChildHandle stand-in that records send_confirm calls."""
+    """Minimal ModelingChildHandle stand-in that records send_confirm / send_context order."""
 
     confirmed = pyqtSignal(dict)
     finished_run = pyqtSignal(dict)
@@ -28,15 +28,18 @@ class _FakeHandle(QObject):
         self.confirms: List[str] = []
         self._running = True
         self.contexts: List[Any] = []
+        self.events: List[Any] = []
 
     def is_running(self) -> bool:
         return bool(self._running)
 
     def send_confirm(self) -> None:
         self.confirms.append("confirm")
+        self.events.append("confirm")
 
     def send_context(self, ctx: ModelingContext) -> None:
         self.contexts.append(ctx)
+        self.events.append(("context", str(getattr(ctx, "sample_id", "") or "")))
 
     def send_focus(self) -> None:
         return None
@@ -156,3 +159,31 @@ def test_discard_pending_on_close(tmp_path: Path):
     assert mgr._shape_confirm_pending is False  # noqa: SLF001
     assert mgr._shape_auto is False  # noqa: SLF001
     assert fake.confirms == []
+
+
+def test_flush_applies_latest_context_before_confirm(tmp_path: Path):
+    """Busy→idle pending flush: set_context (latest push) then Confirm — never Confirm on stale sample."""
+    mgr = _manager(tmp_path)
+    fake = _attach_fake_shape(mgr, sample_id="file1", tmp_path=tmp_path)
+    fake.auto_changed.emit(True)
+    fake.busy_changed.emit(True)
+
+    # Liveview moved to a later sample while shape was still busy on file1.
+    mgr._shape_push = {  # noqa: SLF001
+        "profile_path": str(tmp_path / "sub_file2.dat"),
+        "gnom_path": str(tmp_path / "datgnom_best.out"),
+        "output_root": tmp_path,
+        "stem": "file2",
+        "sample_id": "file2",
+    }
+    mgr.request_confirm_shape()
+    assert fake.confirms == []
+    assert fake.events == []
+    assert mgr._shape_confirm_pending is True  # noqa: SLF001
+
+    fake.busy_changed.emit(False)
+    assert fake.confirms == ["confirm"]
+    assert mgr._shape_confirm_pending is False  # noqa: SLF001
+    assert len(fake.contexts) == 1
+    assert str(fake.contexts[0].sample_id) == "file2"
+    assert fake.events == [("context", "file2"), "confirm"]

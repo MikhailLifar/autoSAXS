@@ -19,6 +19,10 @@
 
 Busy sample A + pending Confirm for B → after A finishes, deferred context re-push for B used to reset `n_runs` to liveview default (1). Pending flush then Confirmed B with the wrong params.
 
+## Confirm vs context on busy→idle
+
+`ModelingChildManager` owns both deferred Confirm (`_*_confirm_pending`) and the latest push args (`_*_push`). Child IPC emits `busy=False` before `ready_for_context`, so the manager must **not** flush Confirm on idle alone: on pending flush it re-applies latest context **then** `send_confirm`. Prefer this ordered flush over fingerprints.
+
 ## Related
 
 - Confirm protocol: Project store `docs/modeling-confirm-protocol.md`

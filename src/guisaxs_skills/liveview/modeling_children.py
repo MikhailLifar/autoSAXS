@@ -12,6 +12,9 @@ Confirm protocol (``request_confirm_*``):
 
 Discard pending on child close/exit/shutdown or Auto→Manual.
 Flush pending only on ``busy_changed(False)`` if still open+Auto.
+On flush: re-apply latest ``_shape_push`` / ``_dr_push`` context **before**
+``send_confirm`` so Confirm never runs against a stale busy-sample context
+(child may still emit ``ready_for_context`` later — that re-push is idempotent).
 """
 
 from __future__ import annotations
@@ -308,7 +311,12 @@ class ModelingChildManager(QObject):
         self.preview_refresh_requested.emit("dr")
 
     def _flush_shape_confirm(self) -> None:
-        """Deliver one deferred Confirm after idle; only when still open + Auto."""
+        """Deliver one deferred Confirm after idle; only when still open + Auto.
+
+        Ordered flush: latest ModelingContext (``_shape_push``) then Confirm.
+        Child emits ``busy=False`` before ``ready_for_context``; without this
+        order Confirm would re-run the busy sample's paths.
+        """
         if not self._shape_confirm_pending:
             return
         if (
@@ -322,9 +330,11 @@ class ModelingChildManager(QObject):
                 self._shape_confirm_pending = False
             return
         self._shape_confirm_pending = False
+        self._apply_latest_shape_context()
         self._shape.send_confirm()
 
     def _flush_dr_confirm(self) -> None:
+        """Same ordered flush as shape: latest context, then Confirm."""
         if not self._dr_confirm_pending:
             return
         if (
@@ -337,9 +347,11 @@ class ModelingChildManager(QObject):
                 self._dr_confirm_pending = False
             return
         self._dr_confirm_pending = False
+        self._apply_latest_dr_context()
         self._dr.send_confirm()
 
-    def _retry_shape_context(self) -> None:
+    def _apply_latest_shape_context(self) -> None:
+        """Push the latest stored shape ModelingContext args (no-op if unset)."""
         args = self._shape_push
         if not args:
             return
@@ -351,7 +363,8 @@ class ModelingChildManager(QObject):
             sample_id=str(args.get("sample_id") or ""),
         )
 
-    def _retry_dr_context(self) -> None:
+    def _apply_latest_dr_context(self) -> None:
+        """Push the latest stored DR ModelingContext args (no-op if unset)."""
         args = self._dr_push
         if not args:
             return
@@ -361,6 +374,12 @@ class ModelingChildManager(QObject):
             stem=str(args.get("stem") or ""),
             sample_id=str(args.get("sample_id") or ""),
         )
+
+    def _retry_shape_context(self) -> None:
+        self._apply_latest_shape_context()
+
+    def _retry_dr_context(self) -> None:
+        self._apply_latest_dr_context()
 
     def build_shape_context(
         self,
