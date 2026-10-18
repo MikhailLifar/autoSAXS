@@ -27,6 +27,7 @@ def parse_gnom_out(source: Union[str, os.PathLike]) -> Dict[str, Any]:
       (σ of the distribution) when present and finite; otherwise ``None``.
       Interpret as p(r) for DATGNOM and D(R) for polydisperse GNOM runs.
     - ``current_alpha``: regularization parameter ``Current ALPHA`` from the .out, if present.
+    - ``nr``: ``Points in real space`` from the GNOM config block, if present.
     - ``force_zero_rmin`` / ``force_zero_rmax``: ``Y``/``N`` from GNOM ``Force 0.0 at r = rmin/rmax``
       lines when present.
     """
@@ -231,6 +232,15 @@ def parse_gnom_out(source: Union[str, os.PathLike]) -> Dict[str, Any]:
         )
         return _parse_scientific_float(m)
 
+    def parse_nr(text: str) -> Optional[int]:
+        m = re.search(r"Points\s+in\s+real\s+space\s*:\s*(\d+)", text or "", flags=re.IGNORECASE)
+        if not m:
+            return None
+        try:
+            return int(m.group(1))
+        except ValueError:
+            return None
+
     def parse_distribution(
         text: str,
     ) -> Optional[Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]]:
@@ -259,6 +269,7 @@ def parse_gnom_out(source: Union[str, os.PathLike]) -> Dict[str, Any]:
         "real_space_rg": parse_real_space_rg(out_text),
         "real_space_i0": parse_real_space_i0(out_text),
         "current_alpha": parse_current_alpha(out_text),
+        "nr": parse_nr(out_text),
         "force_zero_rmin": parse_force_zero_flag(out_text, which="rmin"),
         "force_zero_rmax": parse_force_zero_flag(out_text, which="rmax"),
         "iq_table": parse_iq_table(out_text),
