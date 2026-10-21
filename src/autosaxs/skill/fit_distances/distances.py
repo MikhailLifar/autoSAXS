@@ -71,7 +71,7 @@ def fit_distances(
     r"""
     SAXS / small-angle x-ray scattering: obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve via ATSAS GNOM (real-space distance distribution).
 
-    **Auto path** (when `dmax_nm` is omitted): Guinier \(R_g\) (tool only) → Shannon-bound \(D_{\max}\) grid \(\times\) \(\log_{10}\alpha\) joint monodisperse GNOM search → pick by interpretable **`shape_tight_extent`** score (soft taper, non‑negativity, low wiggle, χ² guardrail, extent band \(\sim 3.2\)–\(5\times R_g\)). Units: \(q\) in nm⁻¹, lengths in nm. Does **not** use Autorg→DATGNOM TOTAL selection (clarity over deposit‑Dmax matching).
+    **Auto path** (when `dmax_nm` is omitted): Guinier \(R_g\) (tool only) → **Fast AutoGNOM** — Stage 1: H32 NumPy Tikhonov over Shannon-bound \(D_{\max}\times\log_{10}\alpha\) (no ATSAS in the search loop; α in GNOM-printed units via locked H32 packaging) → pick by interpretable **`shape_tight_extent`** score (soft taper, non‑negativity, low wiggle, χ² guardrail, extent band \(\sim 3.2\)–\(5\times R_g\)) → Stage 2: ATSAS `gnom` at the Stage‑1 \((D_{\max},\alpha)\) writes stable `gnom_best.out`, close-fits ensemble, force-zero-off (unless `minimal`), passport. Units: \(q\) in nm⁻¹, lengths in nm. Does **not** use Autorg→DATGNOM TOTAL selection (clarity over deposit‑Dmax matching).
 
     **Refine path** (when `dmax_nm` is set): single GNOM `--rmax` run at the given Dmax (optional fixed `--alpha`), plus Dmax±10% close-fits ensemble unless `minimal=True`.
 
@@ -89,7 +89,7 @@ def fit_distances(
     - `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted on refine, GNOM chooses automatically. On the auto Shannon×α path, α is searched on \(\log_{10}\alpha\in[-1,2.5]\) and this argument is ignored.
     - `force_zero_rmin` (str | None, default `None`): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
     - `force_zero_rmax` (str | None, default `None`): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y`.
-    - `minimal` (bool, default `False`): When `True` with `dmax_nm` set, write only the single refine `.out` and remove any previous `ensemble/` (no close-fits / force-zero-off probe).
+    - `minimal` (bool, default `False`): When `True`, write only the selected `.out` and remove any previous `ensemble/` (no close-fits / force-zero-off probe). Applies to both auto and refine paths.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Returns
@@ -509,9 +509,10 @@ def _fit_distances_paths(
     search_workdir: Optional[str] = None
     try:
         best_search, search_trials, search_failures, grid_meta = _search_shannon_alpha_pr(
-            atsas_dat_path=atsas_dat_path,
             output_dir=output_dir,
             q_nm=q_nm,
+            I=I,
+            sigma=sigma,
             rg_guinier_nm=rg_nm,
             first=first_pt,
             last=last_pt,
@@ -641,7 +642,8 @@ def _fit_distances_paths(
     best["grid_meta"] = grid_meta
     candidates.append(best)
 
-    # Close-fits Dmax ensemble + force-zero-off validation (saved artifacts).
+    # Close-fits Dmax ensemble + force-zero-off validation (saved artifacts),
+    # unless minimal (mirrors fit_sizes refine/auto behaviour).
     ensemble_info: Dict[str, Any] = {
         "ensemble_dir": "",
         "ensemble_summary_path": "",
@@ -651,7 +653,7 @@ def _fit_distances_paths(
         "force_zero_off_parsed": None,
     }
     dmax_validation: Optional[Dict[str, Any]] = None
-    if np.isfinite(dmax_best_f) and dmax_best_f > 0:
+    if (not bool(minimal)) and np.isfinite(dmax_best_f) and dmax_best_f > 0:
         best_parsed_for_alpha = parse_gnom_out(out_text)
         if event_bus:
             event_bus.publish(
@@ -676,6 +678,8 @@ def _fit_distances_paths(
             dmax_ref_nm=float(dmax_best_f),
         )
         ensemble_info["dmax_validation"] = dmax_validation
+    elif bool(minimal):
+        clear_ensemble_dir(output_dir)
 
     pr_quality = _assess_and_write_pr_quality(
         output_dir=output_dir,
