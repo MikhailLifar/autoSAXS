@@ -10,7 +10,7 @@
 
 - **One skills API for everything** — the same processing steps run as `autosaxs <skill> …` or as Python functions with stable signatures, so scripts, GUIs, and agents share one surface.
 - **Unique algorithms** — **automatic calibration** from calibrant frames (no priors on sample-detector distance or center coordinates!) and **automatic buffer scaling** for robust sample−buffer subtraction, reducing manual tuning at the beamline.
-- **Flexible inputs** — path expressions (file, directory, or glob) instead of “one file only,” allowing to process multiple files as easily as processing one.
+- **Flexible inputs** — path expressions (file, directory, or glob) instead of “one file only,” allowing to process multiple failes as easy as processing one.
 - **Opt-in caching** — re-run interactive work without recomputing unchanged steps.
 - **GUI when you want** — `guisaxs-liveview` (fast online processing, watch-folder live processing with optional monodisperse / polydisperse analysis).
 - **Built for automation** — designed for reproducible beamline-to-analysis workflows and LLM/agent-driven runs.
@@ -42,10 +42,10 @@ ATSAS is optional and proprietary — see [INSTALL.md](INSTALL.md#optional-atsas
 
 ## Main features
 
-Pipeline stages exposed as skills: **calibrate → integrate / average → subtract → analyze → model → report**, including Guinier, Kratky, `fit-distances` (p(r)), `fit-sizes` (D(R)), `calc-profile` (CRYSOL), `model-lc` (library NNLS), `model-dam`, `model-bodies`, `model-density` (DENSS), `model-dr-mc` (McSAS), `model-mixture`, and reporting helpers.
+Pipeline stages exposed as skills: **calibrate → integrate / average → subtract → analyze → model → report**, including Guinier, Kratky, `fit-distances` (p(r)), `fit-sizes` (D(R)), `model-dam`, `model-bodies`, `model-density` (DENSS), `model-dr-mc` (McSAS), `model-mixture`, and reporting helpers.
 
 Apps:  
-**guisaxs-liveview** (queued live integration, buffer subtraction, optional analysis / modeling wizards; **Settings → Appearance** for UI font size).  
+**guisaxs-liveview** (queued live integration, buffer subtraction, optional analysis wizards).  
 **guisaxs-skills** (catalog + forms + isolated CLI runs, beta version)  
 
 Full per-skill documentation: [`autosaxs-docs/skills_reference.md`](autosaxs-docs/skills_reference.md).

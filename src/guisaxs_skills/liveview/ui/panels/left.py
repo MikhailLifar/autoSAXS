@@ -25,6 +25,7 @@ from ...services.calibration.storage import calibration_subdir
 from ...session.api import LiveviewSession
 from ...session.state import LiveviewIntakeMode, LiveviewSessionState
 from ..attention import AttentionPulse
+from ..wizards.buffer_rules import BufferRulesEditorDialog, BufferRulesStrip
 from ..wizards.left import BufferWizardDialog, CalibrationWizardDialog
 from ..wizards.mask import MaskWizardDialog
 from ....logic.session_state import SessionPathHints
@@ -162,12 +163,16 @@ class LiveviewLeftPanel(QWidget):
         self._buf_preview = PreviewPanel()
         self._buf_preview.setMinimumHeight(140)
         self._buf_preview.set_image_click_handler(self._open_buffer_wizard)
+        self._buf_rules_strip = BufferRulesStrip()
+        self._buf_rules_strip.edit_requested.connect(self._open_buffer_rules_editor)
+        self._rules_editor: BufferRulesEditorDialog | None = None
         buf_lay = QVBoxLayout(self._buf_group)
         buf_btns = QHBoxLayout()
         buf_btns.addWidget(self._buf_open, 1)
         buf_btns.addWidget(self._buf_reset, 0)
         buf_lay.addLayout(buf_btns)
         buf_lay.addWidget(self._buf_hint)
+        buf_lay.addWidget(self._buf_rules_strip, 0)
         buf_lay.addWidget(self._buf_preview, 1)
 
         lay = QVBoxLayout(self)
@@ -212,9 +217,7 @@ class LiveviewLeftPanel(QWidget):
         """Pulse the next calibration / buffer / analysis setup control(s)."""
         intake = self._state.intake_mode
         calibrated = self._state.integrator_dir is not None
-        buffer_ready = (
-            self._state.buffer_dat_path is not None and self._state.subtract_options is not None
-        )
+        buffer_ready = self._state.buffer_ready()
         targets: list = []
         cal = self._cal_wizard
         buf = self._buf_wizard
@@ -764,13 +767,40 @@ class LiveviewLeftPanel(QWidget):
             self._buf_preview.show_path(str(buf), q_min=q_min, q_max=q_max)
         else:
             self._buf_preview.show_path("")
+            n_rules = len(self._state.buffer_rules or [])
+            if self._state.buffer_ready():
+                self._buf_hint.setText(f"Buffer rules ready ({n_rules}); optional pin preview empty")
+            else:
+                self._buf_hint.setText("Set subtract options (Set buffer) and/or Edit rules…")
             self._buf_hint.setVisible(True)
         self._buf_preview.set_image_click_handler(self._open_buffer_wizard)
+        self._buf_rules_strip.set_rules(list(self._state.buffer_rules or []))
 
     def sync_buffer_preview_from_state(self) -> None:
         """Refresh buffer thumbnail from ``LiveviewSessionState`` (e.g. after watch-folder change)."""
         self._refresh_buffer_preview_from_state()
         self.refresh_calibration_coach()
+
+    def _open_buffer_rules_editor(self) -> None:
+        rules = list(self._state.buffer_rules or [])
+        if self._rules_editor is None:
+            self._rules_editor = BufferRulesEditorDialog(rules=rules, parent=self)
+            self._rules_editor.applied.connect(self._on_buffer_rules_applied)
+        else:
+            self._rules_editor._editor.set_rules(rules)  # noqa: SLF001
+        self._rules_editor.show()
+        self._rules_editor.raise_()
+        self._rules_editor.activateWindow()
+
+    def _on_buffer_rules_applied(self, rules: object) -> None:
+        try:
+            pairs = [(str(a), str(b)) for a, b in list(rules or [])]  # type: ignore[arg-type]
+            # Keep existing subtract_options if present; otherwise require wizard still.
+            self._session.set_buffer_rules(pairs)
+            self._refresh_buffer_preview_from_state()
+            self.refresh_calibration_coach()
+        except Exception as e:
+            QMessageBox.critical(self, "Cannot apply buffer rules", str(e))
 
     def reset_calibration_wizard_form(self) -> None:
         if self._cal_wizard is not None:

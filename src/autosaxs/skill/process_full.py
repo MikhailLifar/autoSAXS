@@ -50,17 +50,22 @@ def process_full(
 
     ```yaml
     calibrant: "*AgBh*.tif"          # basename fnmatch glob (default)
-    buffer_rules:                    # sample_glob → buffer_glob (fnmatch only)
-      "*_sample*.tif": "*_buffer*.tif"
+    buffer_rules:                    # ordered sample_expr → buffer_expr ({capture} + *)
+      "*{stem}_sample*": "*{stem}_buffer*"
+      # "*protein*": ""              # explicit no-buffer sample (skip subtract, still analyze)
     analysis: mono                   # required: mono | poly
     # optional leaf overrides:
     # calibrate: { wavelength: 1.445 }
     # subtract: { q_min: 4.5, q_max: 5.5 }
     ```
 
-    Matching is **fnmatch against basenames** (no regex). Calibrant: lexicographically
-    first match. Buffer pairing reuses ``map_sample_files_to_buffer_files``; if that
-    leaves unpaired samples and exactly one buffer exists, all samples share it.
+    Matching is basename ``*`` / ``{capture}`` patterns (no regex). Calibrant:
+    lexicographically first match. Buffer pairing uses the shared
+    ``autosaxs.core.buffer_rules`` matcher. Outcomes: unique pair → subtract;
+    RHS ``""`` → skip subtract but continue analysis on unsubtracted 1D; no
+    sample-expr match → silent skip (not analyzed); multi-match / 0/>1 buffers →
+    hard error with diagnostics. The old shared-single-buffer fallback is gone —
+    write an explicit rule when one buffer serves many samples.
 
     ### Arguments
 

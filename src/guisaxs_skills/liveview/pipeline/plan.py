@@ -7,6 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from autosaxs.core.buffer_rules import (
+    BufferMatchConflict,
+    MatchKind,
+    MatchResult,
+    match_sample_to_buffer,
+)
+
 from ...core.models import RunRequest
 from ..session.output_paths import (
     averaged_dir,
@@ -19,6 +26,7 @@ from ..session.output_paths import (
 from ..session.sample import Sample
 from ..session.state import LiveviewIntakeMode, LiveviewSessionState
 from ..services.calibration.masks import applied_mask_path
+from .buffer_match import collect_buffer_candidates
 from .jobs import (
     CompletedWork,
     Job,
@@ -31,6 +39,9 @@ from .polydisperse_pipeline import PolydispersePipelineParts, build_polydisperse
 from .report_pipeline import report_individual_step
 
 YamlOptionsLoader = Callable[[Optional[Path]], dict]
+
+# Re-export for executor / controller catch sites.
+__all__ = ["PipelinePlan", "plan_for", "BufferMatchConflict"]
 
 
 def _remaining_steps(steps: List[JobStep], completed: CompletedWork | None) -> List[JobStep]:
@@ -155,6 +166,60 @@ def _analysis_steps(
     return steps
 
 
+def _match_for_sample(
+    state: LiveviewSessionState,
+    *,
+    sample_curve: str,
+    sample_output_root: Path,
+) -> MatchResult:
+    """Run buffer_rules matcher; raise ``BufferMatchConflict`` on CONFLICT."""
+    rules = tuple(state.buffer_rules or ())
+    candidates = collect_buffer_candidates(
+        state,
+        sample_output_root=sample_output_root,
+        exclude=[sample_curve],
+    )
+    result = match_sample_to_buffer(sample_curve, candidates, rules)
+    if result.kind == MatchKind.CONFLICT:
+        raise BufferMatchConflict(result)
+    return result
+
+
+def _append_analysis_and_report(
+    steps: List[JobStep],
+    state: LiveviewSessionState,
+    *,
+    profile: str,
+    output_root: Path,
+    stem: str,
+    load_yaml: YamlOptionsLoader,
+) -> None:
+    steps.extend(_analysis_steps(state, profile, output_root=output_root, load_yaml=load_yaml))
+    if state.analysis_enabled():
+        steps.append(report_individual_step(output_root=output_root, basename=stem))
+
+
+def _subtract_step(
+    state: LiveviewSessionState,
+    *,
+    sample_curve: str,
+    buffer_path: str,
+    output_root: Path,
+) -> JobStep:
+    subdir = subtracted_dir(output_root)
+    subdir.mkdir(parents=True, exist_ok=True)
+    opts = {"output_dir": str(subdir), "use_cache": False}
+    opts.update(dict(state.subtract_options or {}))
+    return JobStep(
+        name="subtract",
+        request=RunRequest(
+            skill_name="subtract",
+            positional=[sample_curve, buffer_path],
+            options=opts,
+        ),
+    )
+
+
 def _plan_frame(
     state: LiveviewSessionState,
     sample: Sample,
@@ -209,26 +274,54 @@ def _plan_frame(
     )
     integrated_dat = str(integrated_dat_path(root=root, stem=stem, integrator_ready=True).resolve())
 
-    if state.buffer_ready():
-        assert state.buffer_dat_path is not None
-        subdir = subtracted_dir(root)
-        subdir.mkdir(parents=True, exist_ok=True)
-        opts = {"output_dir": str(subdir), "use_cache": False}
-        opts.update(dict(state.subtract_options or {}))
+    if not state.buffer_ready():
+        # Buffer stage not configured: integrate then analysis on unsubtracted (legacy).
+        profile = integrated_dat
+        _append_analysis_and_report(
+            steps, state, profile=profile, output_root=root, stem=stem, load_yaml=load_yaml
+        )
+        return PipelinePlan(
+            steps=steps,
+            profile_path=profile,
+            output_root=root,
+            source_path=tp,
+            boarding=LiveviewIntakeMode.FRAME_2D,
+            sample_stem=stem,
+        )
+
+    # Match against TIFF basename as well as predicted integrated curve so rules
+    # written for either naming style work. Prefer the curve path for pairing.
+    match = _match_for_sample(state, sample_curve=integrated_dat, sample_output_root=root)
+    if match.kind == MatchKind.UNMATCHED:
+        # Also try the source TIFF basename (rules often target *.tif pools).
+        match_tiff = _match_for_sample(state, sample_curve=tp, sample_output_root=root)
+        if match_tiff.kind != MatchKind.UNMATCHED:
+            match = match_tiff
+        else:
+            # Not a claimed sample → stop after integrate (silent; no analysis).
+            return PipelinePlan(
+                steps=steps,
+                profile_path=integrated_dat,
+                output_root=root,
+                source_path=tp,
+                boarding=LiveviewIntakeMode.FRAME_2D,
+                sample_stem=stem,
+            )
+
+    if match.kind == MatchKind.PAIRED:
+        assert match.buffer is not None
         steps.append(
-            JobStep(
-                name="subtract",
-                request=RunRequest(
-                    skill_name="subtract",
-                    positional=[integrated_dat, str(state.buffer_dat_path)],
-                    options=opts,
-                ),
+            _subtract_step(
+                state,
+                sample_curve=integrated_dat,
+                buffer_path=match.buffer,
+                output_root=root,
             )
         )
         profile = str(subtracted_dat_path(root=root, stem=stem).resolve())
-        steps.extend(_analysis_steps(state, profile, output_root=root, load_yaml=load_yaml))
-        if state.analysis_enabled():
-            steps.append(report_individual_step(output_root=root, basename=stem))
+        _append_analysis_and_report(
+            steps, state, profile=profile, output_root=root, stem=stem, load_yaml=load_yaml
+        )
         return PipelinePlan(
             steps=steps,
             profile_path=profile,
@@ -239,10 +332,11 @@ def _plan_frame(
             subtracted_path=profile,
         )
 
+    # NONE: claimed sample, skip subtract, continue analysis on integrated.
     profile = integrated_dat
-    steps.extend(_analysis_steps(state, profile, output_root=root, load_yaml=load_yaml))
-    if state.analysis_enabled():
-        steps.append(report_individual_step(output_root=root, basename=stem))
+    _append_analysis_and_report(
+        steps, state, profile=profile, output_root=root, stem=stem, load_yaml=load_yaml
+    )
     return PipelinePlan(
         steps=steps,
         profile_path=profile,
@@ -264,26 +358,45 @@ def _plan_curve_1d(
     root = state.watchdir.resolve()
     steps: List[JobStep] = []
 
-    if state.buffer_ready():
-        assert state.buffer_dat_path is not None
-        subdir = subtracted_dir(root)
-        subdir.mkdir(parents=True, exist_ok=True)
-        opts = {"output_dir": str(subdir), "use_cache": False}
-        opts.update(dict(state.subtract_options or {}))
+    if not state.buffer_ready():
+        profile = dp
+        _append_analysis_and_report(
+            steps, state, profile=profile, output_root=root, stem=stem, load_yaml=load_yaml
+        )
+        return PipelinePlan(
+            steps=steps,
+            profile_path=profile,
+            output_root=root,
+            source_path=dp,
+            boarding=LiveviewIntakeMode.CURVE_1D,
+            sample_stem=stem,
+        )
+
+    match = _match_for_sample(state, sample_curve=dp, sample_output_root=root)
+    if match.kind == MatchKind.UNMATCHED:
+        return PipelinePlan(
+            steps=steps,
+            profile_path=dp,
+            output_root=root,
+            source_path=dp,
+            boarding=LiveviewIntakeMode.CURVE_1D,
+            sample_stem=stem,
+        )
+
+    if match.kind == MatchKind.PAIRED:
+        assert match.buffer is not None
         steps.append(
-            JobStep(
-                name="subtract",
-                request=RunRequest(
-                    skill_name="subtract",
-                    positional=[dp, str(state.buffer_dat_path)],
-                    options=opts,
-                ),
+            _subtract_step(
+                state,
+                sample_curve=dp,
+                buffer_path=match.buffer,
+                output_root=root,
             )
         )
         profile = str(subtracted_dat_path(root=root, stem=stem).resolve())
-        steps.extend(_analysis_steps(state, profile, output_root=root, load_yaml=load_yaml))
-        if state.analysis_enabled():
-            steps.append(report_individual_step(output_root=root, basename=stem))
+        _append_analysis_and_report(
+            steps, state, profile=profile, output_root=root, stem=stem, load_yaml=load_yaml
+        )
         return PipelinePlan(
             steps=steps,
             profile_path=profile,
@@ -295,9 +408,9 @@ def _plan_curve_1d(
         )
 
     profile = dp
-    steps.extend(_analysis_steps(state, profile, output_root=root, load_yaml=load_yaml))
-    if state.analysis_enabled():
-        steps.append(report_individual_step(output_root=root, basename=stem))
+    _append_analysis_and_report(
+        steps, state, profile=profile, output_root=root, stem=stem, load_yaml=load_yaml
+    )
     return PipelinePlan(
         steps=steps,
         profile_path=profile,

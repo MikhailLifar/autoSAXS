@@ -108,11 +108,12 @@ def process_monodisperse(
     **First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
     **and** a pipeline config is available (``config.conf`` in that dir, or
     ``config_path`` / ``--conf``), run the TIFF full pipeline (calibrate → integrate →
-    average as needed → subtract via ``buffer_rules``) then analyze each subtracted
-    ``.dat``. Otherwise treat ``profile`` as subtracted ``.dat`` path(s) (backward
-    compatible). TIFF dir without config → clear ``FileNotFoundError`` (not silent
-    fallthrough). Explicit folder+config router: ``process_full`` (reads
-    ``analysis: mono|poly``).
+    average as needed → pair/subtract via ``buffer_rules``) then analyze each
+    profile (subtracted when paired; unsubtracted when RHS is ``""``). Unmatched
+    curves are skipped. Otherwise treat ``profile`` as subtracted ``.dat``
+    path(s) (backward compatible). TIFF dir without config → clear
+    ``FileNotFoundError`` (not silent fallthrough). Explicit folder+config
+    router: ``process_full`` (reads ``analysis: mono|poly``).
 
     ### Arguments
 
@@ -187,7 +188,11 @@ def process_monodisperse(
             use_cache=use_cache,
             event_bus=bus,
         )
-        expanded = list(tiff_front["subtracted_paths"])
+        # analysis_paths includes PAIRED (subtracted) + NONE (unsubtracted);
+        # UNMATCHED are omitted. Fall back to subtracted_paths for older dicts.
+        expanded = list(
+            tiff_front.get("analysis_paths") or tiff_front.get("subtracted_paths") or []
+        )
         # Prefer the same config file the front-end resolved.
         config_path = tiff_front.get("config_path") or config_path
     else:

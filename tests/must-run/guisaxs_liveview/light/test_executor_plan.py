@@ -387,3 +387,61 @@ def test_monodisperse_step_shape_dammif_not_queued(tmp_path: Path):
     assert step is None
 
 
+
+
+def test_executor_dispatch_hold_blocks_tick(tmp_path: Path):
+    """dispatch_hold pauses all promote/start (including manual); not Auto/Manual mode."""
+
+    class _DummySignal:
+        def connect(self, _fn):
+            return None
+
+    class _DummyRunner:
+        def __init__(self):
+            self.finished = _DummySignal()
+            self.started: list[RunRequest] = []
+
+        def is_running(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            return None
+
+        def start(self, req) -> None:
+            self.started.append(req)
+
+    runner = _DummyRunner()
+    state = LiveviewSessionState(watchdir=tmp_path)
+    state.set_auto_processing(True)
+    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=runner)  # type: ignore[arg-type]
+
+    manual = Job(
+        id="manual",
+        priority=150,
+        steps=[JobStep(name="fit_guinier", request=RunRequest("fit_guinier", ["prof.dat"], {}))],
+        context={"manual": True},
+    )
+    auto = Job(
+        id="auto",
+        priority=0,
+        steps=[JobStep(name="integrate", request=RunRequest("integrate", [], {}))],
+        context={"tiff_path": str(tmp_path / "a.tif")},
+    )
+    ex._jobs.put(auto)  # noqa: SLF001
+    ex._jobs.put(manual)  # noqa: SLF001
+
+    ex.set_dispatch_hold(True, reason="buffer_rules_conflict")
+    assert ex.dispatch_hold is True
+    assert state.is_auto_processing() is True  # hold is orthogonal to Auto/Manual
+
+    ex._tick()  # noqa: SLF001
+    ex._tick()  # noqa: SLF001
+    assert ex._current_job is None  # noqa: SLF001
+    assert runner.started == []
+    assert len(ex._jobs) == 2  # noqa: SLF001
+
+    ex.set_dispatch_hold(False)
+    # Auto on: should start highest-priority (manual) first
+    ex._tick()  # noqa: SLF001
+    assert ex._current_job is not None  # noqa: SLF001
+    assert ex._current_job.id == "manual"  # noqa: SLF001
