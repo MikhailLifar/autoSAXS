@@ -242,7 +242,7 @@ class BufferRulesConflictDialog(QDialog):
 
 
 class BufferRulesStrip(QWidget):
-    """Compact read-only strip + Edit rules… button for the left buffer panel."""
+    """Compact read-only strip + Edit rules… for the buffer wizard session settings."""
 
     edit_requested = pyqtSignal()
 

@@ -7,6 +7,7 @@ from typing import Optional
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import (
+    QButtonGroup,
     QDialog,
     QGroupBox,
     QHBoxLayout,
@@ -15,6 +16,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QSizePolicy,
     QSplitter,
     QTableWidget,
@@ -51,6 +53,7 @@ from ..widgets.plots import (
     open_image_2d_dialog,
 )
 from ..widgets.plots import mpl_navigation_toolbar
+from .buffer_rules import BufferRulesEditorDialog, BufferRulesStrip
 
 
 def _empty_hints():
@@ -630,6 +633,7 @@ class BufferWizardDialog(QDialog):
         *,
         watchdir: Path,
         hints: SessionPathHints,
+        session,
         saved_state: dict | None = None,
         parent=None,
     ) -> None:
@@ -657,11 +661,14 @@ class BufferWizardDialog(QDialog):
             self.resize(1120, 640)
         self._watchdir = watchdir
         self._hints = hints
+        self._session = session
         self._dat_viewer = None
         self._apply_coach_dismissed = False
         self._close_coach_armed = False
         self._autofill_buffer_key = None
         self._auto_hinted_buffer_path: str | None = None
+        self._q_mode_auto = True
+        self._rules_editor: BufferRulesEditorDialog | None = None
         self._btn_close = QPushButton("Close")
         self._btn_close.clicked.connect(self.close)
 
@@ -673,6 +680,16 @@ class BufferWizardDialog(QDialog):
         self._plot = LogCurvePlot()
         self._plot.mpl_connect("button_press_event", self._on_plot_click)
         self._splitter: QSplitter | None = None
+
+        self._rules_strip = BufferRulesStrip()
+        self._rules_strip.edit_requested.connect(self._open_buffer_rules_editor)
+        self._radio_q_auto = QRadioButton("Auto")
+        self._radio_q_fixed = QRadioButton("Fixed")
+        self._radio_q_auto.setChecked(True)
+        q_mode_group = QButtonGroup(self)
+        q_mode_group.addButton(self._radio_q_auto)
+        q_mode_group.addButton(self._radio_q_fixed)
+        self._radio_q_auto.toggled.connect(self._on_q_mode_toggled)
 
         lay = QVBoxLayout(self)
         if meta is not None:
@@ -703,7 +720,24 @@ class BufferWizardDialog(QDialog):
             right.setMinimumWidth(340)
             right_lay = QVBoxLayout(right)
             right_lay.setContentsMargins(0, 0, 0, 0)
-            right_lay.addWidget(self._form, 1)
+
+            session_box = QGroupBox("Session settings")
+            session_lay = QVBoxLayout(session_box)
+            session_lay.addWidget(self._rules_strip)
+            q_row = QHBoxLayout()
+            q_row.addWidget(QLabel("q0 / q1:"))
+            q_row.addWidget(self._radio_q_auto)
+            q_row.addWidget(self._radio_q_fixed)
+            q_row.addStretch(1)
+            session_lay.addLayout(q_row)
+            right_lay.addWidget(session_box, 0)
+
+            this_box = QGroupBox("This buffer")
+            this_lay = QVBoxLayout(this_box)
+            this_lay.setContentsMargins(6, 6, 6, 6)
+            this_lay.addWidget(self._form, 1)
+            right_lay.addWidget(this_box, 1)
+
             row = QHBoxLayout()
             row.addWidget(self._apply)
             self._btn_reset = QPushButton("Reset")
@@ -715,12 +749,15 @@ class BufferWizardDialog(QDialog):
             row.addStretch(1)
             row.addWidget(self._btn_close)
             right_lay.addLayout(row)
-            right_lay.addWidget(QLabel("These settings are kept for this session and applied to new files."))
+            right_lay.addWidget(
+                QLabel("Rules and subtract options are kept for this session and applied to new files.")
+            )
             splitter.addWidget(right)
             splitter.setStretchFactor(0, 3)
             splitter.setStretchFactor(1, 2)
             lay.addWidget(splitter, 1)
             self._attach_options_help_button()
+            self.sync_session_rules()
             self._sync_auto_hint_marker_from_field()
             self._autofill_q_range_from_buffer(force=False)
             self._refresh_buffer_plot()
@@ -755,6 +792,49 @@ class BufferWizardDialog(QDialog):
 
     def update_path_hints(self, hints: SessionPathHints) -> None:
         self._hints = hints
+
+    def sync_session_rules(self) -> None:
+        """Refresh the compact rules strip from session ``buffer_rules``."""
+        rules = list(getattr(self._session.state, "buffer_rules", None) or [])
+        self._rules_strip.set_rules(rules)
+        if self._rules_editor is not None and self._rules_editor.isVisible():
+            self._rules_editor._editor.set_rules(rules)  # noqa: SLF001
+
+    def _open_buffer_rules_editor(self) -> None:
+        rules = list(getattr(self._session.state, "buffer_rules", None) or [])
+        if self._rules_editor is None:
+            self._rules_editor = BufferRulesEditorDialog(rules=rules, parent=self)
+            self._rules_editor.applied.connect(self._on_buffer_rules_applied)
+        else:
+            self._rules_editor._editor.set_rules(rules)  # noqa: SLF001
+        self._rules_editor.show()
+        self._rules_editor.raise_()
+        self._rules_editor.activateWindow()
+
+    def _on_buffer_rules_applied(self, rules: object) -> None:
+        try:
+            pairs = [(str(a), str(b)) for a, b in list(rules or [])]  # type: ignore[arg-type]
+            self._session.set_buffer_rules(pairs)
+            self.sync_session_rules()
+            self.attention_context_changed.emit()
+        except Exception as e:
+            QMessageBox.critical(self, "Cannot apply buffer rules", str(e))
+
+    def _on_q_mode_toggled(self, checked: bool) -> None:
+        # Connected to the Auto radio: checked=False means the user picked Fixed.
+        self._q_mode_auto = bool(checked)
+        if self._q_mode_auto:
+            self._sync_q_range_to_buffer(force=True)
+            self._refresh_buffer_plot()
+
+    def _set_q_mode_fixed(self) -> None:
+        if self._radio_q_fixed.isChecked():
+            self._q_mode_auto = False
+            return
+        self._radio_q_fixed.blockSignals(True)
+        self._radio_q_fixed.setChecked(True)
+        self._radio_q_fixed.blockSignals(False)
+        self._q_mode_auto = False
 
     def maybe_apply_empty_buffer_hint(self) -> bool:
         """
@@ -889,11 +969,13 @@ class BufferWizardDialog(QDialog):
     def _on_buffer_path_changed(self, *_args) -> None:
         # User browse/edit/drop owns the path; stop refreshing soft hints over it.
         self._auto_hinted_buffer_path = None
-        # New / edited buffer path → always recompute the pre-knee window.
-        self._sync_q_range_to_buffer(force=True)
+        # Auto mode recomputes the pre-knee window; Fixed keeps the user's q.
+        self._sync_q_range_to_buffer(force=bool(self._q_mode_auto))
         self._refresh_buffer_plot()
 
     def _on_q_text_changed(self, _text: str = "") -> None:
+        # Manual q edits switch session q mode to Fixed.
+        self._set_q_mode_fixed()
         self._refresh_buffer_plot()
 
     def _buffer_field(self) -> PathField | None:
@@ -956,8 +1038,9 @@ class BufferWizardDialog(QDialog):
         """Keep q_min/q_max aligned with the current buffer curve.
 
         ``PathField.set_text`` does not emit ``path_changed``, so session/hint
-        fills must also go through this sync. Recalculate whenever the resolved
-        buffer identity changes, or when ``force`` is set (user edit/browse).
+        fills must also go through this sync. In Auto mode, recalculate whenever
+        the resolved buffer identity changes or ``force`` is set. In Fixed mode,
+        keep the user's q0/q1 unless Auto is selected again.
         """
         resolved = self._resolved_buffer_path()
         key = str(resolved) if resolved is not None else ""
@@ -965,6 +1048,10 @@ class BufferWizardDialog(QDialog):
 
         if not key:
             self._autofill_buffer_key = ""
+            return
+
+        if not self._q_mode_auto and not force:
+            self._autofill_buffer_key = key
             return
 
         if not force:
@@ -1016,7 +1103,7 @@ class BufferWizardDialog(QDialog):
         # If the buffer identity changed without a path_changed signal, catch up.
         key = str(resolved)
         if key != getattr(self, "_autofill_buffer_key", None):
-            self._sync_q_range_to_buffer(force=True)
+            self._sync_q_range_to_buffer(force=bool(self._q_mode_auto))
             q_min, q_max = self._q_range()
         try:
             self._plot.plot_dat(str(resolved), q_min=q_min, q_max=q_max)
@@ -1135,9 +1222,9 @@ class BufferWizardDialog(QDialog):
             "Options",
             "Buffer subtraction auto-scales the buffer using a min-ratio match in the "
             "high-q plateau just before the detector knee.\n\n"
-            "q min / q max define that matching window. They are filled automatically "
-            "from the buffer curve (pre-knee band) when you choose a buffer; edit them "
-            "if you want a different interval.",
+            "q min / q max define that matching window. Session settings q0/q1 Auto "
+            "refills them from the buffer curve (pre-knee band) when the buffer changes; "
+            "Fixed keeps your values. Editing q min/q max switches to Fixed.",
         )
 
     def _on_apply(self) -> None:
