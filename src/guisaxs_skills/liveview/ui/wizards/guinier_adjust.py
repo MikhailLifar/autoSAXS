@@ -50,7 +50,7 @@ class GuinierAdjustWizardDialog(QDialog):
     Right: first/last spin+sliders, Restore auto, Confirm, passport table.
     """
 
-    params_changed = pyqtSignal()
+    params_changed = pyqtSignal(bool)  # go_auto
     editing_started = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -146,7 +146,7 @@ class GuinierAdjustWizardDialog(QDialog):
         right.setSpacing(8)
         right.addLayout(form)
         right.addWidget(self._btn_restore)
-        right.addWidget(self._confirm.button)
+        right.addWidget(self._confirm.widget)
         right.addLayout(passport_col, 1)
 
         body = QHBoxLayout()
@@ -159,7 +159,8 @@ class GuinierAdjustWizardDialog(QDialog):
         lay.addWidget(
             QLabel(
                 "Adjust Guinier first/last for the current curve. "
-                "Plots and passport update live; press Confirm to write parameters and re-run. "
+                "Plots and passport update live; Confirm writes parameters and re-runs. "
+                "Confirm, go Auto also resumes Auto processing. "
                 "Click a plot to open an enlarged viewer."
             )
         )
@@ -324,8 +325,8 @@ class GuinierAdjustWizardDialog(QDialog):
             return
         self.set_params(snap, emit=True)
 
-    def _on_confirm(self) -> None:
-        self.params_changed.emit()
+    def _on_confirm(self, go_auto: bool = False) -> None:
+        self.params_changed.emit(bool(go_auto))
 
     def _passport_from_fixed(self, out: Mapping[str, Any], *, first: int, last: int) -> Dict[str, Any]:
         interval = out.get("interval") if isinstance(out.get("interval"), dict) else {}

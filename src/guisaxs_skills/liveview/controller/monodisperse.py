@@ -131,7 +131,7 @@ class LiveviewMonodisperseHandler:
         self._c.executor.enqueue_job(job)
         return True
 
-    def on_guinier_chain(self) -> None:
+    def on_guinier_chain(self, *, go_auto: bool = False) -> None:
         prof, root = self._profile_and_root()
         if not prof or root is None:
             return
@@ -174,8 +174,10 @@ class LiveviewMonodisperseHandler:
             return
         job = self._c.executor.build_monodisperse_manual_job(profile_abs=prof, steps=steps, output_root=root)
         self._c.executor.enqueue_job(job)
+        if go_auto:
+            self.on_resume_queue()
 
-    def on_gnom_rerun(self) -> None:
+    def on_gnom_rerun(self, *, go_auto: bool = False) -> None:
         prof, root = self._profile_and_root()
         if not prof or root is None:
             parent = self._c.parent_widget
@@ -196,6 +198,8 @@ class LiveviewMonodisperseHandler:
         )
         job = self._c.executor.build_monodisperse_manual_job(profile_abs=prof, steps=steps, output_root=root)
         self._c.executor.enqueue_job(job)
+        if go_auto:
+            self.on_resume_queue()
 
     def on_shape_rerun(self) -> None:
         """Modeling is Confirm-only in guisaxs-shape (not liveview SkillRunner)."""

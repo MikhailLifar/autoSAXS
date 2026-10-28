@@ -108,7 +108,14 @@ class LiveviewSkillRunsHandler:
     def cancel_running(self) -> None:
         self._c.executor.cancel_running(requeue=False)
 
-    def apply_subtraction_rerun(self, *, scaling_factor: float, sample_dat: str, buffer_dat: str) -> None:
+    def apply_subtraction_rerun(
+        self,
+        *,
+        scaling_factor: float,
+        sample_dat: str,
+        buffer_dat: str,
+        go_auto: bool = False,
+    ) -> None:
         # Sync live pane numbers into session before building the after-subtract chain.
         right = self._c.right
         if right is not None:
@@ -126,7 +133,11 @@ class LiveviewSkillRunsHandler:
             use_ui_params=True,
         )
         self._c.executor.enqueue_job(job)
-        if not (self._c.state.monodisperse_armed or self._c.state.polydisperse_armed):
+        # Plain Apply resumes only when analysis is unarmed (legacy). "Apply, go Auto"
+        # always resumes via the same session.resume path as Resume auto-processing.
+        if go_auto or not (self._c.state.monodisperse_armed or self._c.state.polydisperse_armed):
+            if go_auto:
+                self._c.enqueue_report_for_current_sample()
             self._c.session.resume()
 
     def _run_manual_fit(

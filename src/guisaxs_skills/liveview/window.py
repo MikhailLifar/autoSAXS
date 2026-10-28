@@ -449,7 +449,7 @@ class LiveviewMainWindow(QMainWindow):
             return
         self._controller.on_subtraction_wizard_closed()
 
-    def _on_subtraction_apply_requested(self, scaling_factor: float) -> None:
+    def _on_subtraction_apply_requested(self, scaling_factor: float, go_auto: bool = False) -> None:
         ctx = self._controller.middle_subtraction_context()
         sample_dat = str(ctx.get("sample_dat") or "").strip()
         buffer_dat = str(ctx.get("buffer_dat") or "").strip()
@@ -467,6 +467,7 @@ class LiveviewMainWindow(QMainWindow):
             scaling_factor=float(scaling_factor),
             sample_dat=sample_dat,
             buffer_dat=buffer_dat,
+            go_auto=bool(go_auto),
         )
 
     def _on_tiff_files_dropped(self, paths: object) -> None:

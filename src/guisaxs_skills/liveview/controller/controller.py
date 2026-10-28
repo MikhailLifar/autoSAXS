@@ -302,11 +302,19 @@ class LiveviewController(QObject):
     def cancel_running_skill(self) -> None:
         self.skill_runs.cancel_running()
 
-    def apply_subtraction_rerun(self, *, scaling_factor: float, sample_dat: str, buffer_dat: str) -> None:
+    def apply_subtraction_rerun(
+        self,
+        *,
+        scaling_factor: float,
+        sample_dat: str,
+        buffer_dat: str,
+        go_auto: bool = False,
+    ) -> None:
         self.skill_runs.apply_subtraction_rerun(
             scaling_factor=scaling_factor,
             sample_dat=sample_dat,
             buffer_dat=buffer_dat,
+            go_auto=bool(go_auto),
         )
 
     def on_subtraction_control_changed(self) -> None:
@@ -410,11 +418,11 @@ class LiveviewController(QObject):
     def on_monodisperse_shape_config(self) -> None:
         self.monodisperse.on_shape_config_changed()
 
-    def on_monodisperse_guinier_chain(self) -> None:
-        self.monodisperse.on_guinier_chain()
+    def on_monodisperse_guinier_chain(self, go_auto: bool = False) -> None:
+        self.monodisperse.on_guinier_chain(go_auto=bool(go_auto))
 
-    def on_monodisperse_gnom_rerun(self) -> None:
-        self.monodisperse.on_gnom_rerun()
+    def on_monodisperse_gnom_rerun(self, go_auto: bool = False) -> None:
+        self.monodisperse.on_gnom_rerun(go_auto=bool(go_auto))
 
     def on_monodisperse_shape_rerun(self) -> None:
         self.monodisperse.on_shape_rerun()
@@ -434,11 +442,11 @@ class LiveviewController(QObject):
     def on_polydisperse_mixture_config(self) -> None:
         self.polydisperse.on_mixture_config_changed()
 
-    def on_polydisperse_guinier_rerun(self) -> None:
-        self.polydisperse.on_guinier_rerun()
+    def on_polydisperse_guinier_rerun(self, go_auto: bool = False) -> None:
+        self.polydisperse.on_guinier_rerun(go_auto=bool(go_auto))
 
-    def on_polydisperse_sizes_rerun(self) -> None:
-        self.polydisperse.on_sizes_rerun()
+    def on_polydisperse_sizes_rerun(self, go_auto: bool = False) -> None:
+        self.polydisperse.on_sizes_rerun(go_auto=bool(go_auto))
 
     def on_polydisperse_mixture_rerun(self) -> None:
         self.polydisperse.on_mixture_rerun()

@@ -15,8 +15,8 @@ from .config_sync import PolydisperseConfigSync
 class PolydisperseCoordinator(QObject):
     intervention_requested = pyqtSignal()
     mixture_config_changed = pyqtSignal()
-    guinier_rerun_requested = pyqtSignal()
-    sizes_rerun_requested = pyqtSignal()
+    guinier_rerun_requested = pyqtSignal(bool)  # go_auto
+    sizes_rerun_requested = pyqtSignal(bool)  # go_auto
     mixture_rerun_requested = pyqtSignal()
     resume_auto_processing_requested = pyqtSignal()
     stop_auto_processing_requested = pyqtSignal()
@@ -228,7 +228,7 @@ class PolydisperseCoordinator(QObject):
         self._sizes_adjust.show()
         self._sizes_adjust.raise_()
         self._sizes_adjust.activateWindow()
-    def _on_guinier_adjust_params_changed(self) -> None:
+    def _on_guinier_adjust_params_changed(self, go_auto: bool = False) -> None:
         if self._guinier_adjust is not None:
             p = self._guinier_adjust.guinier_params()
             self._config.store_guinier_interval(int(p["first"]), int(p["last"]))
@@ -237,13 +237,13 @@ class PolydisperseCoordinator(QObject):
             except Exception:
                 pass
         self.sync_params_to_state()
-        self.guinier_rerun_requested.emit()
+        self.guinier_rerun_requested.emit(bool(go_auto))
 
-    def _on_sizes_adjust_params_changed(self) -> None:
+    def _on_sizes_adjust_params_changed(self, go_auto: bool = False) -> None:
         if self._sizes_adjust is not None:
             self._config.store_sizes_working(self._sizes_adjust.sizes_params())
         self.sync_params_to_state()
-        self.sizes_rerun_requested.emit()
+        self.sizes_rerun_requested.emit(bool(go_auto))
 
     def _on_mixture_mode_changed(self, mode: str) -> None:
         self._config.apply_mixture_mode(mode)
