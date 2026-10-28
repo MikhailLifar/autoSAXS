@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence, Tuple
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import (
+    QButtonGroup,
     QDialog,
     QGroupBox,
     QHBoxLayout,
@@ -15,6 +16,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QSizePolicy,
     QSplitter,
     QTableWidget,
@@ -51,6 +53,7 @@ from ..widgets.plots import (
     open_image_2d_dialog,
 )
 from ..widgets.plots import mpl_navigation_toolbar
+from .buffer_rules import BufferRulesEditorDialog, BufferRulesStrip
 
 
 def _empty_hints():
@@ -624,6 +627,7 @@ class CalibrationWizardDialog(QDialog):
 class BufferWizardDialog(QDialog):
     reset_requested = pyqtSignal()
     attention_context_changed = pyqtSignal()
+    buffer_rules_applied = pyqtSignal(object)  # list[tuple[str,str]]
 
     def __init__(
         self,
@@ -631,6 +635,7 @@ class BufferWizardDialog(QDialog):
         watchdir: Path,
         hints: SessionPathHints,
         saved_state: dict | None = None,
+        buffer_rules: Sequence[Tuple[str, str]] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -649,12 +654,12 @@ class BufferWizardDialog(QDialog):
             geo = scr.availableGeometry() if scr is not None else None
             if geo is not None:
                 w = max(1000, int(0.72 * int(geo.width())))
-                h = max(560, int(0.58 * int(geo.height())))
+                h = max(620, int(0.68 * int(geo.height())))
                 self.resize(w, h)
-                self.setMinimumSize(900, 520)
+                self.setMinimumSize(900, 560)
         except Exception:
             self.setMinimumWidth(900)
-            self.resize(1120, 640)
+            self.resize(1120, 720)
         self._watchdir = watchdir
         self._hints = hints
         self._dat_viewer = None
@@ -662,6 +667,9 @@ class BufferWizardDialog(QDialog):
         self._close_coach_armed = False
         self._autofill_buffer_key = None
         self._auto_hinted_buffer_path: str | None = None
+        self._q_mode_auto = True
+        self._rules: list[tuple[str, str]] = []
+        self._rules_editor: BufferRulesEditorDialog | None = None
         self._btn_close = QPushButton("Close")
         self._btn_close.clicked.connect(self.close)
 
@@ -673,6 +681,21 @@ class BufferWizardDialog(QDialog):
         self._plot = LogCurvePlot()
         self._plot.mpl_connect("button_press_event", self._on_plot_click)
         self._splitter: QSplitter | None = None
+        self._rules_strip = BufferRulesStrip()
+        self._rules_strip.edit_requested.connect(self._open_buffer_rules_editor)
+        self._radio_q_auto = QRadioButton("Auto")
+        self._radio_q_fixed = QRadioButton("Fixed")
+        self._radio_q_auto.setToolTip(
+            "Recompute q0/q1 from the selected buffer curve (pre-knee window) when the buffer changes."
+        )
+        self._radio_q_fixed.setToolTip(
+            "Keep the q0/q1 values you set; changing the buffer path will not overwrite them."
+        )
+        self._radio_q_auto.setChecked(True)
+        q_mode_group = QButtonGroup(self)
+        q_mode_group.addButton(self._radio_q_auto)
+        q_mode_group.addButton(self._radio_q_fixed)
+        self._radio_q_auto.toggled.connect(self._on_q_mode_toggled)
 
         lay = QVBoxLayout(self)
         if meta is not None:
@@ -700,10 +723,29 @@ class BufferWizardDialog(QDialog):
             splitter.addWidget(left)
 
             right = QWidget()
-            right.setMinimumWidth(340)
+            right.setMinimumWidth(360)
             right_lay = QVBoxLayout(right)
             right_lay.setContentsMargins(0, 0, 0, 0)
-            right_lay.addWidget(self._form, 1)
+
+            session_box = QGroupBox("Session settings")
+            session_lay = QVBoxLayout(session_box)
+            session_lay.setContentsMargins(8, 8, 8, 8)
+            session_lay.addWidget(QLabel("Buffer pairing rules"))
+            session_lay.addWidget(self._rules_strip, 0)
+            q_mode_row = QHBoxLayout()
+            q_mode_row.addWidget(QLabel("q0 / q1:"))
+            q_mode_row.addWidget(self._radio_q_auto)
+            q_mode_row.addWidget(self._radio_q_fixed)
+            q_mode_row.addStretch(1)
+            session_lay.addLayout(q_mode_row)
+            right_lay.addWidget(session_box, 0)
+
+            this_box = QGroupBox("This buffer")
+            this_lay = QVBoxLayout(this_box)
+            this_lay.setContentsMargins(8, 8, 8, 8)
+            this_lay.addWidget(self._form, 1)
+            right_lay.addWidget(this_box, 1)
+
             row = QHBoxLayout()
             row.addWidget(self._apply)
             self._btn_reset = QPushButton("Reset")
@@ -715,14 +757,20 @@ class BufferWizardDialog(QDialog):
             row.addStretch(1)
             row.addWidget(self._btn_close)
             right_lay.addLayout(row)
-            right_lay.addWidget(QLabel("These settings are kept for this session and applied to new files."))
+            right_lay.addWidget(
+                QLabel(
+                    "Rules and subtract options are kept for this session and applied to new files."
+                )
+            )
             splitter.addWidget(right)
             splitter.setStretchFactor(0, 3)
             splitter.setStretchFactor(1, 2)
             lay.addWidget(splitter, 1)
             self._attach_options_help_button()
+            self.set_buffer_rules(list(buffer_rules or ()))
             self._sync_auto_hint_marker_from_field()
             self._autofill_q_range_from_buffer(force=False)
+            self._apply_q_fields_enabled()
             self._refresh_buffer_plot()
         else:
             lay.addWidget(QLabel("subtract skill is not available."))
@@ -752,6 +800,52 @@ class BufferWizardDialog(QDialog):
 
     def has_buffer_path(self) -> bool:
         return bool(self._buffer_path_text())
+
+    def set_buffer_rules(self, rules: Sequence[Tuple[str, str]]) -> None:
+        """Refresh the compact session rules strip from session state."""
+        self._rules = [(str(a), str(b)) for a, b in list(rules or ())]
+        self._rules_strip.set_rules(self._rules)
+        if self._rules_editor is not None and self._rules_editor.isVisible():
+            self._rules_editor._editor.set_rules(self._rules)  # noqa: SLF001
+
+    def _open_buffer_rules_editor(self) -> None:
+        rules = list(self._rules)
+        if self._rules_editor is None:
+            self._rules_editor = BufferRulesEditorDialog(rules=rules, parent=self)
+            self._rules_editor.applied.connect(self._on_rules_editor_applied)
+        else:
+            self._rules_editor._editor.set_rules(rules)  # noqa: SLF001
+        self._rules_editor.show()
+        self._rules_editor.raise_()
+        self._rules_editor.activateWindow()
+
+    def _on_rules_editor_applied(self, rules: object) -> None:
+        try:
+            pairs = [(str(a), str(b)) for a, b in list(rules or [])]  # type: ignore[arg-type]
+        except Exception:
+            pairs = []
+        self.set_buffer_rules(pairs)
+        self.buffer_rules_applied.emit(pairs)
+        self._apply_coach_dismissed = False
+        self.attention_context_changed.emit()
+
+    def _on_q_mode_toggled(self, _checked: bool = False) -> None:
+        self._q_mode_auto = bool(self._radio_q_auto.isChecked())
+        self._apply_q_fields_enabled()
+        if self._q_mode_auto:
+            self._sync_q_range_to_buffer(force=True)
+            self._refresh_buffer_plot()
+        self._apply_coach_dismissed = False
+        self.attention_context_changed.emit()
+
+    def _apply_q_fields_enabled(self) -> None:
+        """Auto mode keeps q fields read-only (values still follow the buffer)."""
+        editable = not self._q_mode_auto
+        for name in ("q_min", "q_max"):
+            w = self._form._opt_fields.get(name)  # type: ignore[attr-defined]
+            if isinstance(w, QLineEdit):
+                w.setReadOnly(not editable)
+                w.setEnabled(True)
 
     def update_path_hints(self, hints: SessionPathHints) -> None:
         self._hints = hints
@@ -889,8 +983,9 @@ class BufferWizardDialog(QDialog):
     def _on_buffer_path_changed(self, *_args) -> None:
         # User browse/edit/drop owns the path; stop refreshing soft hints over it.
         self._auto_hinted_buffer_path = None
-        # New / edited buffer path → always recompute the pre-knee window.
-        self._sync_q_range_to_buffer(force=True)
+        # Auto mode: recompute pre-knee window. Fixed mode: keep user q0/q1.
+        if self._q_mode_auto:
+            self._sync_q_range_to_buffer(force=True)
         self._refresh_buffer_plot()
 
     def _on_q_text_changed(self, _text: str = "") -> None:
@@ -953,11 +1048,12 @@ class BufferWizardDialog(QDialog):
                 w.blockSignals(False)
 
     def _sync_q_range_to_buffer(self, *, force: bool = False) -> None:
-        """Keep q_min/q_max aligned with the current buffer curve.
+        """Keep q_min/q_max aligned with the current buffer curve (Auto mode).
 
         ``PathField.set_text`` does not emit ``path_changed``, so session/hint
         fills must also go through this sync. Recalculate whenever the resolved
         buffer identity changes, or when ``force`` is set (user edit/browse).
+        Fixed mode skips overwrites so particular q0/q1 stay user-owned.
         """
         resolved = self._resolved_buffer_path()
         key = str(resolved) if resolved is not None else ""
@@ -965,6 +1061,11 @@ class BufferWizardDialog(QDialog):
 
         if not key:
             self._autofill_buffer_key = ""
+            return
+
+        if not self._q_mode_auto:
+            # Still track buffer identity so switching back to Auto can recompute.
+            self._autofill_buffer_key = key
             return
 
         if not force:
@@ -1015,7 +1116,7 @@ class BufferWizardDialog(QDialog):
             return
         # If the buffer identity changed without a path_changed signal, catch up.
         key = str(resolved)
-        if key != getattr(self, "_autofill_buffer_key", None):
+        if self._q_mode_auto and key != getattr(self, "_autofill_buffer_key", None):
             self._sync_q_range_to_buffer(force=True)
             q_min, q_max = self._q_range()
         try:
@@ -1064,6 +1165,10 @@ class BufferWizardDialog(QDialog):
         self._hints = hints
         self._autofill_buffer_key = None
         self._auto_hinted_buffer_path = None
+        self._q_mode_auto = True
+        self._radio_q_auto.blockSignals(True)
+        self._radio_q_auto.setChecked(True)
+        self._radio_q_auto.blockSignals(False)
         out = self._watchdir / "subtracted"
         out.mkdir(parents=True, exist_ok=True)
         self._form.set_skill(
@@ -1079,6 +1184,7 @@ class BufferWizardDialog(QDialog):
         self._attach_options_help_button()
         self._sync_auto_hint_marker_from_field()
         self._sync_q_range_to_buffer(force=False)
+        self._apply_q_fields_enabled()
         self._refresh_buffer_plot()
         self._apply_coach_dismissed = False
         self._close_coach_armed = False
@@ -1112,6 +1218,7 @@ class BufferWizardDialog(QDialog):
         self._sync_auto_hint_marker_from_field()
         # Buffer may have been filled via silent set_text (hints); sync q to that identity.
         self._sync_q_range_to_buffer(force=False)
+        self._apply_q_fields_enabled()
         self._refresh_buffer_plot()
         self.attention_context_changed.emit()
 

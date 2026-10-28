@@ -242,7 +242,7 @@ class BufferRulesConflictDialog(QDialog):
 
 
 class BufferRulesStrip(QWidget):
-    """Compact read-only strip + Edit rules… button for the left buffer panel."""
+    """Compact read-only rules table + Edit rules… (session strip in Buffer wizard)."""
 
     edit_requested = pyqtSignal()
 
@@ -261,7 +261,7 @@ class BufferRulesStrip(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._table)
-        lay.addWidget(self._edit)
+        lay.addWidget(self._edit, 0, Qt.AlignLeft)
 
     def set_rules(self, rules: Sequence[Tuple[str, str]]) -> None:
         self._table.setRowCount(0)

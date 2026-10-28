@@ -5,6 +5,7 @@
 - **Purpose:** Single-window watchdir app; sequential `autosaxs` skills; middle/right plots follow session facts + on-disk artifacts.
 - **Owners:** `LiveviewSession` (facts), `SampleStore` (current sample identity), `plan_for` (steps), `RevisionSettler`/`RevisionIngress` (ingest), `sync_middle_view` / `present_right` (presentation), `LiveviewJobExecutor` (run).
 - **Invariant (sample-tied):** Right panes + Adjust wizards follow `SampleStore.current` analysis identity; session wizard params are defaults/gaps only. See `docs/architecture/liveview/invariants.md`.
+- **Buffer rules UI:** session pairing rules strip + Edit rules + Auto/Fixed q live in `BufferWizardDialog` (not the left Buffer pane). Conflict ApplicationModal still reuses the rules editor; matcher/`dispatch_hold` unchanged.
 - **Maps SSOT:** `docs/architecture/liveview/nodes.yaml` → `scripts/render_arch.py` → Mermaid/Graphviz. Index: `docs/architecture/README.md`.
 - **Prose:** `docs/liveview_architecture.md`, `docs/liveview_session_sample_plan.md`.
 
