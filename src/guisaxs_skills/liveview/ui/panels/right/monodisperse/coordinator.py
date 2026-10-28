@@ -17,8 +17,8 @@ class MonodisperseCoordinator(QObject):
 
     intervention_requested = pyqtSignal()
     shape_config_changed = pyqtSignal()
-    guinier_chain_requested = pyqtSignal()
-    gnom_rerun_requested = pyqtSignal()
+    guinier_chain_requested = pyqtSignal(bool)  # go_auto
+    gnom_rerun_requested = pyqtSignal(bool)  # go_auto
     shape_rerun_requested = pyqtSignal()
     resume_auto_processing_requested = pyqtSignal()
     stop_auto_processing_requested = pyqtSignal()
@@ -260,7 +260,7 @@ class MonodisperseCoordinator(QObject):
         self._gnom_adjust.show()
         self._gnom_adjust.raise_()
         self._gnom_adjust.activateWindow()
-    def _on_guinier_adjust_params_changed(self) -> None:
+    def _on_guinier_adjust_params_changed(self, go_auto: bool = False) -> None:
         if self._guinier_adjust is not None:
             p = self._guinier_adjust.guinier_params()
             self._config.store_guinier_interval(int(p["first"]), int(p["last"]))
@@ -269,14 +269,14 @@ class MonodisperseCoordinator(QObject):
             except Exception:
                 pass
         self.sync_params_to_state()
-        self.guinier_chain_requested.emit()
+        self.guinier_chain_requested.emit(bool(go_auto))
 
-    def _on_gnom_adjust_params_changed(self) -> None:
+    def _on_gnom_adjust_params_changed(self, go_auto: bool = False) -> None:
         # Pause already fired via editing_started on first edit.
         if self._gnom_adjust is not None:
             self._config.store_gnom_working(self._gnom_adjust.gnom_params())
         self.sync_params_to_state()
-        self.gnom_rerun_requested.emit()
+        self.gnom_rerun_requested.emit(bool(go_auto))
 
     def _on_shape_mode_changed(self, mode: str) -> None:
         self._config.apply_shape_mode(mode)

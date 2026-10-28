@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Mapping, Optional
 
 from PyQt5.QtCore import QObject
-from PyQt5.QtWidgets import QMessageBox, QPushButton, QWidget
+from PyQt5.QtWidgets import QMessageBox, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from ..attention import AttentionPulse
 
@@ -42,8 +42,11 @@ def params_equivalent(a: Mapping[str, Any] | None, b: Mapping[str, Any] | None) 
 
 class AdjustConfirmController(QObject):
     """
-    Owns the Confirm button: inactive when UI matches the last committed (on-disk) params,
-    coach-pulsed when dirty, and gates dialog close with OK/Cancel.
+    Owns Confirm / Confirm-go-Auto buttons: inactive when UI matches the last committed
+    (on-disk) params, coach-pulsed when dirty, and gates dialog close with OK/Cancel.
+
+    ``on_confirm(go_auto)`` runs the same disk commit path; when ``go_auto`` is True the
+    caller must also resume session Auto (same as Confirm then Resume auto-processing).
     """
 
     def __init__(
@@ -51,7 +54,7 @@ class AdjustConfirmController(QObject):
         dialog: QWidget,
         *,
         get_current_params: Callable[[], Mapping[str, Any]],
-        on_confirm: Callable[[], None],
+        on_confirm: Callable[[bool], None],
         warning_title: str = "Unconfirmed changes",
         warning_text: str = (
             "You have unconfirmed parameter changes. Close without applying them to disk?"
@@ -67,15 +70,47 @@ class AdjustConfirmController(QObject):
         self._committed: dict[str, Any] = {}
         self._controls_enabled = True
         self._close_permitted = False
-        self._btn = QPushButton("Confirm", dialog)
+
+        # Vertical stack: adjust wizards put this in a narrow right column; stacked
+        # full-width buttons keep labels readable (no side-by-side squeeze/ellipsis).
+        self._widget = QWidget(dialog)
+        col = QVBoxLayout(self._widget)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(6)
+
+        self._btn = QPushButton("Confirm", self._widget)
         self._btn.setEnabled(False)
-        self._btn.setToolTip("Write parameters and re-run the skill on disk")
-        self._btn.clicked.connect(self._handle_confirm)
+        self._btn.setToolTip("Write parameters and re-run the skill on disk (stay Manual)")
+        self._btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._btn.setMinimumHeight(max(28, self._btn.sizeHint().height()))
+        self._btn.clicked.connect(self._handle_confirm_only)
+
+        self._btn_go_auto = QPushButton("Confirm, go Auto", self._widget)
+        self._btn_go_auto.setEnabled(False)
+        self._btn_go_auto.setToolTip(
+            "Write parameters, re-run the skill, and resume Auto processing for this sample"
+        )
+        self._btn_go_auto.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._btn_go_auto.setMinimumHeight(max(28, self._btn_go_auto.sizeHint().height()))
+        self._btn_go_auto.clicked.connect(self._handle_confirm_go_auto)
+
+        col.addWidget(self._btn)
+        col.addWidget(self._btn_go_auto)
         self._attention = AttentionPulse(dialog)
 
     @property
     def button(self) -> QPushButton:
+        """Plain Confirm button (tests / callers that click Confirm only)."""
         return self._btn
+
+    @property
+    def go_auto_button(self) -> QPushButton:
+        return self._btn_go_auto
+
+    @property
+    def widget(self) -> QWidget:
+        """Row containing Confirm | Confirm, go Auto (add this to layouts)."""
+        return self._widget
 
     def set_committed(self, params: Mapping[str, Any] | None) -> None:
         self._committed = dict(params or {})
@@ -93,8 +128,10 @@ class AdjustConfirmController(QObject):
         dirty = self.is_dirty()
         can_confirm = dirty and self._controls_enabled
         self._btn.setEnabled(can_confirm)
+        self._btn_go_auto.setEnabled(can_confirm)
         if can_confirm:
-            self._attention.set_targets([self._btn])
+            # Pulse both so neither label is missed; go-Auto is the convenience CTA.
+            self._attention.set_targets([self._btn, self._btn_go_auto])
         else:
             self._attention.clear()
 
@@ -118,6 +155,12 @@ class AdjustConfirmController(QObject):
             return True
         return False
 
-    def _handle_confirm(self) -> None:
-        self._on_confirm()
+    def _handle_confirm_only(self) -> None:
+        self._handle_confirm(go_auto=False)
+
+    def _handle_confirm_go_auto(self) -> None:
+        self._handle_confirm(go_auto=True)
+
+    def _handle_confirm(self, *, go_auto: bool) -> None:
+        self._on_confirm(bool(go_auto))
         self.set_committed(self._get_current())

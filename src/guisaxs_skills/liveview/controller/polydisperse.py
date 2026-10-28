@@ -111,7 +111,7 @@ class LiveviewPolydisperseHandler:
         prof, root, _tp = self._profile_root_and_tiff()
         return prof, root
 
-    def on_guinier_rerun(self) -> None:
+    def on_guinier_rerun(self, *, go_auto: bool = False) -> None:
         prof, root = self._profile_and_root()
         if not prof or root is None:
             return
@@ -155,8 +155,10 @@ class LiveviewPolydisperseHandler:
             profile_abs=prof, steps=steps, output_root=root
         )
         self._c.executor.enqueue_job(job)
+        if go_auto:
+            self.on_resume_queue()
 
-    def on_sizes_rerun(self) -> None:
+    def on_sizes_rerun(self, *, go_auto: bool = False) -> None:
         prof, root = self._profile_and_root()
         if not prof or root is None:
             return
@@ -174,6 +176,8 @@ class LiveviewPolydisperseHandler:
             profile_abs=prof, steps=steps, output_root=root
         )
         self._c.executor.enqueue_job(job)
+        if go_auto:
+            self.on_resume_queue()
 
     def on_mixture_rerun(self) -> None:
         """Modeling is Confirm-only in guisaxs-dr (not liveview SkillRunner)."""

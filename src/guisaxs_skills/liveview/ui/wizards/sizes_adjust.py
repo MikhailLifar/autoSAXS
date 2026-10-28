@@ -51,7 +51,7 @@ class SizesAdjustWizardDialog(QDialog):
     Right: q-min/q-max/rmin/rmax/alpha/boundary checkboxes, Restore auto, passport table.
     """
 
-    params_changed = pyqtSignal()
+    params_changed = pyqtSignal(bool)  # go_auto
     editing_started = pyqtSignal()
     restore_auto_requested = pyqtSignal()
 
@@ -176,7 +176,7 @@ class SizesAdjustWizardDialog(QDialog):
         right.addWidget(self._d0)
         right.addWidget(self._drmax)
         right.addWidget(self._btn_restore)
-        right.addWidget(self._confirm.button)
+        right.addWidget(self._confirm.widget)
         right.addLayout(passport_col, 1)
 
         body = QHBoxLayout()
@@ -189,7 +189,8 @@ class SizesAdjustWizardDialog(QDialog):
         lay.addWidget(
             QLabel(
                 "Adjust GNOM parameters for the current curve. "
-                "Plots and passport update live; press Confirm to write parameters and re-run fit_sizes. "
+                "Plots and passport update live; Confirm writes parameters and re-runs fit_sizes. "
+                "Confirm, go Auto also resumes Auto processing. "
                 "Click a plot to open an enlarged viewer."
             )
         )
@@ -472,8 +473,8 @@ class SizesAdjustWizardDialog(QDialog):
         self._confirm.refresh()
         self._preview_debounce.start()
 
-    def _on_confirm(self) -> None:
-        self.params_changed.emit()
+    def _on_confirm(self, go_auto: bool = False) -> None:
+        self.params_changed.emit(bool(go_auto))
 
     def _ensure_atsas_dat(self) -> bool:
         if self._atsas_dat_path and os.path.isfile(self._atsas_dat_path) and self._q_nm is not None:

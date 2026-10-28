@@ -26,7 +26,7 @@ class SubtractionWizardDialog(QDialog):
     """
 
     preview_scale_changed = pyqtSignal(float)
-    apply_requested = pyqtSignal(float)
+    apply_requested = pyqtSignal(float, bool)  # scaling_factor, go_auto
 
     def __init__(
         self,
@@ -86,8 +86,20 @@ class SubtractionWizardDialog(QDialog):
         row.addWidget(self._scale, 1)
         self._apply = QPushButton("Apply")
         self._apply.setEnabled(False)
-        self._apply.clicked.connect(self._on_apply_clicked)
+        self._apply.setToolTip("Write subtraction with this scale (stay Manual if analysis is armed)")
+        self._apply.setMinimumWidth(self._apply.fontMetrics().boundingRect("Apply").width() + 28)
+        self._apply.clicked.connect(lambda: self._on_apply_clicked(go_auto=False))
+        self._apply_go_auto = QPushButton("Apply, go Auto")
+        self._apply_go_auto.setEnabled(False)
+        self._apply_go_auto.setToolTip(
+            "Write subtraction with this scale and resume Auto processing"
+        )
+        self._apply_go_auto.setMinimumWidth(
+            self._apply_go_auto.fontMetrics().boundingRect("Apply, go Auto").width() + 28
+        )
+        self._apply_go_auto.clicked.connect(lambda: self._on_apply_clicked(go_auto=True))
         row.addWidget(self._apply, 0)
+        row.addWidget(self._apply_go_auto, 0)
         lay.addLayout(row, 0)
 
         self._scale_touched = False
@@ -97,7 +109,9 @@ class SubtractionWizardDialog(QDialog):
 
     def set_running(self, running: bool) -> None:
         r = bool(running)
-        self._apply.setEnabled((not r) and self._scale_touched and self._paths_ok())
+        can_apply = (not r) and self._scale_touched and self._paths_ok()
+        self._apply.setEnabled(can_apply)
+        self._apply_go_auto.setEnabled(can_apply)
         self._scale.setEnabled(not r)
         if r:
             self.setWindowTitle("Subtraction wizard — running…")
@@ -122,7 +136,9 @@ class SubtractionWizardDialog(QDialog):
 
     def _validate_paths_and_update_ui(self) -> None:
         ok = self._paths_ok()
-        self._apply.setEnabled(ok and self._scale_touched)
+        can_apply = ok and self._scale_touched
+        self._apply.setEnabled(can_apply)
+        self._apply_go_auto.setEnabled(can_apply)
         if not ok:
             self._compare_plot.clear()
             self._sub_plot.clear()
@@ -169,16 +185,18 @@ class SubtractionWizardDialog(QDialog):
 
     def _on_scale_changed(self, _val: float) -> None:
         self._scale_touched = True
-        self._apply.setEnabled(self._paths_ok())
+        can_apply = self._paths_ok()
+        self._apply.setEnabled(can_apply)
+        self._apply_go_auto.setEnabled(can_apply)
         self._set_step_relative()
         self._refresh_plots()
         self.preview_scale_changed.emit(float(self._scale.value()))
 
-    def _on_apply_clicked(self) -> None:
+    def _on_apply_clicked(self, *, go_auto: bool = False) -> None:
         if float(self._scale.value()) <= 0.0:
             QMessageBox.warning(self, "Scaling factor", "Scaling factor must be positive.")
             return
-        self.apply_requested.emit(float(self._scale.value()))
+        self.apply_requested.emit(float(self._scale.value()), bool(go_auto))
 
     def _refresh_plots(self) -> None:
         sp = self._sample_dat
