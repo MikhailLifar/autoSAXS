@@ -58,11 +58,12 @@ D(R) quality gates pass → per-sample PDF report).
 **First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
 **and** a pipeline config is available (``config.conf`` in that dir, or
 ``config_path`` / ``--conf``), run the TIFF full pipeline (calibrate → integrate →
-average as needed → subtract via ``buffer_rules``) then analyze each subtracted
-``.dat``. Otherwise treat ``profile`` as subtracted ``.dat`` path(s) (backward
-compatible). TIFF dir without config → clear ``FileNotFoundError`` (not silent
-fallthrough). Explicit folder+config router: ``process_full`` (reads
-``analysis: mono|poly``).
+average as needed → pair/subtract via ``buffer_rules``) then analyze each
+profile (subtracted when paired; unsubtracted when RHS is ``""``). Unmatched
+curves are skipped. Otherwise treat ``profile`` as subtracted ``.dat``
+path(s) (backward compatible). TIFF dir without config → clear
+``FileNotFoundError`` (not silent fallthrough). Explicit folder+config
+router: ``process_full`` (reads ``analysis: mono|poly``).
 
 ### Arguments
 

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple
 
 from PyQt5.QtCore import QObject, pyqtSignal
+
+from autosaxs.core.buffer_rules import normalize_buffer_rules, seed_literal_rule_from_buffer_path
 
 from .persistence import load_liveview_session_settings, save_liveview_session_settings
 from .state import LiveviewIntakeMode, LiveviewSessionState, MonodisperseShapeMode
@@ -119,7 +121,39 @@ class LiveviewSession(QObject):
         *,
         persist: bool = True,
     ) -> None:
+        """Apply wizard buffer pin + subtract options; seed a literal ``*`` → basename rule."""
         self._state.buffer_dat_path = buffer_path
+        self._state.subtract_options = dict(options)
+        self._state.buffer_rules = list(seed_literal_rule_from_buffer_path(buffer_path))
+        if persist:
+            self.persist()
+        self.buffer_changed.emit()
+
+    def set_buffer_rules(
+        self,
+        rules: Sequence[Tuple[str, str]] | Sequence[Sequence[str]],
+        *,
+        subtract_options: Optional[Dict[str, Any]] = None,
+        persist: bool = True,
+    ) -> None:
+        """Replace ordered buffer_rules (and optionally subtract_options)."""
+        pairs = normalize_buffer_rules(list((str(a), str(b)) for a, b in rules))
+        self._state.buffer_rules = list(pairs)
+        if subtract_options is not None:
+            self._state.subtract_options = dict(subtract_options)
+        elif self._state.subtract_options is None:
+            # Applying rules completes the buffer stage; q-window may still be defaults.
+            self._state.subtract_options = {}
+        if persist:
+            self.persist()
+        self.buffer_changed.emit()
+
+    def set_subtract_options(
+        self,
+        options: Dict[str, Any],
+        *,
+        persist: bool = True,
+    ) -> None:
         self._state.subtract_options = dict(options)
         if persist:
             self.persist()

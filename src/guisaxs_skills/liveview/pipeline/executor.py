@@ -43,11 +43,14 @@ from .monodisperse_pipeline import (
     build_monodisperse_steps,
     profile_sample_stem,
 )
-from .plan import plan_for
+from .plan import BufferMatchConflict, plan_for
 from .polydisperse_pipeline import (
     PolydispersePipelineParts,
     build_polydisperse_steps,
 )
+
+# Extensible hold reasons (not Auto/Manual modes).
+HOLD_REASON_BUFFER_RULES = "buffer_rules_conflict"
 from .queue import FIFOQueue, JobQueue, QueueItem, RevisionEnqueueResult
 from .report_pipeline import report_individual_step
 from . import artifact_enrichment as _artifacts
@@ -82,6 +85,8 @@ class LiveviewJobExecutor(QObject):
     skill_finished = pyqtSignal(object)  # RunOutcome
     # Synthetic pipeline Confirm for open modeling children ("shape" | "dr").
     modeling_confirm_requested = pyqtSignal(str)
+    # Dispatch hold (e.g. buffer rules conflict) — reason str + MatchResult-like payload.
+    dispatch_hold_changed = pyqtSignal(bool, str, object)
 
     def __init__(
         self,
@@ -122,6 +127,10 @@ class LiveviewJobExecutor(QObject):
         # True while handling a skill result (incl. modal UI in skill_finished slots).
         # Nested Qt event loops must not let _tick restart the same job step.
         self._handling_skill_outcome: bool = False
+        # Runtime-only pause for all dispatch (auto + manual). Not an Auto/Manual mode.
+        self._dispatch_hold: bool = False
+        self._dispatch_hold_reason: str = ""
+        self._dispatch_hold_payload: Any = None
 
     def register_owned_output(self, path: str) -> None:
         key = normalize_sample_path(path)
@@ -189,6 +198,35 @@ class LiveviewJobExecutor(QObject):
     @property
     def queue_suspended(self) -> bool:
         return not self._state.is_auto_processing()
+
+    @property
+    def dispatch_hold(self) -> bool:
+        return bool(self._dispatch_hold)
+
+    @property
+    def dispatch_hold_reason(self) -> str:
+        return str(self._dispatch_hold_reason or "")
+
+    def set_dispatch_hold(
+        self,
+        held: bool,
+        *,
+        reason: str = "",
+        payload: Any = None,
+    ) -> None:
+        """
+        Pause or resume all job dispatch (promote + auto/manual starts).
+
+        Orthogonal to Auto/Manual. Not persisted. While held, ``_tick`` returns early.
+        """
+        held = bool(held)
+        reason_s = str(reason or "").strip() if held else ""
+        changed = held != self._dispatch_hold or reason_s != self._dispatch_hold_reason
+        self._dispatch_hold = held
+        self._dispatch_hold_reason = reason_s
+        self._dispatch_hold_payload = payload if held else None
+        if changed:
+            self.dispatch_hold_changed.emit(held, reason_s, payload if held else None)
 
     def sync_auto_processing_from_session(self) -> None:
         """API hook; queue suspension follows ``session.auto_processing``."""
@@ -360,6 +398,9 @@ class LiveviewJobExecutor(QObject):
         # advance/restart the current job until outcome handling has finished.
         if self._handling_skill_outcome:
             return
+        # Conflict / safety hold: no promote, no auto or manual starts.
+        if self._dispatch_hold:
+            return
 
         auto = self._state.is_auto_processing()
 
@@ -389,6 +430,15 @@ class LiveviewJobExecutor(QObject):
             return
         self._start_job(nxt)
 
+    def _enter_buffer_rules_hold(self, exc: BufferMatchConflict, *, sample_path: str) -> None:
+        """Set dispatch hold, cancel/requeue current work, signal UI."""
+        self.set_dispatch_hold(
+            True,
+            reason=HOLD_REASON_BUFFER_RULES,
+            payload={"match": exc.result, "sample_path": sample_path, "error": exc},
+        )
+        self.cancel_running(requeue=True)
+
     def _promote_incoming_to_jobs(self) -> None:
         """Move settled admit-queue items into ``_jobs`` via ``plan_for``."""
         while True:
@@ -403,6 +453,12 @@ class LiveviewJobExecutor(QObject):
                 self._samples.remember(sample)
                 plan = plan_for(self._state, sample, load_yaml=self._load_yaml_options)
                 job = plan.to_job()
+            except BufferMatchConflict as e:
+                # Push item back so it re-plans after rules are fixed.
+                with self._incoming_lock:
+                    self._incoming.put_front(item)
+                self._enter_buffer_rules_hold(e, sample_path=sample_path)
+                return
             except Exception as e:
                 self.error.emit(f"Cannot build job for sample: {sample_path}\n{e}")
                 continue
@@ -478,6 +534,9 @@ class LiveviewJobExecutor(QObject):
                 load_yaml=self._load_yaml_options,
                 completed=job.completed,
             )
+        except BufferMatchConflict as e:
+            self._enter_buffer_rules_hold(e, sample_path=source)
+            return False
         except Exception as e:
             self.error.emit(f"Cannot replan current job for sample: {source}\n{e}")
             return False

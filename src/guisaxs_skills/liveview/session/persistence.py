@@ -16,7 +16,18 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from .state import LiveviewIntakeMode, LiveviewSessionState, LiveviewWatchMode
+from autosaxs.core.buffer_rules import (
+    rules_from_session_yaml,
+    seed_literal_rule_from_buffer_path,
+    session_rules_to_yaml,
+)
+
+from .state import (
+    DEFAULT_LIVEVIEW_BUFFER_RULES,
+    LiveviewIntakeMode,
+    LiveviewSessionState,
+    LiveviewWatchMode,
+)
 
 SESSION_DIR = ".guisaxs_liveview"
 SESSION_FILE = "session.yaml"
@@ -65,6 +76,7 @@ def save_liveview_session_settings(state: LiveviewSessionState) -> None:
             "integrator_dir": _as_rel_if_under(wd, state.integrator_dir),
             "buffer_dat_path": _as_rel_if_under(wd, state.buffer_dat_path),
             "subtract_options": state.subtract_options,
+            "buffer_rules": session_rules_to_yaml(state.buffer_rules or DEFAULT_LIVEVIEW_BUFFER_RULES),
             "calibration_curve_plot_path": _as_rel_if_under(wd, state.calibration_curve_plot_path),
             "calibration_refined_yml_path": _as_rel_if_under(wd, state.calibration_refined_yml_path),
             "mask_path": _as_rel_if_under(wd, state.mask_path),
@@ -120,12 +132,29 @@ def load_liveview_session_settings(state: LiveviewSessionState) -> bool:
         state.integrator_dir = None
 
     buf = _resolve_saved_path(wd, raw.get("buffer_dat_path") if raw.get("buffer_dat_path") else None)
-    opts = raw.get("subtract_options")
-    if buf is not None and buf.is_file() and isinstance(opts, dict):
+    if buf is not None and buf.is_file():
         state.buffer_dat_path = buf
-        state.subtract_options = {str(k): v for k, v in opts.items()}
     else:
         state.buffer_dat_path = None
+
+    try:
+        loaded_rules = rules_from_session_yaml(raw.get("buffer_rules"))
+    except (TypeError, ValueError):
+        loaded_rules = None
+    if loaded_rules is not None:
+        state.buffer_rules = list(loaded_rules)
+    elif state.buffer_dat_path is not None:
+        # Migrate old single-buffer sessions → literal catch-all rule.
+        state.buffer_rules = list(seed_literal_rule_from_buffer_path(state.buffer_dat_path))
+    else:
+        state.buffer_rules = list(DEFAULT_LIVEVIEW_BUFFER_RULES)
+
+    opts = raw.get("subtract_options")
+    has_rules_key = raw.get("buffer_rules") is not None
+    if isinstance(opts, dict) and (state.buffer_dat_path is not None or has_rules_key):
+        state.subtract_options = {str(k): v for k, v in opts.items()}
+    else:
+        # Legacy: missing buffer path (and no rules key) drops subtract_options.
         state.subtract_options = None
 
     cal_png = _resolve_saved_path(

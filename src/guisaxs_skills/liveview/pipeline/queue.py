@@ -54,6 +54,10 @@ class FIFOQueue:
     def put(self, item: QueueItem) -> None:
         self._q.append(item)
 
+    def put_front(self, item: QueueItem) -> None:
+        """Re-insert at the head (e.g. after a plan-time conflict hold)."""
+        self._q.appendleft(item)
+
     def put_revision(self, item: QueueItem) -> RevisionEnqueueResult:
         """
         Append a TIFF revision, or replace an existing queued entry for the same path in place.

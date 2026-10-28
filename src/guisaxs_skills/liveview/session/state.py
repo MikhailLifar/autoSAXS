@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+from autosaxs.core.buffer_rules import DEFAULT_BUFFER_RULES as _CORE_DEFAULT_BUFFER_RULES
 
 # Default BODIES shapes for liveview “primitives” when no model_bodies.conf exists yet.
 DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES: List[str] = ["ellipsoid"]
+
+# Session default: same capture-aware pairs as TIFF batch.
+DEFAULT_LIVEVIEW_BUFFER_RULES: Tuple[Tuple[str, str], ...] = tuple(_CORE_DEFAULT_BUFFER_RULES)
 
 
 class LiveviewWatchMode(str, Enum):
@@ -56,8 +61,11 @@ class LiveviewSessionState:
     mask_path: Optional[Path] = None  # applied mask (integrate --mask / UI overlay); not auto-only
     mask_preview_path: Optional[Path] = None
 
-    buffer_dat_path: Optional[Path] = None
+    buffer_dat_path: Optional[Path] = None  # preview / wizard pin; pairing uses buffer_rules
     subtract_options: Optional[Dict[str, Any]] = None
+    buffer_rules: List[Tuple[str, str]] = field(
+        default_factory=lambda: list(DEFAULT_LIVEVIEW_BUFFER_RULES)
+    )
 
     monodisperse_armed: bool = False
     polydisperse_armed: bool = False
@@ -82,7 +90,8 @@ class LiveviewSessionState:
         return self.integrator_dir is not None
 
     def buffer_ready(self) -> bool:
-        return self.buffer_dat_path is not None and self.subtract_options is not None
+        """True when subtract options and buffer_rules are configured (rules may be defaults)."""
+        return self.subtract_options is not None and bool(self.buffer_rules)
 
     def analysis_enabled(self) -> bool:
         return bool(self.monodisperse_armed or self.polydisperse_armed)
@@ -100,6 +109,7 @@ class LiveviewSessionState:
         self.calibration_refined_yml_path = None
         self.buffer_dat_path = None
         self.subtract_options = None
+        self.buffer_rules = list(DEFAULT_LIVEVIEW_BUFFER_RULES)
         self.last_integrated_dat_path = None
         self.last_subtracted_dat_path = None
         self._disarm_analysis()
@@ -108,6 +118,7 @@ class LiveviewSessionState:
         """Clear buffer/subtract; disarm analysis; keep calibration."""
         self.buffer_dat_path = None
         self.subtract_options = None
+        self.buffer_rules = list(DEFAULT_LIVEVIEW_BUFFER_RULES)
         self.last_subtracted_dat_path = None
         self._disarm_analysis()
 
