@@ -763,12 +763,9 @@ class LiveviewLeftPanel(QWidget):
             self._buf_hint.setVisible(False)
             self._buf_preview.show_path(str(buf), q_min=q_min, q_max=q_max)
         else:
+            # Match calib/mask empty state: short em-dash, no coaching copy.
             self._buf_preview.show_path("")
-            n_rules = len(self._state.buffer_rules or [])
-            if self._state.buffer_ready():
-                self._buf_hint.setText(f"Buffer rules ready ({n_rules}); optional pin preview empty")
-            else:
-                self._buf_hint.setText("Open Set buffer to edit pairing rules and subtract options")
+            self._buf_hint.setText("—")
             self._buf_hint.setVisible(True)
         self._buf_preview.set_image_click_handler(self._open_buffer_wizard)
         if self._buf_wizard is not None:

@@ -7,7 +7,7 @@ from typing import Optional
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import (
-    QButtonGroup,
+    QComboBox,
     QDialog,
     QGroupBox,
     QHBoxLayout,
@@ -16,7 +16,6 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QRadioButton,
     QSizePolicy,
     QSplitter,
     QTableWidget,
@@ -38,7 +37,7 @@ from ....logic.smart_defaults import (
     session_hint_soft_buffer_1d,
 )
 from ....ui.path_field import PathField
-from ....ui.style import configure_readonly_copyable_table
+from ....ui.style import COLOR_MUTED_TEXT, configure_readonly_copyable_table
 from ....ui.skill_form import SkillForm
 from ..skill_form_utils import (
     liveview_run_controls,
@@ -682,19 +681,16 @@ class BufferWizardDialog(QDialog):
         self._splitter: QSplitter | None = None
         self._rules_strip = BufferRulesStrip()
         self._rules_strip.edit_requested.connect(self._open_buffer_rules_editor)
-        self._radio_q_auto = QRadioButton("Auto")
-        self._radio_q_fixed = QRadioButton("Fixed")
-        self._radio_q_auto.setToolTip(
-            "Recompute q0/q1 from the selected buffer curve (pre-knee window) when the buffer changes."
+        self._q_mode_combo = QComboBox()
+        self._q_mode_combo.addItem("Auto", True)
+        self._q_mode_combo.addItem("Fixed", False)
+        self._q_mode_combo.setToolTip(
+            "Auto: recompute q0/q1 from the selected buffer curve (pre-knee window) when the "
+            "buffer changes.\n"
+            "Fixed: keep the q0/q1 values you set; changing the buffer path will not overwrite them."
         )
-        self._radio_q_fixed.setToolTip(
-            "Keep the q0/q1 values you set; changing the buffer path will not overwrite them."
-        )
-        self._radio_q_auto.setChecked(True)
-        q_mode_group = QButtonGroup(self)
-        q_mode_group.addButton(self._radio_q_auto)
-        q_mode_group.addButton(self._radio_q_fixed)
-        self._radio_q_auto.toggled.connect(self._on_q_mode_toggled)
+        self._q_mode_combo.setCurrentIndex(0)
+        self._q_mode_combo.currentIndexChanged.connect(self._on_q_mode_changed)
 
         lay = QVBoxLayout(self)
         if meta is not None:
@@ -721,29 +717,19 @@ class BufferWizardDialog(QDialog):
             left_lay.addWidget(_AspectPlotHost(self._plot, aspect=1.55), 1)
             splitter.addWidget(left)
 
+            # Flat one-column right pane (no nested Session/This-buffer groupboxes).
             right = QWidget()
             right.setMinimumWidth(360)
             right_lay = QVBoxLayout(right)
             right_lay.setContentsMargins(0, 0, 0, 0)
-
-            session_box = QGroupBox("Session settings")
-            session_lay = QVBoxLayout(session_box)
-            session_lay.setContentsMargins(8, 8, 8, 8)
-            session_lay.addWidget(QLabel("Buffer pairing rules"))
-            session_lay.addWidget(self._rules_strip, 0)
+            right_lay.setSpacing(10)
+            right_lay.addWidget(self._rules_strip, 0)
             q_mode_row = QHBoxLayout()
+            q_mode_row.setContentsMargins(0, 0, 0, 0)
             q_mode_row.addWidget(QLabel("q0 / q1:"))
-            q_mode_row.addWidget(self._radio_q_auto)
-            q_mode_row.addWidget(self._radio_q_fixed)
-            q_mode_row.addStretch(1)
-            session_lay.addLayout(q_mode_row)
-            right_lay.addWidget(session_box, 0)
-
-            this_box = QGroupBox("This buffer")
-            this_lay = QVBoxLayout(this_box)
-            this_lay.setContentsMargins(8, 8, 8, 8)
-            this_lay.addWidget(self._form, 1)
-            right_lay.addWidget(this_box, 1)
+            q_mode_row.addWidget(self._q_mode_combo, 1)
+            right_lay.addLayout(q_mode_row)
+            right_lay.addWidget(self._form, 1)
 
             row = QHBoxLayout()
             row.addWidget(self._apply)
@@ -756,11 +742,12 @@ class BufferWizardDialog(QDialog):
             row.addStretch(1)
             row.addWidget(self._btn_close)
             right_lay.addLayout(row)
-            right_lay.addWidget(
-                QLabel(
-                    "Rules and subtract options are kept for this session and applied to new files."
-                )
+            footer = QLabel(
+                "Rules and subtract options are kept for this session and applied to new files."
             )
+            footer.setWordWrap(True)
+            footer.setStyleSheet(f"color: {COLOR_MUTED_TEXT};")
+            right_lay.addWidget(footer)
             splitter.addWidget(right)
             splitter.setStretchFactor(0, 3)
             splitter.setStretchFactor(1, 2)
@@ -831,8 +818,8 @@ class BufferWizardDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Cannot apply buffer rules", str(e))
 
-    def _on_q_mode_toggled(self, _checked: bool = False) -> None:
-        self._q_mode_auto = bool(self._radio_q_auto.isChecked())
+    def _on_q_mode_changed(self, _index: int = 0) -> None:
+        self._q_mode_auto = bool(self._q_mode_combo.currentData())
         self._apply_q_fields_enabled()
         if self._q_mode_auto:
             self._sync_q_range_to_buffer(force=True)
@@ -850,13 +837,16 @@ class BufferWizardDialog(QDialog):
                 w.setEnabled(True)
 
     def _set_q_mode_fixed(self) -> None:
-        if self._radio_q_fixed.isChecked():
+        fixed_index = self._q_mode_combo.findData(False)
+        if fixed_index < 0:
+            fixed_index = 1
+        if self._q_mode_combo.currentIndex() == fixed_index:
             self._q_mode_auto = False
             self._apply_q_fields_enabled()
             return
-        self._radio_q_fixed.blockSignals(True)
-        self._radio_q_fixed.setChecked(True)
-        self._radio_q_fixed.blockSignals(False)
+        self._q_mode_combo.blockSignals(True)
+        self._q_mode_combo.setCurrentIndex(fixed_index)
+        self._q_mode_combo.blockSignals(False)
         self._q_mode_auto = False
         self._apply_q_fields_enabled()
 
@@ -1178,9 +1168,9 @@ class BufferWizardDialog(QDialog):
         self._autofill_buffer_key = None
         self._auto_hinted_buffer_path = None
         self._q_mode_auto = True
-        self._radio_q_auto.blockSignals(True)
-        self._radio_q_auto.setChecked(True)
-        self._radio_q_auto.blockSignals(False)
+        self._q_mode_combo.blockSignals(True)
+        self._q_mode_combo.setCurrentIndex(0)
+        self._q_mode_combo.blockSignals(False)
         out = self._watchdir / "subtracted"
         out.mkdir(parents=True, exist_ok=True)
         self._form.set_skill(

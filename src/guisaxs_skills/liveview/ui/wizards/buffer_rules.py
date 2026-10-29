@@ -258,10 +258,15 @@ class BufferRulesStrip(QWidget):
         self._table.setMaximumHeight(90)
         self._edit = QPushButton("Edit rules…")
         self._edit.clicked.connect(self.edit_requested.emit)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.addWidget(QLabel("Buffer pairing rules"), 1)
+        header.addWidget(self._edit, 0, Qt.AlignRight)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        lay.addLayout(header)
         lay.addWidget(self._table)
-        lay.addWidget(self._edit, 0, Qt.AlignLeft)
 
     def set_rules(self, rules: Sequence[Tuple[str, str]]) -> None:
         self._table.setRowCount(0)
