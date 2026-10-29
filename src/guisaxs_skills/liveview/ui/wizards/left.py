@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional, Sequence, Tuple
+from typing import Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QGuiApplication
@@ -627,15 +627,14 @@ class CalibrationWizardDialog(QDialog):
 class BufferWizardDialog(QDialog):
     reset_requested = pyqtSignal()
     attention_context_changed = pyqtSignal()
-    buffer_rules_applied = pyqtSignal(object)  # list[tuple[str,str]]
 
     def __init__(
         self,
         *,
         watchdir: Path,
         hints: SessionPathHints,
+        session,
         saved_state: dict | None = None,
-        buffer_rules: Sequence[Tuple[str, str]] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -662,13 +661,13 @@ class BufferWizardDialog(QDialog):
             self.resize(1120, 720)
         self._watchdir = watchdir
         self._hints = hints
+        self._session = session
         self._dat_viewer = None
         self._apply_coach_dismissed = False
         self._close_coach_armed = False
         self._autofill_buffer_key = None
         self._auto_hinted_buffer_path: str | None = None
         self._q_mode_auto = True
-        self._rules: list[tuple[str, str]] = []
         self._rules_editor: BufferRulesEditorDialog | None = None
         self._btn_close = QPushButton("Close")
         self._btn_close.clicked.connect(self.close)
@@ -767,7 +766,7 @@ class BufferWizardDialog(QDialog):
             splitter.setStretchFactor(1, 2)
             lay.addWidget(splitter, 1)
             self._attach_options_help_button()
-            self.set_buffer_rules(list(buffer_rules or ()))
+            self.sync_session_rules()
             self._sync_auto_hint_marker_from_field()
             self._autofill_q_range_from_buffer(force=False)
             self._apply_q_fields_enabled()
@@ -801,33 +800,36 @@ class BufferWizardDialog(QDialog):
     def has_buffer_path(self) -> bool:
         return bool(self._buffer_path_text())
 
-    def set_buffer_rules(self, rules: Sequence[Tuple[str, str]]) -> None:
-        """Refresh the compact session rules strip from session state."""
-        self._rules = [(str(a), str(b)) for a, b in list(rules or ())]
-        self._rules_strip.set_rules(self._rules)
+    def update_path_hints(self, hints: SessionPathHints) -> None:
+        self._hints = hints
+
+    def sync_session_rules(self) -> None:
+        """Refresh the compact rules strip from session ``buffer_rules``."""
+        rules = list(getattr(self._session.state, "buffer_rules", None) or [])
+        self._rules_strip.set_rules(rules)
         if self._rules_editor is not None and self._rules_editor.isVisible():
-            self._rules_editor._editor.set_rules(self._rules)  # noqa: SLF001
+            self._rules_editor._editor.set_rules(rules)  # noqa: SLF001
 
     def _open_buffer_rules_editor(self) -> None:
-        rules = list(self._rules)
+        rules = list(getattr(self._session.state, "buffer_rules", None) or [])
         if self._rules_editor is None:
             self._rules_editor = BufferRulesEditorDialog(rules=rules, parent=self)
-            self._rules_editor.applied.connect(self._on_rules_editor_applied)
+            self._rules_editor.applied.connect(self._on_buffer_rules_applied)
         else:
             self._rules_editor._editor.set_rules(rules)  # noqa: SLF001
         self._rules_editor.show()
         self._rules_editor.raise_()
         self._rules_editor.activateWindow()
 
-    def _on_rules_editor_applied(self, rules: object) -> None:
+    def _on_buffer_rules_applied(self, rules: object) -> None:
         try:
             pairs = [(str(a), str(b)) for a, b in list(rules or [])]  # type: ignore[arg-type]
-        except Exception:
-            pairs = []
-        self.set_buffer_rules(pairs)
-        self.buffer_rules_applied.emit(pairs)
-        self._apply_coach_dismissed = False
-        self.attention_context_changed.emit()
+            self._session.set_buffer_rules(pairs)
+            self.sync_session_rules()
+            self._apply_coach_dismissed = False
+            self.attention_context_changed.emit()
+        except Exception as e:
+            QMessageBox.critical(self, "Cannot apply buffer rules", str(e))
 
     def _on_q_mode_toggled(self, _checked: bool = False) -> None:
         self._q_mode_auto = bool(self._radio_q_auto.isChecked())
@@ -847,8 +849,16 @@ class BufferWizardDialog(QDialog):
                 w.setReadOnly(not editable)
                 w.setEnabled(True)
 
-    def update_path_hints(self, hints: SessionPathHints) -> None:
-        self._hints = hints
+    def _set_q_mode_fixed(self) -> None:
+        if self._radio_q_fixed.isChecked():
+            self._q_mode_auto = False
+            self._apply_q_fields_enabled()
+            return
+        self._radio_q_fixed.blockSignals(True)
+        self._radio_q_fixed.setChecked(True)
+        self._radio_q_fixed.blockSignals(False)
+        self._q_mode_auto = False
+        self._apply_q_fields_enabled()
 
     def maybe_apply_empty_buffer_hint(self) -> bool:
         """
@@ -989,6 +999,8 @@ class BufferWizardDialog(QDialog):
         self._refresh_buffer_plot()
 
     def _on_q_text_changed(self, _text: str = "") -> None:
+        # Manual q edits switch session q mode to Fixed.
+        self._set_q_mode_fixed()
         self._refresh_buffer_plot()
 
     def _buffer_field(self) -> PathField | None:

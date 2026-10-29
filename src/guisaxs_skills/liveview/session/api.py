@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
-from autosaxs.core.buffer_rules import normalize_buffer_rules, seed_literal_rule_from_buffer_path
+from autosaxs.core.buffer_rules import normalize_buffer_rules
 
 from .persistence import load_liveview_session_settings, save_liveview_session_settings
 from .state import LiveviewIntakeMode, LiveviewSessionState, MonodisperseShapeMode
@@ -121,10 +121,9 @@ class LiveviewSession(QObject):
         *,
         persist: bool = True,
     ) -> None:
-        """Apply wizard buffer pin + subtract options; seed a literal ``*`` → basename rule."""
+        """Apply wizard buffer pin + subtract options; pairing rules are unchanged."""
         self._state.buffer_dat_path = buffer_path
         self._state.subtract_options = dict(options)
-        self._state.buffer_rules = list(seed_literal_rule_from_buffer_path(buffer_path))
         if persist:
             self.persist()
         self.buffer_changed.emit()
