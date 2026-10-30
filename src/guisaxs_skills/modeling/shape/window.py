@@ -81,6 +81,10 @@ class ShapeModelingWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._auto_mode.shutdown()
+        try:
+            self._viewer.shutdown()
+        except Exception:
+            pass
         super().closeEvent(event)
 
     def apply_context(self, ctx: ModelingContext, *, seed_controls: bool = False) -> None:

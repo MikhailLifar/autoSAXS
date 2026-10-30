@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import Optional
 
@@ -72,6 +73,20 @@ class LiveviewViewer3D(QWidget):
         self._open_btn.setToolTip("")
         self._open_btn.setEnabled(False)
         self._plot.clear()
+
+    def shutdown(self) -> None:
+        """Stop mesh workers / full-3D dialog before liveview teardown."""
+        dlg = self._full_3d
+        self._full_3d = None
+        if dlg is not None:
+            with contextlib.suppress(Exception):
+                dlg.close()
+        with contextlib.suppress(Exception):
+            self._plot.shutdown()
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self.shutdown()
+        super().closeEvent(event)
 
     def set_dam_catalog(self, catalog: Optional[DamModelCatalog]) -> None:
         """Attach ensemble catalog for the dedicated dialog; embedded view stays on best."""

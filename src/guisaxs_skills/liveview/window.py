@@ -121,6 +121,18 @@ class LiveviewMainWindow(QMainWindow):
             self._right.shutdown_modeling_children()
         except Exception:
             pass
+        # Stop 3D isosurface QThreads before Qt destroys the widget tree.
+        # Destroying a still-running mesh worker aborts / segfaults on exit.
+        try:
+            from guisaxs_skills.liveview.ui.widgets.viewer_3d import LiveviewViewer3D
+            from guisaxs_skills.ui.saxs_interactive_3d import SaxsInteractive3DWidget
+
+            for viewer in self.findChildren(LiveviewViewer3D):
+                viewer.shutdown()
+            for plot in self.findChildren(SaxsInteractive3DWidget):
+                plot.shutdown()
+        except Exception:
+            pass
         self._controller.shutdown()
         super().closeEvent(event)
 

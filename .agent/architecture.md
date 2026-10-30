@@ -18,4 +18,5 @@
 - Mixture option names / component init (`init_radii_nm` / fractions / poly): `.agent/liveview/model-mixture-options.md`.
 - DR results navigation: `modeling/catalogs/mixture_models.py` (ensemble fit browser; same role as `dam_models` for shape).
 - 3D preview chrome: `LiveviewViewer3D` owns CIF/MRC path checks via `pathlib`; revealing folders is `ui/os_open.open_path_in_file_manager` (shared with DR).
+- 3D mesh QThread: `SaxsInteractive3DWidget` owns isosurface worker lifetime (`shutdown` / `_stop_mesh_worker`); thread is **unparented**. Window/`LiveviewViewer3D` close must stop workers before widget-tree destroy — otherwise Qt aborts (“QThread destroyed while running”) or PyQt `cleanup_qobject` segfaults on exit.
 - Modeling mini-apps: `.agent/liveview/modeling-session-controls.md` (paths from context push; run knobs session-owned).

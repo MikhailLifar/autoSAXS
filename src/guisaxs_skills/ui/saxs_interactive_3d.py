@@ -518,15 +518,45 @@ class SaxsInteractive3DWidget(QWidget):
         self._load_gen += 1
         return self._load_gen
 
+    def shutdown(self) -> None:
+        """Stop timers and mesh workers before Qt tears the widget tree down."""
+        try:
+            self._timer.stop()
+        except Exception:
+            pass
+        self._stop_mesh_worker()
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self.shutdown()
+        super().closeEvent(event)
+
     def _stop_mesh_worker(self) -> None:
+        """Quit the isosurface QThread and wait; never destroy it while running.
+
+        Parenting the thread to this widget is unsafe: Qt can delete the QThread
+        with the widget while ``run`` is still in marching-cubes / MRC work, which
+        aborts or segfaults on interpreter exit (PyQt ``cleanup_qobject``).
+        """
         thr = self._mesh_thread
+        worker = self._mesh_worker
         self._mesh_thread = None
         self._mesh_worker = None
         if thr is None:
             return
+        if worker is not None:
+            with contextlib.suppress(TypeError, RuntimeError):
+                worker.finished.disconnect()
+            with contextlib.suppress(TypeError, RuntimeError):
+                worker.failed.disconnect()
+        with contextlib.suppress(TypeError, RuntimeError):
+            thr.started.disconnect()
         try:
-            thr.quit()
-            thr.wait(100)
+            if thr.isRunning():
+                thr.quit()
+                # Isosurface / MRC jobs can take seconds; 100ms was far too short.
+                if not thr.wait(10_000):
+                    thr.terminate()
+                    thr.wait(2_000)
         except Exception:
             pass
 
@@ -556,8 +586,20 @@ class SaxsInteractive3DWidget(QWidget):
 
     def _start_mesh_job(self, job: dict[str, Any]) -> None:
         self._stop_mesh_worker()
+        # Import heavy deps on the GUI thread so a mid-quit worker does not race
+        # fabio/h5py import against interpreter/HDF5 atexit teardown.
+        try:
+            from autosaxs.core.utils import read_bodies_cif  # noqa: F401
+            from guisaxs_skills.ui.isosurface_mesh_data import (  # noqa: F401
+                compute_atoms_isosurface_mesh,
+                compute_mrc_density_point_cloud,
+                compute_shape_isosurface_mesh,
+            )
+        except Exception:
+            pass
         worker = _IsosurfaceWorker()
-        thread = QThread(self)
+        # Unparented: lifetime is owned by ``_stop_mesh_worker`` / ``shutdown``.
+        thread = QThread()
         worker.moveToThread(thread)
         worker.configure(job)
         thread.started.connect(worker.run)
@@ -1333,6 +1375,13 @@ class Interactive3DViewerDialog(QDialog):
         lay.addWidget(self._occ_widget)
         lay.addWidget(self._denss_color_widget)
         lay.addWidget(self._plot, 1)
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        try:
+            self._plot.shutdown()
+        except Exception:
+            pass
+        super().closeEvent(event)
 
     def eventFilter(self, obj, event):  # type: ignore[override]
         from PyQt5.QtCore import QEvent

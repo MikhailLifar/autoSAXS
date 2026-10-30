@@ -50,3 +50,13 @@ def run_liveview_app() -> None:
     window = LiveviewMainWindow(watchdir=Path(watchdir))
     window.showMaximized()
     app.exec_()
+    # Explicit teardown before interpreter atexit / PyQt cleanup_on_exit.
+    try:
+        window.close()
+    except Exception:
+        pass
+    try:
+        window.deleteLater()
+        app.processEvents()
+    except Exception:
+        pass
