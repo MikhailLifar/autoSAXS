@@ -2,7 +2,7 @@
 Meta-skill: polydisperse single-profile quality pipeline (Guinier onward).
 
 Wires existing leaf skills only — no reimplementation of Guinier / GNOM / MIXTURE math.
-Sequence: fit_guinier → fit_sizes → optional model_mixture (opt-in + quality gate) →
+Sequence: fit_guinier → fit_sizes → optional model_mixture (opt-in + modeling gate) →
 report_individual. Omits calibration, radiation averaging, buffer subtraction, and
 monodisperse-only steps (Kratky / DATGNOM / DAMMIF).
 """
@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from autosaxs.core.event_bus import EventBus, EventType
+from autosaxs.core.gnom_quality import allows_modeling, modeling_gate_skip_reason
 from autosaxs.core.utils import _strip_sub_int_prefix
 
 from .common import (
@@ -44,19 +45,6 @@ def _as_scalar(value: Any) -> Any:
     if isinstance(value, list):
         return value[0] if value else None
     return value
-
-
-def _dr_allows_model_mixture(fit_sizes_out: Dict[str, Any]) -> bool:
-    """
-    Allow MIXTURE only when D(R) quality is internally consistent
-    (``sizes_quality_class == high_quality`` / ``HIGH QUALITY``), analogous to
-    ``process_monodisperse`` gating ``model_dam`` on p(r) high quality.
-    """
-    cls = str(_as_scalar(fit_sizes_out.get("sizes_quality_class")) or "").strip().lower()
-    status = str(_as_scalar(fit_sizes_out.get("overall_status")) or "").strip().upper()
-    if cls == "high_quality" or status == "HIGH QUALITY":
-        return True
-    return False
 
 
 def _rmax_nm_from_fit_sizes_out(fit_sizes_out: Dict[str, Any]) -> Optional[float]:
@@ -108,7 +96,21 @@ def process_polydisperse(
     """
     SAXS / small-angle x-ray scattering: run the polydisperse single-profile quality pipeline
     (Guinier → GNOM D(R) / size-distribution passport → optional MIXTURE when requested and
-    D(R) quality gates pass → per-sample PDF report).
+    the shared modeling gate passes → per-sample PDF report).
+
+    **Modeling gate** (``allows_modeling`` on the fit_sizes passport — same helper as
+    mono DAM): when ``run_mixture=True``, start MIXTURE only when **all** of the
+    following hold:
+
+    - Total Estimate **> 0.3** (hard floor; passport ``high_quality`` still uses ≥ 0.55)
+    - Reduced χ² in the acceptable passport band [0.3, 2.5]
+      (``chi2_class`` ``high_quality`` or ``acceptable``)
+    - ``detail_reliability_class`` is not ``SUSPICIOUS``
+    - Shannon ``s_min`` < 2.0 (class not ``unreliable``)
+    - ``n_shannon`` ≥ 8 (``DEFAULT_DETAIL_N_SHANNON_FLOOR``)
+
+    ΔRg is mono p(r)-only and is skipped for D(R). ``run_mixture`` remains an
+    independent opt-in (default ``False``).
 
     **First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
     **and** a pipeline config is available (``config.conf`` in that dir, or
@@ -133,8 +135,9 @@ def process_polydisperse(
     - `shape` (str, default `spheres`): Forwarded to `fit_sizes` (currently spheres).
     - `q_min` / `q_max` (float | None): Optional `fit_sizes` q bounds (nm⁻¹). When set, they override
       Guinier-first handoff for the corresponding end (do not combine `q_min` with an implicit first).
-    - `run_mixture` (bool, default `False`): When `True`, run `model_mixture` if D(R) is high quality.
-      Default stays off to match liveview auto / real-data light (MIXTURE is interactive Confirm in GUI).
+    - `run_mixture` (bool, default `False`): When `True`, run `model_mixture` if the shared
+      modeling gate passes. Default stays off to match liveview auto / real-data light
+      (MIXTURE is interactive Confirm in GUI).
     - `use_cache` (bool, default `False`): Forwarded to leaf skills.
 
     ### Returns
@@ -284,13 +287,9 @@ def process_polydisperse(
                 EventType.MESSAGE,
                 {"text": f"process_polydisperse: skipping model_mixture ({model_mixture_skip_reason})"},
             )
-    elif not _dr_allows_model_mixture(out_sizes):
-        status = _as_scalar(out_sizes.get("overall_status")) or "FAILED"
-        cls = _as_scalar(out_sizes.get("sizes_quality_class")) or "failed"
-        model_mixture_skip_reason = (
-            f"D(R) quality gate not satisfied for MIXTURE "
-            f"(overall_status={status!r}, sizes_quality_class={cls!r}; "
-            f"require HIGH QUALITY)"
+    elif not allows_modeling(out_sizes):
+        model_mixture_skip_reason = modeling_gate_skip_reason(
+            out_sizes, kind="D(R)"
         )
         if bus:
             bus.publish(

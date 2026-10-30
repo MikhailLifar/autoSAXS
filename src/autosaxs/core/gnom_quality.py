@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
 
@@ -387,6 +387,192 @@ def classify_shannon(s_min: Optional[float]) -> str:
     if s_min < 2.0:
         return "marginal"
     return "unreliable"
+
+
+# ---------------------------------------------------------------------------
+# Modeling start gate (process_monodisperse DAM / process_polydisperse MIXTURE)
+# ---------------------------------------------------------------------------
+#
+# Passport ``high_quality`` still uses TE ≥ 0.55 for display/classification.
+# Automatic modeling (DAMMIF / MIXTURE) uses a broader multi-indicator gate:
+# TE > 0.3 (hard) plus acceptable χ², ΔRg (when present), detail reliability,
+# s_min / Shannon class, and enough Shannon channels.
+
+DEFAULT_MODELING_TE_MIN = 0.3  # exclusive: Total Estimate must be >
+DEFAULT_MODELING_SHANNON_S_MIN_MAX = 2.0  # s_min < 2.0 ↔ not ``unreliable``
+DEFAULT_MODELING_N_SHANNON_MIN = DEFAULT_DETAIL_N_SHANNON_FLOOR  # 8.0
+
+
+@dataclass(frozen=True)
+class ModelingGateThresholds:
+    """Thresholds for ``allows_modeling`` / ``evaluate_modeling_gate``.
+
+    Defaults reuse passport bands from this module (acceptable χ² / ΔRg, Shannon
+    unreliable cutoff, detail n_shannon floor) except Total Estimate, which is a
+    hard modeling floor of ``> 0.3`` rather than the passport high_quality 0.55.
+    """
+
+    total_estimate_min: float = DEFAULT_MODELING_TE_MIN
+    chi2_acceptable_min: float = DEFAULT_CHI2_ACCEPTABLE_MIN
+    chi2_acceptable_max: float = DEFAULT_CHI2_ACCEPTABLE_MAX
+    delta_rg_pct_max: float = DEFAULT_DELTA_RG_PCT_ACCEPTABLE
+    shannon_s_min_max: float = DEFAULT_MODELING_SHANNON_S_MIN_MAX
+    n_shannon_min: float = DEFAULT_MODELING_N_SHANNON_MIN
+
+
+def _modeling_field(quality: Mapping[str, Any], *keys: str) -> Any:
+    """First present non-empty scalar from ``quality`` (unwraps one-element lists)."""
+    for key in keys:
+        if key not in quality:
+            continue
+        val = quality.get(key)
+        if isinstance(val, list):
+            val = val[0] if val else None
+        if val is None:
+            continue
+        if isinstance(val, str) and not val.strip():
+            continue
+        return val
+    return None
+
+
+def _modeling_float(quality: Mapping[str, Any], *keys: str) -> Optional[float]:
+    raw = _modeling_field(quality, *keys)
+    if raw is None:
+        return None
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(v):
+        return None
+    return v
+
+
+def evaluate_modeling_gate(
+    quality: Mapping[str, Any],
+    *,
+    thresholds: Optional[ModelingGateThresholds] = None,
+) -> Tuple[bool, List[str]]:
+    """
+    Evaluate whether a GNOM p(r) / D(R) passport is good enough to start modeling.
+
+    Shared by monodisperse DAMMIF and polydisperse MIXTURE start decisions.
+    ``quality`` may be a fit_distances / fit_sizes return dict or a loaded
+    quality-passport YAML mapping.
+
+    Checks (all must pass):
+
+    - Total Estimate **>** ``total_estimate_min`` (default 0.3, hard)
+    - Reduced χ² in the **acceptable** passport band
+      [``chi2_acceptable_min``, ``chi2_acceptable_max``] = [0.3, 2.5]
+      (``chi2_class`` in ``high_quality`` / ``acceptable``, or raw ``chi2``)
+    - ΔRg ≤ ``delta_rg_pct_max`` (default 15% = passport acceptable band)
+      when ``delta_rg_pct`` is present (mono p(r)); skipped when absent (poly D(R))
+    - ``detail_reliability_class`` is not ``SUSPICIOUS``
+    - Shannon ``s_min`` < 2.0 (class not ``unreliable``)
+    - ``n_shannon`` ≥ ``n_shannon_min`` (default 8.0 = detail floor)
+
+    Returns ``(allowed, failure_reasons)``. ``failure_reasons`` is empty when allowed.
+    """
+    t = thresholds or ModelingGateThresholds()
+    failures: List[str] = []
+
+    te = _modeling_float(quality, "total_estimate")
+    if te is None:
+        failures.append("Total Estimate missing")
+    elif not (te > float(t.total_estimate_min)):
+        failures.append(
+            f"Total Estimate {te:.3f} is not > {float(t.total_estimate_min):.2f}"
+        )
+
+    chi2_class_raw = _modeling_field(quality, "chi2_class")
+    chi2_class = str(chi2_class_raw).strip().lower() if chi2_class_raw is not None else ""
+    chi2 = _modeling_float(quality, "chi2")
+    if chi2_class in ("high_quality", "acceptable"):
+        pass
+    elif chi2 is not None:
+        derived = classify_chi2(
+            chi2,
+            good_min=DEFAULT_CHI2_GOOD_MIN,
+            good_max=DEFAULT_CHI2_GOOD_MAX,
+            acceptable_min=float(t.chi2_acceptable_min),
+            acceptable_max=float(t.chi2_acceptable_max),
+        )
+        if derived not in ("high_quality", "acceptable"):
+            failures.append(
+                f"χ² = {chi2:.3f} outside acceptable band "
+                f"[{float(t.chi2_acceptable_min):.1f}, {float(t.chi2_acceptable_max):.1f}]"
+            )
+    else:
+        failures.append(
+            "χ² not acceptable (chi2_class missing/unknown and chi2 unavailable)"
+        )
+
+    # ΔRg is mono p(r)-only; poly D(R) passports omit it — skip when absent.
+    drg = _modeling_float(quality, "delta_rg_pct")
+    if drg is not None and drg > float(t.delta_rg_pct_max):
+        failures.append(
+            f"ΔRg = {drg:.1f}% exceeds {float(t.delta_rg_pct_max):.0f}%"
+        )
+
+    detail_raw = _modeling_field(quality, "detail_reliability_class")
+    detail = str(detail_raw).strip().upper() if detail_raw is not None else ""
+    if detail == "SUSPICIOUS":
+        failures.append("detail_reliability_class is SUSPICIOUS")
+
+    s_min = _modeling_float(quality, "shannon_s_min")
+    shannon_class_raw = _modeling_field(quality, "shannon_class")
+    shannon_class = (
+        str(shannon_class_raw).strip().lower() if shannon_class_raw is not None else ""
+    )
+    if shannon_class == "unreliable" or (
+        s_min is not None and s_min >= float(t.shannon_s_min_max)
+    ):
+        s_txt = f"{s_min:.3f}" if s_min is not None else "n/a"
+        failures.append(
+            f"Shannon s_min = {s_txt} is unreliable "
+            f"(require s_min < {float(t.shannon_s_min_max):.1f})"
+        )
+    elif s_min is None and shannon_class in ("", "unknown"):
+        failures.append("Shannon s_min / shannon_class unavailable")
+
+    n_shannon = _modeling_float(quality, "n_shannon")
+    if n_shannon is None:
+        failures.append("n_shannon missing")
+    elif n_shannon < float(t.n_shannon_min):
+        failures.append(
+            f"n_shannon = {n_shannon:.2f} < {float(t.n_shannon_min):.1f}"
+        )
+
+    return (not failures), failures
+
+
+def allows_modeling(
+    quality: Mapping[str, Any],
+    *,
+    thresholds: Optional[ModelingGateThresholds] = None,
+) -> bool:
+    """
+    True when a GNOM quality passport may start DAM (mono) or MIXTURE (poly).
+
+    See ``evaluate_modeling_gate`` for the concrete multi-indicator thresholds.
+    """
+    ok, _failures = evaluate_modeling_gate(quality, thresholds=thresholds)
+    return ok
+
+
+def modeling_gate_skip_reason(
+    quality: Mapping[str, Any],
+    *,
+    kind: str = "modeling",
+    thresholds: Optional[ModelingGateThresholds] = None,
+) -> str:
+    """Human-readable skip reason when ``allows_modeling`` is False; else ``\"\"``."""
+    ok, failures = evaluate_modeling_gate(quality, thresholds=thresholds)
+    if ok:
+        return ""
+    return f"{kind} quality gate not satisfied ({'; '.join(failures)})"
 
 
 def shannon_ok(q_min_nm: Optional[float], dmax_nm: Optional[float]) -> Optional[bool]:

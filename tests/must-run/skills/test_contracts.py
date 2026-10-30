@@ -1408,6 +1408,12 @@ def _process_polydisperse_mod():
     return importlib.import_module("autosaxs.skill.process_polydisperse")
 
 
+def _process_monodisperse_mod():
+    import importlib
+
+    return importlib.import_module("autosaxs.skill.process_monodisperse")
+
+
 def test_process_polydisperse_registered_and_cli_description(capsys):
     from autosaxs.cli import main as cli_main
     from autosaxs.skill import list_skills, SKILL_ORDER
@@ -1500,8 +1506,140 @@ def test_process_polydisperse_orchestration_default_skips_mixture(monkeypatch):
         assert os.path.isfile(str(result["report_pdf_path"]))
 
 
+def _modeling_gate_ok_passport(**overrides):
+    """Minimal fit_distances / fit_sizes fields that pass ``allows_modeling``."""
+    base = {
+        "total_estimate": 0.45,
+        "chi2": 1.0,
+        "chi2_class": "acceptable",
+        "detail_reliability_class": "RELIABLE",
+        "shannon_s_min": 0.7,
+        "shannon_class": "stable",
+        "n_shannon": 10.0,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_allows_modeling_multi_indicator_gate():
+    """Shared DAM/MIXTURE gate: TE>0.3 + χ²/ΔRg/detail/s_min/n_shannon."""
+    from autosaxs.core.gnom_quality import allows_modeling, evaluate_modeling_gate
+
+    ok = _modeling_gate_ok_passport(delta_rg_pct=12.0)
+    assert allows_modeling(ok) is True
+    assert evaluate_modeling_gate(ok)[1] == []
+
+    # Poly D(R) omits ΔRg — still allowed when other indicators pass.
+    assert allows_modeling(_modeling_gate_ok_passport()) is True
+
+    # TE hard floor is exclusive (> 0.3), not passport high_quality 0.55.
+    assert allows_modeling(_modeling_gate_ok_passport(total_estimate=0.31)) is True
+    assert allows_modeling(_modeling_gate_ok_passport(total_estimate=0.3)) is False
+    assert allows_modeling(_modeling_gate_ok_passport(total_estimate=0.2)) is False
+
+    assert allows_modeling(_modeling_gate_ok_passport(chi2_class="failed", chi2=3.0)) is False
+    assert allows_modeling(_modeling_gate_ok_passport(delta_rg_pct=20.0)) is False
+    assert allows_modeling(
+        _modeling_gate_ok_passport(detail_reliability_class="SUSPICIOUS")
+    ) is False
+    assert allows_modeling(
+        _modeling_gate_ok_passport(shannon_s_min=2.1, shannon_class="unreliable")
+    ) is False
+    assert allows_modeling(_modeling_gate_ok_passport(n_shannon=5.0)) is False
+
+    # Empty / serialized missing fields fail closed.
+    assert allows_modeling({"total_estimate": "", "chi2_class": ""}) is False
+
+
+def test_process_monodisperse_model_dam_gated(monkeypatch):
+    """model_dam runs only when shared allows_modeling gate passes."""
+    _stub_atsas_installed(monkeypatch)
+    mod = _process_monodisperse_mod()
+
+    dam_calls: list[dict] = []
+
+    def _fake_guinier(profile, output_dir, **kwargs):
+        os.makedirs(output_dir, exist_ok=True)
+        results = os.path.join(output_dir, "guinier_results.txt")
+        Path(results).write_text("Rg = 2.0\n", encoding="utf-8")
+        return {"results_path": results}
+
+    def _fake_parse(path):
+        _ = path
+        return {"rg": 2.0, "i0": 1.0, "first_point_1based": 2}
+
+    def _fake_kratky(profile, output_dir, **kwargs):
+        os.makedirs(output_dir, exist_ok=True)
+        return {"kratky_plot_path": os.path.join(output_dir, "k.png")}
+
+    def _fake_distances_ok(profile, output_dir, **kwargs):
+        os.makedirs(output_dir, exist_ok=True)
+        gnom = os.path.join(output_dir, "datgnom_best.out")
+        Path(gnom).write_text("GNOM OUTPUT\nTotal Estimate = 0.45\n", encoding="utf-8")
+        return {
+            "best_gnom_out_path": gnom,
+            "pr_quality_class": "acceptable",
+            "overall_status": "ACCEPTABLE",
+            **_modeling_gate_ok_passport(delta_rg_pct=8.0),
+        }
+
+    def _fake_distances_fail(profile, output_dir, **kwargs):
+        os.makedirs(output_dir, exist_ok=True)
+        return {
+            "best_gnom_out_path": "",
+            "pr_quality_class": "high_quality",
+            "overall_status": "HIGH QUALITY",
+            # Old TE≥0.55 high_quality alone is not enough: detail SUSPICIOUS blocks.
+            **_modeling_gate_ok_passport(
+                total_estimate=0.9,
+                delta_rg_pct=5.0,
+                detail_reliability_class="SUSPICIOUS",
+            ),
+        }
+
+    def _fake_dam(profile, output_dir, **kwargs):
+        dam_calls.append(dict(kwargs))
+        os.makedirs(output_dir, exist_ok=True)
+        return {"dam_pdb_path": os.path.join(output_dir, "dam.pdb")}
+
+    def _fake_report(search_root, basename, **kwargs):
+        out_pdf = kwargs.get("output_path") or os.path.join(".", f"{basename}.pdf")
+        os.makedirs(os.path.dirname(out_pdf), exist_ok=True)
+        Path(out_pdf).write_text("%PDF-fake\n", encoding="utf-8")
+        return {"report_pdf_path": out_pdf, "assembled_report_md_path": ""}
+
+    monkeypatch.setattr(mod, "fit_guinier", _fake_guinier)
+    monkeypatch.setattr(mod, "parse_guinier_results_txt", _fake_parse)
+    monkeypatch.setattr(mod, "analyze_kratky", _fake_kratky)
+    monkeypatch.setattr(mod, "model_dam", _fake_dam)
+    monkeypatch.setattr(mod, "report_individual", _fake_report)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.05, 2.0, 40)
+        profile_path = os.path.join(tmp, "sample.dat")
+        write_saxs(profile_path, q, np.exp(-q**2), 0.02, {})
+
+        monkeypatch.setattr(mod, "fit_distances", _fake_distances_ok)
+        out_ok = mod.process_monodisperse(
+            profile_path, os.path.join(tmp, "ok"), n_runs=1, use_cache=False
+        )
+        assert out_ok["model_dam_ran"] is True
+        assert out_ok["model_dam_skip_reason"] == ""
+        assert len(dam_calls) == 1
+
+        dam_calls.clear()
+        monkeypatch.setattr(mod, "fit_distances", _fake_distances_fail)
+        out_skip = mod.process_monodisperse(
+            profile_path, os.path.join(tmp, "skip"), n_runs=1, use_cache=False
+        )
+        assert out_skip["model_dam_ran"] is False
+        assert "quality gate" in str(out_skip["model_dam_skip_reason"]).lower()
+        assert "SUSPICIOUS" in str(out_skip["model_dam_skip_reason"])
+        assert dam_calls == []
+
+
 def test_process_polydisperse_run_mixture_gated(monkeypatch):
-    """run_mixture=True runs MIXTURE only when D(R) is high_quality; passes r_max."""
+    """run_mixture=True runs MIXTURE only when shared modeling gate passes; passes r_max."""
     _stub_atsas_installed(monkeypatch)
     mod = _process_polydisperse_mod()
 
@@ -1517,14 +1655,15 @@ def test_process_polydisperse_run_mixture_gated(monkeypatch):
         _ = path
         return {"rg": 2.0, "i0": 1.0, "first_point_1based": 2}
 
-    def _fake_sizes_hq(profile, output_dir, **kwargs):
+    def _fake_sizes_ok(profile, output_dir, **kwargs):
         os.makedirs(output_dir, exist_ok=True)
         handoff = os.path.join(output_dir, "fit.yml")
         Path(handoff).write_text("fit:\n  rmax_nm: 7.5\n", encoding="utf-8")
         return {
             "fit_sizes_path": handoff,
-            "sizes_quality_class": "high_quality",
-            "overall_status": "HIGH QUALITY",
+            "sizes_quality_class": "acceptable",
+            "overall_status": "ACCEPTABLE",
+            **_modeling_gate_ok_passport(),
         }
 
     def _fake_sizes_fail(profile, output_dir, **kwargs):
@@ -1533,6 +1672,7 @@ def test_process_polydisperse_run_mixture_gated(monkeypatch):
             "fit_sizes_path": "",
             "sizes_quality_class": "failed",
             "overall_status": "FAILED",
+            **_modeling_gate_ok_passport(total_estimate=0.1, chi2_class="failed", chi2=5.0),
         }
 
     def _fake_mixture(profile, output_dir, **kwargs):
@@ -1556,7 +1696,7 @@ def test_process_polydisperse_run_mixture_gated(monkeypatch):
         profile_path = os.path.join(tmp, "sample.dat")
         write_saxs(profile_path, q, np.exp(-q**2), 0.02, {})
 
-        monkeypatch.setattr(mod, "fit_sizes", _fake_sizes_hq)
+        monkeypatch.setattr(mod, "fit_sizes", _fake_sizes_ok)
         out_ok = mod.process_polydisperse(
             profile_path, os.path.join(tmp, "ok"), run_mixture=True, use_cache=False
         )

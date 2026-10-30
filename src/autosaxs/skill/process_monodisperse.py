@@ -4,7 +4,8 @@ Meta-skill: monodisperse single-profile quality pipeline (Guinier onward).
 Wires existing leaf skills only — no reimplementation of Guinier / Kratky / GNOM / DAMMIF math.
 Sequence follows ``docs/saxs_quality_guide_newest.docx`` steps 4–7 and 9
 (omit calibration, radiation averaging, buffer subtraction, and polydisperse step 8).
-Optional ``model_dam`` when step-7 quality gates pass (Total Estimate ≥ 0.55, ΔRg ≤ 10%).
+Optional ``model_dam`` when the shared modeling gate passes
+(``autosaxs.core.gnom_quality.allows_modeling``).
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from autosaxs.core.event_bus import EventBus, EventType
+from autosaxs.core.gnom_quality import allows_modeling, modeling_gate_skip_reason
 from autosaxs.core.utils import _strip_sub_int_prefix
 
 from .analyze_kratky import analyze_kratky
@@ -30,8 +32,6 @@ from .model_dam import model_dam
 from .report_individual import report_individual
 from .skill_wrap import require_atsas
 
-# Quality-guide gate for 3D (step 7): ΔRg ≤ 10% and Total Estimate ≥ 0.55
-# → encoded as fit_distances pr_quality_class ``high_quality``.
 _DEFAULT_MODEL_DAM_N_RUNS = 5
 
 
@@ -41,24 +41,6 @@ def _as_single_path(value: Any) -> Optional[str]:
     if isinstance(value, str) and value:
         return value
     return None
-
-
-def _as_scalar(value: Any) -> Any:
-    if isinstance(value, list):
-        return value[0] if value else None
-    return value
-
-
-def _pr_allows_model_dam(fit_distances_out: Dict[str, Any]) -> bool:
-    """
-    Quality guide step 7: allow ab initio 3D only when p(r) is internally consistent
-    (Total Estimate ≥ 0.55 and ΔRg ≤ 10%). That maps to ``pr_quality_class == high_quality``.
-    """
-    cls = str(_as_scalar(fit_distances_out.get("pr_quality_class")) or "").strip().lower()
-    status = str(_as_scalar(fit_distances_out.get("overall_status")) or "").strip().upper()
-    if cls == "high_quality" or status == "HIGH QUALITY":
-        return True
-    return False
 
 
 def _gnom_out_for_model_dam(
@@ -103,7 +85,18 @@ def process_monodisperse(
     """
     SAXS / small-angle x-ray scattering: run the monodisperse single-profile quality pipeline
     (Guinier → dimensionless Kratky → DATGNOM p(r) / Shannon–ΔRg passport → optional DAMMIF
-    when quality gates pass → per-sample PDF report).
+    when the shared modeling gate passes → per-sample PDF report).
+
+    **Modeling gate** (``allows_modeling`` on the fit_distances passport — same helper as
+    poly MIXTURE): start DAMMIF only when **all** of the following hold:
+
+    - Total Estimate **> 0.3** (hard floor; passport ``high_quality`` still uses ≥ 0.55)
+    - Reduced χ² in the acceptable passport band [0.3, 2.5]
+      (``chi2_class`` ``high_quality`` or ``acceptable``)
+    - ΔRg ≤ 15% (passport acceptable band; mono p(r) only)
+    - ``detail_reliability_class`` is not ``SUSPICIOUS``
+    - Shannon ``s_min`` < 2.0 (class not ``unreliable``)
+    - ``n_shannon`` ≥ 8 (``DEFAULT_DETAIL_N_SHANNON_FLOOR``)
 
     **First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
     **and** a pipeline config is available (``config.conf`` in that dir, or
@@ -126,7 +119,7 @@ def process_monodisperse(
       Guinier `first` is forwarded to DATGNOM; Guinier `last` is **not** passed to DATGNOM
       (window too narrow for p(r)).
     - `smooth` (float | None, default `None`): Optional DATGNOM `--smooth` for `fit_distances`.
-    - `n_runs` (int, default `5`): DAMMIF replica count for `model_dam` when the quality gate passes.
+    - `n_runs` (int, default `5`): DAMMIF replica count for `model_dam` when the modeling gate passes.
     - `use_cache` (bool, default `False`): Forwarded to leaf skills.
 
     ### Returns
@@ -278,7 +271,7 @@ def process_monodisperse(
     model_dam_ran = False
     model_dam_skip_reason = ""
     dam_dir = os.path.join(output_dir, "model_dam")
-    if _pr_allows_model_dam(out_distances):
+    if allows_modeling(out_distances):
         gnom_for_dam = _gnom_out_for_model_dam(
             out_distances, dam_dir=dam_dir, basename=basename
         )
@@ -296,7 +289,7 @@ def process_monodisperse(
                     {
                         "text": (
                             f"process_monodisperse: model_dam "
-                            f"(n_runs={int(n_runs)}, quality gate passed)…"
+                            f"(n_runs={int(n_runs)}, modeling gate passed)…"
                         )
                     },
                 )
@@ -310,12 +303,8 @@ def process_monodisperse(
             )
             model_dam_ran = True
     else:
-        status = _as_scalar(out_distances.get("overall_status")) or "FAILED"
-        cls = _as_scalar(out_distances.get("pr_quality_class")) or "failed"
-        model_dam_skip_reason = (
-            f"p(r) quality gate not satisfied for 3D modeling "
-            f"(overall_status={status!r}, pr_quality_class={cls!r}; "
-            f"require HIGH QUALITY / Total Estimate ≥ 0.55 and ΔRg ≤ 10%)"
+        model_dam_skip_reason = modeling_gate_skip_reason(
+            out_distances, kind="p(r)"
         )
         if bus:
             bus.publish(
