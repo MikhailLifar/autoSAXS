@@ -14,10 +14,9 @@ from __future__ import annotations
 import shutil
 import tempfile
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from scipy.optimize import minimize
 
 from autosaxs.core.gnom import distribution_arrays, parse_gnom_out
 from autosaxs.core.shape_score import (
@@ -39,6 +38,7 @@ from autosaxs.core.tikhonov_pr import (
 )
 from ..deps import EventBus, EventType
 from ..fit_guinier.guinier import run_guinier_analysis
+from ..gnom_fit_common import nelder_mead_2d, slice_profile_window
 from .quality_io import _pr_metrics
 
 # Optional continuous polish of the NumPy grid winner (still no ATSAS).
@@ -164,28 +164,10 @@ def _slice_profile_window(
     first: int,
     last: Optional[int],
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """1-based inclusive ``first``/``last`` → arrays for the Tikhonov data term."""
-    q = np.asarray(q, dtype=float)
-    I = np.asarray(I, dtype=float)
-    n = int(q.size)
-    i0 = max(0, int(first) - 1)
-    i1 = n if last is None else min(n, int(last))
-    if i1 <= i0:
-        raise ValueError(f"fit_distances: empty q-window first={first} last={last} n={n}")
-    q_w = q[i0:i1]
-    I_w = I[i0:i1]
-    if sigma is None:
-        # Match ``write_saxs_atsas_format`` (4% of I) so NumPy and ATSAS share weights.
-        sig_w = 0.04 * np.maximum(np.abs(I_w), 1e-300)
-    else:
-        sig_w = np.asarray(sigma, dtype=float)[i0:i1]
-        # Replace non-positive / non-finite σ; fall back to the same 4% convention.
-        fallback = 0.04 * np.maximum(np.abs(I_w), 1e-300)
-        bad = ~(np.isfinite(sig_w) & (sig_w > 0))
-        if np.any(bad):
-            sig_w = sig_w.copy()
-            sig_w[bad] = fallback[bad]
-    return q_w, I_w, sig_w
+    """Back-compat wrapper around shared ``slice_profile_window``."""
+    return slice_profile_window(
+        q, I, sigma, first=first, last=last, skill_id="fit_distances"
+    )
 
 
 def _candidate_from_numpy_solve(
@@ -260,48 +242,11 @@ def _nelder_mead_2d(
     *,
     x0: np.ndarray,
     bounds: Tuple[Tuple[float, float], Tuple[float, float]],
-    objective: Callable[[np.ndarray], float],
+    objective,
     maxiter: int,
 ) -> Tuple[np.ndarray, float, int]:
-    """
-    Unconstrained Nelder–Mead in a mapped unit box.
-
-    ``x`` is ``(Dmax, log10 α)``; soft-reject outside ``bounds`` with a large
-    penalty so the algorithm stays on the Shannon / α domain without shrinking it.
-    """
-    (d_lo, d_hi), (la_lo, la_hi) = bounds
-    n_eval = 0
-
-    def mapped_obj(x: np.ndarray) -> float:
-        nonlocal n_eval
-        n_eval += 1
-        d = float(x[0])
-        la = float(x[1])
-        if not (d_lo <= d <= d_hi and la_lo <= la <= la_hi):
-            # Soft barrier: keep search full-domain but discourage walk-off
-            pen = 0.0
-            if d < d_lo:
-                pen += (d_lo - d) ** 2
-            elif d > d_hi:
-                pen += (d - d_hi) ** 2
-            if la < la_lo:
-                pen += (la_lo - la) ** 2
-            elif la > la_hi:
-                pen += (la - la_hi) ** 2
-            return 1e3 + 1e2 * pen
-        return float(objective(np.asarray([d, la], dtype=float)))
-
-    res = minimize(
-        mapped_obj,
-        np.asarray(x0, dtype=float),
-        method="Nelder-Mead",
-        options={"maxiter": int(maxiter), "xatol": 1e-3, "fatol": 1e-4, "adaptive": True},
-    )
-    x_best = np.asarray(res.x, dtype=float)
-    # Clamp to domain for the returned point
-    x_best[0] = float(np.clip(x_best[0], d_lo, d_hi))
-    x_best[1] = float(np.clip(x_best[1], la_lo, la_hi))
-    return x_best, float(res.fun), n_eval
+    """Back-compat wrapper around shared ``nelder_mead_2d``."""
+    return nelder_mead_2d(x0=x0, bounds=bounds, objective=objective, maxiter=maxiter)
 
 
 def _search_shannon_alpha_pr(
