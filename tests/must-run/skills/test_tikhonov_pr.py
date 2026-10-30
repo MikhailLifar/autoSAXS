@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from autosaxs.core.tikhonov_pr import (
+    DEFAULT_SPHERE_KERNEL,
     H32_KAPPA,
     build_kernel,
     build_stabilizer,
@@ -15,6 +16,7 @@ from autosaxs.core.tikhonov_pr import (
     nr_for_dmax,
     rg_i0_from_pr,
     solve_tikhonov,
+    sphere_form_factor_squared,
 )
 
 
@@ -104,3 +106,37 @@ def test_rg_i0_from_pr_sphere_like():
     assert np.isfinite(i0) and i0 > 0
     # Sphere diameter D=6 → R=3 → Rg = R√(3/5) ≈ 2.32
     assert 1.5 < rg < 3.0
+
+
+def test_sphere_v_phi2_kernel_recovers_volume_distribution():
+    """GNOM system=1 operator: I = K @ D_v with V(R)·Φ²(qR)."""
+    rmax = 5.0
+    r = np.linspace(0.0, rmax, 71)
+    dv = np.exp(-0.5 * ((r - 2.0) / 0.5) ** 2)
+    dv[0] = dv[-1] = 0.0
+    q = np.linspace(0.12, 2.8, 100)
+    K = build_kernel(q, r, kind=DEFAULT_SPHERE_KERNEL)
+    I = K @ dv
+    # Sanity: Φ(0)=1 and kernel columns scale with volume.
+    assert sphere_form_factor_squared(np.asarray([0.0]))[0] == pytest.approx(1.0)
+    assert float(I[0]) > float(I[-1]) > 0
+    sigma = 0.02 * np.maximum(I, 1e-6) + 1e-5
+    rng = np.random.default_rng(1)
+    I_noisy = I + rng.normal(0.0, 0.2, size=I.shape) * sigma
+    sol = solve_tikhonov(
+        q,
+        I_noisy,
+        sigma,
+        dmax=rmax,
+        alpha=1.0,
+        nr=71,
+        kernel=DEFAULT_SPHERE_KERNEL,
+        use_h32=True,
+    )
+    assert sol.p[0] == pytest.approx(0.0, abs=1e-10)
+    assert sol.p[-1] == pytest.approx(0.0, abs=1e-10)
+    assert "sphere_v_phi2" in sol.variant
+    a = sol.p - sol.p.mean()
+    b = dv - dv.mean()
+    corr = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
+    assert corr > 0.85

@@ -72,7 +72,7 @@ def fit_sizes(
     r"""
     SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtain a size distribution function \(D(R)\) / \(D_v(R)\) for a polydisperse system from a 1D SAXS curve.
 
-    **Auto path** (when `rmax_nm` is omitted): Guinier \(R_g\) (scale tool) → Shannon-bound \(R_{\max}\) grid \(\times\) \(\log_{10}\alpha\) joint GNOM search → pick by **`shape_tight_extent_dr`** (same soft-taper / non‑neg / low-wiggle / χ² philosophy as monodisperse `fit_distances`, with an adapted \(R_{\max}/R_g\) extent band for size distributions). Units: \(q\) in nm⁻¹, lengths in nm.
+    **Auto path** (when `rmax_nm` is omitted, spheres / GNOM system=1): Guinier \(R_g\) (scale tool) → **Fast AutoGNOM** — Stage 1: H32 NumPy Tikhonov with the sphere volume-distribution operator over Shannon-bound \(R_{\max}\times\log_{10}\alpha\) (no ATSAS in the search loop; α in GNOM-printed units via locked H32 packaging) → pick by **`shape_tight_extent_dr`** (same soft-taper / non‑neg / low-wiggle / χ² philosophy as monodisperse `fit_distances`, with an adapted \(R_{\max}/R_g\) extent band) → Stage 2: ATSAS `gnom --system=1` probes the top NumPy candidates (+ optional short GNOM polish) → skill rewrites stable `gnom_best.out`, close-fits ensemble, force-zero-off (unless `minimal`), passport. Units: \(q\) in nm⁻¹, lengths in nm.
 
     **Refine path** (when `rmax_nm` is set): single GNOM `--rmax` at the given Rmax, plus Rmax±10% close-fits ensemble unless `minimal=True`.
 
@@ -89,7 +89,7 @@ def fit_sizes(
     - `last` (int | None): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
     - `q_min` (float | None): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
     - `q_max` (float | None): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`. When both `last` and `q_max` are omitted, a silent safer default is applied.
-    - `alpha` (float | None): GNOM `--alpha`. On auto path: if omitted, searched on \(\log_{10}\alpha\in[-1,2.5]\); if set, Rmax is still Shannon-gridded at that fixed α. On refine path: passed through (GNOM auto if omitted).
+    - `alpha` (float | None): GNOM `--alpha`. On auto Fast AutoGNOM path: if omitted, searched on \(\log_{10}\alpha\in[-1,2.5]\); if set, Rmax is still Shannon-searched at that fixed α (NumPy Stage 1 + ATSAS Stage 2). On refine path: passed through (GNOM auto if omitted).
     - `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
     - `force_zero_rmin` (str | None): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
     - `force_zero_rmax` (str | None): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y`.
@@ -410,6 +410,8 @@ def _fit_sizes_paths(
                 atsas_dat_path=atsas_dat_path,
                 output_dir=output_dir,
                 q_nm=q_nm,
+                I=I,
+                sigma=sigma,
                 system=system,
                 shape=shape,
                 rg_guinier_nm=float(rg_guinier_nm_val),

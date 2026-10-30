@@ -1,12 +1,18 @@
-"""In-process Tikhonov P(r) solver for monodisperse GNOM (system=0) search.
+"""In-process Tikhonov solvers for AutoGNOM Stage 1 (no ATSAS in the loop).
 
-Used by AutoGNOM Stage 1: optimise ``(Dmax, α)`` under ``shape_tight_extent``
-without calling ATSAS. Default α packaging is the locked **H32** recipe from
-GNOM reverse-engineering (stock d1 + ``κ·(2/n_free)·lmb·dr²``), so printed
-GNOM α is used directly — Stage 2 re-solves with ATSAS ``gnom`` at the same
-``(Dmax, α)``.
+Supports:
 
-Units: ``q`` in nm⁻¹, ``r`` / ``Dmax`` in nm.
+- **Monodisperse** GNOM system=0 — Fourier-sine ``p(r)`` kernel (``fit_distances``)
+- **Polydisperse spheres** GNOM system=1 — volume-distribution kernel
+  ``I(q) = ∫ D_v(R) V(R) Φ²(qR) dR`` with ``V=(4/3)πR³`` and
+  ``Φ(x)=3(sin x − x cos x)/x³`` (``fit_sizes``; verified against ATSAS
+  ``gnom --system=1`` ``I_fit``)
+
+Default α packaging is the locked **H32** recipe from GNOM reverse-engineering
+(stock d1 + ``κ·(2/n_free)·lmb·dr²``), so printed GNOM α is used directly —
+Stage 2 re-solves with ATSAS ``gnom`` at the same ``(extent, α)``.
+
+Units: ``q`` in nm⁻¹, ``r`` / ``Dmax`` / ``Rmax`` in nm.
 """
 
 from __future__ import annotations
@@ -17,7 +23,7 @@ from typing import Literal, Optional, Tuple
 
 import numpy as np
 
-KernelKind = Literal["sinc", "4pi_sinc", "4pi_r_sinc"]
+KernelKind = Literal["sinc", "4pi_sinc", "4pi_r_sinc", "sphere_v_phi2"]
 StabilizerKind = Literal["d2", "d1", "I", "d2_weighted"]
 QuadKind = Literal["trapz", "rect", "simpson_like"]
 
@@ -26,6 +32,8 @@ DEFAULT_KERNEL: KernelKind = "4pi_sinc"
 DEFAULT_STABILIZER: StabilizerKind = "d1"
 DEFAULT_QUAD: QuadKind = "trapz"
 DEFAULT_NR = 199
+# GNOM system=1 spheres — Stage-1 default for fit_sizes.
+DEFAULT_SPHERE_KERNEL: KernelKind = "sphere_v_phi2"
 
 # H32: κ = (4π)²√π = C₀/(4π)² with C₀ = (4π)⁴√π (H24b).
 H32_KAPPA = (4.0 * math.pi) ** 2 * math.sqrt(math.pi)
@@ -70,6 +78,17 @@ def _quad_weights(r: np.ndarray, kind: QuadKind) -> np.ndarray:
     return w
 
 
+def sphere_form_factor_squared(qr: np.ndarray) -> np.ndarray:
+    """Solid-sphere ``Φ²(x)`` with ``Φ(x) = 3 (sin x − x cos x) / x³`` (``Φ(0)=1``)."""
+    x = np.asarray(qr, dtype=float)
+    out = np.empty_like(x, dtype=float)
+    small = np.abs(x) < 1e-8
+    out[small] = 1.0
+    xs = x[~small]
+    out[~small] = (3.0 * (np.sin(xs) - xs * np.cos(xs)) / (xs**3)) ** 2
+    return out
+
+
 def build_kernel(
     q: np.ndarray,
     r: np.ndarray,
@@ -77,9 +96,13 @@ def build_kernel(
     kind: KernelKind = DEFAULT_KERNEL,
     quad: QuadKind = DEFAULT_QUAD,
 ) -> np.ndarray:
-    """Design matrix ``K`` such that ``I ≈ K @ p``."""
+    """Design matrix ``K`` such that ``I ≈ K @ p`` (or ``K @ D_v`` for spheres)."""
     w = _quad_weights(r, quad)
     qr = np.outer(q, r)
+    if kind == "sphere_v_phi2":
+        # GNOM system=1: I(q) = ∫ D_v(R) · V(R) · Φ²(qR) dR, V=(4/3)πR³.
+        vol = (4.0 / 3.0) * np.pi * np.maximum(r, 0.0) ** 3
+        return sphere_form_factor_squared(qr) * vol[None, :] * w[None, :]
     with np.errstate(divide="ignore", invalid="ignore"):
         sinc = np.where(np.abs(qr) < 1e-15, 1.0, np.sin(qr) / qr)
     if kind == "sinc":
@@ -210,6 +233,7 @@ def solve_tikhonov(
     dmax: float,
     alpha: float,
     nr: int = DEFAULT_NR,
+    rmin: float = 0.0,
     force_zero_rmin: bool = True,
     force_zero_rmax: bool = True,
     kernel: KernelKind = DEFAULT_KERNEL,
@@ -220,6 +244,9 @@ def solve_tikhonov(
 ) -> TikhonovSolveResult:
     """
     Solve ``min ||W(Kp-I)||² + (α · s) ||Lp||²`` with optional hard endpoint zeros.
+
+    ``dmax`` is the upper real-space bound (Dmax for system=0, Rmax for system=1).
+    Optional ``rmin`` shifts the grid to ``[rmin, dmax]`` (polydisperse ``--rmin``).
 
     Default ``use_h32=True``: ``s`` is the H32 packaging so ``alpha`` is in
     **GNOM-printed** units (Stage 2 can pass the same α to ATSAS ``gnom``).
@@ -237,7 +264,13 @@ def solve_tikhonov(
     if nr_i < 3:
         raise ValueError(f"solve_tikhonov: nr must be ≥3; got {nr}")
 
-    r = np.linspace(0.0, float(dmax), nr_i)
+    r_lo = float(rmin) if np.isfinite(float(rmin)) else 0.0
+    r_hi = float(dmax)
+    if not (r_hi > r_lo and np.isfinite(r_hi) and np.isfinite(r_lo)):
+        raise ValueError(f"solve_tikhonov: require dmax > rmin; got rmin={rmin} dmax={dmax}")
+    r_span = r_hi - r_lo
+
+    r = np.linspace(r_lo, r_hi, nr_i)
     K_full = build_kernel(q, r, kind=kernel, quad=quad)
     L_full = build_stabilizer(nr_i, stabilizer, r=r)
 
@@ -261,8 +294,9 @@ def solve_tikhonov(
     ATA0 = A.T @ A
     S = L.T @ L
     if use_h32:
+        # H32 ``dr`` uses the real-space span (Dmax when rmin=0; Rmax−rmin otherwise).
         s = h32_smoothness_scale(
-            ATA0, S, dmax=float(dmax), nr=nr_i, n_free=int(idx.size)
+            ATA0, S, dmax=float(r_span), nr=nr_i, n_free=int(idx.size)
         )
         s = float(s) * float(alpha_scale)
     else:
@@ -281,7 +315,11 @@ def solve_tikhonov(
     res2 = ((I - I_fit) / sig) ** 2
     chi2_mean = float(np.mean(res2))
     chi2_med = float(np.median(res2))
-    rg, i0 = rg_i0_from_pr(r, p)
+    if str(kernel) == "sphere_v_phi2":
+        # Size-distribution moments are not Guinier Rg / I(0); leave unset.
+        rg, i0 = float("nan"), float("nan")
+    else:
+        rg, i0 = rg_i0_from_pr(r, p)
 
     pack = "h32" if use_h32 else f"scale={float(alpha_scale):g}"
     variant = f"{kernel}|{stabilizer}|{quad}|{pack}|nr={nr_i}"
