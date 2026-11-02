@@ -207,10 +207,10 @@ Modeling apps live under `guisaxs_skills/modeling/` (entries `guisaxs-shape` / `
 **Still worth doing when touching the area:**
 
 1. **UI module size** — still the largest debt: `ui/widgets/plots.py` (~1k), `ui/wizards/left.py`, mask dialog, left/right panels, mono presenter. Split along paint vs wizard vs chrome when those files are edited.
-2. **Executor facade size** — `pipeline/executor.py` still owns tick + admit queue + job lifecycle + skill outcomes. Extract `incoming.py` / `job_lifecycle.py` if that loop grows again; meanwhile prune dead facade helpers (`monodisperse_steps_*`, unused mixture option helper) and stop poking `_load_yaml_options` from controllers.
-3. **Session write discipline** — intake/stop/buffer/mask/arming go through `LiveviewSession`; wizard params, shape/mixture modes, calibration outcomes, and executor `last_*` paths still write `state` directly. Add Session helpers (or explicitly document intentional exceptions) if that surface keeps spreading.
+2. **Executor facade size** — `pipeline/executor.py` still owns tick + admit queue + job lifecycle + skill outcomes. Dead facade helpers pruned (P1); shared `yaml_options.load_yaml_options`. Extract `incoming.py` / `job_lifecycle.py` only if the tick loop grows again.
+3. **Session write discipline** — **Mostly done (P1):** intake/stop/buffer/mask/arming + `last_*` + calibration outcomes + inferred shape/mixture go through `LiveviewSession`. Wizard UI Apply may still write ephemeral wizard params on `state` (documented intentional exception).
 4. **One analysis-step assembler** — `plan._analysis_steps` and `manual_jobs.analysis_steps_for_profile` are near-duplicates. One owner (planner-side) with manual/auto call sites would match “one owner per concept.”
-5. **Single LIVE right ingest** — `LiveviewSkillOutcomesHandler` can call `present_right(LIVE)` from both `on_latest_artifacts` and success handling; collapse to one call site so analysis finishes are not double-presented.
+5. **Single LIVE right ingest** — **Done (P1):** `on_latest_artifacts` middle-only; sole `present_right(LIVE)` in `_handle_success` after enrichment.
 
 **Optional / low urgency (fine to leave):**
 

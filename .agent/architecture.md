@@ -14,6 +14,7 @@
 - **Maps SSOT:** `docs/architecture/liveview/nodes.yaml` → `scripts/render_arch.py` → Mermaid/Graphviz. Index: `docs/architecture/README.md`.
 - **Prose:** `docs/liveview_architecture.md`, `docs/liveview_session_sample_plan.md`.
 - **Science vs process:** executor uses `RunOutcome.science_ok` (queue can finish on science fail; not a process crash).
+- **Finish path / session writes (P1):** `.agent/liveview/session-executor-finish.md` — one LIVE `present_right` on success after enrichment; middle via `on_latest_artifacts` only; `Job.completed` sole progress owner.
 
 ## Related
 

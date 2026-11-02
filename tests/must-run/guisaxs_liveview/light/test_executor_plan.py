@@ -226,26 +226,23 @@ def test_executor_science_fail_finishes_queue_not_process_crash(tmp_path: Path):
 
 
 def test_monodisperse_guinier_opts_fixed_interval_from_spinboxes(tmp_path: Path):
-    class _DummySignal:
-        def connect(self, _fn):
-            return None
-
-    class _DummyRunner:
-        def __init__(self):
-            self.finished = _DummySignal()
-
-        def is_running(self) -> bool:
-            return False
+    from guisaxs_skills.liveview.pipeline.monodisperse_pipeline import (
+        MonodispersePipelineParts,
+        build_monodisperse_steps,
+    )
+    from guisaxs_skills.liveview.pipeline.yaml_options import load_yaml_options
 
     prof = tmp_path / "sub_sample.dat"
     prof.write_text("# q I\n", encoding="utf-8")
     state = LiveviewSessionState(watchdir=tmp_path)
     state.monodisperse_wizard_params = {"first": 1, "last": 1}
-    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=_DummyRunner())  # type: ignore[arg-type]
 
-    steps = ex.monodisperse_steps_guinier_and_distances(
+    steps = build_monodisperse_steps(
         str(prof),
         output_root=tmp_path,
+        state=state,
+        parts=MonodispersePipelineParts.GUINIER_AND_DISTANCES,
+        load_yaml=load_yaml_options,
         fixed_guinier_interval=True,
         guinier_interval_first=8,
         guinier_interval_last=32,
@@ -270,30 +267,24 @@ def test_monodisperse_guinier_opts_fixed_interval_from_spinboxes(tmp_path: Path)
 
 
 def test_analysis_steps_both_armed_separate_guinier(tmp_path: Path):
-    from guisaxs_skills.liveview.pipeline.executor import LiveviewJobExecutor
+    from guisaxs_skills.liveview.pipeline import manual_jobs
     from guisaxs_skills.liveview.pipeline.monodisperse_pipeline import (
         FIT_GUINIER_MONO_STEP,
         FIT_GUINIER_POLY_STEP,
     )
-
-    class _DummySignal:
-        def connect(self, _fn):
-            return None
-
-    class _DummyRunner:
-        def __init__(self):
-            self.finished = _DummySignal()
-
-        def is_running(self) -> bool:
-            return False
+    from guisaxs_skills.liveview.pipeline.yaml_options import load_yaml_options
 
     prof = tmp_path / "int_sample.dat"
     prof.write_text("# q I\n", encoding="utf-8")
     state = LiveviewSessionState(watchdir=tmp_path)
     state.monodisperse_armed = True
     state.polydisperse_armed = True
-    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=_DummyRunner())  # type: ignore[arg-type]
-    steps = ex._analysis_steps_for_profile(str(prof), output_root=tmp_path)  # noqa: SLF001
+    steps = manual_jobs.analysis_steps_for_profile(
+        state,
+        str(prof),
+        output_root=tmp_path,
+        load_yaml=load_yaml_options,
+    )
     names = [s.name for s in steps]
     assert FIT_GUINIER_MONO_STEP in names
     assert FIT_GUINIER_POLY_STEP in names
@@ -313,30 +304,19 @@ def test_polydisperse_steps_full_defaults(tmp_path: Path):
         build_polydisperse_steps,
     )
     from guisaxs_skills.liveview.pipeline.monodisperse_pipeline import FIT_GUINIER_POLY_STEP
+    from guisaxs_skills.liveview.pipeline.yaml_options import load_yaml_options
     from guisaxs_skills.liveview.session.state import PolydisperseMixtureMode
-
-    class _DummySignal:
-        def connect(self, _fn):
-            return None
-
-    class _DummyRunner:
-        def __init__(self):
-            self.finished = _DummySignal()
-
-        def is_running(self) -> bool:
-            return False
 
     prof = tmp_path / "sub_sample.dat"
     prof.write_text("# q I\n", encoding="utf-8")
     state = LiveviewSessionState(watchdir=tmp_path)
-    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=_DummyRunner())  # type: ignore[arg-type]
 
     steps = build_polydisperse_steps(
         str(prof),
         output_root=tmp_path,
         state=state,
         parts=PolydispersePipelineParts.FULL,
-        load_yaml=ex._load_yaml_options,  # noqa: SLF001
+        load_yaml=load_yaml_options,
     )
     assert [s.name for s in steps] == [FIT_GUINIER_POLY_STEP, "fit_sizes", "confirm_dr"]
     s_opts = steps[1].request.options
@@ -350,7 +330,7 @@ def test_polydisperse_steps_full_defaults(tmp_path: Path):
         output_root=tmp_path,
         state=state,
         parts=PolydispersePipelineParts.FULL,
-        load_yaml=ex._load_yaml_options,  # noqa: SLF001
+        load_yaml=load_yaml_options,
     )
     assert [s.name for s in steps2] == [FIT_GUINIER_POLY_STEP, "fit_sizes", "confirm_dr"]
 
@@ -374,30 +354,19 @@ def test_polydisperse_guinier_only_no_sizes_first_handoff(tmp_path: Path):
         build_polydisperse_steps,
         fit_sizes_opts,
     )
-
-    class _DummySignal:
-        def connect(self, _fn):
-            return None
-
-    class _DummyRunner:
-        def __init__(self):
-            self.finished = _DummySignal()
-
-        def is_running(self) -> bool:
-            return False
+    from guisaxs_skills.liveview.pipeline.yaml_options import load_yaml_options
 
     prof = tmp_path / "sub_sample.dat"
     prof.write_text("# q I\n", encoding="utf-8")
     state = LiveviewSessionState(watchdir=tmp_path)
     state.polydisperse_window_params = {"guinier_first": 5, "guinier_last": 20, "first": 1}
-    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=_DummyRunner())  # type: ignore[arg-type]
 
     steps = build_polydisperse_steps(
         str(prof),
         output_root=tmp_path,
         state=state,
         parts=PolydispersePipelineParts.GUINIER_ONLY,
-        load_yaml=ex._load_yaml_options,  # noqa: SLF001
+        load_yaml=load_yaml_options,
         fixed_guinier_interval=True,
         guinier_interval_first=5,
         guinier_interval_last=20,
@@ -406,24 +375,15 @@ def test_polydisperse_guinier_only_no_sizes_first_handoff(tmp_path: Path):
     assert steps[0].request.options["first"] == 5
     assert steps[0].request.options["last"] == 20
 
-    s_opts = fit_sizes_opts(state=state, output_root=tmp_path, load_yaml=ex._load_yaml_options)  # noqa: SLF001
+    s_opts = fit_sizes_opts(state=state, output_root=tmp_path, load_yaml=load_yaml_options)
     assert s_opts["first"] == 1
     assert s_opts["shape"] == "spheres"
 
 
 def test_monodisperse_step_shape_dammif_not_queued(tmp_path: Path):
     """DAMMIF shape is Confirm-only in guisaxs-shape — no JobStep on the liveview queue."""
-
-    class _DummySignal:
-        def connect(self, _fn):
-            return None
-
-    class _DummyRunner:
-        def __init__(self):
-            self.finished = _DummySignal()
-
-        def is_running(self) -> bool:
-            return False
+    from guisaxs_skills.liveview.pipeline import manual_jobs
+    from guisaxs_skills.liveview.pipeline.yaml_options import load_yaml_options
 
     prof = tmp_path / "sub_sample.dat"
     prof.write_text("# q I\n", encoding="utf-8")
@@ -433,14 +393,79 @@ def test_monodisperse_step_shape_dammif_not_queued(tmp_path: Path):
     gnom.write_text("GNOM mock\n", encoding="utf-8")
 
     state = LiveviewSessionState(watchdir=tmp_path)
-    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=_DummyRunner())  # type: ignore[arg-type]
-
-    step = ex.monodisperse_step_shape(
-        str(prof),
+    step = manual_jobs.monodisperse_step_shape(
+        state=state,
+        profile_abs=str(prof),
         output_root=tmp_path,
         shape_mode="dammif",
+        load_yaml=load_yaml_options,
         gnom_out_path=str(gnom),
     )
     assert step is None
+
+
+def test_executor_emits_enriched_result_once_for_ui(tmp_path: Path):
+    """Artifacts + skill_finished share one enriched result; Job.completed stays sole progress owner."""
+
+    class _DummySignal:
+        def __init__(self):
+            self._slots = []
+
+        def connect(self, fn):
+            self._slots.append(fn)
+
+        def emit(self, *a, **k):
+            for fn in list(self._slots):
+                fn(*a, **k)
+
+    class _DummyRunner:
+        def __init__(self):
+            self.finished = _DummySignal()
+
+        def is_running(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            return None
+
+        def start(self, _req) -> None:
+            return None
+
+    runner = _DummyRunner()
+    state = LiveviewSessionState(watchdir=tmp_path)
+    state.set_auto_processing(False)
+    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=runner)  # type: ignore[arg-type]
+    artifacts: list[dict] = []
+    finished: list[object] = []
+    ex.latest_artifacts.connect(lambda r: artifacts.append(dict(r)))
+    ex.skill_finished.connect(lambda o: finished.append(o))
+
+    job = Job(
+        id="guinier",
+        priority=150,
+        steps=[JobStep(name="fit_guinier", request=RunRequest("fit_guinier", ["prof.dat"], {}))],
+        context={"manual": True, "monodisperse": True},
+    )
+    ex._start_job(job)  # noqa: SLF001
+    ex._pending_step_name = "fit_guinier"  # noqa: SLF001
+    from guisaxs_skills.logic.runner_qprocess import RunOutcome
+
+    ex._on_skill_finished(  # noqa: SLF001
+        RunOutcome(
+            process_ok=True,
+            science_ok=True,
+            exit_code=0,
+            result={"rg": 2.5, "results_path": "guinier_results.txt"},
+            request=RunRequest("fit_guinier", ["prof.dat"], {}),
+        )
+    )
+    assert len(artifacts) == 1
+    assert len(finished) == 1
+    assert artifacts[0].get("_liveview_step") == "fit_guinier"
+    assert finished[0].result.get("_liveview_step") == "fit_guinier"
+    assert artifacts[0] == finished[0].result
+    # Progress recorded only on Job.completed
+    assert ex._current_job is not None  # noqa: SLF001
+    assert "fit_guinier" in ex._current_job.completed.step_names  # noqa: SLF001
 
 

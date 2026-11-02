@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Optional
 from PyQt5.QtWidgets import QMessageBox
 
 from ..pipeline.polydisperse_pipeline import PolydispersePipelineParts, build_polydisperse_steps
+from ..pipeline.yaml_options import load_yaml_options
 from ..ingest.sample_revision import is_dat_path
 from ..session.output_paths import analysis_output_root
 from ...logic.runner_qprocess import RunOutcome
@@ -127,7 +128,7 @@ class LiveviewPolydisperseHandler:
             output_root=root,
             state=self._c.state,
             parts=PolydispersePipelineParts.GUINIER_ONLY,
-            load_yaml=self._c.executor._load_yaml_options,
+            load_yaml=load_yaml_options,
             fixed_guinier_interval=fixed,
             guinier_interval_first=first_i,
             guinier_interval_last=last_i,
@@ -168,7 +169,7 @@ class LiveviewPolydisperseHandler:
             output_root=root,
             state=self._c.state,
             parts=PolydispersePipelineParts.SIZES_ONLY,
-            load_yaml=self._c.executor._load_yaml_options,
+            load_yaml=load_yaml_options,
         )
         job = self._c.executor.build_polydisperse_manual_job(
             profile_abs=prof, steps=steps, output_root=root

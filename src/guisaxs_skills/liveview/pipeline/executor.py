@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
-import yaml
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
 from ...core.models import RunRequest
@@ -20,17 +19,12 @@ from ..ingest.sample_revision import (
     is_tiff_path,
     normalize_sample_path,
 )
-from ..session.output_paths import (
-    subtracted_dat_path,
-    subtracted_dir,
-)
 from ..session.sample import Sample
 from ..session.sample_store import SampleStore
 from ..session.state import (
     LiveviewIntakeMode,
     LiveviewSessionState,
 )
-from ..services.artifacts import merge_fit_distances_quality_fields
 from .jobs import Job, JobStep, PlaceholderError, is_manual_job, resolve_request_placeholders
 from .modeling_confirm import (
     CONFIRM_SHAPE_STEP,
@@ -39,19 +33,16 @@ from .modeling_confirm import (
 from .monodisperse_pipeline import (
     FIT_GUINIER_MONO_STEP,
     FIT_GUINIER_POLY_STEP,
-    MonodispersePipelineParts,
-    build_monodisperse_steps,
-    profile_sample_stem,
 )
 from .plan import plan_for
-from .polydisperse_pipeline import (
-    PolydispersePipelineParts,
-    build_polydisperse_steps,
-)
 from .queue import FIFOQueue, JobQueue, QueueItem, RevisionEnqueueResult
 from .report_pipeline import report_individual_step
+from .yaml_options import load_yaml_options
 from . import artifact_enrichment as _artifacts
 from . import manual_jobs as _manual_jobs
+
+if TYPE_CHECKING:
+    from ..session.api import LiveviewSession
 
 
 @dataclass(frozen=True)
@@ -94,6 +85,7 @@ class LiveviewJobExecutor(QObject):
         self._state = state
         self._samples = sample_store
         self._runner = runner
+        self._session: Optional[LiveviewSession] = None
 
         self._tick_timer = QTimer(self)
         self._tick_timer.setInterval(100)
@@ -122,6 +114,10 @@ class LiveviewJobExecutor(QObject):
         # True while handling a skill result (incl. modal UI in skill_finished slots).
         # Nested Qt event loops must not let _tick restart the same job step.
         self._handling_skill_outcome: bool = False
+
+    def bind_session(self, session: LiveviewSession) -> None:
+        """Route last_* / calibration-adjacent writes through LiveviewSession."""
+        self._session = session
 
     def register_owned_output(self, path: str) -> None:
         key = normalize_sample_path(path)
@@ -293,7 +289,7 @@ class LiveviewJobExecutor(QObject):
             sample_dat=sample_dat,
             buffer_dat=buffer_dat,
             scaling_factor=scaling_factor,
-            load_yaml=self._load_yaml_options,
+            load_yaml=load_yaml_options,
             priority=priority,
             use_ui_params=use_ui_params,
         )
@@ -401,7 +397,7 @@ class LiveviewJobExecutor(QObject):
             try:
                 sample = Sample.from_path(sample_path, boarding=boarding)
                 self._samples.remember(sample)
-                plan = plan_for(self._state, sample, load_yaml=self._load_yaml_options)
+                plan = plan_for(self._state, sample, load_yaml=load_yaml_options)
                 job = plan.to_job()
             except Exception as e:
                 self.error.emit(f"Cannot build job for sample: {sample_path}\n{e}")
@@ -475,7 +471,7 @@ class LiveviewJobExecutor(QObject):
             plan = plan_for(
                 self._state,
                 sample,
-                load_yaml=self._load_yaml_options,
+                load_yaml=load_yaml_options,
                 completed=job.completed,
             )
         except Exception as e:
@@ -492,6 +488,26 @@ class LiveviewJobExecutor(QObject):
         self._job_step_idx = 0
         return True
 
+    def _set_last_dat_path(self, *, integrated: bool, raw: str) -> None:
+        if not raw:
+            return
+        try:
+            p = Path(raw).expanduser().resolve()
+        except OSError:
+            return
+        if not p.is_file():
+            return
+        if self._session is not None:
+            if integrated:
+                self._session.set_last_integrated_dat_path(p)
+            else:
+                self._session.set_last_subtracted_dat_path(p)
+            return
+        if integrated:
+            self._state.last_integrated_dat_path = p
+        else:
+            self._state.last_subtracted_dat_path = p
+
     def _sync_last_paths_from_job_context(self, job: Job) -> None:
         """Curve boarding never emits integrate/subtract artifacts — seed last_* from context."""
         boarding = str(job.context.get("boarding") or "").strip()
@@ -499,33 +515,23 @@ class LiveviewJobExecutor(QObject):
         profile = str(job.context.get("profile_path") or "").strip()
         subtracted = str(job.context.get("subtracted_path") or "").strip()
 
-        def _set_if_file(attr: str, raw: str) -> None:
-            if not raw:
-                return
-            try:
-                p = Path(raw).expanduser().resolve()
-            except OSError:
-                return
-            if p.is_file():
-                setattr(self._state, attr, p)
-
         if boarding == LiveviewIntakeMode.CURVE_1D.value:
-            _set_if_file("last_integrated_dat_path", source)
+            self._set_last_dat_path(integrated=True, raw=source)
             # Profile may already be the subtracted path when buffer is configured.
             if subtracted:
-                _set_if_file("last_subtracted_dat_path", subtracted)
+                self._set_last_dat_path(integrated=False, raw=subtracted)
             elif profile and profile != source and Path(profile).name.lower().startswith("sub_"):
-                _set_if_file("last_subtracted_dat_path", profile)
+                self._set_last_dat_path(integrated=False, raw=profile)
         elif boarding == LiveviewIntakeMode.CURVE_SUB.value:
-            _set_if_file("last_subtracted_dat_path", source or profile)
+            self._set_last_dat_path(integrated=False, raw=source or profile)
         elif boarding == LiveviewIntakeMode.FRAME_2D.value and profile:
             # Keep last_* in sync when a TIFF job already knows its profile path.
             if "subtracted" in str(Path(profile).parent).lower() or Path(profile).name.lower().startswith(
                 "sub_"
             ):
-                _set_if_file("last_subtracted_dat_path", profile)
+                self._set_last_dat_path(integrated=False, raw=profile)
             else:
-                _set_if_file("last_integrated_dat_path", profile)
+                self._set_last_dat_path(integrated=True, raw=profile)
 
     def _finish_job(self, *, ok: bool) -> None:
         job = self._current_job
@@ -661,58 +667,6 @@ class LiveviewJobExecutor(QObject):
             priority=priority,
         )
 
-    def monodisperse_steps_guinier_and_distances(
-        self,
-        profile_abs: str,
-        *,
-        output_root: Path,
-        guinier_handoff: Optional[dict] = None,
-        fixed_guinier_interval: bool = False,
-        guinier_interval_first: Optional[int] = None,
-        guinier_interval_last: Optional[int] = None,
-    ) -> List[JobStep]:
-        return build_monodisperse_steps(
-            profile_abs,
-            output_root=output_root,
-            state=self._state,
-            parts=MonodispersePipelineParts.GUINIER_AND_DISTANCES,
-            load_yaml=self._load_yaml_options,
-            guinier_handoff=guinier_handoff,
-            fixed_guinier_interval=fixed_guinier_interval,
-            guinier_interval_first=guinier_interval_first,
-            guinier_interval_last=guinier_interval_last,
-        )
-
-    def monodisperse_step_fit_distances(
-        self, profile_abs: str, *, output_root: Path, guinier_handoff: Optional[dict] = None
-    ) -> JobStep:
-        steps = build_monodisperse_steps(
-            profile_abs,
-            output_root=output_root,
-            state=self._state,
-            parts=MonodispersePipelineParts.DISTANCES_ONLY,
-            load_yaml=self._load_yaml_options,
-            guinier_handoff=guinier_handoff,
-        )
-        return steps[0]
-
-    def monodisperse_step_shape(
-        self,
-        profile_abs: str,
-        *,
-        output_root: Path,
-        shape_mode: str,
-        gnom_out_path: Optional[str] = None,
-    ) -> Optional[JobStep]:
-        return _manual_jobs.monodisperse_step_shape(
-            state=self._state,
-            profile_abs=profile_abs,
-            output_root=output_root,
-            shape_mode=shape_mode,
-            load_yaml=self._load_yaml_options,
-            gnom_out_path=gnom_out_path,
-        )
-
     def _sync_last_paths_from_result(self, result: Dict[str, Any]) -> None:
         integ = result.get("integrated_1d")
         integ_path: Optional[str] = None
@@ -721,12 +675,7 @@ class LiveviewJobExecutor(QObject):
         elif isinstance(integ, str):
             integ_path = integ
         if integ_path:
-            try:
-                p = Path(integ_path)
-                if p.is_file():
-                    self._state.last_integrated_dat_path = p
-            except Exception:
-                pass
+            self._set_last_dat_path(integrated=True, raw=integ_path)
 
         sub = result.get("subtracted_1d")
         sub_path: Optional[str] = None
@@ -735,12 +684,7 @@ class LiveviewJobExecutor(QObject):
         elif isinstance(sub, list) and sub and isinstance(sub[-1], str):
             sub_path = sub[-1]
         if sub_path:
-            try:
-                p = Path(sub_path)
-                if p.is_file():
-                    self._state.last_subtracted_dat_path = p
-            except Exception:
-                pass
+            self._set_last_dat_path(integrated=False, raw=sub_path)
 
     def _on_skill_finished(self, outcome: RunOutcome) -> None:
         # Only handle runner completions that were started by this executor.
@@ -754,20 +698,24 @@ class LiveviewJobExecutor(QObject):
         # step while _current_job is still set, leaving the wizard stuck busy.
         self._handling_skill_outcome = True
         try:
-            # Push raw result to UI for job-driven steps.
-            ui_result = dict(outcome.result or {})
-            if step_name:
-                ui_result["_liveview_step"] = step_name
-            self.latest_artifacts.emit(ui_result)
-            self._sync_last_paths_from_result(outcome.result)
-            self.skill_finished.emit(outcome)
-
-            # Record step result on the Job (sole progress owner), then advance.
+            # Enrich before UI fan-out so the sole LIVE present_right sees full fields.
+            # Job.completed remains the sole progress owner (mark_step_done below).
             res = dict(outcome.result or {})
             if step_name == "fit_distances":
                 res = self._enrich_fit_distances_result(res)
             if step_name in (FIT_GUINIER_MONO_STEP, FIT_GUINIER_POLY_STEP):
-                res = self._enrich_fit_guinier_result(res, resolve_bases=self._artifact_resolve_bases_for_job())
+                res = self._enrich_fit_guinier_result(
+                    res, resolve_bases=self._artifact_resolve_bases_for_job()
+                )
+            if step_name:
+                res["_liveview_step"] = step_name
+            ui_outcome = replace(outcome, result=res)
+
+            # Artifacts path: middle sync + profile hints only (no present_right).
+            self.latest_artifacts.emit(res)
+            self._sync_last_paths_from_result(res)
+            # Lifecycle/success path: single LIVE present_right for analysis skills.
+            self.skill_finished.emit(ui_outcome)
 
             if not outcome.process_ok:
                 # Job failed/cancelled (process / queue crash — not science-only fail).
@@ -802,51 +750,4 @@ class LiveviewJobExecutor(QObject):
                     self._finish_job(ok=False)
         finally:
             self._handling_skill_outcome = False
-
-    def _subtraction_output_root(self, *, sample_dat: str) -> Path:
-        return _manual_jobs.subtraction_output_root(state=self._state, sample_dat=sample_dat)
-
-    def _analysis_steps_for_profile(
-        self,
-        profile_abs: str,
-        *,
-        output_root: Path,
-        use_ui_params: bool = False,
-    ) -> List[JobStep]:
-        return _manual_jobs.analysis_steps_for_profile(
-            self._state,
-            profile_abs,
-            output_root=output_root,
-            load_yaml=self._load_yaml_options,
-            use_ui_params=use_ui_params,
-        )
-
-    def _model_mixture_run_options(self) -> dict:
-        """Skill options from window Apply; omit empty values and persistence-only keys."""
-        raw = self._state.model_mixture_options
-        if not isinstance(raw, dict):
-            return {}
-        skip = frozenset({"output_dir", "use_cache", "config_path"})
-        out: dict = {}
-        for key, value in raw.items():
-            if key in skip:
-                continue
-            if value is None:
-                continue
-            if isinstance(value, str) and not value.strip():
-                continue
-            out[str(key)] = value
-        return out
-
-    @staticmethod
-    def _load_yaml_options(path: Optional[Path]) -> dict:
-        if path is None:
-            return {}
-        try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace"))
-            if isinstance(data, dict):
-                return {str(k): v for k, v in data.items()}
-        except Exception:
-            return {}
-        return {}
 

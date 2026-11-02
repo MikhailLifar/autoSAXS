@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QMessageBox
 
 from ..ingest.sample_revision import is_dat_path
 from ..pipeline.monodisperse_pipeline import MonodispersePipelineParts, build_monodisperse_steps
+from ..pipeline.yaml_options import load_yaml_options
 from ..session.output_paths import analysis_output_root
 from ...logic.runner_qprocess import RunOutcome
 
@@ -147,7 +148,7 @@ class LiveviewMonodisperseHandler:
             output_root=root,
             state=self._c.state,
             parts=MonodispersePipelineParts.GUINIER_AND_DISTANCES,
-            load_yaml=self._c.executor._load_yaml_options,
+            load_yaml=load_yaml_options,
             fixed_guinier_interval=fixed,
             guinier_interval_first=first_i,
             guinier_interval_last=last_i,
@@ -191,7 +192,7 @@ class LiveviewMonodisperseHandler:
             output_root=root,
             state=self._c.state,
             parts=MonodispersePipelineParts.DISTANCES_ONLY,
-            load_yaml=self._c.executor._load_yaml_options,
+            load_yaml=load_yaml_options,
             guinier_handoff=handoff or None,
         )
         job = self._c.executor.build_monodisperse_manual_job(profile_abs=prof, steps=steps, output_root=root)

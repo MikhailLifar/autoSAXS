@@ -321,7 +321,9 @@ def present_right(
             watch_mode=watch_mode,
             mixture_mode=state.polydisperse_mixture_mode,
         )
-        if (
+        if bundle_p.inferred_mixture_mode is not None and session is not None:
+            session.apply_inferred_mixture_mode(bundle_p.inferred_mixture_mode)
+        elif (
             bundle_p.inferred_mixture_mode is not None
             and state.polydisperse_mixture_mode == PolydisperseMixtureMode.NONE
         ):
