@@ -122,7 +122,7 @@ autosaxs/
 | Module | Look here for… |
 |--------|----------------|
 | `path_expression.py` | Typed path/glob/comma-list expansion (`Dat`, `Tiff`, `Mask`, …) |
-| `utils.py` | `read_saxs`, `write_saxs`, `load_config`, detector helpers, `LATEST_STEPS_PATH` |
+| `utils.py` | Facade + remaining helpers (`LATEST_STEPS_PATH`, geometry, shape); SAXS I/O → `saxs_io.py`, YAML config → `yaml_config.py` (re-exported from `utils` for now) |
 | `integrator.py` | `IntegratorExtended` (pyFAI wrapper; geometry in `integrator/`, masks alongside as `effective_mask.npy` / `auto_mask.npy`) |
 | `detector_shape.py` | Frame/mask `(H,W)` helpers; `require_mask_matches_frame` (skills + liveview gates) |
 | `guinier.py` | Pure Guinier math |

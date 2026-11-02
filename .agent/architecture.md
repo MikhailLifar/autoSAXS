@@ -33,3 +33,5 @@
 - DR results navigation: `modeling/catalogs/mixture_models.py` (ensemble fit browser; same role as `dam_models` for shape).
 - 3D preview chrome: `LiveviewViewer3D` owns CIF/MRC path checks via `pathlib`; revealing folders is `ui/os_open.open_path_in_file_manager` (shared with DR).
 - Modeling mini-apps: `.agent/liveview/modeling-session-controls.md` (paths from context push; run knobs session-owned).
+- Package import lightness: `.agent/package-imports.md`.
+- `core/utils.py` gradual split: `.agent/core-utils-split.md`.
