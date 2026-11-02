@@ -536,6 +536,11 @@ class SaxsInteractive3DWidget(QWidget):
         Parenting the thread to this widget is unsafe: Qt can delete the QThread
         with the widget while ``run`` is still in marching-cubes / MRC work, which
         aborts or segfaults on interpreter exit (PyQt ``cleanup_qobject``).
+
+        Python must also keep a live reference until the OS thread has stopped.
+        Dropping ``_mesh_thread`` from a ``worker.finished`` slot (still
+        ``isRunning()``) lets GC / ``deleteLater`` destroy the QThread mid-run —
+        the same abort seen on liveview reopen when history restores a DAM CIF.
         """
         thr = self._mesh_thread
         worker = self._mesh_worker
@@ -550,6 +555,8 @@ class SaxsInteractive3DWidget(QWidget):
                 worker.failed.disconnect()
         with contextlib.suppress(TypeError, RuntimeError):
             thr.started.disconnect()
+        with contextlib.suppress(TypeError, RuntimeError):
+            thr.finished.disconnect(self._on_mesh_thread_finished)
         try:
             if thr.isRunning():
                 thr.quit()
@@ -559,6 +566,27 @@ class SaxsInteractive3DWidget(QWidget):
                     thr.wait(2_000)
         except Exception:
             pass
+
+    def _on_mesh_thread_finished(self) -> None:
+        """Release ownership only after the QThread has fully stopped."""
+        thr = self._mesh_thread
+        worker = self._mesh_worker
+        if thr is None:
+            return
+        try:
+            if thr.isRunning():
+                return
+        except RuntimeError:
+            self._mesh_thread = None
+            self._mesh_worker = None
+            return
+        self._mesh_thread = None
+        self._mesh_worker = None
+        if worker is not None:
+            with contextlib.suppress(RuntimeError):
+                worker.deleteLater()
+        with contextlib.suppress(RuntimeError):
+            thr.deleteLater()
 
     def _show_loading(self) -> None:
         self._disconnect_click()
@@ -598,7 +626,7 @@ class SaxsInteractive3DWidget(QWidget):
         except Exception:
             pass
         worker = _IsosurfaceWorker()
-        # Unparented: lifetime is owned by ``_stop_mesh_worker`` / ``shutdown``.
+        # Unparented: lifetime owned until ``_on_mesh_thread_finished`` / ``_stop_mesh_worker``.
         thread = QThread()
         worker.moveToThread(thread)
         worker.configure(job)
@@ -607,8 +635,8 @@ class SaxsInteractive3DWidget(QWidget):
         worker.failed.connect(self._on_mesh_failed)
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
+        # Do not deleteLater from worker.finished — that still races isRunning().
+        thread.finished.connect(self._on_mesh_thread_finished)
         self._mesh_worker = worker
         self._mesh_thread = thread
         thread.start()
@@ -616,8 +644,7 @@ class SaxsInteractive3DWidget(QWidget):
     def _on_mesh_failed(self, gen: int, message: str) -> None:
         if gen != self._load_gen:
             return
-        self._mesh_thread = None
-        self._mesh_worker = None
+        # Keep ``_mesh_thread`` until ``thread.finished`` — see ``_stop_mesh_worker``.
         self._reset_empty_view()
         self._ax.clear()
         self._apply_empty_chrome()
@@ -636,8 +663,7 @@ class SaxsInteractive3DWidget(QWidget):
     def _on_mesh_finished(self, gen: int, payload: object) -> None:
         if gen != self._load_gen:
             return
-        self._mesh_thread = None
-        self._mesh_worker = None
+        # Keep ``_mesh_thread`` until ``thread.finished`` — see ``_stop_mesh_worker``.
         if not isinstance(payload, dict):
             self._on_mesh_failed(gen, "invalid payload")
             return
