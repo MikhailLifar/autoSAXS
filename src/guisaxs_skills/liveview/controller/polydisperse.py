@@ -48,7 +48,7 @@ class LiveviewPolydisperseHandler:
     def _resolve_profile_path(self) -> Optional[str]:
         """Usable analysis profile for the **current** history sample only."""
         from ..ingest.curve_classify import usable_analysis_curve_path
-        from ..services.history.right_artifacts import resolve_analysis_profile
+        from ..session.stem_resolve import resolve_analysis_profile
 
         right = self._c.right
         if right is not None:
@@ -71,7 +71,7 @@ class LiveviewPolydisperseHandler:
         _, profile = resolve_analysis_profile(
             watchdir=self._c.state.watchdir,
             stem=stem,
-            tiff_path=sample,
+            sample_path=sample,
             watch_mode=self._c.state.watch_mode,
         )
         return profile or None

@@ -636,17 +636,11 @@ class MonodisperseArtifactPresenter:
         if not stem and prof:
             stem = profile_sample_stem(prof)
         if stem:
-            from .....session.output_paths import fit_distances_dir
+            from .....session.stem_resolve import resolve_fit_distances_gnom_out
 
-            fd = fit_distances_dir(root) / stem
-            for cand in (
-                fd / "gnom_best.out",
-                fd / f"{stem}_gnom.out",
-                fd / f"{stem}.out",
-                fd / "datgnom_best.out",
-            ):
-                if cand.is_file():
-                    return str(cand.resolve())
+            gnom = resolve_fit_distances_gnom_out(root=root, stem=stem)
+            if gnom is not None:
+                return str(gnom)
         if not prof:
             return ""
         return discover_gnom_out_path(
