@@ -1,6 +1,6 @@
 # Legacy interactive pipeline (removed)
 
-Historical note for the former package `autosaxs.pipeline` (deleted). Prefer **skills** (`autosaxs.skill`), the `autosaxs` CLI, and liveview `plan_for` for new work.
+Historical note for the former package `autosaxs.pipeline` (deleted). Prefer **skills** (`autosaxs.skill`), the `autosaxs` CLI, and liveview `plan_for` for new work. Skills contract: [`../paradigm/skills.md`](../paradigm/skills.md).
 
 ## What it was
 

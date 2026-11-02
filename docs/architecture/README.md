@@ -8,20 +8,27 @@ YAML is the SSOT; Mermaid (for Markdown) and colored Graphviz (for slides) are g
 ```text
 docs/architecture/
   README.md                 ← this file
+  guisaxs-skills.md         ← skills-console eng contract
   liveview/
+    overview.md             ← concepts, owners, plan_for, code map, debt
+    behavior.md             ← product / UX contract
+    invariants.md           ← ownership / Adjust rebind / I(q) SSOT
     nodes.yaml              ← SSOT: nodes, edges, diagram ids, drilldowns
-    invariants.md           ← ownership / Adjust rebind invariants
     owners.md               ← generated from YAML
     scenarios/
+      README.md             ← scenario index
       sample-switch-open-adjust.md
     diagrams/               ← generated .mmd + .dot (committed)
     generated/              ← PNG binaries (gitignored; regenerate locally)
 scripts/render_arch.py
 ```
 
-Prose architecture (unchanged SSOT for narrative):  
-[`docs/liveview_architecture.md`](../liveview_architecture.md),  
-[`docs/liveview_session_sample_plan.md`](../liveview_session_sample_plan.md).
+Prose homes (LiveView):  
+[`liveview/overview.md`](liveview/overview.md),  
+[`liveview/behavior.md`](liveview/behavior.md),  
+[`liveview/invariants.md`](liveview/invariants.md).  
+Skills console: [`guisaxs-skills.md`](guisaxs-skills.md).  
+Docs role index: [`../README.md`](../README.md).
 
 ## Edge legend
 

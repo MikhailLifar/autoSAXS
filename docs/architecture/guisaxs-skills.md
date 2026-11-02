@@ -1,9 +1,9 @@
-# guisaxs-skills — Technical Specification
+# guisaxs-skills — eng contract
 
 Product requirements for the **guisaxs-skills** skill console (PyQt5).  
-**Package layout and module map:** [`../AGENTS.md`](../AGENTS.md) (code is SSOT).  
-**Skills contract:** [`skills_paradigm.md`](skills_paradigm.md).  
-**Liveview** (separate app): [`guisaxs_liveview_spec.md`](guisaxs_liveview_spec.md), [`liveview_architecture.md`](liveview_architecture.md), [`liveview_session_sample_plan.md`](liveview_session_sample_plan.md).
+**Package layout and module map:** [`../../AGENTS.md`](../../AGENTS.md) (code is SSOT).  
+**Skills contract:** [`../paradigm/skills.md`](../paradigm/skills.md).  
+**Liveview** (separate app): [`liveview/overview.md`](liveview/overview.md), [`liveview/behavior.md`](liveview/behavior.md).
 
 This document describes intended UX and constraints. When it conflicts with `src/guisaxs_skills/`, update this file.
 

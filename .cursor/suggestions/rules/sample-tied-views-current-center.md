@@ -4,4 +4,4 @@ Clearing `averaged_proxy/` as an analysis profile default left calibrant `profil
 
 # Proposed change
 
-**Promoted (2026-09-24):** documented in `AGENTS.md` (Liveview column ownership), `docs/liveview_session_sample_plan.md` (Column ownership), `docs/liveview_architecture.md` (§1.4.1), and `docs/guisaxs_liveview_spec.md` (§6). Keep those docs as SSOT; delete this inbox entry when cleaning suggestions.
+**Promoted (2026-09-24):** documented in `AGENTS.md` (Liveview column ownership), `docs/architecture/liveview/overview.md` (column ownership), `docs/architecture/liveview/invariants.md`, and `docs/architecture/liveview/behavior.md` (UI layout). Keep those docs as SSOT; delete this inbox entry when cleaning suggestions.

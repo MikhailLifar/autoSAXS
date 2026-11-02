@@ -1,5 +1,5 @@
 # Wrappers and common functionality for skills.
-# See docs/skills_paradigm.md.
+# See docs/paradigm/skills.md.
 
 from __future__ import annotations
 

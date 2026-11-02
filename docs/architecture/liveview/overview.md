@@ -1,12 +1,13 @@
-# Liveview architecture
+# LiveView architecture overview
 
-How **guisaxs-liveview** is structured: concepts and ownership, how that maps onto code, end-to-end scenarios, and remaining improvement directions.
+Concepts, owners, `plan_for` / replan, middle layout, code/symbol map, and remaining debt for **guisaxs-liveview** (implementation: `guisaxs_skills.liveview`).
 
 **Code SSOT:** `guisaxs_skills.liveview` (paths below are relative to `src/guisaxs_skills/liveview/`).  
-**Product / UX contract:** [`guisaxs_liveview_spec.md`](guisaxs_liveview_spec.md).  
-**Ownership cheat sheet:** [`liveview_session_sample_plan.md`](liveview_session_sample_plan.md).  
-**Extraction maps (YAML → Mermaid/Graphviz):** [`architecture/README.md`](architecture/README.md) (Adjust rebind invariant: [`architecture/liveview/invariants.md`](architecture/liveview/invariants.md)).  
-**Package map:** [`../AGENTS.md`](../AGENTS.md).
+**Product / UX behavior:** [`behavior.md`](behavior.md).  
+**Hard invariants:** [`invariants.md`](invariants.md).  
+**Maps (YAML → Mermaid/Graphviz):** [`nodes.yaml`](nodes.yaml), index [`../README.md`](../README.md).  
+**Scenarios:** [`scenarios/README.md`](scenarios/README.md).  
+**Package map:** [`../../../AGENTS.md`](../../../AGENTS.md).
 
 The installable entry package `guisaxs_liveview` is a thin launcher only (`__main__.py` → `app.run_liveview_app()`). Help HTML lives under `autosaxs/resources/help/guisaxs_liveview/`.
 
@@ -78,16 +79,18 @@ present_right(source=live|disk) → presenters._ingest_* → Right UI
 ModelingChildManager → ModelingContext (sample_id + family/<stem>) → child apps
 ```
 
-### 1.4.1 Session vs sample-tied UI
+### 1.4.1 Column ownership (session vs sample)
 
 | Area | Tied to | Rule |
 |------|---------|------|
-| Left: calib / buffer / mask | **Session** | Not rewritten when history selection changes. |
-| Arming / shape / mixture mode | **Session preference** | Config for next runs; do not use to load another sample’s artifacts. |
-| Center selection | **`SampleStore.current`** | Sole sample identity for sample-tied views. |
-| Right analysis plots + modeling apps | **Current sample** | Discover / paint / IPC only for that stem. No usable profile (e.g. `averaged_proxy/` only) ⇒ **empty** views — never `last_*`, sticky prior profile, or newest sibling under a shared family dir. |
+| Left: calibration, buffer, mask | **Session** | Independent of history selection. Soft hints (e.g. empty buffer ← `last_integrated`) stay session UX. |
+| Arming / shape / mixture mode (right chrome) | **Session preference** | How to run *next*; must **not** pull another sample’s disk results into the view. |
+| Center history selection | **`SampleStore.current`** | Sole identity for anything “about a sample.” |
+| Middle paint for selected file | **Current sample** | Via `sync_middle_view` (buffer curve itself is still the session buffer). |
+| Right Guinier / GNOM / shape / sizes / mixture views | **Current sample** | Only that stem’s artifacts under the analysis root; else **empty**. |
+| Modeling mini-apps (shape / DR) | **Current sample** | Push/replace whole `ModelingContext`; empty profile ⇒ blank PathFields, no sibling-dir load. |
 
-Calibrant frames, the session buffer curve, and mask previews are not analysis profile defaults.
+**Invariant:** “No usable analysis profile for this sample” means empty sample-tied views — never session `last_*`, sticky prior profile, or newest sibling under a shared `dammif/` / `mixture/` family. Calibrant TIFF, buffer `.dat`, and mask are **not** sample analysis curves.
 
 ### 1.5 Session mutation surface
 
@@ -123,6 +126,18 @@ Analysis steps append only if `session.analysis_enabled()`. Auto/Manual does **n
 
 Shape / mixture arming is the same path: session facts change → next `plan_for(..., completed=job.completed)` on the current auto job. There is no post-job followup enqueue. Modeling skills (`model_dam` / `model_bodies` / `model_density` / `model_mixture`) stay **out** of SkillRunner. When the shape or DR mini-app is open **and Auto**, the pipeline appends a synthetic `confirm_shape` / `confirm_dr` step after distances / sizes; the executor emits `modeling_confirm_requested` → `ModelingChildManager.request_confirm_*`. Context push (history browse / path sync) never Confirm.
 
+#### Phase-boundary replan (table)
+
+| When | What |
+|------|------|
+| Enqueue (settled incoming) | `plan_for` full plan → queue (`Job.completed` empty) |
+| `_start_job` (auto) | `plan_for(..., completed=job.completed)` → replace **current** job steps only |
+| After each successful auto step | `job.mark_step_done(name, result=…)` + replan remaining → replace **current** steps; idx → 0 |
+| Cancel-requeue | `job.as_retry(priority=…)` — same `completed` (phases + results), new id |
+| Manual jobs | No replan; `mark_step_done` still stores results; frozen steps + index advance |
+
+Arming mono/poly/shape/mixture mid-job therefore affects the current sample’s remaining analysis without re-running finished integrate/subtract, without mutating the queue, and without a separate followup path.
+
 ### 1.7 Middle layout (intake × buffer)
 
 Owned only by `MiddlePanel.apply_intake_layout` inside `sync_middle_view`. Paint APIs (`show_*`) are fillers only, called from `_apply_paint`.
@@ -136,6 +151,25 @@ Owned only by `MiddlePanel.apply_intake_layout` inside `sync_middle_view`. Paint
 | `CURVE_SUB` | any | main titled Sub only |
 
 ---
+
+### 1.8 Types
+
+- **`Sample`**: absolute `path`, `boarding` (`LiveviewIntakeMode`: `FRAME_2D` / `CURVE_1D` / `CURVE_SUB`), `stem`, optional `SampleRevision`.
+- **`SampleRevision`**: path + `FileStatSnapshot` (`ingest/sample_revision.py`, `stability.py`) — frame or `.dat`.
+- **`PipelinePlan`**: steps, `profile_path`, `output_root`, `source_path`, `boarding`, `sample_stem` (no middle hint).
+- **`CompletedWork`**: owned by `Job.completed` — finished `PlanPhase`s (integrate/subtract/report), finished analysis `step_names`, and skill `results` for phase-boundary replan + placeholders.
+- **Boarding:** `LiveviewIntakeMode` (`ingest/curve_classify.py` returns the same enum).
+
+### 1.9 Auto/Manual
+
+- **Owner:** `LiveviewSession` → `state.auto_processing` (`stop` / `resume`).
+- **Executor:** reads the session flag plus transient busy/cancel guards.
+- **Process while Manual:** history Process resumes Auto (incoming promote only when Auto).
+- **Shortcuts:** Ctrl+X Auto→Manual; Ctrl+P Manual→Auto (application-wide via `LiveviewMainWindow` `QApplication` event filter, so mono/poly and other liveview wizards — modal or not — receive them; skipped while typing in text fields).
+
+### 1.10 Ingest
+
+Backends (FLAT watcher, TIFF poller, TREE observer, aux dat, drops/Process) emit observations into **`RevisionSettler`**. Only after the on-disk `FileStatSnapshot` is unchanged across settle polls does a `SampleRevision` reach **`RevisionIngress.accept`** → SampleStore boarding + executor admit queue (`_incoming`). Watch topology follows `state.intake_mode`. Known-path baseline at watcher start; change identity is `FileStatSnapshot`. Manual drops after `copy2` may enter ingress directly (file already complete).
 
 ## 2. Implementation map
 
@@ -181,22 +215,9 @@ Modeling apps live under `guisaxs_skills/modeling/` (entries `guisaxs-shape` / `
 
 ---
 
-## 3. Scenarios (summary)
+## 3. Scenarios
 
-| Scenario | User sees | Internal |
-|----------|-----------|----------|
-| Cold start | Restored calib/buffer/intake; files not auto-queued | `LiveviewSession` loads YAML; watchers baseline; `sync_middle` |
-| New frame | Queue advances; plots update | Backend → settle → `RevisionIngress.accept` → `plan_for` → skills |
-| Drop `.dat` | May auto-switch from 2D | Classify → `session.set_intake` → manual revision via ingress |
-| Drop / watch `.tif` while 1D/Sub | Option A → 2D | TIFF detector stays on in curve intake → `_on_tiff_while_curve` → same drop path |
-| Calibrate | Left shows success; later integrate | Manual skill; outcomes write calib facts |
-| Buffer set | Dual layout | `session.set_buffer` → `buffer_changed` → middle sync |
-| Stop / Resume | Auto queue held / released | `session.stop` / `resume` |
-| History `<`/`>` | Middle + right for that stem | `sync_middle` + `present_right(DISK)`; empty profile ⇒ empty right |
-| Select calibrant (proxy only) | Right analysis empty | No usable profile; no foreign-stem fallback |
-| Arm analysis | Current job’s remaining steps grow analysis | Session arming; executor replans current via `plan_for(completed=…)` |
-| Live skill finish | Right panes update | `present_right(LIVE)` → `ingest_skill_result` → `_ingest_*` |
-| Open shape/DR modeling | Child shows current sample paths; Confirm only via pipeline step or user click | `ModelingChildManager` pushes `ModelingContext` (`family/<stem>`); `confirm_shape` / `confirm_dr` after analysis |
+Scenario summary table and overlays: [`scenarios/README.md`](scenarios/README.md).
 
 ---
 
