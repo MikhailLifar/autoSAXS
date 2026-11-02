@@ -1,7 +1,6 @@
-# EventBus and event types for Controller–Interface I/O.
-# Single channel: Controller publishes requests; Interface implementation
-# (cli_interface or gui_interface) publishes responses.
-# Legacy interactive pipeline (`autosaxs.pipeline`); skills paradigm: docs/skills_paradigm.md.
+# EventBus and event types (optional skill progress; historically Controller↔UI I/O).
+# Skills paradigm: docs/skills_paradigm.md.
+# Former interactive orchestrator: docs/legacy-interactive-pipeline.md.
 
 from enum import Enum
 from typing import Any, Callable, Dict, List
@@ -31,7 +30,7 @@ class EventType(Enum):
 
 class EventBus:
     """
-    Single channel for Controller–Interface I/O.
+    Event channel for optional skill progress and request/response patterns.
     One response per request; PROGRAM_INTERRUPTED always exits.
     Delivery is synchronous: publish() calls subscribers in turn.
     """

@@ -194,7 +194,7 @@ Exact keys and multiplicity (single path vs list) are defined per skill in code 
 
 ### 5.1 What is UI
 
-- **UI** is the same as today: **CLI** (stdin/print, file monitoring) and **GUI** (e.g. CustomTkinter dialogs). Both are **interfaces** that subscribe to EventBus. They handle:
+- **UI** for product surfaces is the **`autosaxs` CLI** and **PyQt** apps (`guisaxs-skills`, `guisaxs-liveview`). EventBus remains available for optional skill progress and for older request/response patterns. Historical interactive CLI/CustomTkinter interfaces lived with the removed Controller (`docs/legacy-interactive-pipeline.md`). Event types that remain include:
   - **DIRECTORY_REQUESTED** → prompt user → **DIRECTORY_SPECIFIED**
   - **FILE_REQUESTED** → prompt or monitor → **FILE_UPLOADED** / **FILE_UPLOAD_CANCELED**
   - **CHOICE_REQUESTED** → prompt → **OPTION_CHOSEN** / **OPTION_CHOICE_CANCELED**
@@ -202,7 +202,7 @@ Exact keys and multiplicity (single path vs list) are defined per skill in code 
   - **PROFILE_SELECTION_REQUESTED** → profile selection → **PROFILE_SELECTION_SPECIFIED**
   - **MESSAGE** → display text (progress, errors, status)
 
-No UI component calls a skill. The **script** (or a thin orchestrator in the script) publishes requests and subscribes to responses; once it has paths, it calls skills. So the same UI can serve both the legacy pipeline (controller publishing requests) and the new paradigm (script publishing requests).
+Product GUIs do not call skills in-process for execution (they launch the CLI). Scripts may still use EventBus for prompts, then call skills with resolved paths.
 
 ### 5.2 What is UX
 
@@ -221,19 +221,19 @@ No UI component calls a skill. The **script** (or a thin orchestrator in the scr
 - **External tool invocation standard (hard requirement):** Skills that invoke external command-line tools (e.g. ATSAS programs such as `gnom`, `dammif`, `bodies`, etc.) MUST invoke them **by executable name from `PATH`** (e.g. `gnom ...`). This is required for portability across environments where ATSAS is installed and exposed via `PATH`.
 - **Optional caching via `.cache` and output integrity; per-sample in batch:** A single hidden file **`.cache`** (YAML) under the skill’s output directory stores a **`records`** list (§2.1). Each record has **`hash`** (input digest), **`finish_date`** (ISO date when the skill finished), and **`output_paths`** (dict of output role → path(s), same shape as the skill return value). There is **one** record when a single sample uses the directory; **many** records when multiple samples write to the same batch directory, so caching remains **per sample**. No separate cache directory. Lookup is by **matching hash** (not by index). For the matching record, integrity is verified: all paths in `output_paths` must exist and have modification time not later than `finish_date`. Integrity uses paths and mtime only, not content hash. Enables correct reuse when inputs are unchanged; replaces naive “if file exists, skip.” Caching is **off by default** (`use_cache=False`); enable with `use_cache=True` or CLI `--cache`.
 - **Wrappers in `skill_wrap.py`:** Wrappers for hashing/cache logic (`.cache` read/write, integrity check) and for batch skill application (`apply_batch`, with `single_output_dir` and `stem_from_keys`) live in `autosaxs/skill/skill_wrap.py` and are used by skill modules and scripts.
-- **Skill package is the primary API:** **`autosaxs/skill/`** holds entry points; heavy logic stays in submodules and `core/`. A legacy **Controller** + EventBus path remains under `autosaxs/pipeline/` for older lab scripts; new product work uses skills (and liveview `plan_for`), not Controller extensions.
+- **Skill package is the primary API:** **`autosaxs/skill/`** holds entry points; heavy logic stays in submodules and `core/`. Product orchestration uses skills (and liveview `plan_for`). The former interactive Controller package is gone — see `docs/legacy-interactive-pipeline.md`.
 - **One place for discovery:** **`autosaxs.skill.list_skills()`** is the registry for CLI/GUI; each skill’s public function lives in its module under `autosaxs/skill/`.
 - **Skill documentation:** Each skill has a **standard triple-quoted docstring** with: main purpose, inputs (path roles and notable kwargs), outputs (returned path roles). Short and consistent so scripts and AI can rely on it.
 - **Skill tests:** Each skill has **tests** that MUST be **run by the coding agent every time that skill is modified**. Tests cover the skill’s contract and main behaviour; running them on change is required to avoid regressions.
 
 ---
 
-## 7. Relation to GUIs and legacy Controller
+## 7. Relation to GUIs
 
-- **Skills paradigm** (this document): skills as functions, composition in scripts / liveview planner, EventBus only for optional progress from skills or legacy Controller.
+- **Skills paradigm** (this document): skills as functions, composition in scripts / liveview planner, EventBus only for optional progress from skills.
 - **Liveview:** Session + SampleStore + `plan_for` — `docs/liveview_architecture.md`, `docs/liveview_session_sample_plan.md`, `docs/guisaxs_liveview_spec.md`.
 - **Skills GUI:** product requirements in `docs/guisaxs_skills_spec.md`; package layout in `AGENTS.md`.
-- **Legacy interactive Controller** (`autosaxs/pipeline/`, lab `saxsprocessing/pipeline.py`): still callable; **not** a maintained product spec. Prefer skills for new work.
+- **Removed interactive Controller** (`autosaxs.pipeline`): historical note in `docs/legacy-interactive-pipeline.md`.
 
 ---
 

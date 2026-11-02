@@ -10,7 +10,7 @@ Specs (code under `src/` is SSOT when docs drift — keep them aligned):
 - **Liveview product / UX**: `docs/guisaxs_liveview_spec.md`
 - **Skills GUI product / UX**: `docs/guisaxs_skills_spec.md`
 
-Agent navigation: `AGENTS.md`. Lab scripts may call the legacy Controller via `saxsprocessing/pipeline.py`; that path has **no** separate product spec — prefer skills for new work.
+Agent navigation: `AGENTS.md`. Former interactive Controller (`autosaxs.pipeline`) is removed — see `docs/legacy-interactive-pipeline.md`.
 
 Examine the spec carefully and modify all the sections related to my request.
 IF SOMETHING IS UNCLEAR OR AMBIGUOUS IN MY INSTRUCTIONS, QUERY ME FOR CLARIFICATION after you finished to modify the Spec.

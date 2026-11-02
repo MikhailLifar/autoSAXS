@@ -1,4 +1,4 @@
-# autosaxs: interactive SAXS pipeline core (controller, processor, skill, utils, guinier, event_bus, cli, viewer, context, gui, gui_interface, api, polydispfit, report)
+# autosaxs: SAXS processing skills, core I/O, and CLI entry points
 from __future__ import annotations
 
 import logging
@@ -20,26 +20,20 @@ warn_atsas_on_import()
 
 from .core.event_bus import EventBus, EventType
 from .core.context import Context
-from .pipeline import cli_interface
 from .core import integrator
 from .core import processor
 from .core import utils
 from .core import viewer
-from .pipeline import api
 from . import skill
-from .pipeline.saxs_controller import Controller
 
 __all__ = [
     "EventBus",
     "EventType",
     "Context",
-    "Controller",
-    "cli_interface",
     "integrator",
     "processor",
     "utils",
     "viewer",
-    "api",
     "skill",
     "__version__",
 ]

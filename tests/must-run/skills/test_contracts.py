@@ -9,8 +9,7 @@ This module keeps:
   - skills absent from the real-data suite (plot, plot_2d, integrate_proxy,
     model_mixture, model_bodies) and mocked fit_sizes edges
   - edge cases and branching for skills that real-data already exercises on the happy path
-    (validation errors, omitted-GNOM → fit_distances, Rg optimization, failure paths,
-    deprecated aliases)
+    (validation errors, omitted-GNOM → fit_distances, Rg optimization, failure paths)
 """
 
 from __future__ import annotations
@@ -39,13 +38,10 @@ from autosaxs.skill import (
 )
 from autosaxs.skill.calibrate import calibrate
 from autosaxs.skill.model_bodies import model_bodies
-from autosaxs.skill.fit_bodies import fit_bodies
 from autosaxs.skill.model_dam import model_dam
-from autosaxs.skill.fit_dammif import fit_dammif
 from autosaxs.skill.fit_distances import fit_distances
 from autosaxs.skill.fit_sizes import fit_sizes
 from autosaxs.skill.model_mixture import model_mixture
-from autosaxs.skill.fit_mixture import fit_mixture
 from autosaxs.skill.fit_guinier import fit_guinier
 from autosaxs.skill.analyze_kratky import analyze_kratky
 from autosaxs.skill.integrate import integrate
@@ -714,41 +710,6 @@ def test_model_mixture_radius_params_use_nm_externally():
 
 
 
-def test_fit_mixture_deprecated_alias(monkeypatch):
-    """Deprecated fit_mixture still forwards to model_mixture."""
-    import subprocess as _sp
-
-    def _fake_run_mixture(work_dir: Path, dat_basename: str, cmd_content: str) -> _sp.CompletedProcess:
-        _ = cmd_content
-        work_dir.mkdir(parents=True, exist_ok=True)
-        fit_path = work_dir / dat_basename.replace(".dat", ".fit")
-        log_path = work_dir / "mixture.log"
-        q_nm = np.linspace(0.1, 2.0, 30)
-        q_A = q_nm / 10.0
-        I_exp = np.exp(-q_nm**2) + 0.05
-        I_fit = I_exp * 0.98
-        sigma = 0.03 * np.abs(I_exp)
-        with open(fit_path, "w") as f:
-            for i in range(len(q_A)):
-                f.write(f"{q_A[i]}\t{I_exp[i]}\t{I_fit[i]}\t{sigma[i]}\n")
-        log_path.write_text("1SPH 0.50 0 0 50.0 0 5.0\nProduced function minimum is equal to 1.234\n")
-        return _sp.CompletedProcess(args=["mixture"], returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr("autosaxs.skill.model_mixture.mixture._run_mixture", _fake_run_mixture)
-    monkeypatch.setattr(
-        "autosaxs.skill.model_mixture._rmax_nm_from_fit_sizes",
-        lambda *_a, **_k: (5.0, "/tmp/fake_fit_sizes.yml"),
-    )
-
-    with tempfile.TemporaryDirectory() as tmp:
-        q = np.linspace(0.1, 2.0, 40)
-        profile_path = os.path.join(tmp, "subtracted.dat")
-        write_saxs(profile_path, q, np.exp(-q**2) + 0.02, 0.03, {})
-        with pytest.warns(DeprecationWarning, match="fit_mixture is deprecated"):
-            fit_mixture(profile_path, output_dir=os.path.join(tmp, "mixture"), use_cache=False)
-
-
-
 def test_model_bodies_first_from_guinier(monkeypatch):
     import subprocess as _sp
     import importlib as _importlib
@@ -826,37 +787,6 @@ def test_model_bodies_raises_without_profile():
             output_dir=tempfile.mkdtemp(),
             use_cache=False,
         )
-
-
-
-def test_fit_bodies_deprecated_alias(monkeypatch):
-    """Deprecated fit_bodies still forwards to model_bodies."""
-    import subprocess as _sp
-
-    _stub_atsas_installed(monkeypatch)
-    monkeypatch.setattr(
-        "autosaxs.skill.model_bodies.run_guinier_analysis",
-        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should pass first")),
-    )
-
-    def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
-        _ = capture_output, text, timeout, kwargs
-        assert (cmd[0] if cmd else "") == "bodies"
-        return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr("autosaxs.skill.model_bodies.subprocess.run", _fake_run)
-
-    with tempfile.TemporaryDirectory() as tmp:
-        q = np.linspace(0.05, 2.0, 60)
-        profile_path = os.path.join(tmp, "profile.dat")
-        write_saxs(profile_path, q, np.exp(-q**2), 0.02, {})
-        with pytest.warns(DeprecationWarning, match="fit_bodies is deprecated"):
-            fit_bodies(
-                profile_path,
-                output_dir=os.path.join(tmp, "bodies"),
-                first=3,
-                use_cache=False,
-            )
 
 
 
@@ -1352,52 +1282,6 @@ def test_model_dam_n_runs_runs_damaver(monkeypatch):
         assert result["frequency_map_path"]
         assert os.path.isfile(str(result["frequency_map_path"]))
         _assert_best_cif(Path(str(result["best_cif_path"])), target_name="dammif-2-1.cif")
-
-
-
-def test_fit_dammif_deprecated_alias(monkeypatch):
-    """Deprecated fit_dammif still forwards to model_dam."""
-    import subprocess as _sp
-
-    _stub_atsas_installed(monkeypatch)
-    monkeypatch.setattr(
-        "autosaxs.skill.model_dam.dam._gnom_path_from_fit_distances",
-        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should use gnom_path")),
-    )
-
-    def _fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, **kwargs):
-        _ = capture_output, text, timeout, kwargs
-        prefix = next(a.split("=", 1)[1] for a in cmd if str(a).startswith("--prefix="))
-        fir = os.path.join(cwd or ".", f"{prefix}.fir")
-        with open(fir, "w") as f:
-            f.write("s Exp iExp Err iFit\n")
-            for i in range(10):
-                q = 0.1 * (i + 1)
-                f.write(f"{q}\t1.0\t0.1\t0.95\n")
-        _write_minimal_dammif_cif(os.path.join(cwd or ".", f"{prefix}-1.cif"))
-        return _sp.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr("autosaxs.skill.model_dam.dam.subprocess.run", _fake_run)
-    monkeypatch.setattr("autosaxs.skill.model_dam.dam.PLTViewer.view_curves", lambda *a, **k: None)
-    monkeypatch.setattr(
-        "autosaxs.skill.model_dam.dam.PLTViewer.plot_3d_views_and_scattering",
-        lambda *a, **k: None,
-    )
-
-    with tempfile.TemporaryDirectory() as tmp:
-        q = np.linspace(0.05, 2.0, 60)
-        profile_path = os.path.join(tmp, "profile.dat")
-        write_saxs(profile_path, q, np.exp(-q**2), 0.02, {})
-        gnom_path = os.path.join(tmp, "gnom.out")
-        Path(gnom_path).write_text("DATGNOM OUTPUT (fake)\n")
-        with pytest.warns(DeprecationWarning, match="fit_dammif is deprecated"):
-            fit_dammif(
-                profile_path,
-                output_dir=os.path.join(tmp, "dammif"),
-                gnom_path=gnom_path,
-                dammif_reps_num=1,
-                use_cache=False,
-            )
 
 
 
