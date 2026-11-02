@@ -15,6 +15,7 @@ from autosaxs.skill.skill_wrap import (
     ATSAS_DOWNLOAD_URL,
     RECOMMENDED_ATSAS_VERSION,
     probe_atsas,
+    warn_atsas_once,
 )
 
 # Skills decorated with @require_atsas (must have ATSAS on PATH).
@@ -203,7 +204,8 @@ def run_checks() -> List[CheckResult]:
         )
     )
 
-    # ATSAS (optional, proprietary)
+    # ATSAS (optional, proprietary) — soft warn once here (not on ``import autosaxs``).
+    warn_atsas_once()
     version, err = probe_atsas()
     if err:
         results.append(

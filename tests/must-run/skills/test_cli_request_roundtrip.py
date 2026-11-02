@@ -18,7 +18,7 @@ from autosaxs.cli.request_codec import (
     parse_result_frame,
     science_ok_for_result,
 )
-from autosaxs.skill import list_skills
+from autosaxs.skill import get_skill, list_skills
 from guisaxs_skills.core.models import RunRequest
 from guisaxs_skills.logic.result_parser import parse_skill_result_stdout
 
@@ -29,7 +29,7 @@ def _parse_skill_argv(skill_name: str, argv: List[str]) -> argparse.Namespace:
     assert skill_name in skills, skill_name
     parser = argparse.ArgumentParser(prog="autosaxs-test")
     sub = parser.add_subparsers(dest="command", required=True)
-    cli_mod._add_skill_subparser(sub, skill_name, skills[skill_name])
+    cli_mod._add_skill_subparser(sub, skill_name, get_skill(skill_name))
     return parser.parse_args(argv)
 
 
@@ -66,7 +66,7 @@ def test_options_to_argv_cache_and_bools(options: Dict[str, Any], expect: Dict[s
 
 def _required_positionals(skill_name: str) -> List[str]:
     """Dummy positional argv values matching the skill signature arity."""
-    fn = list_skills()[skill_name]
+    fn = get_skill(skill_name)
     names = [
         p.name
         for p in inspect.signature(fn).parameters.values()

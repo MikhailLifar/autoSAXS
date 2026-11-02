@@ -6,6 +6,11 @@
 - **Owners / invariants:** `.agent/cli-gui-contract.md`.
 - **Code:** `autosaxs/cli/request_codec.py`, `guisaxs_skills/core/models.py` (`RunRequest.cli_argv`), `logic/result_parser.py`, `logic/runner_qprocess.py` (`RunOutcome.process_ok` / `science_ok`).
 
+## Package imports (P2)
+
+- **Purpose:** Light `import autosaxs`; lazy skill catalog; ATSAS probe only on doctor / first ATSAS skill.
+- **Owners / invariants:** `.agent/package-imports.md`.
+
 ## LiveView
 
 - **Purpose:** Single-window watchdir app; sequential `autosaxs` skills; middle/right plots follow session facts + on-disk artifacts.

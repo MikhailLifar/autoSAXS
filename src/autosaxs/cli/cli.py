@@ -151,9 +151,13 @@ def _wrap_path_expression_value(value: Any, ann: Any) -> Any:
 
 
 def _skill_functions() -> Dict[str, Callable[..., Any]]:
+    """Load real skill callables (one module each) for argparse / dispatch."""
     from .. import skill as skill_mod
 
-    return dict(skill_mod.list_skills(include_reports=True))
+    return {
+        name: skill_mod.get_skill(name)
+        for name in skill_mod.list_skill_names(include_reports=True)
+    }
 
 
 def _read_subskill_ai_skill_template() -> str:

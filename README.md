@@ -115,7 +115,7 @@ Then find "Help" at the top tool-bar and follow.
 autoSAXS builds on the SAXS ecosystem rather than replacing it:
 
 - **[pyFAI](https://pyfai.readthedocs.io/)** — detector geometry, calibration, and 1D integration.
-- **[ATSAS](https://www.embl-hamburg.de/biosaxs/download.html)** — tools such as `autorg`, `datgnom`, `gnom`, `dammif`, `mixture`, and `bodies` (external install; recommended **ATSAS 3.2.1**). Importing autoSAXS **warns** if ATSAS is missing; skills that shell out to ATSAS **raise** immediately when it is unavailable.
+- **[ATSAS](https://www.embl-hamburg.de/biosaxs/download.html)** — tools such as `autorg`, `datgnom`, `gnom`, `dammif`, `mixture`, and `bodies` (external install; recommended **ATSAS 3.2.1**). ``autosaxs doctor`` and the first ATSAS-backed skill **warn** (and skills that shell out **raise**) if ATSAS is missing; ``import autosaxs`` itself does not probe ATSAS.
 - **[DENSS](https://www.tdgrant.com/denss)** — electron-density reconstruction (`model_density`); pulled in via the `denss` PyPI dependency.
 - **[McSAS](https://github.com/BAMresearch/McSAS) / McSAS3** — Monte Carlo polydisperse sizing (`model_dr_mc`).
 

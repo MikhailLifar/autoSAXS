@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import inspect
-import re
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, get_args, get_origin, get_type_hints
 
 from ..core.models import SkillMeta, SkillParam
@@ -17,11 +15,19 @@ from autosaxs.core.path_expression import (
     TiffPathExpression,
 )
 
+# Per-process cache: skill name -> fully introspected SkillMeta (one module import each).
+_meta_cache: Dict[str, SkillMeta] = {}
 
-def _public_skill_functions() -> Dict[str, Callable]:
-    from autosaxs import skill as skill_mod
 
-    return dict(skill_mod.list_skills(include_reports=True))
+def list_catalog_skill_names() -> List[str]:
+    """
+    Ordered skill names for the console catalog without importing skill bodies.
+    """
+    from autosaxs.skill import SKILL_ORDER, list_skill_names
+
+    names = list_skill_names(include_reports=False)
+    order_index = {n: i for i, n in enumerate(SKILL_ORDER)}
+    return sorted(names, key=lambda n: (0, order_index[n], n) if n in order_index else (1, 0, n))
 
 
 def _summary(doc: str) -> str:
@@ -29,32 +35,6 @@ def _summary(doc: str) -> str:
     if not doc:
         return ""
     return doc.splitlines()[0].strip()
-
-
-def _skill_order_from_source(*, module_file: Path) -> List[str]:
-    """
-    Derive public skill function ordering from autosaxs/skill.py source order.
-
-    We do this because inspect.getmembers returns functions sorted by name, but the GUI
-    should mirror the curated ordering in the source file.
-    """
-    try:
-        text = module_file.read_text(encoding="utf-8", errors="replace")
-    except Exception:
-        return []
-
-    out: List[str] = []
-    # Top-level defs only (no indent) to avoid grabbing nested helpers.
-    pat = re.compile(r"^def\s+(?P<name>[A-Za-z_]\w*)\s*\(", re.MULTILINE)
-    for m in pat.finditer(text):
-        name = m.group("name")
-        if name.startswith("_"):
-            continue
-        # Exclude report skills from the GUI for now.
-        if name in ("report_individual", "report_summary") or name.startswith("report_"):
-            continue
-        out.append(name)
-    return out
 
 
 def _is_union(ann: Any) -> bool:
@@ -120,86 +100,81 @@ def _annotation_label(fn: Callable, param: inspect.Parameter, type_hints: Dict[s
         return str(ann)
 
 
-def discover_skills() -> List[SkillMeta]:
-    metas: List[SkillMeta] = []
-    public = _public_skill_functions()
-    # Preferred ordering: a curated order list if available, otherwise autosaxs/skill.py source order.
-    order: List[str] = []
+def _meta_from_callable(name: str, fn: Callable[..., Any]) -> SkillMeta:
+    doc = inspect.getdoc(fn) or ""
+    sig = inspect.signature(fn)
     try:
-        from autosaxs import skill as skill_mod
-        if hasattr(skill_mod, "SKILL_ORDER"):
-            order = list(getattr(skill_mod, "SKILL_ORDER") or [])
-        if not order:
-            order = _skill_order_from_source(module_file=Path(skill_mod.__file__))
+        type_hints = get_type_hints(fn)
     except Exception:
-        order = []
-    order_index = {name: i for i, name in enumerate(order)}
+        type_hints = {}
 
-    def _sort_key(item: tuple[str, Callable]) -> tuple[int, int, str]:
-        name, _fn = item
-        # (0, idx, name): ordered-by-source; (1, 0, name): unknown -> alphabetical after.
-        if name in order_index:
-            return (0, order_index[name], name)
-        return (1, 0, name)
+    positional: List[SkillParam] = []
+    options: List[SkillParam] = []
 
-    for name, fn in sorted(public.items(), key=_sort_key):
-        # Exclude report skills from the GUI for now.
-        if name in ("report_individual", "report_summary") or name.startswith("report_"):
+    for param in sig.parameters.values():
+        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
             continue
-        doc = inspect.getdoc(fn) or ""
-        sig = inspect.signature(fn)
-        try:
-            type_hints = get_type_hints(fn)
-        except Exception:
-            type_hints = {}
+        ann = _annotation_label(fn, param, type_hints)
 
-        positional: List[SkillParam] = []
-        options: List[SkillParam] = []
-
-        for param in sig.parameters.values():
-            if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
-                continue
-            ann = _annotation_label(fn, param, type_hints)
-
-            if param.kind == inspect.Parameter.KEYWORD_ONLY:
-                if param.default is inspect._empty:
-                    options.append(
-                        SkillParam(
-                            name=param.name,
-                            kind="required_kwonly",
-                            default=None,
-                            annotation=ann,
-                        )
+        if param.kind == inspect.Parameter.KEYWORD_ONLY:
+            if param.default is inspect._empty:
+                options.append(
+                    SkillParam(
+                        name=param.name,
+                        kind="required_kwonly",
+                        default=None,
+                        annotation=ann,
                     )
-                else:
-                    options.append(
-                        SkillParam(
-                            name=param.name,
-                            kind="kwonly",
-                            default=param.default,
-                            annotation=ann,
-                        )
-                    )
-            elif param.default is inspect._empty:
-                positional.append(SkillParam(name=param.name, kind="positional", default=None, annotation=ann))
+                )
             else:
                 options.append(
                     SkillParam(
                         name=param.name,
-                        kind="optional",
+                        kind="kwonly",
                         default=param.default,
                         annotation=ann,
                     )
                 )
-
-        metas.append(
-            SkillMeta(
-                name=name,
-                summary=_summary(doc),
-                doc=doc,
-                positional_params=positional,
-                option_params=options,
+        elif param.default is inspect._empty:
+            positional.append(SkillParam(name=param.name, kind="positional", default=None, annotation=ann))
+        else:
+            options.append(
+                SkillParam(
+                    name=param.name,
+                    kind="optional",
+                    default=param.default,
+                    annotation=ann,
+                )
             )
-        )
-    return metas
 
+    return SkillMeta(
+        name=name,
+        summary=_summary(doc),
+        doc=doc,
+        positional_params=positional,
+        option_params=options,
+    )
+
+
+def skill_meta_for(name: str) -> SkillMeta:
+    """
+    Load metadata for one skill (imports that skill module once; cached).
+    """
+    cached = _meta_cache.get(name)
+    if cached is not None:
+        return cached
+    from autosaxs.skill import get_skill
+
+    meta = _meta_from_callable(name, get_skill(name))
+    _meta_cache[name] = meta
+    return meta
+
+
+def discover_skills() -> List[SkillMeta]:
+    """
+    Full catalog metadata (imports each skill module once).
+
+    Prefer ``list_catalog_skill_names`` + ``skill_meta_for`` for console cold start
+    so the UI can list names without importing every implementation up front.
+    """
+    return [skill_meta_for(name) for name in list_catalog_skill_names()]

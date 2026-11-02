@@ -9,10 +9,11 @@ This is a package (not a single file) so that each skill can live in a dedicated
 from __future__ import annotations
 
 import importlib
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, List
 
-# Re-export wrappers and cache helpers (tests and callers import these from autosaxs.skill)
-from .deps import (  # noqa: F401
+# Re-export wrappers and cache helpers from skill_wrap directly (not via deps) so
+# ``import autosaxs.skill`` does not touch the deps lazy hub or heavy core modules.
+from .skill_wrap import (  # noqa: F401
     CACHE_FILENAME,
     apply_batch,
     check_output_integrity,
@@ -78,6 +79,10 @@ SKILL_ORDER = [
 ]
 
 
+def _is_report_skill(name: str) -> bool:
+    return name.startswith("report_") or name in ("report_individual", "report_summary")
+
+
 def _make_lazy_skill_entrypoint(name: str, mod_path: str) -> Callable[..., Any]:
     """
     Create a thin callable wrapper that imports the real skill function on demand.
@@ -90,9 +95,7 @@ def _make_lazy_skill_entrypoint(name: str, mod_path: str) -> Callable[..., Any]:
     """
 
     def _entrypoint(*args: Any, **kwargs: Any) -> Any:
-        mod = importlib.import_module(mod_path)
-        fn = getattr(mod, name)
-        return fn(*args, **kwargs)
+        return get_skill(name)(*args, **kwargs)
 
     _entrypoint.__name__ = name
     _entrypoint.__qualname__ = name
@@ -106,21 +109,50 @@ for _name, _mod_path in _SKILL_IMPORTS.items():
     globals()[_name] = _make_lazy_skill_entrypoint(_name, _mod_path)
 
 
+def get_skill(name: str) -> Callable[..., Any]:
+    """Import one skill module and return its public callable (eager for that name only)."""
+    mod_path = _SKILL_IMPORTS.get(name)
+    if mod_path is None:
+        raise KeyError(name)
+    mod = importlib.import_module(mod_path)
+    return getattr(mod, name)
+
+
+def list_skill_names(*, include_reports: bool = True) -> List[str]:
+    """Ordered public skill names without importing skill implementation modules."""
+    names: List[str] = []
+    seen: set[str] = set()
+    for name in SKILL_ORDER:
+        if name not in _SKILL_IMPORTS:
+            continue
+        if not include_reports and _is_report_skill(name):
+            continue
+        names.append(name)
+        seen.add(name)
+    for name in _SKILL_IMPORTS:
+        if name in seen:
+            continue
+        if not include_reports and _is_report_skill(name):
+            continue
+        names.append(name)
+    return names
+
+
 def list_skills(*, include_reports: bool = True) -> Dict[str, Callable[..., Any]]:
     """
     Return a mapping of public skill name -> callable entry point.
 
+    Entry points are lazy: this does **not** import skill implementation modules.
+    Use ``get_skill(name)`` when a real function object (signature/doc) is required.
     This function is the single source of truth for automatic skill discovery
     in CLI and GUI.
     """
     skills: Dict[str, Callable[..., Any]] = {}
-    for name, mod_path in _SKILL_IMPORTS.items():
-        if not include_reports and (name.startswith("report_") or name in ("report_individual", "report_summary")):
-            continue
-        mod = importlib.import_module(mod_path)
-        skills[name] = getattr(mod, name)
-    if not include_reports:
-        return skills
+    for name in list_skill_names(include_reports=include_reports):
+        # Prefer the package-level lazy entrypoint when present.
+        skills[name] = globals().get(name) or _make_lazy_skill_entrypoint(
+            name, _SKILL_IMPORTS[name]
+        )
     return skills
 
 
@@ -131,6 +163,4 @@ def __getattr__(name: str) -> Any:
     mod_path = _SKILL_IMPORTS.get(name)
     if mod_path is None:
         raise AttributeError(name)
-    mod = importlib.import_module(mod_path)
-    return getattr(mod, name)
-
+    return get_skill(name)
