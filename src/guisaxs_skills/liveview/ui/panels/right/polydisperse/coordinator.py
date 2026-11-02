@@ -111,7 +111,7 @@ class PolydisperseCoordinator(QObject):
         if (not working) and results:
             try:
                 from autosaxs.core.guinier import parse_guinier_results_txt
-                from autosaxs.skill.fit_guinier.guinier import guinier_point_range_1based
+                from guisaxs_skills.liveview.services.skill_present import guinier_point_range_1based
 
                 parsed = parse_guinier_results_txt(results)
                 fp = parsed.get("first_point_1based")

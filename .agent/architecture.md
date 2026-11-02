@@ -21,6 +21,7 @@
 - **Science vs process:** executor uses `RunOutcome.science_ok` (queue can finish on science fail; not a process crash).
 - **Finish path / session writes (P1):** `.agent/liveview/session-executor-finish.md` — one LIVE `present_right` on success after enrichment; middle via `on_latest_artifacts` only; `Job.completed` sole progress owner.
 - **Stem→path resolve (P3):** `.agent/liveview/stem-resolve.md` — module `session.stem_resolve` only; no SampleAnalysisContext; Sample/history stay identity.
+- **Import boundaries (P4):** `.agent/liveview/import-boundaries.md` — panels ↛ `autosaxs.skill`; session ↛ Qt widgets/panels; pipeline ↛ `ui.panels`; portable gate `helpers/run_portable_gate.sh`.
 
 ## Related
 

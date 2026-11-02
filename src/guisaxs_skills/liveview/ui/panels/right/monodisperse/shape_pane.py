@@ -26,19 +26,7 @@ from ......ui.in_progress_overlay import InProgressOverlay
 from ......ui.style import apply_quality_hint_style
 from .plots import ShapeFitPlot
 
-try:
-    from autosaxs.skill.model_bodies import BODIES_SHAPES_LIST
-except Exception:
-    BODIES_SHAPES_LIST = [
-        "cylinder",
-        "dumbbell",
-        "ellipsoid",
-        "elliptic-cylinder",
-        "hollow-cylinder",
-        "hollow-sphere",
-        "parallelepiped",
-        "rotation-ellipsoid",
-    ]
+from guisaxs_skills.liveview.services.skill_present import BODIES_SHAPES_LIST
 
 _DAMMIF_INFO = (
     "Independent DAMMIF reconstructions (n_runs).\n\n"

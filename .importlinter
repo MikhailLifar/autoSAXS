@@ -1,5 +1,9 @@
 [importlinter]
-root_package = autosaxs
+root_packages =
+    autosaxs
+    guisaxs_skills
+include_external_packages = True
+exclude_type_checking_imports = True
 
 [importlinter:contract:core_independent]
 name = Core does not depend on higher layers
@@ -47,3 +51,34 @@ forbidden_modules =
     autosaxs.pipeline
     autosaxs.cli
 
+[importlinter:contract:liveview_panels_no_skill]
+name = Liveview UI panels do not import autosaxs.skill
+type = forbidden
+source_modules =
+    guisaxs_skills.liveview.ui.panels
+forbidden_modules =
+    autosaxs.skill
+# Presentation helpers go through liveview.services.skill_present (indirect OK).
+allow_indirect_imports = True
+
+[importlinter:contract:liveview_session_no_widgets]
+name = Liveview session does not import Qt widgets or UI panels
+type = forbidden
+source_modules =
+    guisaxs_skills.liveview.session
+forbidden_modules =
+    guisaxs_skills.liveview.ui.panels
+    guisaxs_skills.liveview.ui.widgets
+    guisaxs_skills.ui
+# QtWidgets cannot be named as a forbidden external subpackage in importlinter;
+# project widget/panel packages cover the session↛widgets/panels edge.
+allow_indirect_imports = True
+
+[importlinter:contract:liveview_pipeline_no_panels]
+name = Liveview pipeline does not import UI panels
+type = forbidden
+source_modules =
+    guisaxs_skills.liveview.pipeline
+forbidden_modules =
+    guisaxs_skills.liveview.ui.panels
+allow_indirect_imports = True

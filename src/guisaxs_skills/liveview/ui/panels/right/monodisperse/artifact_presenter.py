@@ -30,7 +30,7 @@ from .....services.artifacts import (
 from .....services.dam_models import build_dam_model_catalog
 from .....services.denss_models import build_denss_model_catalog
 from .format_display import scalar_value
-from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
+from guisaxs_skills.liveview.services.skill_present import failure_message_from_result, is_atsas_fit_ok
 
 
 class MonodisperseArtifactPresenter:
@@ -174,7 +174,7 @@ class MonodisperseArtifactPresenter:
             lp = data.get("last_point_1based")
             if fp is None or lp is None:
                 try:
-                    from autosaxs.skill.fit_guinier.guinier import guinier_point_range_1based
+                    from guisaxs_skills.liveview.services.skill_present import guinier_point_range_1based
 
                     fp, lp = guinier_point_range_1based(data)
                 except Exception:

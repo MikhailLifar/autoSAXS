@@ -23,7 +23,7 @@ from .....services.artifacts import (
 )
 from ..monodisperse.format_display import scalar_value
 from .format_display import format_sizes_passport_text
-from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
+from guisaxs_skills.liveview.services.skill_present import failure_message_from_result, is_atsas_fit_ok
 
 
 class PolydisperseArtifactPresenter:
@@ -174,7 +174,7 @@ class PolydisperseArtifactPresenter:
             lp = data.get("last_point_1based")
             if fp is None or lp is None:
                 try:
-                    from autosaxs.skill.fit_guinier.guinier import guinier_point_range_1based
+                    from guisaxs_skills.liveview.services.skill_present import guinier_point_range_1based
 
                     fp, lp = guinier_point_range_1based(data)
                 except Exception:
@@ -397,7 +397,7 @@ class PolydisperseArtifactPresenter:
         best = str(result.get("best_label") or "").strip()
         if not best:
             try:
-                from autosaxs.skill.model_mixture.mixture import select_best_mixture_row
+                from guisaxs_skills.liveview.services.skill_present import select_best_mixture_row
 
                 picked = select_best_mixture_row(df.to_dict(orient="records"))
                 if picked is not None:

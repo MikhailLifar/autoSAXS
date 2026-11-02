@@ -153,7 +153,7 @@ class MixtureFitPlot(_BaseMplPlot):
             self._show_status("No .fit")
             return
         try:
-            from autosaxs.skill.model_mixture.mixture import parse_mixture_fit_file
+            from guisaxs_skills.liveview.services.skill_present import parse_mixture_fit_file
 
             parsed = parse_mixture_fit_file(fit_path)
         except Exception:
@@ -194,7 +194,7 @@ class MixtureDistPlot(_BaseMplPlot):
         label: str = "",
     ) -> None:
         try:
-            from autosaxs.skill.model_mixture.mixture import distribution_curve_for_model
+            from guisaxs_skills.liveview.services.skill_present import distribution_curve_for_model
 
             R_nm, total = distribution_curve_for_model(
                 row, r_min_ang=r_min_ang, r_max_ang=r_max_ang

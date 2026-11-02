@@ -8,19 +8,7 @@ import yaml
 from ....session.state import LiveviewSessionState
 from ...wizards.right import LIVEVIEW_MIXTURE_YML_NAME
 
-try:
-    from autosaxs.skill.model_bodies import BODIES_SHAPES_LIST
-except Exception:
-    BODIES_SHAPES_LIST = [
-        "cylinder",
-        "dumbbell",
-        "ellipsoid",
-        "elliptic-cylinder",
-        "hollow-cylinder",
-        "hollow-sphere",
-        "parallelepiped",
-        "rotation-ellipsoid",
-    ]
+from guisaxs_skills.liveview.services.skill_present import BODIES_SHAPES_LIST
 
 
 class RightPanelConfigRestore:

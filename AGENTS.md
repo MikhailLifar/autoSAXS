@@ -257,7 +257,7 @@ Use conda env **`dev_autosaxs`**:
 - Python: `/home/mikl/.conda/envs/dev_autosaxs/bin/python`
 - pip: `/home/mikl/.conda/envs/dev_autosaxs/bin/pip`
 
-`helpers/run_tests.sh` uses these paths.
+`helpers/run_tests.sh` (lab gate) uses these paths. Cloud / portable gate: `helpers/run_portable_gate.sh` (see Tests).
 
 ### ATSAS
 
@@ -286,14 +286,26 @@ No parallel APIs or duplicated literals.
 
 ### Tests
 
-Commit gate (mere minutes; orchestrated by `helpers/run_tests.sh`):
+Two commit gates:
+
+| Gate | Script | Where | What |
+|------|--------|-------|------|
+| **Portable** | `helpers/run_portable_gate.sh` | Cloud Agents / any checkout | `lint-imports` + `tests/must-run/skills` + `tests/must-run/guisaxs_liveview/light` (xvfb). Resolves repo from script location; `PYTHON` or `python3`. **Skips** `real_data` and `liveview/pipeline`. |
+| **Lab** | `helpers/run_tests.sh` | Mikhail’s lab conda | Portable suites **plus** `real_data/light`+`heavy` and `liveview/pipeline`. Hardcoded `dev_autosaxs` + lab checkout paths. |
+
+Portable / lab shared suites:
 
 | Location | What |
 |----------|------|
 | `tests/must-run/skills/` | Contracts / CLI / edge cases (`test_contracts.py`, `test_cli_doctor.py`) |
+| `tests/must-run/guisaxs_liveview/light/` | Liveview unit / plan / session (fast) |
+
+Lab-only:
+
+| Location | What |
+|----------|------|
 | `tests/must-run/real_data/light/` | Scientific light: calib→integrate→subtract; mono (no DAM); poly Pt_NPs vs `reference_poly` (no MIXTURE) |
 | `tests/must-run/real_data/heavy/` | `model_dam` smoke (ihs27) — **only after light green** |
-| `tests/must-run/guisaxs_liveview/light/` | Liveview unit / plan / session (fast) |
 | `tests/must-run/guisaxs_liveview/pipeline/` | One golden mono watchdir path (no DAM) + light misuse |
 
 Out of commit gate:
@@ -303,9 +315,7 @@ Out of commit gate:
 | `tests/optional/guisaxs_liveview/` | Exhaustive GUI by subsystem — **agent runs only on significant changes** to that subsystem (see README there) |
 | `tests/development/` | Explorative algorithm benches (former `tests/optional/`) |
 
-Fixtures: `scripts/setup_validation_data.py` (`PROTOCOL_MONO_2D`, `PROTOCOL_POLY`).
-
-Run commit gate: `helpers/run_tests.sh`.
+Fixtures: `scripts/setup_validation_data.py` (`PROTOCOL_MONO_2D`, `PROTOCOL_POLY`). Liveview importlinter edges live in `.importlinter` (panels ↛ `autosaxs.skill`; session ↛ Qt widgets/panels; pipeline ↛ `ui.panels`).
 
 ### Docs & specs
 
@@ -360,7 +370,7 @@ Launch GUIs from a writable directory (for example `/tmp/saxs-watch`). `guisaxs-
 
 `autosaxs doctor` is the health check. It exits 0 when core dependencies are present. ATSAS is proprietary and is not installed here; doctor reports it as an optional warning. Skills that call ATSAS (`fit_distances`, `fit_sizes`, `calc_profile`, `model_bodies`, `model_dam`, `model_mixture`, `process_monodisperse`, `process_polydisperse`) will not run. Calibration, integration, subtraction, Guinier, plots, DENSS, McSAS, and `model_lc` do not need ATSAS.
 
-`tests/must-run/skills/` is the suite that runs without external beamline fixtures. Two mixture contract tests still call the ATSAS gate and fail until ATSAS is on `PATH`. Real-data and liveview commit-gate tests expect validation data from `scripts/setup_validation_data.py` under a sibling `validation/` tree that is not in this repository. `helpers/run_tests.sh` hardcodes the lab conda path and lab checkout; on Cloud Agents invoke pytest with the venv Python instead.
+`tests/must-run/skills/` is the suite that runs without external beamline fixtures. Two mixture contract tests still call the ATSAS gate and fail until ATSAS is on `PATH`. Real-data and liveview **pipeline** tests expect validation data from `scripts/setup_validation_data.py` under a sibling `validation/` tree that is not in this repository. On Cloud Agents run `PYTHON=/home/ubuntu/.venvs/autosaxs/bin/python helpers/run_portable_gate.sh` (not the lab `run_tests.sh`).
 
 Set `MPLBACKEND=Agg` for headless matplotlib. Headless GUI tests need `xvfb-run` (already installed by the environment).
 
