@@ -534,7 +534,7 @@ def _add_skill_subparser(
         aliases=aliases or [],
         help=doc.splitlines()[0] if doc else None,
     )
-    p.set_defaults(_autosaxs_fn=fn)
+    p.set_defaults(_autosaxs_fn=fn, _autosaxs_skill_name=name)
     # A separate flag prints the full docstring and exits (handled before argparse enforces required positionals).
     p.add_argument("--description", action="store_true", help="Print detailed command description")
     short_params = _parse_short_parameter_list(doc)
@@ -625,18 +625,16 @@ def _add_skill_subparser(
                 continue
 
             if isinstance(param.default, bool):
+                # Shared GUI↔CLI contract: always --flag / --no-flag (BooleanOptionalAction).
+                # use_cache is handled above as --cache / --no-cache.
                 bool_kw: Dict[str, Any] = {
                     "dest": param.name,
                     "default": param.default,
+                    "action": argparse.BooleanOptionalAction,
                 }
                 bool_help = short_params.get(param.name)
                 if bool_help:
                     bool_kw["help"] = bool_help
-                if param.default is False:
-                    bool_kw["action"] = "store_true"
-                else:
-                    # True default: keep --flag semantics and expose --no-flag.
-                    bool_kw["action"] = argparse.BooleanOptionalAction
                 p.add_argument(opt_name, **bool_kw)
                 continue
 
@@ -915,11 +913,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 kwargs[param.name] = _wrap_path_expression_value(getattr(args, param.name), ann)
 
     out = fn(*positional, **kwargs)
-    if isinstance(out, dict):
-        for k, v in out.items():
-            print(f"{k}={v}")
-    else:
-        print(out)
+    from .request_codec import build_result_envelope, format_result_frame
+
+    skill_name = str(getattr(args, "command", "") or getattr(fn, "__name__", "") or "")
+    # Prefer the subcommand name when available (argparse sets it on the namespace).
+    if hasattr(args, "_autosaxs_skill_name"):
+        skill_name = str(getattr(args, "_autosaxs_skill_name") or skill_name)
+    envelope = build_result_envelope(skill_name=skill_name, result=out, process_ok=True)
+    sys.stdout.write(format_result_frame(envelope))
     return 0
 
 

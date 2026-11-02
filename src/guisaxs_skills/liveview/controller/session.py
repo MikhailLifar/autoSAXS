@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import QMessageBox
 
 from ..services.skills import normalize_fit_request, profile_path_exists
 from ...logic.runner_qprocess import RunOutcome
-from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
+from autosaxs.skill.gnom_fit_common import failure_message_from_result
 from ...core.paths import latest_stderr_path
 from ..ui.panels.left import pick_calibration_curve_dat_path, pick_calibration_curve_image_path
 
@@ -236,7 +236,7 @@ class LiveviewSkillOutcomesHandler:
             right.sync_modeling_ui_to_session_state()
 
     def _handle_failure(self, outcome: RunOutcome) -> None:
-        if outcome.request is None or outcome.success:
+        if outcome.request is None or outcome.process_ok:
             return
         if outcome.request.skill_name not in (
             "calibrate",
@@ -270,7 +270,9 @@ class LiveviewSkillOutcomesHandler:
             )
 
     def _handle_success(self, outcome: RunOutcome) -> None:
-        if outcome.request is None or not outcome.success:
+        # Process-ok path only. Science-only failure still lands here for UI refresh,
+        # but must not look like a cancelled/crashed queue step.
+        if outcome.request is None or not outcome.process_ok:
             return
         skill = outcome.request.skill_name
         if skill in (
@@ -299,7 +301,7 @@ class LiveviewSkillOutcomesHandler:
                     session=self._c.session,
                 )
         self._c.session.sync_processing_ui()
-        if skill in ("fit_distances", "fit_sizes") and not is_atsas_fit_ok(outcome.result):
+        if not outcome.science_ok:
             parent = self._c.parent_widget
             if parent is not None:
                 QMessageBox.warning(
@@ -307,6 +309,7 @@ class LiveviewSkillOutcomesHandler:
                     skill,
                     failure_message_from_result(outcome.result, skill_id=skill),
                 )
+            return
         if skill == "calibrate":
             self._apply_calibrate_success(outcome.result)
 

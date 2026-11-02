@@ -63,7 +63,9 @@ def test_executor_requeues_cancelled_job_before_normal_jobs(tmp_path: Path):
     ex.cancel_current()
     from guisaxs_skills.logic.runner_qprocess import RunOutcome
 
-    ex._on_skill_finished(RunOutcome(success=False, exit_code=15, result={}, request=None))  # noqa: SLF001
+    ex._on_skill_finished(  # noqa: SLF001
+        RunOutcome(process_ok=False, science_ok=False, exit_code=15, result={}, request=None)
+    )
 
     j1 = ex._jobs.get_nowait()  # noqa: SLF001
     assert j1 is not None and j1.id == "rerun"
@@ -162,10 +164,65 @@ def test_executor_paused_advances_manual_multi_step_job(tmp_path: Path):
     from guisaxs_skills.logic.runner_qprocess import RunOutcome
 
     ex._on_skill_finished(  # noqa: SLF001
-        RunOutcome(success=True, exit_code=0, result={"rg": 1.0}, request=None)
+        RunOutcome(process_ok=True, science_ok=True, exit_code=0, result={"rg": 1.0}, request=None)
     )
     ex._tick()  # noqa: SLF001
     assert runner.started == ["fit_guinier", "fit_distances"]
+
+
+def test_executor_science_fail_finishes_queue_not_process_crash(tmp_path: Path):
+    """Science-only failure finishes the job (ok path) without requeue/crash semantics."""
+
+    class _DummySignal:
+        def connect(self, _fn):
+            return None
+
+        def emit(self, *_a, **_k):
+            return None
+
+    class _DummyRunner:
+        def __init__(self):
+            self.finished = _DummySignal()
+            self.started: list[str] = []
+
+        def is_running(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            return None
+
+        def start(self, req) -> None:
+            self.started.append(req.skill_name)
+
+    runner = _DummyRunner()
+    state = LiveviewSessionState(watchdir=tmp_path)
+    state.set_auto_processing(False)
+    ex = LiveviewJobExecutor(state=state, sample_store=SampleStore(), runner=runner)  # type: ignore[arg-type]
+    errors: list[str] = []
+    ex.error = type("Sig", (), {"emit": lambda _self, msg: errors.append(str(msg)), "connect": lambda *_a, **_k: None})()
+
+    job = Job(
+        id="gnom",
+        priority=150,
+        steps=[JobStep(name="fit_distances", request=RunRequest("fit_distances", ["prof.dat"], {}))],
+        context={"manual": True, "monodisperse": True},
+    )
+    ex._start_job(job)  # noqa: SLF001
+    ex._tick()  # noqa: SLF001
+    assert runner.started == ["fit_distances"]
+    from guisaxs_skills.logic.runner_qprocess import RunOutcome
+
+    ex._on_skill_finished(  # noqa: SLF001
+        RunOutcome(
+            process_ok=True,
+            science_ok=False,
+            exit_code=0,
+            result={"atsas_fit_ok": False, "failure_message": "DATGNOM failed"},
+            request=RunRequest("fit_distances", ["prof.dat"], {}),
+        )
+    )
+    assert ex._current_job is None  # noqa: SLF001  # job finished (queue path)
+    assert errors and "DATGNOM failed" in errors[0]
 
 
 def test_monodisperse_guinier_opts_fixed_interval_from_spinboxes(tmp_path: Path):

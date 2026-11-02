@@ -278,7 +278,7 @@ class MainWindow(QMainWindow):
         self._state.result = outcome.result
         self._state.artifacts = flatten_artifacts(outcome.result)
         self._artifacts.set_result(outcome.result)
-        if outcome.success and outcome.request is not None:
+        if outcome.process_ok and outcome.science_ok and outcome.request is not None:
             update_session_hints_from_success(
                 self._state.path_hints,
                 workdir=self._state.workdir,

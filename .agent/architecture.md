@@ -1,5 +1,11 @@
 # Architecture memory
 
+## CLI ↔ GUI contract
+
+- **Purpose:** Shared argv + framed JSON result between skills GUI/liveview and `autosaxs.cli.cli`.
+- **Owners / invariants:** `.agent/cli-gui-contract.md`.
+- **Code:** `autosaxs/cli/request_codec.py`, `guisaxs_skills/core/models.py` (`RunRequest.cli_argv`), `logic/result_parser.py`, `logic/runner_qprocess.py` (`RunOutcome.process_ok` / `science_ok`).
+
 ## LiveView
 
 - **Purpose:** Single-window watchdir app; sequential `autosaxs` skills; middle/right plots follow session facts + on-disk artifacts.
@@ -7,6 +13,7 @@
 - **Invariant (sample-tied):** Right panes + Adjust wizards follow `SampleStore.current` analysis identity; session wizard params are defaults/gaps only. See `docs/architecture/liveview/invariants.md`.
 - **Maps SSOT:** `docs/architecture/liveview/nodes.yaml` → `scripts/render_arch.py` → Mermaid/Graphviz. Index: `docs/architecture/README.md`.
 - **Prose:** `docs/liveview_architecture.md`, `docs/liveview_session_sample_plan.md`.
+- **Science vs process:** executor uses `RunOutcome.science_ok` (queue can finish on science fail; not a process crash).
 
 ## Related
 

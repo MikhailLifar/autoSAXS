@@ -11,7 +11,7 @@ from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
 from ...core.models import RunRequest
 from ...logic.runner_qprocess import RunOutcome, SkillRunner
-from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
+from autosaxs.skill.gnom_fit_common import failure_message_from_result
 from ..ingest.stability import FileStatSnapshot
 from ..ingest.sample_revision import (
     SampleRevision,
@@ -769,8 +769,8 @@ class LiveviewJobExecutor(QObject):
             if step_name in (FIT_GUINIER_MONO_STEP, FIT_GUINIER_POLY_STEP):
                 res = self._enrich_fit_guinier_result(res, resolve_bases=self._artifact_resolve_bases_for_job())
 
-            if not outcome.success:
-                # Job failed/cancelled.
+            if not outcome.process_ok:
+                # Job failed/cancelled (process / queue crash — not science-only fail).
                 if self._requeue_cancelled_job and self._current_job is not None:
                     try:
                         # Job.completed (phases + results) is preserved on retry.
@@ -783,13 +783,12 @@ class LiveviewJobExecutor(QObject):
                 self._finish_job(ok=False)
                 return
 
-            if step_name == "fit_distances" and not is_atsas_fit_ok(res):
-                self.error.emit(failure_message_from_result(res, skill_id="fit_distances"))
-                self._finish_job(ok=True)
-                return
-
-            if step_name == "fit_sizes" and not is_atsas_fit_ok(res):
-                self.error.emit(failure_message_from_result(res, skill_id="fit_sizes"))
+            # Science failure: UI must not treat as full success; queue still finishes cleanly.
+            if not outcome.science_ok:
+                skill_for_msg = step_name or (
+                    outcome.request.skill_name if outcome.request is not None else "skill"
+                )
+                self.error.emit(failure_message_from_result(res, skill_id=str(skill_for_msg)))
                 self._finish_job(ok=True)
                 return
 

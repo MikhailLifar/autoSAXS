@@ -10,7 +10,9 @@ from typing import Optional
 import yaml
 from PyQt5.QtCore import QObject, QProcess, pyqtSignal
 
-from ..core.models import RunRequest, flatten_artifacts
+from autosaxs.cli.request_codec import science_ok_for_result
+
+from ..core.models import RunRequest
 from ..core.paths import (
     latest_request_path,
     latest_result_path,
@@ -18,12 +20,15 @@ from ..core.paths import (
     latest_stderr_path,
     latest_stdout_path,
 )
-from .result_parser import parse_key_value_stdout
+from .result_parser import parse_skill_result_stdout
 
 
 @dataclass(frozen=True)
 class RunOutcome:
-    success: bool
+    """Skill subprocess outcome with process vs science success split."""
+
+    process_ok: bool
+    science_ok: bool
     exit_code: int
     result: dict
     request: Optional[RunRequest] = None
@@ -129,7 +134,9 @@ class SkillRunner(QObject):
         if proc is None:
             return
 
-        result = parse_key_value_stdout(self._stdout_buf)
+        process_ok = status == QProcess.NormalExit and exit_code == 0
+        result, framed_process_ok, framed_science_ok = parse_skill_result_stdout(self._stdout_buf)
+
         # Enrich artifacts for certain skills (GUI-side only; does not affect computation).
         if self._skill_name == "fit_distances":
             bp = result.get("fit_distances_log_path")
@@ -160,12 +167,19 @@ class SkillRunner(QObject):
                 except Exception:
                     pass
 
+        if framed_process_ok is not None:
+            process_ok = process_ok and framed_process_ok
+        if framed_science_ok is not None:
+            science_ok = bool(process_ok) and bool(framed_science_ok)
+        else:
+            science_ok = bool(process_ok) and science_ok_for_result(self._skill_name or "", result)
+
         latest_result_path(self._workdir).write_text(yaml.safe_dump(result, sort_keys=True), encoding="utf-8")
         outcome = RunOutcome(
-            success=(status == QProcess.NormalExit and exit_code == 0),
+            process_ok=process_ok,
+            science_ok=science_ok,
             exit_code=exit_code,
             result=result,
             request=self._last_request,
         )
         self.finished.emit(outcome)
-
