@@ -9,6 +9,11 @@
 - **Maps SSOT:** `docs/architecture/liveview/nodes.yaml` → `scripts/render_arch.py` → Mermaid/Graphviz. Index: `docs/architecture/README.md`.
 - **Prose:** `docs/liveview_architecture.md`, `docs/liveview_session_sample_plan.md`.
 
+## Package notes
+
+- Interactive `autosaxs.pipeline` (EventBus `Controller`) was removed; history: `docs/legacy-interactive-pipeline.md`. Orchestration is skills + liveview `plan_for`.
+- Deprecated Python/CLI skill aliases `fit_mixture` / `fit_bodies` / `fit_dammif` were removed; use `model_mixture` / `model_bodies` / `model_dam`. Liveview may still probe legacy on-disk conf/`fit_bodies/` paths.
+
 ## Related
 
 - Adjust rebind drilldown: diagram id `gnom-adjust-bind` (mono; sizes twin).

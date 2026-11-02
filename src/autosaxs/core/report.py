@@ -1,7 +1,7 @@
 """
 Per-profile PDF report builder for the SAXS pipeline.
 Builds a single PDF from a report-data dictionary; only sections for which data is present are included.
-Used by report skills and the legacy Controller path (`autosaxs.pipeline`).
+Used by report skills (historically also by the removed interactive Controller; see docs/legacy-interactive-pipeline.md).
 """
 import os
 import re

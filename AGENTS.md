@@ -42,7 +42,6 @@ flowchart TB
     CLI["autosaxs CLI\nautosaxs/cli/cli.py"]
     SkillsGUI["guisaxs-skills\nPyQt5"]
     Liveview["guisaxs-liveview\nwatch-folder"]
-    LegacyPipe["pipeline/\nlegacy Controller"]
   end
 
   subgraph core_pkg [autosaxs package]
@@ -59,14 +58,13 @@ flowchart TB
   CLI --> Skill
   SkillsGUI -->|"subprocess:\npython -m autosaxs.cli.cli"| CLI
   Liveview --> SkillsGUI
-  LegacyPipe --> Skill
   Skill --> Core
   Skill --> Wrap
   Skill --> PyFAI
   Skill --> ATSAS
 ```
 
-**Paradigm:** processing = **skills** (pure functions returning output path dicts). Pipelines are composed outside the package (scripts, liveview `plan_for` + executor, legacy `Controller`). Spec: `docs/skills_paradigm.md`.
+**Paradigm:** processing = **skills** (pure functions returning output path dicts). Pipelines are composed outside the package (scripts, liveview `plan_for` + executor). Spec: `docs/skills_paradigm.md`. The former interactive `autosaxs.pipeline` Controller is removed — see `docs/legacy-interactive-pipeline.md`.
 
 **GUI rule:** PyQt apps **do not** call skill functions in-process for execution. They introspect `autosaxs.skill` for metadata, then run `python -m autosaxs.cli.cli <skill> ...` via `guisaxs_skills/logic/runner_qprocess.py` (`SkillRunner`).
 
@@ -81,7 +79,6 @@ autosaxs/
 ├── skill/          # PUBLIC API — one callable per processing step
 ├── core/           # Low-level algorithms, I/O, PathExpression (no skill imports)
 ├── cli/            # argparse CLI; subcommands generated from skill signatures
-├── pipeline/       # Legacy interactive multi-step workflow (EventBus + Controller)
 ├── foreign/        # Vendored supervised_ml, aiAssistantFramework
 └── resources/      # Bundled config, prompts, help HTML, AI skill templates
 ```
@@ -108,8 +105,8 @@ autosaxs/
 | fit_sizes | `skill/fit_sizes/` | GNOM polydisperse D(R); refine+ensemble when `rmax_nm` set (`minimal` skips ensemble) |
 | calc_profile | `skill/calc_profile.py` | ATSAS CRYSOL I(q) from PDB/CIF/ENT; `.xyz` → pseudo-PDB adapter; q out in nm⁻¹ |
 | model_lc | `skill/model_lc.py` | Custom NNLS: experimental profile ≈ ≤3 nonnegative library curves (CSV or `.dat`s); no ATSAS |
-| model_mixture | `skill/model_mixture/` | ATSAS MIXTURE (`fit_mixture` deprecated alias) |
-| model_bodies | `skill/model_bodies.py` | ATSAS BODIES (`fit_bodies` deprecated alias) |
+| model_mixture | `skill/model_mixture/` | ATSAS MIXTURE |
+| model_bodies | `skill/model_bodies.py` | ATSAS BODIES |
 | model_dam | `skill/model_dam.py` | DAMMIF ab initio (+ DAMAVER when n_runs>1) |
 | model_density | `skill/model_density/` | DENSS continuous density |
 | report_individual | `skill/report_individual.py` | Per-sample PDF from fragments |
@@ -130,7 +127,7 @@ autosaxs/
 | `pddf.py` | p(r) from BODIES/DAMMIF shapes |
 | `viewer.py` | Matplotlib plotting (`PLTViewer`) |
 | `report_fragments.py` | Decentralized `*_report_individual.md` / `*_report_summary.yaml` |
-| `event_bus.py` | `EventBus`, `EventType` (pipeline + optional skill progress) |
+| `event_bus.py` | `EventBus`, `EventType` (optional skill progress; historically Controller UI) |
 | `context.py` | `Context` — working dir, config |
 
 ### `autosaxs/cli/`
@@ -139,17 +136,6 @@ autosaxs/
 - Subcommands: auto-built from `list_skills()` signatures (`--kebab-case` options, `--cache`/`--no-cache`, `--conf`).
 - Agent helpers: `get-docs`, `get-skills`, `get-default-config` (see `resources/agent_quickstart.txt`).
 - **Invoke as:** `python -m autosaxs.cli.cli` (no `__main__` on `autosaxs.cli`).
-
-### `autosaxs/pipeline/` — legacy interactive orchestration
-
-| Module | Role |
-|--------|------|
-| `saxs_controller.py` | `Controller` — event-driven step sequencer |
-| `cli_interface.py` | Stdin prompts ↔ EventBus |
-| `gui_interface.py` | CustomTkinter dialogs ↔ EventBus |
-| `api.py` | `fast_first_processing` script API |
-
-**Legacy.** Prefer skills + scripts or liveview `plan_for`. Lab entry may still call `Controller` from `saxsprocessing/pipeline.py`. No separate interactive-pipeline product spec — see `docs/skills_paradigm.md` for the skills contract.
 
 ### `autosaxs/resources/`
 
@@ -369,7 +355,7 @@ Set `MPLBACKEND=Agg` for headless matplotlib. Headless GUI tests need `xvfb-run`
 ## Known gaps / stale references
 
 - README / CLI help may still say `python -m autosaxs.cli` in places; entry module is `python -m autosaxs.cli.cli`.
-- `autosaxs/pipeline/` (legacy Controller) remains for lab scripts; do not extend it for new product features.
+- Former interactive `autosaxs.pipeline` Controller is removed; history in `docs/legacy-interactive-pipeline.md`.
 
 ---
 

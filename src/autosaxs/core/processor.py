@@ -1,7 +1,7 @@
 """
 Shared processing primitives (core layer).
 
-Re-exports only from ``core`` submodules — never from ``skill`` or ``pipeline``.
+Re-exports only from ``core`` submodules — never from ``skill``.
 """
 
 from .integrator import IntegratorExtended
