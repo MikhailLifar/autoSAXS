@@ -1,14 +1,9 @@
 from typing import Any, Tuple, Union, Dict, Optional, List
-import yaml
-import pandas as pd
 import numpy as np
-from io import StringIO
 import os
-import sys
 import re
 import glob
 import itertools
-from pathlib import PureWindowsPath, PurePosixPath
 
 from ase import Atoms
 
@@ -21,7 +16,6 @@ from scipy.spatial.distance import cdist
 import time
 from contextlib import contextmanager
 
-_autosaxs_pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Deprecated pipeline UI state — keep outside the install tree.
 LATEST_STEPS_PATH = os.path.join(
     os.environ.get("XDG_CACHE_HOME", os.path.join(os.path.expanduser("~"), ".cache")),
@@ -29,15 +23,26 @@ LATEST_STEPS_PATH = os.path.join(
     "latest_steps.yml",
 )
 
-from ..foreign.supervised_ml.whittaker_smooth import whittaker_smooth
-
-RESOURCES_DIR = os.path.join(_autosaxs_pkg_dir, "resources")
-
 # Pipeline units convention: q in nm^-1 (inverse nanometers), Rg and lengths in nm.
 # PyFAI integrate1d must be called with unit='q_nm^-1'. ATSAS (autorg, datgnom, etc.)
 # accept .dat with q in nm^-1 and return Rg, Dmax in nm; use write_saxs_atsas_format for input.
 
 from pyFAI.detectors import Pilatus1M
+
+# Temporary re-exports (P5 gradual split) — prefer autosaxs.core.saxs_io / yaml_config.
+from .saxs_io import (  # noqa: F401
+    _make_yaml_safe,
+    ensure_q_nm,
+    load_saxs_1d_any,
+    read_chi,
+    read_data,
+    read_reference_sub_dat,
+    read_saxs,
+    write_data,
+    write_saxs,
+    write_saxs_atsas_format,
+)
+from .yaml_config import load_config, save_config, update_config  # noqa: F401
 
 
 def get_detector(detector_name: str = "Pilatus1M", pixel_size=None):
@@ -89,9 +94,6 @@ def timer(name="Timer"):
         elapsed = end - start
         metrics["elapsed"] = elapsed
         print(f"[{name}] Elapsed time: {elapsed:.6f} seconds")
-
-
-##### READING/WRITING FUNCTIONS ######
 
 
 def read_from_tiff(tiff_path) -> np.ndarray:
@@ -170,46 +172,6 @@ def _parse_descriptors_from_results(results_path: Optional[str]) -> Optional[Dic
     return out if out else None
 
 
-def write_saxs(filename, wavenumber, intensity, sigma, metadata):
-    """
-    Write SAXS data and metadata to a file using YAML for metadata and CSV for data.
-    
-    Parameters:
-    filename (str): Output file path
-    wavenumber (numpy.ndarray): Array of q-values (wavenumber)
-    intensity (numpy.ndarray): Array of intensity values
-    metadata (dict): Dictionary containing metadata
-    """
-    # Create a DataFrame for the data
-    df = pd.DataFrame({
-        'q': wavenumber,
-        'intensity': intensity,
-    })
-    if sigma is not None:
-        df['sigma'] = sigma
-
-    # Delegate actual writing to generic helper
-    write_data(filename, df, metadata)
-
-
-def write_saxs_atsas_format(filename: str, q: np.ndarray, I: np.ndarray, sigma: Optional[np.ndarray] = None) -> None:
-    """
-    Write SAXS data in ATSAS .dat format: plain 3 columns (q, intensity, errors),
-    no headers or YAML. Pipeline convention: q in nm^-1; ATSAS returns Rg/Dmax in nm when given nm^-1.
-
-    If sigma is None, errors are set to 4% of I (ATSAS convention when errors absent).
-    """
-    q = np.asarray(q)
-    I = np.asarray(I)
-    if sigma is None or not np.all(np.isfinite(sigma)) or np.any(sigma <= 0):
-        sigma = 0.04 * np.maximum(I, 1e-300)
-    else:
-        sigma = np.asarray(sigma)
-    with open(filename, 'w') as f:
-        for i in range(len(q)):
-            f.write(f"{q[i]}\t{I[i]}\t{sigma[i]}\n")
-
-
 # -----------------------------------------------------------------------------
 # Size distribution PDFs (for MIXTURE / polydisperse sphere plots)
 # -----------------------------------------------------------------------------
@@ -239,113 +201,6 @@ def lognormal_pdf(R: np.ndarray, mu: float, sigma: float) -> np.ndarray:
     x = np.log(R[mask] / m)
     out[mask] = np.exp(-0.5 * (x / s) ** 2)
     return out
-
-
-def read_saxs(filename):
-    """
-    Read SAXS data and metadata from a file with YAML metadata and CSV data.
-    
-    Parameters:
-    filename (str): Input file path
-    
-    Returns:
-    tuple: (wavenumber, intensity, sigma, metadata)
-        wavenumber (numpy.ndarray): Array of q-values
-        intensity (numpy.ndarray): Array of intensity values
-        sigma (numpy.ndarray or None): Uncertainties, if present in the file
-        metadata (dict): Dictionary containing metadata
-    """
-    df, _, metadata = read_data(filename)
-
-    # Extract arrays
-    wavenumber = df['q'].to_numpy()
-    intensity = df['intensity'].to_numpy()
-    
-    sigma = None
-    if 'sigma' in df:
-        sigma = df['sigma'].to_numpy()
-    
-    return wavenumber, intensity, sigma, metadata
-
-
-def read_chi(filename: str) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Read q and intensity from a .chi file (two-column format with header).
-    Returns (q, intensity) arrays.
-    """
-    data_lines = []
-    header_passed = False
-    with open(filename, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            parts = line.split()
-            if len(parts) == 2:
-                try:
-                    float(parts[0])
-                    float(parts[1])
-                    header_passed = True
-                except ValueError:
-                    pass
-            if header_passed and len(parts) == 2:
-                data_lines.append(line)
-    if not data_lines:
-        raise ValueError(f"No valid data found in .chi file: {filename}")
-    q, I = np.loadtxt(data_lines, unpack=True)
-    return q, I
-
-
-def ensure_q_nm(
-    q: np.ndarray,
-    I: np.ndarray,
-    sigma: Optional[np.ndarray] = None,
-) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
-    """
-    Ensure q is in nm^-1 (pipeline convention). If q looks like Å^-1 (typical max < 0.6),
-    convert by q_nm = q_angstrom * 10. Returns (q, I, sigma) unchanged or with q converted.
-    """
-    q = np.asarray(q, dtype=float)
-    q_max = np.max(q)
-    # q in nm^-1 is typically ~0.05–5; q in Å^-1 is ~0.005–0.5
-    if q_max > 0 and q_max < 0.6:
-        q = q * 10.0
-    return q, np.asarray(I, dtype=float), sigma
-
-
-def load_saxs_1d_any(filename: str) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
-    """
-    Load q, I and optionally sigma from a SAXS 1D file.
-    Tries read_saxs (YAML+CSV), then two-column .chi-style, then any two-column numeric.
-    Returns (q, I, sigma); sigma is None if not available.
-    """
-    try:
-        q, I, sigma, _ = read_saxs(filename)
-        return np.asarray(q), np.asarray(I), np.asarray(sigma) if sigma is not None else None
-    except (ValueError, KeyError):
-        pass
-    try:
-        q, I = read_chi(filename)
-        return np.asarray(q), np.asarray(I), None
-    except (ValueError, Exception):
-        pass
-    data_lines = []
-    with open(filename, 'r') as f:
-        for line in f:
-            parts = line.split()
-            if len(parts) >= 2:
-                try:
-                    a, b = float(parts[0]), float(parts[1])
-                    data_lines.append((a, b))
-                except ValueError:
-                    pass
-    if len(data_lines) < 3:
-        raise ValueError(f"Cannot load 1D SAXS data from {filename}")
-    arr = np.array(data_lines)
-    q, I = np.sort(arr[:, 0]), arr[:, 1][np.argsort(arr[:, 0])]
-    return q, I, None
-
-
 
 
 def find_porod_region(
@@ -447,46 +302,6 @@ def find_porod_region(
     return best
 
 
-def read_reference_sub_dat(filename: str) -> Tuple[np.ndarray, np.ndarray, str]:
-    """
-    Read reference subtracted .dat file (format: header with Parent(s): sample.chi buffer.chi, then two-column q I).
-    Returns (q, intensity, sample_chi_basename) where sample_chi_basename is the stem of the sample .chi (e.g. 0002_ihs27_95.9).
-    """
-    sample_basename = ""
-    data_lines = []
-    header_passed = False
-    parent_re = re.compile(r"Parent\s*\(\s*s\s*\)\s*:\s*(.+)", re.IGNORECASE)  # "Parent(s): path1 path2"
-    with open(filename, "r") as f:
-        for line in f:
-            line_strip = line.strip()
-            m = parent_re.match(line_strip)
-            if m:
-                # Paths can be space-separated; first is sample .chi, second is buffer .chi
-                paths = m.group(1).strip().split()
-                if paths:
-                    sample_path = paths[0]
-                    # "Parent(s)" may contain POSIX or Windows paths, regardless of host OS.
-                    p = PureWindowsPath(sample_path) if ("\\" in sample_path or (len(sample_path) >= 2 and sample_path[1] == ":")) else PurePosixPath(sample_path)
-                    sample_basename = p.name
-                    if sample_basename.lower().endswith(".chi"):
-                        sample_basename = sample_basename[:-4]
-            parts = line.split()
-            if len(parts) == 2:
-                try:
-                    float(parts[0])
-                    float(parts[1])
-                    header_passed = True
-                    data_lines.append(line)  # only append lines that are actually two numbers (skip e.g. "range-from: 1")
-                except ValueError:
-                    pass
-    if not data_lines:
-        raise ValueError(f"No valid data found in reference sub .dat file: {filename}")
-    if not sample_basename:
-        raise ValueError(f"No Parent(s) line with sample .chi path in: {filename}")
-    q, I = np.loadtxt(data_lines, unpack=True)
-    return q, I, sample_basename
-
-
 def integration_comparison_metric(
     q1: np.ndarray, I1: np.ndarray,
     q2: np.ndarray, I2: np.ndarray,
@@ -551,192 +366,6 @@ def subtraction_comparison_metric(
     if span <= 0.0:
         return np.nan
     return float(np.trapezoid(integrand, q_common) / span)
-
-
-def _make_yaml_safe(obj):
-    """Convert numpy/types to native Python so yaml.dump produces clean YAML."""
-    if isinstance(obj, dict):
-        return {k: _make_yaml_safe(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_make_yaml_safe(x) for x in obj]
-    if isinstance(obj, np.floating):
-        return float(obj)
-    if isinstance(obj, np.integer):
-        return int(obj)
-    if isinstance(obj, np.bool_):
-        return bool(obj)
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    return obj
-
-
-def write_data(filename, data: pd.DataFrame, metadata):
-    """
-    Write generic tabular data and metadata to a file using YAML for metadata and CSV for data.
-
-    Parameters:
-    filename (str): Output file path
-    data (pd.DataFrame): Tabular data to be written as CSV
-    metadata (dict): Dictionary containing metadata
-    """
-    metadata = _make_yaml_safe(metadata)
-    with open(filename, 'w') as f:
-        # Write metadata in YAML format
-        f.write("# Data File\n")
-        f.write("# Metadata in YAML format\n")
-        f.write("---\n")
-        yaml.dump(metadata, f, default_flow_style=False)
-        f.write("...\n")
-
-        # Write data in CSV format
-        f.write("\n# Data in CSV format\n")
-        data.to_csv(f, index=False)
-
-
-def read_data(filename):
-    """
-    Read generic tabular data and metadata from a file with YAML metadata and CSV data.
-
-    Parameters:
-    filename (str): Input file path
-
-    Returns:
-    tuple: (data, columns_as_arrays, metadata)
-        data (pd.DataFrame): Tabular data
-        columns_as_arrays (tuple): Tuple of NumPy arrays corresponding to DataFrame columns
-        metadata (dict): Dictionary containing metadata
-    """
-    with open(filename, 'r') as f:
-        content = f.read()
-
-    # Split content into YAML and CSV sections
-    yaml_start = content.find("---\n") + 4
-    yaml_end = content.find("\n...\n")
-
-    if yaml_start == 3 or yaml_end == -1:
-        raise ValueError("Invalid file format: YAML delimiters not found")
-
-    # Extract and parse YAML metadata
-    yaml_text = content[yaml_start:yaml_end]
-    metadata = yaml.safe_load(yaml_text)
-
-    # Extract and parse CSV data
-    csv_start = content.find("\n# Data in CSV format\n") + len("\n# Data in CSV format\n")
-    csv_text = content[csv_start:]
-
-    # Use pandas to read CSV data
-    df = pd.read_csv(StringIO(csv_text))
-
-    # Return DataFrame and tuple of its columns as NumPy arrays
-    columns_as_arrays = tuple(df[col].to_numpy() for col in df.columns)
-
-    return df, columns_as_arrays, metadata
-
-
-def get_pipeline_description(pipeline_name: str) -> str:
-    """
-    Read and parse a pipeline description from a .txt file in the pipelines directory.
-
-    Parameters:
-    pipeline_name (str): Name of the pipeline (without .txt extension)
-
-    Returns:
-    str: A readable description of the pipeline in natural language
-
-    Raises:
-    FileNotFoundError: If the pipeline description file doesn't exist
-    """
-    pipeline_file = os.path.join(RESOURCES_DIR, "pipelines", f"{pipeline_name}.txt")
-
-    if not os.path.exists(pipeline_file):
-        raise FileNotFoundError(f"Pipeline description file not found: {pipeline_file}")
-
-    with open(pipeline_file, 'r') as f:
-        content = f.read()
-
-    # Parse the structured content
-    description_parts = []
-
-    # Extract Description section if present
-    desc_match = re.search(r'<Description>\s*(.*?)\s*</Description>', content, re.DOTALL)
-    if desc_match:
-        desc_part = desc_match.group(1).strip()
-        if desc_part:
-            description_parts.append(f"Description: {desc_part}")
-
-    # Extract Purpose section if present
-    purpose_match = re.search(r'<Purpose>\s*(.*?)\s*</Purpose>', content, re.DOTALL)
-    if purpose_match:
-        description_parts.append(f"The purpose of the pipeline: {purpose_match.group(1).strip()}")
-
-    # Extract Steps section if present
-    steps_match = re.search(r'<Steps>\s*(.*?)\s*</Steps>', content, re.DOTALL)
-    if steps_match:
-        steps = steps_match.group(1).strip()
-        description_parts.append(f"Processing Steps:\n{steps}")
-
-    # Helper function to parse file structure sections
-    def parse_file_structure(text):
-        lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
-        parsed_lines = []
-
-        for line in lines:
-            parts = line.split('#', 1)
-            file_part = parts[0].strip()
-            desc_part = parts[1].strip() if len(parts) > 1 else None
-
-            # Parse the notation
-            if file_part.endswith(' inf'):
-                count_desc = "an arbitrary number of"
-                file_part = file_part[:-4].strip()
-            elif any(char.isdigit() for char in file_part.split()[-1]):
-                # Extract number from the end
-                file_parts = file_part.split()
-                if file_parts[-1].isdigit():
-                    count = int(file_parts[-1])
-                    count_desc = f"exactly {count}"
-                    file_part = ' '.join(file_parts[:-1])
-                else:
-                    count_desc = "a specific number of"
-            else:
-                count_desc = "a single"
-
-            file_or_files = 'file' if 'single' in count_desc else 'files'
-            
-            if desc_part:
-                parsed_lines.append(f"{count_desc} {file_part} {file_or_files} ({desc_part})")
-            else:
-                parsed_lines.append(f"{count_desc} {file_part} {file_or_files}")
-
-        return parsed_lines
-    
-    description_parts.append(
-        'For the pipeline to work as expected you should provide an algorithm with an input directory containing your data, structure of which should strictly follow the requirements which are listed below.'
-    )
-
-    # Extract Input Structure section if present
-    input_match = re.search(r'<Input Structure>\s*(.*?)\s*</Input Structure>', content, re.DOTALL)
-    if input_match:
-        input_desc = parse_file_structure(input_match.group(1))
-        input_desc = '\n'.join(input_desc)
-        description_parts.append(f"Input Requirements:\n{input_desc}")
-
-    description_parts.append(
-        'Some outputs are generated as a product of the pipeline work.'
-    )
-    
-    # Extract Output Structure section if present
-    output_match = re.search(r'<Output Structure>\s*(.*?)\s*</Output Structure>', content, re.DOTALL)
-    if output_match:
-        output_desc = parse_file_structure(output_match.group(1))
-        output_desc = '\n'.join(output_desc)
-        description_parts.append(f"Output Files:\n{output_desc}")
-
-    # If no structured content found, return the raw content
-    if not description_parts:
-        return content.strip()
-
-    return "\n\n".join(description_parts), pipeline_file
 
 
 def get_pipeline_paths(description_file, directory_path, check=True):
@@ -849,29 +478,6 @@ def get_pipeline_paths(description_file, directory_path, check=True):
             raise AssertionError(f"Directory structure mismatch: Expected at maximum {max_count} files matching '{file_mask}', found {actual_count}")
         
     return result
-
-
-def load_config(src_path):
-    with open(src_path, 'r') as f:
-        return yaml.safe_load(f)
-
-
-def save_config(config, dest_path):
-    with open(dest_path, 'w') as f:
-        yaml.dump(config, f)
-
-
-def update_config(config, config_file, *keys, values: dict):
-    keys = list(keys)
-
-    conf = config
-    for k in keys:
-        if k not in conf:
-            conf[k] = {}
-        conf = conf[k]
-    
-    conf.update(values)
-    save_config(config, config_file)
 
 
 def read_bodies_cif(src_path):
