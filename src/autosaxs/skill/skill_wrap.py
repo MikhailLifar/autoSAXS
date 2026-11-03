@@ -50,11 +50,22 @@ def probe_atsas() -> Tuple[Optional[str], Optional[str]]:
     return match.group(1), None
 
 
-def warn_atsas_on_import() -> None:
-    """Soft import-time check: warn on missing/mismatched ATSAS; never raise."""
-    version, err = probe_atsas()
+_atsas_soft_warned = False
+
+
+def _emit_atsas_soft_warnings(
+    version: Optional[str],
+    err: Optional[str],
+    *,
+    stacklevel: int = 3,
+) -> None:
+    """Emit at most one soft ATSAS warning for this process (never raises)."""
+    global _atsas_soft_warned
+    if _atsas_soft_warned:
+        return
+    _atsas_soft_warned = True
     if err:
-        warnings.warn(err, RuntimeWarning, stacklevel=2)
+        warnings.warn(err, RuntimeWarning, stacklevel=stacklevel)
         return
     if version is None:
         warnings.warn(
@@ -62,7 +73,7 @@ def warn_atsas_on_import() -> None:
             "`dammif -v` output. Some autosaxs functions may not work as expected. "
             "Run `autosaxs doctor` for a full install report.",
             RuntimeWarning,
-            stacklevel=2,
+            stacklevel=stacklevel,
         )
         return
     if version != RECOMMENDED_ATSAS_VERSION:
@@ -72,13 +83,29 @@ def warn_atsas_on_import() -> None:
             "Some autosaxs functions may not work due to the mismatch. "
             "Run `autosaxs doctor` for a full install report.",
             RuntimeWarning,
-            stacklevel=2,
+            stacklevel=stacklevel,
         )
+
+
+def warn_atsas_once() -> None:
+    """
+    Lazy soft ATSAS probe: warn once on missing/mismatched ATSAS; never raise.
+
+    Not called from ``import autosaxs``. Triggered by ``autosaxs doctor``,
+    ``ensure_atsas_installed`` / first ``@require_atsas`` skill, or explicit callers.
+    """
+    version, err = probe_atsas()
+    _emit_atsas_soft_warnings(version, err, stacklevel=3)
+
+
+# Backward-compatible name; no longer invoked on package import.
+warn_atsas_on_import = warn_atsas_once
 
 
 def ensure_atsas_installed() -> str:
     """Raise if ATSAS is not available; return parsed version or ``\"unknown\"``."""
     version, err = probe_atsas()
+    _emit_atsas_soft_warnings(version, err, stacklevel=3)
     if err:
         raise RuntimeError(err)
     return version or "unknown"

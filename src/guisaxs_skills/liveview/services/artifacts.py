@@ -135,14 +135,6 @@ def _read_fit_distances_quality_yaml(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _profile_sample_stem(profile_abs: str) -> str:
-    stem = Path(profile_abs).stem
-    for prefix in ("sub_", "int_"):
-        if stem.startswith(prefix):
-            stem = stem[len(prefix) :]
-    return stem
-
-
 def gnom_out_usable_for_dammif(path: str, *, min_iq_points: int = 5) -> bool:
     """True when path is a GNOM/DATGNOM .out with enough I(q) points for DAMMIF."""
     if not path or not str(path).lower().endswith(".out"):
@@ -169,8 +161,13 @@ def discover_gnom_out_path(
     watchdir: Path,
     hint: str = "",
 ) -> str:
-    """Resolve the best DATGNOM .out for DAMMIF (newest usable under fit_distances/<stem>/)."""
-    from ..session.output_paths import fit_distances_dir
+    """
+    Resolve DATGNOM/GNOM ``.out`` for DAMMIF under ``fit_distances/<stem>/``.
+
+    Shared stem precedence via ``iter_fit_distances_gnom_candidates``; keeps a
+    hint-first probe and ``gnom_out_usable_for_dammif`` filter for DAMMIF.
+    """
+    from ..session.stem_resolve import iter_fit_distances_gnom_candidates, profile_sample_stem
 
     bases = [output_root.expanduser().resolve(), watchdir.expanduser().resolve()]
     seen: set[str] = set()
@@ -180,17 +177,8 @@ def discover_gnom_out_path(
     if hint_s:
         candidates.append(Path(hint_s))
 
-    stem = _profile_sample_stem(profile_abs)
-    fd = fit_distances_dir(output_root) / stem
-    if fd.is_dir():
-        for patt in (
-            "gnom_best.out",
-            "datgnom_best.out",  # legacy auto-path name (pre unified gnom_best.out)
-            "datgnom_rg_*.out",
-            "*_gnom.out",
-            "*.out",
-        ):
-            candidates.extend(sorted(fd.glob(patt), key=lambda p: p.stat().st_mtime, reverse=True))
+    stem = profile_sample_stem(profile_abs)
+    candidates.extend(iter_fit_distances_gnom_candidates(root=output_root, stem=stem))
 
     for cand in candidates:
         resolved = resolve_artifact_path(str(cand), bases=bases)

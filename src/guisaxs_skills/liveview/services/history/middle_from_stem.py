@@ -12,13 +12,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from ...ingest.sample_revision import is_dat_path, is_tiff_path, sample_stem_from_path
-from ...session.output_paths import (
-    integrated_dat_path,
-    subtracted_dat_path,
-    tiff_output_root,
-)
 from ...session.sample import Sample
 from ...session.state import LiveviewIntakeMode, LiveviewSessionState, LiveviewWatchMode
+from ...session.stem_resolve import resolve_integrated_dat, resolve_subtracted_dat
 
 
 def integrated_dat_for_tiff_stem(
@@ -30,9 +26,13 @@ def integrated_dat_for_tiff_stem(
     mode: LiveviewWatchMode = LiveviewWatchMode.FLAT,
 ) -> str:
     """Return path to ``int_<stem>.dat`` under the TIFF output root if the file exists."""
-    root = tiff_output_root(watchdir=watchdir, tiff_path=tiff_path, mode=mode)
-    p = integrated_dat_path(root=root, stem=stem, integrator_ready=integrator_ready)
-    return str(p.resolve()) if p.is_file() else ""
+    return resolve_integrated_dat(
+        watchdir=watchdir,
+        stem=stem,
+        integrator_ready=integrator_ready,
+        sample_path=tiff_path,
+        mode=mode,
+    )
 
 
 def subtracted_dat_for_tiff_stem(
@@ -43,9 +43,12 @@ def subtracted_dat_for_tiff_stem(
     mode: LiveviewWatchMode = LiveviewWatchMode.FLAT,
 ) -> str:
     """``subtracted/sub_<stem>.dat`` under the TIFF output root."""
-    root = tiff_output_root(watchdir=watchdir, tiff_path=tiff_path, mode=mode)
-    p = subtracted_dat_path(root=root, stem=stem)
-    return str(p.resolve()) if p.is_file() else ""
+    return resolve_subtracted_dat(
+        watchdir=watchdir,
+        stem=stem,
+        sample_path=tiff_path,
+        mode=mode,
+    )
 
 
 @dataclass(frozen=True)
@@ -230,8 +233,7 @@ def _resolve_curve_paint(
     if state.buffer_ready():
         buf = state.buffer_dat_path
         buf_str = str(buf) if buf is not None and buf.is_file() else ""
-        sub_cand = watchdir / "subtracted" / f"sub_{stem}.dat"
-        sub_str = str(sub_cand.resolve()) if sub_cand.is_file() else ""
+        sub_str = resolve_subtracted_dat(watchdir=watchdir, stem=stem)
         main = resolved if state.intake_mode == LiveviewIntakeMode.CURVE_1D else ""
         return _MiddlePaint(
             main_curve_path=main,

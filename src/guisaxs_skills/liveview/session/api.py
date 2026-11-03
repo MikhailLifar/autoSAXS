@@ -10,7 +10,12 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from autosaxs.core.buffer_rules import normalize_buffer_rules
 
 from .persistence import load_liveview_session_settings, save_liveview_session_settings
-from .state import LiveviewIntakeMode, LiveviewSessionState, MonodisperseShapeMode
+from .state import (
+    LiveviewIntakeMode,
+    LiveviewSessionState,
+    MonodisperseShapeMode,
+    PolydisperseMixtureMode,
+)
 
 if TYPE_CHECKING:
     from ..pipeline.executor import LiveviewJobExecutor
@@ -45,6 +50,9 @@ class LiveviewSession(QObject):
 
     def bind_executor(self, executor: LiveviewJobExecutor) -> None:
         self._executor = executor
+        bind = getattr(executor, "bind_session", None)
+        if callable(bind):
+            bind(self)
 
     def bind_right_panel(self, right: LiveviewRightPanel | None) -> None:
         self._right = right
@@ -217,3 +225,45 @@ class LiveviewSession(QObject):
             return False
         self._state.monodisperse_shape_mode = mode
         return True
+
+    def apply_inferred_mixture_mode(self, mode: PolydisperseMixtureMode) -> bool:
+        """Apply disk-inferred mixture mode only when session mode is still NONE."""
+        if not isinstance(mode, PolydisperseMixtureMode):
+            mode = PolydisperseMixtureMode(mode)
+        if mode == PolydisperseMixtureMode.NONE:
+            return False
+        if self._state.polydisperse_mixture_mode != PolydisperseMixtureMode.NONE:
+            return False
+        self._state.polydisperse_mixture_mode = mode
+        return True
+
+    # --- calibration / last_* pipeline hints ---------------------------------
+
+    def set_integrator_dir(self, path: Optional[Path], *, persist: bool = False) -> None:
+        self._state.integrator_dir = path
+        if persist:
+            self.persist()
+
+    def set_last_integrated_dat_path(self, path: Optional[Path]) -> None:
+        """Pipeline hint only — not sample-tied UI SSOT."""
+        self._state.last_integrated_dat_path = path
+
+    def set_last_subtracted_dat_path(self, path: Optional[Path]) -> None:
+        """Pipeline hint only — not sample-tied UI SSOT."""
+        self._state.last_subtracted_dat_path = path
+
+    def apply_calibration_outcome(
+        self,
+        *,
+        integrator_dir: Optional[Path] = None,
+        refined_yml_path: Optional[Path] = None,
+        curve_plot_path: Optional[Path] = None,
+        persist: bool = True,
+    ) -> None:
+        """Write calibrate skill outcomes into session facts."""
+        if integrator_dir is not None:
+            self._state.integrator_dir = integrator_dir
+        self._state.calibration_refined_yml_path = refined_yml_path
+        self._state.calibration_curve_plot_path = curve_plot_path
+        if persist:
+            self.persist()

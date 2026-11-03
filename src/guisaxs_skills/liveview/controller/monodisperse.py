@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QMessageBox
 
 from ..ingest.sample_revision import is_dat_path
 from ..pipeline.monodisperse_pipeline import MonodispersePipelineParts, build_monodisperse_steps
+from ..pipeline.yaml_options import load_yaml_options
 from ..session.output_paths import analysis_output_root
 from ...logic.runner_qprocess import RunOutcome
 
@@ -47,7 +48,7 @@ class LiveviewMonodisperseHandler:
     def _resolve_profile_path(self) -> Optional[str]:
         """Usable analysis profile for the **current** history sample only."""
         from ..ingest.curve_classify import usable_analysis_curve_path
-        from ..services.history.right_artifacts import resolve_analysis_profile
+        from ..session.stem_resolve import resolve_analysis_profile
 
         right = self._c.right
         if right is not None:
@@ -70,7 +71,7 @@ class LiveviewMonodisperseHandler:
         _, profile = resolve_analysis_profile(
             watchdir=self._c.state.watchdir,
             stem=stem,
-            tiff_path=sample,
+            sample_path=sample,
             watch_mode=self._c.state.watch_mode,
         )
         return profile or None
@@ -147,7 +148,7 @@ class LiveviewMonodisperseHandler:
             output_root=root,
             state=self._c.state,
             parts=MonodispersePipelineParts.GUINIER_AND_DISTANCES,
-            load_yaml=self._c.executor._load_yaml_options,
+            load_yaml=load_yaml_options,
             fixed_guinier_interval=fixed,
             guinier_interval_first=first_i,
             guinier_interval_last=last_i,
@@ -193,7 +194,7 @@ class LiveviewMonodisperseHandler:
             output_root=root,
             state=self._c.state,
             parts=MonodispersePipelineParts.DISTANCES_ONLY,
-            load_yaml=self._c.executor._load_yaml_options,
+            load_yaml=load_yaml_options,
             guinier_handoff=handoff or None,
         )
         job = self._c.executor.build_monodisperse_manual_job(profile_abs=prof, steps=steps, output_root=root)

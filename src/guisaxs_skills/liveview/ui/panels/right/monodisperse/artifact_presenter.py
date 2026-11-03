@@ -30,7 +30,7 @@ from .....services.artifacts import (
 from .....services.dam_models import build_dam_model_catalog
 from .....services.denss_models import build_denss_model_catalog
 from .format_display import scalar_value
-from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
+from guisaxs_skills.liveview.services.skill_present import failure_message_from_result, is_atsas_fit_ok
 
 
 class MonodisperseArtifactPresenter:
@@ -174,7 +174,7 @@ class MonodisperseArtifactPresenter:
             lp = data.get("last_point_1based")
             if fp is None or lp is None:
                 try:
-                    from autosaxs.skill.fit_guinier.guinier import guinier_point_range_1based
+                    from guisaxs_skills.liveview.services.skill_present import guinier_point_range_1based
 
                     fp, lp = guinier_point_range_1based(data)
                 except Exception:
@@ -636,17 +636,11 @@ class MonodisperseArtifactPresenter:
         if not stem and prof:
             stem = profile_sample_stem(prof)
         if stem:
-            from .....session.output_paths import fit_distances_dir
+            from .....session.stem_resolve import resolve_fit_distances_gnom_out
 
-            fd = fit_distances_dir(root) / stem
-            for cand in (
-                fd / "gnom_best.out",
-                fd / f"{stem}_gnom.out",
-                fd / f"{stem}.out",
-                fd / "datgnom_best.out",
-            ):
-                if cand.is_file():
-                    return str(cand.resolve())
+            gnom = resolve_fit_distances_gnom_out(root=root, stem=stem)
+            if gnom is not None:
+                return str(gnom)
         if not prof:
             return ""
         return discover_gnom_out_path(

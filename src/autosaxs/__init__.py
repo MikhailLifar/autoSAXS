@@ -1,8 +1,10 @@
 # autosaxs: SAXS processing skills, core I/O, and CLI entry points
 from __future__ import annotations
 
+import importlib
 import logging
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from typing import Any
 
 try:
     __version__ = _pkg_version("autosaxs")
@@ -14,18 +16,8 @@ except PackageNotFoundError:
 # logger with full stack traces; keep calling the same APIs but don't spam users.
 logging.getLogger("pyFAI.DEPRECATION").setLevel(logging.ERROR)
 
-from .skill.skill_wrap import warn_atsas_on_import
-
-warn_atsas_on_import()
-
-from .core.event_bus import EventBus, EventType
-from .core.context import Context
-from .core import integrator
-from .core import processor
-from .core import utils
-from .core import viewer
-from . import skill
-
+# Heavy / optional re-exports stay lazy: ``import autosaxs`` must not probe ATSAS
+# (``dammif``), import skill implementations, or pull pyFAI/matplotlib stacks.
 __all__ = [
     "EventBus",
     "EventType",
@@ -37,3 +29,33 @@ __all__ = [
     "skill",
     "__version__",
 ]
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "EventBus": ("autosaxs.core.event_bus", "EventBus"),
+    "EventType": ("autosaxs.core.event_bus", "EventType"),
+    "Context": ("autosaxs.core.context", "Context"),
+    "integrator": ("autosaxs.core", "integrator"),
+    "processor": ("autosaxs.core", "processor"),
+    "utils": ("autosaxs.core", "utils"),
+    "viewer": ("autosaxs.core", "viewer"),
+    "skill": ("autosaxs", "skill"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    mod_name, attr = target
+    if name == "skill":
+        mod = importlib.import_module("autosaxs.skill")
+        globals()[name] = mod
+        return mod
+    mod = importlib.import_module(mod_name)
+    value = getattr(mod, attr)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

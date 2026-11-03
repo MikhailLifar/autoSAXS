@@ -22,7 +22,7 @@ from ..logic.default_output_dir import default_output_dir_for_skill
 from ..logic.runner_qprocess import SkillRunner
 from ..logic.session_state import SessionState
 from ..logic.smart_defaults import update_session_hints_from_success
-from ..logic.skill_catalog import discover_skills
+from ..logic.skill_catalog import list_catalog_skill_names, skill_meta_for
 from ..logic.workdir import select_workdir
 from .artifacts_panel import ArtifactsPanel
 from .catalog_tabs import CatalogTabs
@@ -47,7 +47,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("guisaxs-skills")
 
         self._splitter = QSplitter(Qt.Horizontal)
-        self._catalog = CatalogTabs(skills=discover_skills())
+        # Names only at cold start; each skill body loads on first selection.
+        self._catalog = CatalogTabs(
+            skill_names=list_catalog_skill_names(),
+            load_meta=skill_meta_for,
+        )
         self._middle = QWidget()
         self._right = QWidget()
 
@@ -278,7 +282,7 @@ class MainWindow(QMainWindow):
         self._state.result = outcome.result
         self._state.artifacts = flatten_artifacts(outcome.result)
         self._artifacts.set_result(outcome.result)
-        if outcome.success and outcome.request is not None:
+        if outcome.process_ok and outcome.science_ok and outcome.request is not None:
             update_session_hints_from_success(
                 self._state.path_hints,
                 workdir=self._state.workdir,

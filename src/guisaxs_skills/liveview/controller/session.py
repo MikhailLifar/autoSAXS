@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import QMessageBox
 
 from ..services.skills import normalize_fit_request, profile_path_exists
 from ...logic.runner_qprocess import RunOutcome
-from autosaxs.skill.gnom_fit_common import failure_message_from_result, is_atsas_fit_ok
+from autosaxs.skill.gnom_fit_common import failure_message_from_result
 from ...core.paths import latest_stderr_path
 from ..ui.panels.left import pick_calibration_curve_dat_path, pick_calibration_curve_image_path
 
@@ -208,12 +208,17 @@ class LiveviewSkillOutcomesHandler:
         self._c.session.sync_processing_ui()
 
     def on_latest_artifacts(self, result: dict) -> None:
+        """Middle sync + profile hints after a skill step.
+
+        Right LIVE paint is owned solely by ``_handle_success`` (one
+        ``present_right(LIVE)`` per analysis finish, after enrichment).
+        """
         middle, right = self._c.middle, self._c.right
         if middle is None or right is None:
             return
         integ_dir = result.get("integrator_dir")
-        if isinstance(integ_dir, str) and integ_dir:
-            self._c.state.integrator_dir = Path(integ_dir)
+        if isinstance(integ_dir, str) and integ_dir.strip():
+            self._c.session.set_integrator_dir(Path(integ_dir.strip()))
 
         try:
             if self._c.history.middle_updates_follow_pipeline():
@@ -228,26 +233,13 @@ class LiveviewSkillOutcomesHandler:
                 else:
                     # Calibrate-only / no boarded sample: layout via sync, no direct paint.
                     self._c.history.sync_middle(sample=None, force=True)
-                from ..services.history.right_artifacts import RightPresentSource, present_right
-
-                present_right(
-                    right,
-                    state=self._c.state,
-                    sample_path=str(sample or ""),
-                    stem="",
-                    watch_mode=self._c.state.watch_mode,
-                    source=RightPresentSource.LIVE,
-                    result=result,
-                    skill_name=str(result.get("skill_name") or ""),
-                    session=self._c.session,
-                )
             self._c.monodisperse.update_profile_from_artifacts(result)
             self._c.polydisperse.update_profile_from_artifacts(result)
         finally:
             right.sync_modeling_ui_to_session_state()
 
     def _handle_failure(self, outcome: RunOutcome) -> None:
-        if outcome.request is None or outcome.success:
+        if outcome.request is None or outcome.process_ok:
             return
         if outcome.request.skill_name not in (
             "calibrate",
@@ -281,7 +273,9 @@ class LiveviewSkillOutcomesHandler:
             )
 
     def _handle_success(self, outcome: RunOutcome) -> None:
-        if outcome.request is None or not outcome.success:
+        # Process-ok path only. Science-only failure still lands here for UI refresh,
+        # but must not look like a cancelled/crashed queue step.
+        if outcome.request is None or not outcome.process_ok:
             return
         skill = outcome.request.skill_name
         if skill in (
@@ -310,7 +304,7 @@ class LiveviewSkillOutcomesHandler:
                     session=self._c.session,
                 )
         self._c.session.sync_processing_ui()
-        if skill in ("fit_distances", "fit_sizes") and not is_atsas_fit_ok(outcome.result):
+        if not outcome.science_ok:
             parent = self._c.parent_widget
             if parent is not None:
                 QMessageBox.warning(
@@ -318,6 +312,7 @@ class LiveviewSkillOutcomesHandler:
                     skill,
                     failure_message_from_result(outcome.result, skill_id=skill),
                 )
+            return
         if skill == "calibrate":
             self._apply_calibrate_success(outcome.result)
 
@@ -325,31 +320,36 @@ class LiveviewSkillOutcomesHandler:
         left = self._c.left
         if left is None:
             return
-        state = self._c.state
-        integ_dir = result.get("integrator_dir")
-        if isinstance(integ_dir, str) and integ_dir.strip():
-            state.integrator_dir = Path(integ_dir.strip())
+        integ_dir: Optional[Path] = None
+        raw_integ = result.get("integrator_dir")
+        if isinstance(raw_integ, str) and raw_integ.strip():
+            integ_dir = Path(raw_integ.strip())
         refined_s = result.get("refined_path")
         rpath: Optional[Path] = None
         if isinstance(refined_s, str) and refined_s.strip():
             rp = Path(refined_s.strip())
             if rp.is_file():
                 rpath = rp.resolve()
-        if rpath is None and state.integrator_dir is not None:
-            cand = state.integrator_dir.parent / "refined.yml"
+        resolved_integ = integ_dir if integ_dir is not None else self._c.state.integrator_dir
+        if rpath is None and resolved_integ is not None:
+            cand = resolved_integ.parent / "refined.yml"
             if cand.is_file():
                 rpath = cand.resolve()
-        state.calibration_refined_yml_path = rpath
-        left.set_calibration_params_from_path(str(rpath) if rpath is not None else None)
         img = pick_calibration_curve_image_path(result)
+        curve_plot = Path(img) if img else None
+        self._c.session.apply_calibration_outcome(
+            integrator_dir=integ_dir,
+            refined_yml_path=rpath,
+            curve_plot_path=curve_plot,
+            persist=True,
+        )
+        left.set_calibration_params_from_path(str(rpath) if rpath is not None else None)
         if img:
-            state.calibration_curve_plot_path = Path(img)
             left.set_calibration_preview_path(
                 img,
                 viewer_path=pick_calibration_curve_dat_path(result, image_path=img),
             )
         else:
-            state.calibration_curve_plot_path = None
             left.set_calibration_preview_path("")
         eff = result.get("effective_mask_path")
         if isinstance(eff, str) and eff.strip():
@@ -359,4 +359,3 @@ class LiveviewSkillOutcomesHandler:
                 if left._cal_wizard is not None:
                     left._cal_wizard.set_mask_path(str(ep.resolve()))
         left.sync_mask_preview_from_state()
-        self._c.persist_session_settings()

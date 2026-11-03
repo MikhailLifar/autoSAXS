@@ -20,6 +20,7 @@ from ..session.state import (
     LiveviewSessionState,
     MonodisperseShapeMode,
 )
+from ..session.stem_resolve import profile_sample_stem
 from ..services.artifacts import discover_gnom_out_path
 from .jobs import JobStep
 from .modeling_confirm import confirm_shape_step
@@ -38,14 +39,6 @@ class MonodispersePipelineParts(str, Enum):
     DISTANCES_ONLY = "distances_only"
     SHAPE_ONLY = "shape_only"
     FULL = "full"  # guinier + distances + optional shape from session mode
-
-
-def profile_sample_stem(profile_abs: str) -> str:
-    stem = Path(profile_abs).stem
-    for prefix in ("sub_", "int_"):
-        if stem.startswith(prefix):
-            stem = stem[len(prefix) :]
-    return stem
 
 
 def coerce_opt_int(val: Any) -> Optional[int]:

@@ -138,7 +138,7 @@ class GuinierCurvePlot(_BaseMplPlot):
             lp = data.get("last_point_1based")
             if fp is None or lp is None:
                 try:
-                    from autosaxs.skill.fit_guinier.guinier import guinier_point_range_1based
+                    from guisaxs_skills.liveview.services.skill_present import guinier_point_range_1based
 
                     fp, lp = guinier_point_range_1based(data)
                 except Exception:
@@ -156,7 +156,7 @@ class GuinierCurvePlot(_BaseMplPlot):
         lp_disp = data.get("last_point_1based")
         if lp_disp is None:
             try:
-                from autosaxs.skill.fit_guinier.guinier import guinier_point_range_1based
+                from guisaxs_skills.liveview.services.skill_present import guinier_point_range_1based
 
                 _fp, lp_disp = guinier_point_range_1based(data)
             except Exception:

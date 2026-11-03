@@ -255,6 +255,7 @@ def test_merge_skill_params_precedence():
 
 def test_cli_invocation_smoke(capsys):
     from autosaxs.cli import main as cli_main
+    from autosaxs.cli.request_codec import parse_result_frame
 
     with tempfile.TemporaryDirectory() as tmp:
         q = np.linspace(0.1, 2.0, 20)
@@ -268,8 +269,12 @@ def test_cli_invocation_smoke(capsys):
         assert rc == 0
 
         captured = capsys.readouterr().out
-        assert "guinier_plot_path=" in captured
-        assert "kratky_plot_path=" in captured
+        framed = parse_result_frame(captured)
+        assert framed is not None
+        assert framed.get("process_ok") is True
+        result = framed.get("result") or {}
+        assert "guinier_plot_path" in result
+        assert "kratky_plot_path" in result
 
         # Kebab-case is the canonical CLI command form for skills.
         rc = cli_main(["fit-guinier", "--description"])

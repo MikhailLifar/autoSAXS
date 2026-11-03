@@ -40,34 +40,12 @@ class RunRequest:
     options: Dict[str, Any]
 
     def cli_argv(self) -> List[str]:
+        """Build argv for ``python -m autosaxs.cli.cli`` (shared codec with CLI)."""
+        from autosaxs.cli.request_codec import options_to_argv
+
         argv: List[str] = [self.skill_name]
         argv.extend(self.positional)
-        for k, v in self.options.items():
-            if k == "use_cache":
-                # CLI uses --no-cache to set use_cache=False
-                if v is False:
-                    argv.append("--no-cache")
-                continue
-            if k == "output_dir":
-                argv.extend(["--output-dir", str(v)])
-                continue
-
-            flag = f"--{k.replace('_', '-')}"
-            if isinstance(v, bool):
-                # Mirror autosaxs.cli convention: bool flags are store_true/store_false depending on default.
-                # Here we just emit the flag for True, omit for False.
-                if v:
-                    argv.append(flag)
-            elif v is None:
-                continue
-            elif isinstance(v, str) and not v.strip():
-                # Omit optional args saved as "" in YAML / form state (same as unset).
-                continue
-            elif isinstance(v, (list, tuple)):
-                argv.append(flag)
-                argv.extend([str(x) for x in v])
-            else:
-                argv.extend([flag, str(v)])
+        argv.extend(options_to_argv(self.options))
         return argv
 
 
