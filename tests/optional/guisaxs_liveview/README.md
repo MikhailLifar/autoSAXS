@@ -1,7 +1,7 @@
 # Exhaustive liveview tests — agent-run only when the matching subsystem
 # changed significantly (not on typos, style, help text, or unrelated skills).
 #
-# Owners (see docs/liveview_architecture.md §1.4):
+# Owners (see docs/architecture/liveview/overview.md §1.4):
 #   ingest/         — RevisionSettler, RevisionIngress, invalid .dat/.tif (wave 1)
 #   preprocessing/  — calib / buffer / Stop–Resume order (wave 1)
 #   analysis/       — right presenters, Guinier / GNOM adjust, arming (wave 1)

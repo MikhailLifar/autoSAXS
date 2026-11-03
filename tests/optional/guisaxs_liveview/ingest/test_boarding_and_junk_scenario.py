@@ -231,7 +231,7 @@ def test_boarding_and_junk_scenario():
                 note(
                     "7 intake auto-switch",
                     f"intake still {mode} after root .dat drop",
-                    "Auto-switch 2D → 1D/Sub per guisaxs_liveview_spec §4.3",
+                    "Auto-switch 2D → 1D/Sub per docs/architecture/liveview/behavior.md §3.3",
                     severity="ux",
                     cause="Drop may require middle drop MIME path; filesystem watch may not auto-switch",
                     fix="Apply same classify+switch on watch-ingest as on DnD",

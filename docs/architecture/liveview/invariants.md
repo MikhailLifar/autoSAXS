@@ -1,6 +1,7 @@
 # LiveView invariants (architecture maps)
 
-Ownership cheat sheet and prose: [`docs/liveview_session_sample_plan.md`](../../liveview_session_sample_plan.md), [`docs/liveview_architecture.md`](../../liveview_architecture.md).  
+Overview (owners / plan / code map): [`overview.md`](overview.md).  
+Product / UX behavior: [`behavior.md`](behavior.md).  
 Map SSOT: [`nodes.yaml`](nodes.yaml).
 
 ## Sample identity

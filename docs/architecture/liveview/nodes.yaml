@@ -7,8 +7,9 @@ meta:
   title: LiveView architecture maps
   package: guisaxs_skills.liveview
   prose:
-    - docs/liveview_architecture.md
-    - docs/liveview_session_sample_plan.md
+    - docs/architecture/liveview/overview.md
+    - docs/architecture/liveview/behavior.md
+    - docs/architecture/liveview/invariants.md
   edge_kinds:
     data: { color: "#1f77b4", label: "data" }
     signal: { color: "#d62728", label: "signal/control" }

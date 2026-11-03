@@ -64,7 +64,7 @@ flowchart TB
   Skill --> ATSAS
 ```
 
-**Paradigm:** processing = **skills** (pure functions returning output path dicts). Pipelines are composed outside the package (scripts, liveview `plan_for` + executor). Spec: `docs/skills_paradigm.md`. The former interactive `autosaxs.pipeline` Controller is removed — see `docs/legacy-interactive-pipeline.md`.
+**Paradigm:** processing = **skills** (pure functions returning output path dicts). Pipelines are composed outside the package (scripts, liveview `plan_for` + executor). Spec: `docs/paradigm/skills.md`. The former interactive `autosaxs.pipeline` Controller is removed — see `docs/archive/legacy-interactive-pipeline.md`. Docs index: `docs/README.md`.
 
 **GUI rule:** PyQt apps **do not** call skill functions in-process for execution. They introspect `autosaxs.skill` for metadata, then run `python -m autosaxs.cli.cli <skill> ...` via `guisaxs_skills/logic/runner_qprocess.py` (`SkillRunner`).
 
@@ -201,7 +201,7 @@ Sibling package for modeling apps: `guisaxs_skills/modeling/` (also launched as 
 | `liveview/ingest/watcher.py` | FLAT mode: watchdog + known-path baseline |
 | `liveview/ingest/dir_tree_observer.py` | TREE mode: hierarchical mtime/ctime/ino scan + prune |
 
-**Liveview:** Session API (`LiveviewSession`) + SampleStore + `plan_for` + middle sync + `present_right` + settle + `RevisionIngress`. See `docs/liveview_architecture.md`, `docs/liveview_session_sample_plan.md`, and `docs/guisaxs_liveview_spec.md`. Sample change identity is `FileStatSnapshot` in `liveview/ingest/stability.py`.
+**Liveview:** Session API (`LiveviewSession`) + SampleStore + `plan_for` + middle sync + `present_right` + settle + `RevisionIngress`. See `docs/architecture/liveview/overview.md`, `docs/architecture/liveview/behavior.md`, and `docs/architecture/liveview/invariants.md`. Sample change identity is `FileStatSnapshot` in `liveview/ingest/stability.py`.
 
 **Column ownership:** left (calib / buffer / mask / arming prefs) is **session**-owned. Anything that refers to a sample (middle paint for the selected file, right Guinier/GNOM/shape, modeling mini-apps) follows **`SampleStore.current` only**. No usable analysis profile for that sample (e.g. calibrant with only `averaged_proxy/`) ⇒ empty sample views — never borrow `last_*`, a sticky prior profile, or the newest sibling under a shared modeling family dir.
 
@@ -219,7 +219,7 @@ Help assets live in `autosaxs/resources/help/guisaxs_liveview/`.
 | Add/modify a processing step | `autosaxs/skill/`, `skill/__init__.py`, `tests/must-run/real_data/` (+ `tests/must-run/skills/test_contracts.py` for edges) |
 | CLI argument parsing | `autosaxs/cli/cli.py` (`_add_skill_subparser`) |
 | Path expansion rules | `autosaxs/core/path_expression.py`, `skill/common.py` |
-| Caching (`.cache` YAML) | `autosaxs/skill/skill_wrap.py`, `docs/skills_paradigm.md` §2.1 |
+| Caching (`.cache` YAML) | `autosaxs/skill/skill_wrap.py`, `docs/paradigm/skills.md` §2.1 |
 | Config merge precedence | `autosaxs/skill/config.py`, `resources/config_base.conf` |
 | Subtraction algorithm | `autosaxs/skill/subtract.py`, `tests/must-run/real_data/light/` |
 | Guinier / GNOM / ATSAS fits | `skill/fit_guinier/`, `fit_distances.py`, `fit_sizes.py`, `gnom_fit_common.py` |
@@ -300,11 +300,13 @@ Run commit gate: `helpers/run_tests.sh`.
 | `INSTALL.md` | Beginner install (Linux/Windows, Miniconda, ATSAS optional) |
 | `README.md` | Short PyPI / GitHub landing page (generated) |
 | `autosaxs-docs/skills_reference.md` | Detailed per-skill reference (generated) |
-| `docs/skills_paradigm.md` | Skills architecture (primary package contract) |
-| `docs/liveview_architecture.md` | Liveview architecture (concepts, code map, scenarios) |
-| `docs/liveview_session_sample_plan.md` | Liveview three owners + middle sync |
-| `docs/guisaxs_liveview_spec.md` | Liveview product / behavior |
-| `docs/guisaxs_skills_spec.md` | Skills GUI product requirements |
+| `docs/README.md` | Docs role index |
+| `docs/paradigm/skills.md` | Skills architecture (primary package contract) |
+| `docs/architecture/liveview/overview.md` | Liveview concepts, owners, plan, code map |
+| `docs/architecture/liveview/behavior.md` | Liveview product / behavior |
+| `docs/architecture/liveview/invariants.md` | Liveview hard invariants |
+| `docs/architecture/guisaxs-skills.md` | Skills GUI eng contract |
+| `docs/archive/legacy-interactive-pipeline.md` | Removed interactive Controller (archive) |
 
 Code under `src/` is SSOT when a doc drifts; update the doc.
 
@@ -355,7 +357,7 @@ Set `MPLBACKEND=Agg` for headless matplotlib. Headless GUI tests need `xvfb-run`
 ## Known gaps / stale references
 
 - README / CLI help may still say `python -m autosaxs.cli` in places; entry module is `python -m autosaxs.cli.cli`.
-- Former interactive `autosaxs.pipeline` Controller is removed; history in `docs/legacy-interactive-pipeline.md`.
+- Former interactive `autosaxs.pipeline` Controller is removed; history in `docs/archive/legacy-interactive-pipeline.md`.
 
 ---
 

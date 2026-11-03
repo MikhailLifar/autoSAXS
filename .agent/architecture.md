@@ -7,12 +7,7 @@
 - **Invariant (sample-tied):** Right panes + Adjust wizards follow `SampleStore.current` analysis identity; session wizard params are defaults/gaps only. See `docs/architecture/liveview/invariants.md`.
 - **Buffer rules UI:** session pairing rules strip + Edit rules + Auto/Fixed q live in `BufferWizardDialog` (not the left Buffer pane). Conflict ApplicationModal still reuses the rules editor; matcher/`dispatch_hold` unchanged.
 - **Maps SSOT:** `docs/architecture/liveview/nodes.yaml` → `scripts/render_arch.py` → Mermaid/Graphviz. Index: `docs/architecture/README.md`.
-- **Prose:** `docs/liveview_architecture.md`, `docs/liveview_session_sample_plan.md`.
-
-## Package notes
-
-- Interactive `autosaxs.pipeline` (EventBus `Controller`) was removed; history: `docs/legacy-interactive-pipeline.md`. Orchestration is skills + liveview `plan_for`.
-- Deprecated Python/CLI skill aliases `fit_mixture` / `fit_bodies` / `fit_dammif` were removed; use `model_mixture` / `model_bodies` / `model_dam`. Liveview may still probe legacy on-disk conf/`fit_bodies/` paths.
+- **Prose:** `docs/architecture/liveview/overview.md`, `docs/architecture/liveview/behavior.md`.
 
 ## Related
 
@@ -25,3 +20,4 @@
 - 3D preview chrome: `LiveviewViewer3D` owns CIF/MRC path checks via `pathlib`; revealing folders is `ui/os_open.open_path_in_file_manager` (shared with DR).
 - 3D mesh QThread: `SaxsInteractive3DWidget` owns isosurface worker lifetime (`shutdown` / `_stop_mesh_worker` / `_on_mesh_thread_finished`); thread is **unparented**. Keep the Python owner ref until the OS thread has stopped — never drop it from `worker.finished` (still `isRunning()`; GC/`deleteLater` then aborts). Window/`LiveviewViewer3D` close must stop workers before widget-tree destroy.
 - Modeling mini-apps: `.agent/liveview/modeling-session-controls.md` (paths from context push; run knobs session-owned).
+- Interactive `autosaxs.pipeline` (EventBus `Controller`) was removed; history: `docs/archive/legacy-interactive-pipeline.md`. Orchestration is skills + liveview `plan_for`.

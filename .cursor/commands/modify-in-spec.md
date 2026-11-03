@@ -5,12 +5,12 @@ Instead go to `docs/`, choose there an appropriate spec file and modify the spec
 
 Specs (code under `src/` is SSOT when docs drift — keep them aligned):
 
-- **Skills paradigm** (package contract): `docs/skills_paradigm.md`
-- **Liveview architecture** (Session / SampleStore / plan_for): `docs/liveview_architecture.md`, ownership cheat sheet `docs/liveview_session_sample_plan.md`
-- **Liveview product / UX**: `docs/guisaxs_liveview_spec.md`
-- **Skills GUI product / UX**: `docs/guisaxs_skills_spec.md`
+- **Skills paradigm** (package contract): `docs/paradigm/skills.md`
+- **Liveview architecture** (Session / SampleStore / plan_for): `docs/architecture/liveview/overview.md`, invariants `docs/architecture/liveview/invariants.md`
+- **Liveview product / UX**: `docs/architecture/liveview/behavior.md`
+- **Skills GUI eng contract**: `docs/architecture/guisaxs-skills.md`
 
-Agent navigation: `AGENTS.md`. Former interactive Controller (`autosaxs.pipeline`) is removed — see `docs/legacy-interactive-pipeline.md`.
+Docs index: `docs/README.md`. Agent navigation: `AGENTS.md`. Former interactive Controller (`autosaxs.pipeline`) is removed — see `docs/archive/legacy-interactive-pipeline.md`.
 
 Examine the spec carefully and modify all the sections related to my request.
 IF SOMETHING IS UNCLEAR OR AMBIGUOUS IN MY INSTRUCTIONS, QUERY ME FOR CLARIFICATION after you finished to modify the Spec.

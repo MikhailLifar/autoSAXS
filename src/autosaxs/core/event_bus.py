@@ -1,6 +1,6 @@
 # EventBus and event types (optional skill progress; historically Controller↔UI I/O).
-# Skills paradigm: docs/skills_paradigm.md.
-# Former interactive orchestrator: docs/legacy-interactive-pipeline.md.
+# Skills paradigm: docs/paradigm/skills.md.
+# Former interactive orchestrator: docs/archive/legacy-interactive-pipeline.md.
 
 from enum import Enum
 from typing import Any, Callable, Dict, List
