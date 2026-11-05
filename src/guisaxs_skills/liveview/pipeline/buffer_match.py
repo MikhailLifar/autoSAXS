@@ -3,6 +3,9 @@
 SSOT for “effective buffer / match outcome for the current sample”:
 overlay → hierarchical ``config.conf`` rules, with the same curve-identity
 probe order as ``plan_for`` (planned integrated ``.dat``, then source path).
+
+Coach does not pulse Set buffer from match kind — Configuration + soft-wait +
+conflict modal own setup; Set buffer is an unprompted overlay escape hatch.
 """
 
 from __future__ import annotations
@@ -205,31 +208,6 @@ def resolve_liveview_match(
         sample_curve=curves[1],
         sample_output_root=root,
     )
-
-
-def sample_needs_manual_buffer(
-    state: LiveviewSessionState,
-    sample: Sample | None,
-    *,
-    sample_output_root: Optional[Path] = None,
-) -> bool:
-    """
-    True only when effective match is ``UNMATCHED`` (coach: pulse Set buffer).
-
-    ``PAIRED`` / ``NONE`` / soft-wait / conflict are covered by rules or overlay
-    — do not push manual buffer.
-    """
-    if sample is None:
-        return False
-    if sample.key in (state.buffer_overrides or {}):
-        return False
-    try:
-        match = resolve_liveview_match(
-            state, sample, sample_output_root=sample_output_root
-        )
-    except Exception:
-        return False
-    return match.kind == MatchKind.UNMATCHED
 
 
 def resolved_buffer_path_for_sample(

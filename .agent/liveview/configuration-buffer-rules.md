@@ -29,11 +29,15 @@ Soft-wait: rematch all waiters after each job finish and on `configuration_chang
 - Soft-wait is executor runtime only (not session / Sample / history).
 - Configuration does not drive analysis/arming.
 - **Effective buffer / match for current sample** is owned by `pipeline/buffer_match.py`
-  (`resolve_liveview_match`, `effective_buffer_path_for_sample`, `sample_needs_manual_buffer`):
+  (`resolve_liveview_match`, `effective_buffer_path_for_sample`):
   same curve-identity probe as `plan_for` (planned `int_<stem>.dat`, then source).
-  `buffer_dat_path` is last-picked UI hint only — not the wizard/coach readiness fact.
-- Coach: after calib pulse Set configuration until opened once; pulse Set buffer **only**
-  when effective match is `UNMATCHED` (not `PAIRED` / `NONE` / soft-wait / conflict).
+  `buffer_dat_path` is last-picked wizard seed only — Buffer pane preview shows it
+  only when there is no current sample (never as a fake PAIRED path).
+- Coach: after calib pulse Set configuration until opened once; then analysis.
+  Never pulse the closed-panel **Set buffer** button from match kind (`UNMATCHED`
+  includes buffer TIFFs / calibrants after a PAIRED sample run). Set buffer remains
+  an unprompted overlay escape hatch; in-dialog coaching still runs while the wizard
+  is open.
 - Subtraction wizard opens when `buffer_ready()` and effective buffer path resolves for
   `SampleStore.current` (rules or overlay) — never requires a Set-buffer hint.
 - Left order: Configuration → Calibrate → Set mask → Set buffer.

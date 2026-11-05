@@ -16,7 +16,7 @@
 - **Purpose:** Single-window watchdir app; sequential `autosaxs` skills; middle/right plots follow session facts + on-disk artifacts.
 - **Owners:** `LiveviewSession` (facts), `SampleStore` (current sample identity), `plan_for` (steps), `RevisionSettler`/`RevisionIngress` (ingest), `sync_middle_view` / `present_right` (presentation), `LiveviewJobExecutor` (run).
 - **Invariant (sample-tied):** Right panes + Adjust wizards follow `SampleStore.current` analysis identity; session wizard params are defaults/gaps only. See `docs/architecture/liveview/invariants.md`.
-- **Buffer rules UI:** Configuration editor owns `config.conf` rules; Set buffer owns overlays. Hard CONFLICT → escapable modal + `dispatch_hold`; 0-hit claimed samples soft-wait in executor (`AWAITING_BUFFER`).
+- **Buffer rules UI:** Configuration editor owns `config.conf` rules; Set buffer owns overlays (unprompted escape hatch — coach does not pulse Set buffer after Configuration). Hard CONFLICT → escapable modal + `dispatch_hold`; 0-hit claimed samples soft-wait in executor (`AWAITING_BUFFER`).
 - **Maps SSOT:** `docs/architecture/liveview/nodes.yaml` → `scripts/render_arch.py` → Mermaid/Graphviz. Index: `docs/architecture/README.md`.
 - **Prose:** `docs/architecture/liveview/overview.md`, `docs/architecture/liveview/behavior.md`.
 - **Science vs process:** executor uses `RunOutcome.science_ok` (queue can finish on science fail; not a process crash).

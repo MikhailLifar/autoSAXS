@@ -1,4 +1,4 @@
-"""Effective buffer ownership: coach skips PAIRED; wizard uses resolved path."""
+"""Effective buffer ownership: coach skips Set buffer; wizard uses resolved path."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from autosaxs.core.buffer_rules import MatchKind
 from guisaxs_skills.liveview.pipeline.buffer_match import (
     effective_buffer_path_for_sample,
     resolve_liveview_match,
-    sample_needs_manual_buffer,
 )
 from guisaxs_skills.liveview.session.api import LiveviewSession
 from guisaxs_skills.liveview.session.sample import Sample
@@ -53,25 +52,14 @@ def test_liveview_match_pairs_via_planned_integrated_curve(tmp_path: Path) -> No
     assert effective_buffer_path_for_sample(session.state, sample) == buf.resolve()
 
 
-def test_coach_skips_set_buffer_when_paired(tmp_path: Path) -> None:
-    session, sample, _buf = _paired_watch(tmp_path)
-    assert sample_needs_manual_buffer(session.state, sample) is False
-
-
-def test_coach_pulses_set_buffer_only_when_unmatched(tmp_path: Path) -> None:
-    wd = tmp_path / "watch"
-    wd.mkdir()
-    write_config_text(
-        wd / "config.conf",
-        "buffer_rules:\n"
-        '  "*{stem}_sample*": "*{stem}_buffer*"\n',
-    )
-    session = LiveviewSession(watchdir=wd, load_settings=True)
-    lone = wd / "solo_thing.tif"
-    lone.write_bytes(b"II*\x00")
-    sample = Sample.from_path(str(lone), boarding=LiveviewIntakeMode.FRAME_2D)
+def test_unmatched_buffer_tiff_is_not_paired(tmp_path: Path) -> None:
+    """Buffer TIFFs stay UNMATCHED under sample→buffer rules (no false PAIRED)."""
+    session, _sample, _buf = _paired_watch(tmp_path)
+    buffer_tiff = session.state.watchdir / "ihs29_buffer.tif"
+    buffer_tiff.write_bytes(b"II*\x00")
+    sample = Sample.from_path(str(buffer_tiff), boarding=LiveviewIntakeMode.FRAME_2D)
     assert resolve_liveview_match(session.state, sample).kind == MatchKind.UNMATCHED
-    assert sample_needs_manual_buffer(session.state, sample) is True
+    assert effective_buffer_path_for_sample(session.state, sample) is None
 
 
 def test_coach_skips_set_buffer_when_none_rule(tmp_path: Path) -> None:
@@ -88,7 +76,6 @@ def test_coach_skips_set_buffer_when_none_rule(tmp_path: Path) -> None:
     cal.write_bytes(b"II*\x00")
     sample = Sample.from_path(str(cal), boarding=LiveviewIntakeMode.FRAME_2D)
     assert resolve_liveview_match(session.state, sample).kind == MatchKind.NONE
-    assert sample_needs_manual_buffer(session.state, sample) is False
     assert effective_buffer_path_for_sample(session.state, sample) is None
 
 
@@ -105,7 +92,7 @@ def test_wizard_gate_accepts_effective_buffer_without_hint(tmp_path: Path) -> No
 
 
 def test_dual_probe_pairs_integrated_when_tiff_basename_unmatched(tmp_path: Path) -> None:
-    """Rules on int_*.dat must cover TIFF samples for coach/wizard (plan order)."""
+    """Rules on int_*.dat must cover TIFF samples for wizard (plan order)."""
     from guisaxs_skills.liveview.pipeline.buffer_match import resolve_match_for_sample
 
     wd = tmp_path / "watch"
@@ -135,5 +122,45 @@ def test_dual_probe_pairs_integrated_when_tiff_basename_unmatched(tmp_path: Path
     match = resolve_liveview_match(session.state, sample)
     assert match.kind == MatchKind.PAIRED
     assert Path(match.buffer).resolve() == buf.resolve()
-    assert sample_needs_manual_buffer(session.state, sample) is False
     assert effective_buffer_path_for_sample(session.state, sample) == buf.resolve()
+
+
+def test_left_coach_never_targets_set_buffer_button(tmp_path: Path) -> None:
+    """After Configuration, coach must not pulse Set buffer for PAIRED or UNMATCHED."""
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt5.QtWidgets import QApplication, QPushButton
+
+    app = QApplication.instance() or QApplication([])
+
+    from guisaxs_skills.liveview.session.sample_store import SampleStore
+    from guisaxs_skills.liveview.ui.panels.left import LiveviewLeftPanel
+
+    session, paired, _buf = _paired_watch(tmp_path)
+    session.state.configuration_opened_once = True
+    store = SampleStore()
+    store.append_history(paired)
+
+    panel = LiveviewLeftPanel(session=session)
+    panel.bind_sample_store(store)
+    panel.set_coach_peers(middle=None, right=None)
+    panel.refresh_attention_coach()
+    targets = list(panel._attention._targets)  # noqa: SLF001
+    assert not any(
+        isinstance(t, QPushButton) and t.text() == "Set buffer" for t in targets
+    ), targets
+
+    buffer_tiff = session.state.watchdir / "ihs29_buffer.tif"
+    buffer_tiff.write_bytes(b"II*\x00")
+    store.clear()
+    store.append_history(
+        Sample.from_path(str(buffer_tiff), boarding=LiveviewIntakeMode.FRAME_2D)
+    )
+    panel.refresh_attention_coach()
+    targets = list(panel._attention._targets)  # noqa: SLF001
+    assert not any(
+        isinstance(t, QPushButton) and t.text() == "Set buffer" for t in targets
+    ), targets
+
+    app.processEvents()

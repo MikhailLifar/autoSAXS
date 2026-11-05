@@ -18,10 +18,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ...pipeline.buffer_match import (
-    effective_buffer_path_for_sample,
-    sample_needs_manual_buffer,
-)
+from ...pipeline.buffer_match import effective_buffer_path_for_sample
 from ...services.calibration.display import refined_yml_display_rows
 from ...services.calibration.mask_preview import render_mask_overlay_png
 from ...services.calibration.masks import applied_mask_path
@@ -242,21 +239,47 @@ class LiveviewLeftPanel(QWidget):
         self._middle = middle
         self._right = right
 
-    def _current_sample_needs_manual_buffer(self) -> bool:
-        """Coach Set buffer only when effective match is UNMATCHED."""
-        if self._samples is None:
+    def _append_open_buffer_wizard_coach(self, targets: list) -> bool:
+        """
+        If Set buffer wizard is open, coach its in-dialog controls.
+
+        Returns True when the wizard consumed coaching (caller should not also
+        pulse the closed-panel Set buffer button — that button is never a
+        post-Configuration setup step; overlays are an unprompted escape hatch).
+        """
+        buf = self._buf_wizard
+        if buf is None or not buf.isVisible():
             return False
-        return sample_needs_manual_buffer(self._state, self._samples.current())
+        if not buf.has_buffer_path():
+            targets.append(buf.buffer_browse_button())
+        elif not buf.has_q_range():
+            targets.append(buf.q_min_field())
+            targets.append(buf.q_max_field())
+        elif not buf.apply_coach_dismissed():
+            targets.append(buf.apply_button())
+        elif buf.close_coach_armed():
+            targets.append(buf.close_button())
+        return True
+
+    def _append_analysis_coach(self, targets: list) -> None:
+        right = self._right
+        analysis_open = False
+        if right is not None and hasattr(right, "analysis_windows_open"):
+            analysis_open = bool(right.analysis_windows_open())
+        if analysis_open or right is None:
+            return
+        if hasattr(right, "mono_analysis_button"):
+            targets.append(right.mono_analysis_button())
+        if hasattr(right, "poly_analysis_button"):
+            targets.append(right.poly_analysis_button())
 
     def refresh_attention_coach(self) -> None:
-        """Pulse calibration → configuration → unmatched Set buffer → analysis."""
+        """Pulse calibration → configuration → analysis (Set buffer is not coached)."""
         intake = self._state.intake_mode
         calibrated = self._state.integrator_dir is not None
         config_opened = bool(self._state.configuration_opened_once)
-        unmatched = self._current_sample_needs_manual_buffer()
         targets: list = []
         cal = self._cal_wizard
-        buf = self._buf_wizard
         right = self._right
         middle = self._middle
 
@@ -266,39 +289,12 @@ class LiveviewLeftPanel(QWidget):
                     targets.append(middle.curve_drop_host())
                 if hasattr(middle, "drop_hint_canvas"):
                     targets.append(middle.drop_hint_canvas())
-            analysis_open = False
-            if right is not None and hasattr(right, "analysis_windows_open"):
-                analysis_open = bool(right.analysis_windows_open())
-            if not analysis_open and right is not None:
-                if hasattr(right, "mono_analysis_button"):
-                    targets.append(right.mono_analysis_button())
-                if hasattr(right, "poly_analysis_button"):
-                    targets.append(right.poly_analysis_button())
+            self._append_analysis_coach(targets)
         elif intake == LiveviewIntakeMode.CURVE_1D:
             if not config_opened:
                 targets.append(self._cfg_open)
-            elif unmatched:
-                if buf is not None and buf.isVisible():
-                    if not buf.has_buffer_path():
-                        targets.append(buf.buffer_browse_button())
-                    elif not buf.has_q_range():
-                        targets.append(buf.q_min_field())
-                        targets.append(buf.q_max_field())
-                    elif not buf.apply_coach_dismissed():
-                        targets.append(buf.apply_button())
-                else:
-                    targets.append(self._buf_open)
-            else:
-                if buf is not None and buf.isVisible() and buf.close_coach_armed():
-                    targets.append(buf.close_button())
-                analysis_open = False
-                if right is not None and hasattr(right, "analysis_windows_open"):
-                    analysis_open = bool(right.analysis_windows_open())
-                if not analysis_open and right is not None:
-                    if hasattr(right, "mono_analysis_button"):
-                        targets.append(right.mono_analysis_button())
-                    if hasattr(right, "poly_analysis_button"):
-                        targets.append(right.poly_analysis_button())
+            elif not self._append_open_buffer_wizard_coach(targets):
+                self._append_analysis_coach(targets)
             if middle is not None:
                 if hasattr(middle, "curve_drop_host"):
                     targets.append(middle.curve_drop_host())
@@ -337,29 +333,8 @@ class LiveviewLeftPanel(QWidget):
             if cal is not None and cal.isVisible() and cal.close_coach_armed():
                 targets.append(cal.close_button())
             targets.append(self._cfg_open)
-        elif unmatched:
-            if buf is not None and buf.isVisible():
-                if not buf.has_buffer_path():
-                    targets.append(buf.buffer_browse_button())
-                elif not buf.has_q_range():
-                    targets.append(buf.q_min_field())
-                    targets.append(buf.q_max_field())
-                elif not buf.apply_coach_dismissed():
-                    targets.append(buf.apply_button())
-            else:
-                targets.append(self._buf_open)
-        else:
-            if buf is not None and buf.isVisible() and buf.close_coach_armed():
-                targets.append(buf.close_button())
-            analysis_open = False
-            if right is not None and hasattr(right, "analysis_windows_open"):
-                analysis_open = bool(right.analysis_windows_open())
-            if not analysis_open:
-                if right is not None:
-                    if hasattr(right, "mono_analysis_button"):
-                        targets.append(right.mono_analysis_button())
-                    if hasattr(right, "poly_analysis_button"):
-                        targets.append(right.poly_analysis_button())
+        elif not self._append_open_buffer_wizard_coach(targets):
+            self._append_analysis_coach(targets)
 
         if (
             intake == LiveviewIntakeMode.FRAME_2D
@@ -792,12 +767,16 @@ class LiveviewLeftPanel(QWidget):
         self.refresh_calibration_coach()
 
     def _resolved_preview_buffer(self) -> Optional[Path]:
-        """Prefer current-sample effective buffer; else last-picked hint."""
+        """
+        Buffer pane path for the current sample only (rules/overlay PAIRED).
+
+        Last-picked ``buffer_dat_path`` is a wizard seed hint — never shown as
+        the current sample's buffer when match is not PAIRED (avoids looking
+        "paired" while coach/plan disagree).
+        """
         sample = self._samples.current() if self._samples is not None else None
         if sample is not None:
-            resolved = effective_buffer_path_for_sample(self._state, sample)
-            if resolved is not None:
-                return resolved
+            return effective_buffer_path_for_sample(self._state, sample)
         buf = self._state.buffer_dat_path
         if buf is not None and buf.is_file():
             return buf
