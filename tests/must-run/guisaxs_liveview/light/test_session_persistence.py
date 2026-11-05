@@ -19,6 +19,8 @@ def test_save_load_roundtrip_relative_paths(tmp_path: Path) -> None:
     integ = wd / "calibration" / "integ"
     buf = wd / "buffer.dat"
     buf.write_text("0 0\n")
+    sample = wd / "s.tif"
+    sample.write_bytes(b"x")
     png = wd / "calibration" / "curve.png"
     png.write_bytes(b"\x89PNG\r\n\x1a\n")
 
@@ -26,17 +28,24 @@ def test_save_load_roundtrip_relative_paths(tmp_path: Path) -> None:
     s.integrator_dir = integ
     s.buffer_dat_path = buf
     s.subtract_options = {"method": "point_match", "q_min": 0.01}
+    s.buffer_overrides = {str(sample.resolve()): str(buf.resolve())}
     s.calibration_curve_plot_path = png
     save_liveview_session_settings(s)
 
     assert session_settings_path(wd).is_file()
+    text = session_settings_path(wd).read_text(encoding="utf-8")
+    assert "buffer_rules" not in text
+    assert "buffer_overrides" in text
 
     s2 = LiveviewSessionState(watchdir=wd)
     assert load_liveview_session_settings(s2) is True
     assert s2.integrator_dir == integ.resolve()
     assert s2.buffer_dat_path == buf.resolve()
     assert s2.subtract_options == {"method": "point_match", "q_min": 0.01}
+    assert s2.buffer_overrides[str(sample.resolve())] == str(buf.resolve())
     assert s2.calibration_curve_plot_path == png.resolve()
+    assert s2.root_rules  # seeded config.conf projection
+    assert s2.buffer_ready() is True
 
 
 def test_auto_processing_not_persisted(tmp_path: Path) -> None:
@@ -75,4 +84,6 @@ def test_load_drops_missing_buffer(tmp_path: Path) -> None:
     s2 = LiveviewSessionState(watchdir=wd)
     load_liveview_session_settings(s2)
     assert s2.buffer_dat_path is None
-    assert s2.subtract_options is None
+    # Seeded config.conf projects default subtract_options={} so PAIRED samples can run.
+    assert s2.subtract_options == {}
+    assert s2.root_rules

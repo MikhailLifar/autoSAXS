@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Default BODIES shapes for liveview “primitives” when no model_bodies.conf exists yet.
 DEFAULT_LIVEVIEW_PRIMITIVE_BODIES_SHAPES: List[str] = ["ellipsoid"]
@@ -56,8 +56,16 @@ class LiveviewSessionState:
     mask_path: Optional[Path] = None  # applied mask (integrate --mask / UI overlay); not auto-only
     mask_preview_path: Optional[Path] = None
 
+    # Last-picked buffer path (UI hint only) — auto pairing uses config.conf + overlays.
     buffer_dat_path: Optional[Path] = None
     subtract_options: Optional[Dict[str, Any]] = None
+    # Per-sample Set buffer binds: Sample.key → absolute buffer .dat path.
+    buffer_overrides: Dict[str, str] = field(default_factory=dict)
+    # True after Configuration dialog opened once this watchdir/session.
+    configuration_opened_once: bool = False
+    # Cached rules keyed by config directory absolute path (replace semantics).
+    rules_by_config_dir: Dict[str, Tuple[Tuple[str, str], ...]] = field(default_factory=dict)
+    root_rules: Tuple[Tuple[str, str], ...] = field(default_factory=tuple)
 
     monodisperse_armed: bool = False
     polydisperse_armed: bool = False
@@ -82,7 +90,8 @@ class LiveviewSessionState:
         return self.integrator_dir is not None
 
     def buffer_ready(self) -> bool:
-        return self.buffer_dat_path is not None and self.subtract_options is not None
+        """True when subtract options exist and root ``buffer_rules`` are projected."""
+        return self.subtract_options is not None and bool(self.root_rules)
 
     def analysis_enabled(self) -> bool:
         return bool(self.monodisperse_armed or self.polydisperse_armed)
@@ -94,20 +103,22 @@ class LiveviewSessionState:
         self.auto_processing = bool(enabled)
 
     def reset_calibration(self) -> None:
-        """Clear calibration and buffer; disarm analysis."""
+        """Clear calibration and buffer bindings; disarm analysis."""
         self.integrator_dir = None
         self.calibration_curve_plot_path = None
         self.calibration_refined_yml_path = None
         self.buffer_dat_path = None
         self.subtract_options = None
+        self.buffer_overrides.clear()
         self.last_integrated_dat_path = None
         self.last_subtracted_dat_path = None
         self._disarm_analysis()
 
     def reset_buffer(self) -> None:
-        """Clear buffer/subtract; disarm analysis; keep calibration."""
+        """Clear buffer overlays / subtract options; keep config.conf rules."""
         self.buffer_dat_path = None
         self.subtract_options = None
+        self.buffer_overrides.clear()
         self.last_subtracted_dat_path = None
         self._disarm_analysis()
 

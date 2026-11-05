@@ -23,8 +23,16 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import yaml
 
+from autosaxs.core.buffer_rules import (
+    DEFAULT_BUFFER_RULES as _DEFAULT_BUFFER_RULE_PAIRS,
+    BufferMatchConflict,
+    normalize_buffer_rules,
+    pair_samples_with_rules,
+    pattern_to_pool_glob,
+    rules_as_mapping,
+)
 from autosaxs.core.event_bus import EventBus, EventType
-from autosaxs.core.utils import _strip_sub_int_prefix, map_sample_files_to_buffer_files
+from autosaxs.core.utils import _strip_sub_int_prefix
 
 from .average import average
 from .calibrate import calibrate
@@ -34,7 +42,8 @@ from .integrate import integrate
 from .subtract import subtract
 
 DEFAULT_CALIBRANT_GLOB = "*AgBh*.tif"
-DEFAULT_BUFFER_RULES: Dict[str, str] = {"*_sample*.tif": "*_buffer*.tif"}
+# Capture-aware default (ordered). Mapping view kept for config dump / tests.
+DEFAULT_BUFFER_RULES: Dict[str, str] = rules_as_mapping(_DEFAULT_BUFFER_RULE_PAIRS)
 DEFAULT_CONFIG_BASENAME = "config.conf"
 ANALYSIS_VALUES = frozenset({"mono", "poly"})
 
@@ -50,9 +59,14 @@ class TiffPipelineConfig:
     """Parsed TIFF→report routing keys (+ path to the YAML file for leaf merges)."""
 
     calibrant: str = DEFAULT_CALIBRANT_GLOB
+    # Ordered sample_expr → buffer_expr (``""`` = explicit no-buffer / NONE).
     buffer_rules: Mapping[str, str] = field(default_factory=lambda: dict(DEFAULT_BUFFER_RULES))
     analysis: Optional[str] = None
     config_path: Optional[str] = None
+
+    @property
+    def buffer_rule_pairs(self) -> Tuple[Tuple[str, str], ...]:
+        return tuple((str(k), str(v)) for k, v in self.buffer_rules.items())
 
 
 @dataclass(frozen=True)
@@ -175,7 +189,8 @@ def load_tiff_pipeline_config(config_path: str) -> TiffPipelineConfig:
     """
     Load and validate TIFF→report routing keys from a YAML/``.conf`` file.
 
-    Matching rule: **fnmatch globs only** (basename). No regex.
+    ``buffer_rules`` use basename ``*`` / ``{capture}`` patterns (no regex).
+    Empty RHS ``""`` means explicit no-buffer (``NONE``).
     """
     path = str(coerce_config_path_expression(config_path).unwrap()[0])
     if not os.path.isfile(path):
@@ -211,15 +226,14 @@ def load_tiff_pipeline_config(config_path: str) -> TiffPipelineConfig:
     if buffer_rules_raw is None:
         buffer_rules: Dict[str, str] = dict(DEFAULT_BUFFER_RULES)
     else:
-        if not isinstance(buffer_rules_raw, dict) or not buffer_rules_raw:
-            raise TypeError("buffer_rules must be a non-empty mapping of sample_glob → buffer_glob")
-        buffer_rules = {}
-        for sample_glob, buffer_glob in buffer_rules_raw.items():
-            sg = str(sample_glob).strip()
-            bg = str(buffer_glob).strip()
-            if not sg or not bg:
-                raise ValueError("buffer_rules entries must be non-empty globs")
-            buffer_rules[sg] = bg
+        try:
+            pairs = normalize_buffer_rules(buffer_rules_raw)
+        except (TypeError, ValueError) as e:
+            raise TypeError(
+                "buffer_rules must be a non-empty mapping of sample_expr → buffer_expr "
+                "(empty buffer_expr \"\" means explicit no-buffer)"
+            ) from e
+        buffer_rules = rules_as_mapping(pairs)
 
     analysis_raw = raw.get("analysis", None)
     analysis: Optional[str] = None
@@ -260,7 +274,10 @@ def _basename_matches(path: str, pattern: str) -> bool:
 
 def classify_tiffs(frames_dir: str, config: TiffPipelineConfig) -> ClassifiedFrames:
     """
-    Classify TIFFs into calibrant / samples / buffers / ignored using fnmatch globs.
+    Classify TIFFs into calibrant / samples / buffers / ignored.
+
+    Pool membership uses basename globs with ``{capture}`` treated as ``*``.
+    Empty RHS rules still claim their LHS as samples (explicit no-buffer).
     """
     files = list_tiff_files(frames_dir)
     if not files:
@@ -279,8 +296,10 @@ def classify_tiffs(frames_dir: str, config: TiffPipelineConfig) -> ClassifiedFra
     claimed: set[str] = set()
     samples: List[str] = []
     buffers: List[str] = []
+    needs_buffer_pool = False
 
-    for sample_glob, buffer_glob in config.buffer_rules.items():
+    for sample_expr, buffer_expr in config.buffer_rule_pairs:
+        sample_glob = pattern_to_pool_glob(sample_expr)
         for p in remaining:
             key = os.path.normpath(p)
             if key in claimed:
@@ -288,6 +307,10 @@ def classify_tiffs(frames_dir: str, config: TiffPipelineConfig) -> ClassifiedFra
             if _basename_matches(p, sample_glob):
                 samples.append(p)
                 claimed.add(key)
+        if not str(buffer_expr).strip():
+            continue
+        needs_buffer_pool = True
+        buffer_glob = pattern_to_pool_glob(buffer_expr)
         for p in remaining:
             key = os.path.normpath(p)
             if key in claimed:
@@ -302,7 +325,7 @@ def classify_tiffs(frames_dir: str, config: TiffPipelineConfig) -> ClassifiedFra
             f"No sample TIFFs matched buffer_rules under {frames_dir!r} "
             f"(rules={dict(config.buffer_rules)!r})"
         )
-    if not buffers:
+    if needs_buffer_pool and not buffers:
         raise FileNotFoundError(
             f"No buffer TIFFs matched buffer_rules under {frames_dir!r} "
             f"(rules={dict(config.buffer_rules)!r})"
@@ -319,44 +342,29 @@ def classify_tiffs(frames_dir: str, config: TiffPipelineConfig) -> ClassifiedFra
 def pair_sample_buffer_1d(
     sample_paths: Sequence[str],
     buffer_paths: Sequence[str],
+    rules: Sequence[Tuple[str, str]] | Mapping[str, str] | None = None,
 ) -> List[Tuple[str, str]]:
     """
-    Pair sample/buffer 1D curves.
+    Pair sample/buffer 1D curves via ordered ``buffer_rules`` (``{capture}`` patterns).
 
-    Primary: ``map_sample_files_to_buffer_files`` (``_sample`` / ``_buffer`` convention).
-    Fallback: if unpaired remain and there is exactly one buffer, share it with all
-    unpaired samples (poly Pt_NPs / real-data light parity).
+    Returns only ``PAIRED`` (sample, buffer) tuples. ``NONE`` samples are omitted
+    here (callers that need unsubtracted analysis should use
+    :func:`pair_samples_with_rules` / :func:`match_sample_to_buffer`).
+    ``UNMATCHED`` is silent (omitted). ``CONFLICT`` raises ``BufferMatchConflict``.
+
+    Breaking change: the old shared-single-buffer fallback is removed — write an
+    explicit rule (or a broad RHS) instead.
     """
     samples = list(sample_paths)
     buffers = list(buffer_paths)
     if not samples:
         raise ValueError("pair_sample_buffer_1d: no sample paths")
-    if not buffers:
-        raise ValueError("pair_sample_buffer_1d: no buffer paths")
-
-    alignment = map_sample_files_to_buffer_files(samples, buffers)
-    if alignment["overlapped"]:
-        overlap_str = "\n".join(", ".join(p) for p in alignment["overlapped"])
-        raise RuntimeError(
-            "Buffer-sample alignment ambiguous (multiple buffers matched a sample).\n"
-            f"Overlapped:\n{overlap_str}"
-        )
-
-    pairs: List[Tuple[str, str]] = list(alignment["aligned_pairs"])
-    not_paired: List[str] = list(alignment["not_paired"])
-
-    if not_paired and len(buffers) == 1:
-        shared = buffers[0]
-        for s in not_paired:
-            pairs.append((s, shared))
-        not_paired = []
-
-    if not_paired:
-        raise RuntimeError(
-            "Buffer-sample alignment failed; unpaired samples:\n"
-            + "\n".join(not_paired)
-        )
-    return pairs
+    rule_pairs = normalize_buffer_rules(rules)
+    try:
+        paired, _none, _unmatched = pair_samples_with_rules(samples, buffers, rule_pairs)
+    except BufferMatchConflict as e:
+        raise RuntimeError(str(e)) from e
+    return paired
 
 
 def _logical_frame_stem(path: str) -> str:
@@ -515,9 +523,28 @@ def run_tiff_to_subtracted(
         buffer_1d, output_dir=averaged_dir, use_cache=use_cache, bus=bus
     )
 
-    pairs = pair_sample_buffer_1d(sample_1d, buffer_1d)
+    rule_pairs = cfg.buffer_rule_pairs
+    try:
+        paired, none_samples, unmatched_samples = pair_samples_with_rules(
+            sample_1d, buffer_1d, rule_pairs
+        )
+    except BufferMatchConflict as e:
+        raise RuntimeError(str(e)) from e
+
+    if unmatched_samples and bus:
+        names = ", ".join(os.path.basename(p) for p in unmatched_samples)
+        bus.publish(
+            EventType.MESSAGE,
+            {
+                "text": (
+                    "tiff_pipeline: skipping unmatched 1D (no sample rule; "
+                    f"not analyzed): {names}"
+                )
+            },
+        )
+
     subtracted_paths: List[str] = []
-    for sample_path, buffer_path in pairs:
+    for sample_path, buffer_path in paired:
         if bus:
             bus.publish(
                 EventType.MESSAGE,
@@ -541,8 +568,25 @@ def run_tiff_to_subtracted(
         elif sub:
             subtracted_paths.append(str(sub))
 
-    if not subtracted_paths:
-        raise RuntimeError("tiff_pipeline: subtract produced no curves")
+    # NONE = claimed sample, skip subtract, continue analysis on unsubtracted 1D.
+    analysis_paths: List[str] = list(subtracted_paths) + list(none_samples)
+    if none_samples and bus:
+        names = ", ".join(os.path.basename(p) for p in none_samples)
+        bus.publish(
+            EventType.MESSAGE,
+            {
+                "text": (
+                    "tiff_pipeline: explicit no-buffer samples "
+                    f"(analyze unsubtracted): {names}"
+                )
+            },
+        )
+
+    if not analysis_paths:
+        raise RuntimeError(
+            "tiff_pipeline: no analysis profiles "
+            "(no PAIRED subtract outputs and no NONE samples)"
+        )
 
     return {
         "config_path": conf_path,
@@ -553,6 +597,9 @@ def run_tiff_to_subtracted(
         "averaged_dir": averaged_dir,
         "subtracted_dir": subtracted_dir,
         "subtracted_paths": subtracted_paths,
+        "analysis_paths": analysis_paths,
+        "none_sample_paths": list(none_samples),
+        "unmatched_sample_paths": list(unmatched_samples),
         "calibrant_path": classified.calibrant_path,
         "sample_tiff_paths": list(classified.sample_paths),
         "buffer_tiff_paths": list(classified.buffer_paths),

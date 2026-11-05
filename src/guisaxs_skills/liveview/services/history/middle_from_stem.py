@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from ...ingest.sample_revision import is_dat_path, is_tiff_path, sample_stem_from_path
+from ...pipeline.buffer_match import resolved_buffer_path_for_sample
 from ...session.output_paths import (
     integrated_dat_path,
     subtracted_dat_path,
@@ -19,6 +20,12 @@ from ...session.output_paths import (
 )
 from ...session.sample import Sample
 from ...session.state import LiveviewIntakeMode, LiveviewSessionState, LiveviewWatchMode
+
+
+def _sample_has_resolved_buffer(state: LiveviewSessionState, sample: Sample | None) -> bool:
+    if sample is None:
+        return False
+    return bool(resolved_buffer_path_for_sample(state, sample))
 
 
 def integrated_dat_for_tiff_stem(
@@ -86,10 +93,15 @@ def sync_middle_view(
     Skips re-paint when layout and resolved paths are unchanged (unless ``force``).
     """
     opts = dict(subtract_options or state.subtract_options or {})
-    middle.apply_intake_layout(state.intake_mode, buffer_ready=state.buffer_ready())
+    # Dual layout when session buffer stage is ready AND current sample has a
+    # resolved buffer (overlay or rules PAIRED); otherwise single-curve honesty.
+    dual = bool(state.buffer_ready() and _sample_has_resolved_buffer(state, sample))
+    if sample is None:
+        dual = bool(state.buffer_ready())
+    middle.apply_intake_layout(state.intake_mode, buffer_ready=dual)
 
     paint = _resolve_paint(state=state, sample=sample)
-    layout_sig = (state.intake_mode, state.buffer_ready())
+    layout_sig = (state.intake_mode, dual)
     full_sig = layout_sig + paint.signature() + (tuple(sorted((k, str(v)) for k, v in opts.items())),)
     prev = getattr(middle, "_middle_sync_sig", None)
     if not force and prev == full_sig:
@@ -157,13 +169,15 @@ def _resolve_paint(
     board = sample.boarding
 
     if is_dat_path(tp):
-        return _resolve_curve_paint(dat_path=tp, watchdir=wd, state=state, boarding=board)
+        return _resolve_curve_paint(
+            dat_path=tp, watchdir=wd, state=state, boarding=board, sample=sample
+        )
 
     image = tp if is_tiff_path(tp) and Path(tp).is_file() else ""
     stem = Path(tp).stem if tp else ""
     if not stem:
         xlab = "px" if not state.is_calibrated() else "q (nm$^{-1}$)"
-        if state.buffer_ready():
+        if _sample_has_resolved_buffer(state, sample):
             return _MiddlePaint(image_path=image, use_dual=True, main_x_label=xlab)
         return _MiddlePaint(image_path=image, main_x_label=xlab)
 
@@ -171,6 +185,7 @@ def _resolve_paint(
     int_path = integrated_dat_for_tiff_stem(
         wd, stem, integrator_ready=integrator_ready, tiff_path=tp, mode=mode
     )
+    out_root = tiff_output_root(watchdir=wd, tiff_path=tp, mode=mode)
 
     if not state.is_calibrated():
         return _MiddlePaint(image_path=image, main_curve_path=int_path, main_x_label="px")
@@ -183,10 +198,17 @@ def _resolve_paint(
             main_x_label="q (nm$^{-1}$)",
         )
 
-    if state.buffer_ready():
+    buf_str = (
+        resolved_buffer_path_for_sample(
+            state,
+            sample,
+            sample_curve=int_path or tp,
+            sample_output_root=out_root,
+        )
+        or ""
+    )
+    if state.buffer_ready() and buf_str:
         sub_path = subtracted_dat_for_tiff_stem(wd, stem, tiff_path=tp, mode=mode)
-        buf = state.buffer_dat_path
-        buf_str = str(buf) if buf is not None and buf.is_file() else ""
         # 1D: main integrated + dual. 2D: dual only (layout hides main).
         main = int_path if state.intake_mode == LiveviewIntakeMode.CURVE_1D else ""
         return _MiddlePaint(
@@ -212,6 +234,7 @@ def _resolve_curve_paint(
     watchdir: Path,
     state: LiveviewSessionState,
     boarding: LiveviewIntakeMode | None,
+    sample: Sample | None = None,
 ) -> _MiddlePaint:
     dp = Path(dat_path)
     if not dp.is_file():
@@ -227,9 +250,11 @@ def _resolve_curve_paint(
     if is_sub_file or state.intake_mode == LiveviewIntakeMode.CURVE_SUB:
         return _MiddlePaint(main_curve_path=resolved, main_x_label="q (nm$^{-1}$)")
 
-    if state.buffer_ready():
-        buf = state.buffer_dat_path
-        buf_str = str(buf) if buf is not None and buf.is_file() else ""
+    sample_obj = sample or Sample.from_path(
+        dat_path, boarding=boarding or LiveviewIntakeMode.CURVE_1D
+    )
+    buf_str = resolved_buffer_path_for_sample(state, sample_obj, sample_curve=resolved) or ""
+    if state.buffer_ready() and buf_str:
         sub_cand = watchdir / "subtracted" / f"sub_{stem}.dat"
         sub_str = str(sub_cand.resolve()) if sub_cand.is_file() else ""
         main = resolved if state.intake_mode == LiveviewIntakeMode.CURVE_1D else ""

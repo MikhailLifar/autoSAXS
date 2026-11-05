@@ -98,29 +98,55 @@ def test_classify_calibrant_sample_buffer_ignore(tmp_path: Path):
     ]
 
 
-def test_pair_aligned_and_shared_buffer(tmp_path: Path):
+def test_pair_aligned_capture_default(tmp_path: Path):
+    s1 = str(tmp_path / "int_ihs27_sample.dat")
+    b1 = str(tmp_path / "int_ihs27_buffer.dat")
+    for p in (s1, b1):
+        Path(p).write_text("0 1 0\n", encoding="utf-8")
+
+    pairs = pair_sample_buffer_1d([s1], [b1])
+    assert pairs == [(s1, b1)]
+
+
+def test_pair_no_shared_buffer_magic(tmp_path: Path):
+    """Shared-single-buffer fallback is removed — explicit rule or conflict."""
     s1 = str(tmp_path / "int_ihs27_sample.dat")
     s2 = str(tmp_path / "int_other_sample.dat")
     b1 = str(tmp_path / "int_ihs27_buffer.dat")
     for p in (s1, s2, b1):
         Path(p).write_text("0 1 0\n", encoding="utf-8")
 
-    pairs = pair_sample_buffer_1d([s1], [b1])
-    assert pairs == [(s1, b1)]
+    with pytest.raises(RuntimeError, match="conflict|0 buffer"):
+        pair_sample_buffer_1d([s1, s2], [b1])
 
-    # Shared single buffer for unmatched sample names
-    pairs2 = pair_sample_buffer_1d([s1, s2], [b1])
-    assert set(pairs2) == {(s1, b1), (s2, b1)}
+    # Explicit broad / capture rule can still pair both when intended
+    pairs = pair_sample_buffer_1d(
+        [s1, s2],
+        [b1],
+        rules={"*_sample*": "int_ihs27_buffer.dat"},
+    )
+    assert set(pairs) == {(s1, b1), (s2, b1)}
 
 
 def test_pair_overlap_raises(tmp_path: Path):
-    s = str(tmp_path / "int_ihs27_long_sample.dat")
-    b1 = str(tmp_path / "int_ihs27_buffer.dat")
-    b2 = str(tmp_path / "int_ihs27_long_buffer.dat")
+    s = str(tmp_path / "int_ihs27_sample.dat")
+    b1 = str(tmp_path / "int_ihs27_buffer_a.dat")
+    b2 = str(tmp_path / "int_ihs27_buffer_b.dat")
     for p in (s, b1, b2):
         Path(p).write_text("0 1 0\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="ambiguous|Overlapped"):
+    with pytest.raises(RuntimeError, match="conflict|matched 2"):
         pair_sample_buffer_1d([s], [b1, b2])
+
+
+def test_load_allows_empty_rhs(tmp_path: Path):
+    conf = _write_conf(
+        tmp_path / "none.conf",
+        {"buffer_rules": {"*protein*": "", "*_sample*": "*_buffer*"}, "analysis": "mono"},
+    )
+    cfg = load_tiff_pipeline_config(conf)
+    assert dict(cfg.buffer_rules)["*protein*"] == ""
+    assert ("*protein*", "") in cfg.buffer_rule_pairs
+    assert ("*_sample*", "*_buffer*") in cfg.buffer_rule_pairs
 
 
 def test_process_full_registered_and_cli_description(capsys):

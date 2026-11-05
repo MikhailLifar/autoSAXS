@@ -67,6 +67,7 @@ class LiveviewHistoryHandler:
         middle.set_process_enabled(True)
         left = self._c.left
         if left is not None:
+            left.sync_buffer_preview_from_state()
             left.refresh_attention_coach()
 
     def on_session_file_completed(self, _path: str = "") -> None:
