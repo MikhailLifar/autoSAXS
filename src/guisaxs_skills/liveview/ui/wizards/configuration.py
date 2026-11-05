@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Callable, Optional
 
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor, QSyntaxHighlighter, QTextCharFormat
 from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -18,6 +20,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from guisaxs_skills.ui.style import COLOR_ACCENT, COLOR_MUTED_TEXT, COLOR_QUALITY_WARN
+
 from ...session.watchdir_config import (
     DEFAULT_CONFIG_SEED_TEXT,
     effective_config_path,
@@ -28,6 +32,47 @@ from ...session.watchdir_config import (
 )
 
 
+class _YamlHighlighter(QSyntaxHighlighter):
+    """Lightweight YAML highlighter: keys, comments, quoted strings."""
+
+    _RE_COMMENT = re.compile(r"#.*$")
+    _RE_KEY = re.compile(
+        r'^(\s*(?:-\s+)?)("[^"]*"|\'[^\']*\'|[^:#\s][^:#]*?)\s*(:)'
+    )
+    _RE_STRING = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\'')
+
+    def __init__(self, document) -> None:
+        super().__init__(document)
+        self._fmt_comment = QTextCharFormat()
+        self._fmt_comment.setForeground(QColor(COLOR_MUTED_TEXT))
+        self._fmt_key = QTextCharFormat()
+        self._fmt_key.setForeground(QColor(COLOR_ACCENT))
+        self._fmt_string = QTextCharFormat()
+        self._fmt_string.setForeground(QColor(COLOR_QUALITY_WARN))
+
+    def highlightBlock(self, text: str) -> None:  # noqa: N802 - Qt API
+        key_m = self._RE_KEY.match(text)
+        if key_m is not None:
+            self.setFormat(key_m.start(2), key_m.end(2) - key_m.start(2), self._fmt_key)
+
+        for m in self._RE_STRING.finditer(text):
+            # Do not restyle the key token itself when it is a quoted key.
+            if key_m is not None and m.start() == key_m.start(2) and m.end() == key_m.end(2):
+                continue
+            self.setFormat(m.start(), m.end() - m.start(), self._fmt_string)
+
+        cm = self._RE_COMMENT.search(text)
+        if cm is not None:
+            # Skip # inside an earlier quoted string on the same line.
+            in_string = False
+            for m in self._RE_STRING.finditer(text):
+                if m.start() <= cm.start() < m.end():
+                    in_string = True
+                    break
+            if not in_string:
+                self.setFormat(cm.start(), cm.end() - cm.start(), self._fmt_comment)
+
+
 def _monospace_editor() -> QPlainTextEdit:
     editor = QPlainTextEdit()
     editor.setLineWrapMode(QPlainTextEdit.NoWrap)
@@ -35,6 +80,7 @@ def _monospace_editor() -> QPlainTextEdit:
     font.setFamily("monospace")
     font.setStyleHint(font.Monospace)
     editor.setFont(font)
+    _YamlHighlighter(editor.document())
     return editor
 
 

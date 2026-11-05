@@ -22,12 +22,15 @@ from autosaxs.core.buffer_rules import (
 CONFIG_BASENAME = "config.conf"
 
 # Teaching comments only — no product internals (session.yaml, migration, etc.).
+# Globs match the file basename including extension (e.g. runA_sample.dat),
+# not the stem without extension — see match_basename in buffer_rules.py.
 _CONFIG_BUFFER_RULES_COMMENT_HEADER = (
     "# Sample ↔ buffer pairing rules (first matching rule wins).\n"
-    "# Left side: sample filename glob. Right side: buffer filename glob.\n"
+    "# Left/right globs match the basename filename including extension\n"
+    "# (e.g. runA_sample.dat), not the stem without extension.\n"
     "# Use * wildcards and {name} capture tokens shared across both sides.\n"
     '# Empty right side ("") = no buffer (skip subtract, still analyze).\n'
-    '# One buffer for everything:  "*": "my_buffer.dat"\n'
+    '# Shared buffer for samples:  "*sample*": "my_buffer.dat"\n'
     "# Example: samples named like runA_sample.dat pair with runA_buffer.dat\n"
 )
 

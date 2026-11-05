@@ -27,7 +27,9 @@ CONFLICT → executor dispatch_hold → ApplicationModal Configuration editor
 
 ## End-user `config.conf` comments
 
-Seed and silent session→root migrate share one teaching header (`_CONFIG_BUFFER_RULES_COMMENT_HEADER`): how to map sample globs to buffer globs, empty RHS, order, examples. No migration/session.yaml/legacy banners in file text or Configuration UI copy.
+Seed and silent session→root migrate share one teaching header (`_CONFIG_BUFFER_RULES_COMMENT_HEADER`): how to map sample globs to buffer globs, empty RHS, order, examples. Globs match **basename filenames including extension** (`match_basename` / `os.path.basename`), not stems. No migration/session.yaml/legacy banners in file text or Configuration UI copy.
+
+Configuration editor uses a small `QSyntaxHighlighter` (keys / comments / strings; guisaxs `style.py` colors).
 
 ## Code
 
