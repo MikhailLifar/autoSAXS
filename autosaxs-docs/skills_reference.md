@@ -44,158 +44,1471 @@ See the package README for launch and layout details.
 
 ## `calibrate`
 
+SAXS / small-angle x-ray scattering: calibrate detector geometry using calibrant image. This is a prerequisite for `integrate` (azimuthal integration).
 
+### Arguments
+
+- `calibrant_image` (str): Path to the calibrant image (e.g. TIFF).
+- `output_dir` (str, default `.`): Directory where results are written.
+- `config_path` (str | None, default `None`): Depricated. Path to a YAML config file with a `calibrate` section. When omitted, bundled defaults are used.
+- `mask` (str | None, default `None`): Optional user detector pixel mask (`.txt` / `.npy` / `.msk`). When omitted, the automatic mask alone becomes the effective mask. When provided, it is OR-combined once with the automatic mask. The user mask file is never overwritten. Results are written as `effective_mask.npy` and `auto_mask.npy` **alongside** `integrator/` (not inside it).
+- `mask_mode` (str | None, default `None`): Deprecated compatibility selector (`f`/`from_file`, `a`/`auto`, `c`/`combined`). Effective mask is always `auto | optional user mask`; this flag only records intent for configs/GUIs. Defaults to `a`/`auto` when no user mask is given, else `c`/`combined`.
+- `calibrant` (str | None, default `None`): Calibrant name (must be in `pyFAI.calibrant.ALL_CALIBRANTS`). Defaults to `AgBh`.
+- `wavelength` (float | None, default `None`): X-ray wavelength in **Ångström**. Defaults to 1.445 Å.
+- `dist_guess` (float | None, default `None`): Optional initial sample–detector distance in **metres** passed to pyFAI before geometry refinement. When omitted, distance is estimated from the innermost calibrant ring. Usually works well if not set.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+Notes:
+
+- Automatic mask always includes the beam-stop disk and all negative-intensity pixels. Local IQR outlier masking is off by default; enable via `mask_config.calc_abnormal_mask` in config.
+- `integrator/` stores geometry only. Both `effective_mask.npy` and `auto_mask.npy` are always written next to it (even when no user mask was provided). Later `integrate --mask` replaces the effective mask entirely (no further OR).
+
+### Short parameter list
+
+- mask: Optional user mask; default: automatic mask only.
+- mask_mode: Deprecated; default: auto (or combined when a user mask is set).
+- calibrant: name of the calibrant, default: AgBh.
+- wavelength: X-ray wavelength in Ångström, default: 1.445 Å.
+- dist_guess: Optional: initial sample-detector distance in metres (algorithm works good if this is not set).
+
+### Returns
+
+`dict[str, str]` with these output path roles:
+
+- `integrator_dir`: Directory containing calibrated geometry (used by `integrate`).
+- `effective_mask_path`: Path to `effective_mask.npy` alongside `integrator/`.
+- `auto_mask_path`: Path to `auto_mask.npy` alongside `integrator/`.
+- `refined_path`: Path to the refined detector geometry YAML (PONI params plus Fit2D `center_y_px` / `center_x_px`).
+- `calibration_plots_dir`: Directory containing calibration plots.
+- `calibration_curve_plot_path`: Path to the calibrantion q/I curve plot (PNG).
+- `calibration_curve_dat_path`: Path to the calibrantion q/I curve (`.dat`, same format as integrated 1D curves).
+- `calibration_mask_path`: Path to the detector pixel mask visualization (PNG).
+
+### Python usage
+
+```python
+from autosaxs.skill import calibrate
+
+out = calibrate(
+    calibrant_image="AgBh.tif",
+    output_dir="calibration/",
+    mask="mask.msk",  # optional
+    use_cache=False,
+)
+
+print(out["integrator_dir"])
+print(out["refined_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs calibrate AgBh.tif --output-dir calibration
+autosaxs calibrate AgBh.tif --output-dir calibration --mask mask.msk
+autosaxs calibrate AgBh.tif --conf my_config.conf -o calibration/
+```
 
 ---
 
 ## `integrate`
 
+SAXS / small-angle x-ray scattering: integrate 2D SAXS images to 1D curves (q, I, sigma) using a calibrated integrator produced by `calibrate` (azimuthal integration; q-space).
 
+### Arguments
+
+- `images` (str): Image path expression. Can be:
+  - a single `.tif` file path
+  - a directory (expands to `*.tif`, non-recursive)
+  - a glob expression
+  - a comma-separated list of file paths (e.g. from multi-file drag & drop)
+- `integrator_dir` (str): Path to the calibrated integrator directory (from `calibrate`). Geometry only.
+- `output_dir` (str, default `.`): Directory where integrated curves are written.
+- `mask` (str | None, default `None`): Optional mask for this run (`.txt` / `.npy` / `.msk`). When set, it is used **as-is** as the effective mask (no OR with auto). When omitted, `integrate` requires `{parent_of_integrator_dir}/effective_mask.npy` (written by `calibrate`) and fails hard if it is missing. Mask shape must match each image (raises ``ValueError`` on mismatch).
+- `npt` (int, default `1000`): Number of points in the output q grid.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+- `validation_png` (bool, default `False`): If `True`, write a PNG next to each integrated curve showing the source image (log-intensity) with integrator-masked pixels highlighted in semi-transparent red.
+
+### Short parameter list
+
+- mask: Optional full mask replacement for this integrate run (else sibling `effective_mask.npy`).
+- npt: Number of integrated points, default: 1000
+- validation_png: Show validation image
+
+### Returns
+
+`dict[str, str | list[str]]` with:
+
+- `integrated_1d`: List of paths to integrated 1D `.dat` curves (one per input image).
+- `validation_png` (only when `validation_png=True`): List of paths to validation PNG(s), one per input image.
+
+### Python usage
+
+```python
+from autosaxs.skill import integrate
+
+out = integrate(
+    images="/data/sample_*.tif",
+    integrator_dir="calibration/integrator",
+    output_dir="integration",
+    npt=1000,
+    use_cache=False,
+)
+
+print(out["integrated_1d"])
+```
+
+### CLI usage
+
+```bash
+autosaxs integrate "/data/sample_01.tif, /data/sample_02.tif" calibration/integrator       --output-dir integration --npt 1000
+autosaxs integrate sample.tif calibration/integrator --mask my_mask.npy -o integration
+```
 
 ---
 
 ## `average`
 
-Radiation-damage-aware averaging of per-frame 1D SAXS curves.
+SAXS / small-angle x-ray scattering: radiation-damage-aware averaging of per-frame 1D SAXS curves.
 
-Compares each frame to the first (lexicographic) reference using reduced chi-squared
-and CorMap (Franke et al., Nature Methods 2015; Schilling 1990), then merges
-accepted frames with inverse-variance weighting.
+### Arguments
+
+- `profiles` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive). Files are sorted lexicographically.
+- `output_dir` (str, default `./averaged`): Directory where the outputs are written.
+- `cormap_p_min` (float, default `0.05`): CorMap p-value threshold for borderline warnings.
+- `chi2_max` (float, default `1.25`): Reject frame (and stop) when reduced chi-squared vs reference exceeds this value.
+- `chi2_min` (float, default `0.9`): Warn when reduced chi-squared is below this value.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Short parameter list
+
+- cormap_p_min: internal parameter, recommended not to change, default: 0.05
+- chi2_max: internal parameter, recommended not to change, default: 1.25
+- chi2_min: internal parameter, recommended not to change, default: 0.9
+
+### Returns
+
+dict[str, str] with:
+
+- `averaged_1d`: Path to the merged `int_<prefix>.dat` curve.
+- `frame_selection_csv`: Path to per-frame selection diagnostics CSV.
+
+### Python usage
+
+```python
+from autosaxs.skill import average
+
+out = average(
+    profiles="integrated/exp_*.dat",
+    output_dir="./averaged",
+    use_cache=False,
+)
+print(out["averaged_1d"])
+```
+
+### CLI usage
+
+```bash
+autosaxs average "integrated/exp_*.dat" --output-dir ./averaged
+```
 
 ---
 
 ## `integrate_proxy`
 
+SAXS / small-angle x-ray scattering: integrate 2D TIFF image(s) to a 1D curve **without detector calibration**, using radial averaging in pixel-radius space (quick-look / debugging; not q-calibrated).
 
+### Arguments
+
+- `image` (str): 2D image path expression (file/directory/glob). Directories expand to `*.tif` (non-recursive).
+- `output_dir` (str, default `.`): Directory where the outputs are written.
+- `mask` (str | None, default `None`): Optional mask path; same shape as the image. (pyFAI convention: masked pixels are excluded.)
+- `cy` (float | None, default `None`): Optional beam center y in pixels. Must be set together with `cx`. Defaults to None.
+- `cx` (float | None, default `None`): Optional beam center x in pixels. Must be set together with `cy`. Defaults to None.
+- `npt` (int, default `1000`): Number of points in the output x grid.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+Notes:
+
+- If `cy/cx` are not provided, the skill **estimates** the center by radial-symmetry optimization and also writes a center diagnostic plot `*_center.png` into `output_dir`.
+- If center estimation fails for an input, that item is skipped and the skill may return an empty list for `integrated_1d`.
+
+### Returns
+
+dict[str, str | list[str]] with:
+
+- `integrated_1d`: Path (or list of paths, if `image` is a directory) to integrated 1D `.dat` curves.
+
+### Python usage
+
+```python
+from autosaxs.skill import integrate_proxy
+
+out = integrate_proxy(
+    image="raw/sample_01.tif",
+    output_dir="integration_proxy",
+    mask="mask.msk",
+    npt=1000,
+    use_cache=False,
+)
+
+print(out["integrated_1d"])
+```
+
+### CLI usage
+
+```bash
+autosaxs integrate-proxy raw/sample_01.tif --output-dir integration_proxy --mask mask.msk --npt 1000
+```
 
 ---
 
 ## `subtract`
 
+SAXS / small-angle x-ray scattering: subtract a buffer curve from a sample 1D profile (background subtraction).
 
+Default scaling is ``minimal_ratio`` in an auto pre-knee ``q`` band detected on the
+buffer alone. Legacy ``point_match`` / ``match_tail`` remain available via ``method``.
+
+### Arguments
+
+- `sample_1d` (str): Sample path expression (file/dir/glob). Directories expand to `*.dat` (non-recursive).
+- `buffer_1d` (str): Path to the buffer 1D `.dat` curve (must be an existing file).
+- `output_dir` (str, default `.`): Directory where subtraction outputs are written.
+- `config_path` (str | None, default `None`): Optional path to a YAML config file with a `subtract` section. When omitted, bundled defaults apply.
+- `method` (str | None, default `None`): `minimal_ratio` (default), `point_match`, or `match_tail`.
+- `q_min` / `q_max` (float | None): Matching q-window (nm⁻¹). Optional; when omitted, auto from buffer pre-knee detection.
+- `sample_form` / `buffer_form` (str | None): For `point_match` only — `linear`, `Porod`, or `Porod-plus-linear`.
+- `point_match_factor` (float | None): For `point_match` only.
+- `window_q_fraction` / `pre_knee_fraction` / `snr_min` / `approach_factor`: For `minimal_ratio` (and pre-knee auto band).
+- `scaling_factor` (float | None): Manual scale override (finite, > 0).
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Notes
+Correctness criteria: buffer and sample visually matched at the high-q tail / pre-knee region.
+Negative values in the subtracted curve are possible due to high variance at the tail.
+
+### Short parameter list
+
+- method: default `minimal_ratio` (set `point_match` to restore the previous default)
+- q_min / q_max: optional; auto pre-knee band when omitted
+- window_q_fraction: default 0.05
+- pre_knee_fraction: default 0.35
+- snr_min: default 2.0
+- scaling_factor: Manual scaling factor; replaces auto-scale when set
+
+### Returns
+
+`dict[str, str]` with:
+
+- `subtracted_1d`: Path to the subtracted curve `.dat`.
+- `sub_plot_path`: Path to the subtracted curve PNG (log I vs q).
+- `diff_plot_path`: Path to a diff plot PNG.
+- `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
+Subtraction quality (`correct` or `over-subtracted`) is written into the subtracted `.dat` metadata
+(``subtract.correctness``) and into per-sample report fragments (individual Markdown and summary YAML).
+The individual report shows subtraction quality, re-plots the log-scale difference
+curves from ``diff_log_*.dat``, then the subtracted curve (log I vs q) from the ``.dat``.
+
+### Python usage
+
+```python
+from autosaxs.skill import subtract
+
+out = subtract(
+    sample_1d="integration/int_sample_01.dat",
+    buffer_1d="integration/int_buffer.dat",
+    output_dir="subtracted",
+    use_cache=False,
+)
+
+print(out["subtracted_1d"])
+```
+
+### CLI usage
+
+```bash
+autosaxs subtract integration/int_sample_01.dat integration/int_buffer.dat \
+  --output-dir subtracted
+# optional restore: --method point_match --q-min 4.0 --q-max 6.0
+```
 
 ---
 
 ## `plot`
 
+SAXS / small-angle x-ray scattering: generate standard diagnostic plots for a 1D curve (Guinier, Kratky, log-log):
 
+- Guinier plot (log(I) vs q^2)
+- Kratky plot (I*q^2 vs q)
+- log-log plot (log(I) vs log(q))
+
+### Arguments
+
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where plot files are written.
+- `guinier_q_min` (float | None, default `None`): Lower q bound for selecting Guinier range (enables `guinier_dat_path`).
+- `guinier_q_max` (float | None, default `None`): Upper q bound for selecting Guinier range.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+Important constraint:
+
+- If you set `guinier_q_max`, you must also set `guinier_q_min` (otherwise the skill raises `ValueError`).
+
+### Returns
+
+dict[str, str] with:
+
+- `guinier_plot_path`: Path to the Guinier PNG.
+- `kratky_plot_path`: Path to the Kratky PNG.
+- `loglog_plot_path`: Path to the log-log PNG.
+- `guinier_dat_path`: Path to the Guinier `.dat` (q², ln(I)) written by the skill (always written; independent of `guinier_q_min/max`).
+
+### Python usage
+
+```python
+from autosaxs.skill import plot
+
+out = plot(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="plots",
+    guinier_q_min=0.01,
+    guinier_q_max=0.05,
+    use_cache=False,
+)
+
+print(out["guinier_dat_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs plot subtracted/sub_sample_01.dat --output-dir plots --guinier-q-min 0.01 --guinier-q-max 0.05
+```
 
 ---
 
 ## `plot_2d`
 
+SAXS / small-angle x-ray scattering: render 2D SAXS TIFF image(s) to PNG using log-intensity scaling (2D detector view).
 
+### Arguments
+
+- `image` (str): 2D path expression (file/directory/glob). Directories expand to `*.tif` (non-recursive).
+- `output_dir` (str, default `.`): Directory where PNG(s) are written.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict[str, str | list[str]]` with:
+
+- `plot_2d_png`: Path (or list of paths, if `image` is a directory) to generated PNG(s).
+
+### Python usage
+
+```python
+from autosaxs.skill import plot_2d
+
+out = plot_2d(
+    image="raw/sample_01.tif",
+    output_dir="plots_2d",
+    use_cache=False,
+)
+
+print(out["plot_2d_png"])
+```
+
+### CLI usage
+
+```bash
+autosaxs plot-2d raw/sample_01.tif --output-dir plots_2d
+```
 
 ---
 
 ## `fit_guinier`
 
+SAXS / small-angle x-ray scattering: Do Guinier analysis on a 1D profile (Rg, I(0), Rg span, Guinier interval, quality).
 
+Default (no ``first``/``last``): classical Shannon-style window search + interpretable score
+(``q·Rg`` gate, linearity, low-q start, residual structure). ATSAS autorg and the older
+adaptive scorer are still computed for comparison but do not select ``chosen_*``.
+
+### Arguments
+
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where the outputs are written.
+- `first` (int | None, default `None`): 1-based start point for a fixed-interval Guinier fit (requires `last`).
+- `last` (int | None, default `None`): 1-based end point (inclusive) for a fixed-interval Guinier fit (requires `first`).
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict[str, str]` with:
+
+- `results_path`: Path to the results text file.
+- `atsas_dat_path`: Path to the ATSAS-format `.dat` file.
+- `guinier_plot_path`: Path to the Guinier fit PNG.
+
+### Python usage
+
+```python
+from autosaxs.skill import fit_guinier
+
+out = fit_guinier(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="guinier",
+    use_cache=False,
+)
+
+print(out["results_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs fit-guinier subtracted/sub_sample_01.dat --output-dir guinier/
+autosaxs fit-guinier subtracted/sub_sample_01.dat --first 10 --last 100 -o guinier/
+```
 
 ---
 
 ## `analyze_kratky`
 
+SAXS / small-angle x-ray scattering: dimensionless Kratky conformation analysis on a 1D profile.
 
+### Arguments
+
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where the outputs are written.
+- `config_path` (str | None, default `None`): Deprecated. YAML/config with a `analyze_kratky` section. When omitted, bundled defaults apply.
+- `rg_nm` (float | None, default `None`): Radius of gyration in nm. If omitted, taken from in-process Guinier.
+- `i0` (float | None, default `None`): Forward scattering I(0). If omitted, taken from in-process Guinier.
+- `q_min`, `q_max` (float | None): Optional q-range (nm⁻¹) applied before analysis. Defaults to None.
+- `globular_x_min`, `globular_x_max`, `globular_y_min`, `globular_y_max`: Globular peak bands. Defaults to 1.65, 1.85, 1.0, 1.2 respectively.
+- `elongated_x_min`, `elongated_x_max`, `elongated_y_min`: Elongated peak bands. Defaults to 1.85, 2.5, 1.15 respectively.
+- `coil_plateau_y`, `coil_plateau_tol`, `coil_high_x_min`: Coil / Debye-plateau detection. Defaults to 2.0, 0.25, 3.0 respectively.
+- `x_search_min`, `x_search_max`: Peak search window in q·Rg. Defaults to 0.5, 4.0 respectively.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict` with:
+
+- `results_path`: Path to the text results file.
+- `kratky_plot_path`: Path to the classical Kratky PNG (I·q² vs q).
+- `kratky_dimensionless_plot_path`: Path to the dimensionless Kratky PNG.
+- `kratky_classical_dat_path`: Path to classical Kratky `.dat`.
+- `kratky_dimensionless_dat_path`: Path to dimensionless Kratky `.dat`.
+- `classification`: Assigned conformation label.
+- `x_max`, `y_max`: Dimensionless peak coordinates (q·Rg, Y).
+
+### Python usage
+
+```python
+from autosaxs.skill import analyze_kratky
+
+out = analyze_kratky(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="kratky",
+    use_cache=False,
+)
+
+print(out["classification"])
+```
+
+### CLI usage
+
+```bash
+autosaxs analyze-kratky subtracted/sub_sample_01.dat --output-dir kratky
+autosaxs analyze-kratky subtracted/sub_sample_01.dat --rg-nm 3.2 --i0 1.05 --output-dir kratky
+```
 
 ---
 
 ## `fit_distances`
 
-DATGNOM / p(r) skill (``fit_distances`` / ``autosaxs fit-distances``).
+SAXS / small-angle x-ray scattering: obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve via ATSAS GNOM (real-space distance distribution).
+
+**Auto path** (when `dmax_nm` is omitted): Guinier \(R_g\) (tool only) → **Fast AutoGNOM** — Stage 1: H32 NumPy Tikhonov over Shannon-bound \(D_{\max}\times\log_{10}\alpha\) (no ATSAS in the search loop; α in GNOM-printed units via locked H32 packaging) → pick by interpretable **`shape_tight_extent`** score (soft taper, non‑negativity, low wiggle, χ² guardrail, extent band \(\sim 3.2\)–\(5\times R_g\)) → Stage 2: ATSAS `gnom` at the Stage‑1 \((D_{\max},\alpha)\) writes stable `gnom_best.out`, close-fits ensemble, force-zero-off (unless `minimal`), passport. Units: \(q\) in nm⁻¹, lengths in nm. Does **not** use Autorg→DATGNOM TOTAL selection (clarity over deposit‑Dmax matching).
+
+**Refine path** (when `dmax_nm` is set): single GNOM `--rmax` run at the given Dmax (optional fixed `--alpha`), plus Dmax±10% close-fits ensemble unless `minimal=True`.
+
+### Arguments
+
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where the outputs are written (one subdirectory per input profile).
+- `rg_nm` (float | None, default `None`): Guinier Rg in nm used to anchor the Shannon \(D_{\max}\) lower bound (\(2 R_g\)). If omitted, in-process Guinier analysis (`fit_guinier`) supplies Rg (and the Guinier interval for `--first` when needed).
+- `first` (int | None, default `None`): GNOM `--first` (1-based point index). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
+- `last` (int | None, default `None`): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
+- `q_min` (float | None, default `None`): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
+- `q_max` (float | None, default `None`): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`. When both `last` and `q_max` are omitted, a silent safer default is applied.
+- `smooth` (float | None, default `None`): Legacy DATGNOM `--smooth` knob; **unused** on the current GNOM auto/refine paths (kept for API compatibility).
+- `dmax_nm` (float | None, default `None`): When set, skip Shannon×α search and run monodisperse GNOM (`--rmax`) with this Dmax (nm). Still writes the Dmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
+- `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted on refine, GNOM chooses automatically. On the auto Shannon×α path, α is searched on \(\log_{10}\alpha\in[-1,2.5]\) and this argument is ignored.
+- `force_zero_rmin` (str | None, default `None`): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
+- `force_zero_rmax` (str | None, default `None`): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y`.
+- `minimal` (bool, default `False`): When `True`, write only the selected `.out` and remove any previous `ensemble/` (no close-fits / force-zero-off probe). Applies to both auto and refine paths.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict[str, str | list[str]]` with:
+
+- `output_subdir`: The per-sample output directory used for this profile.
+- `gnom_out_paths`: List of GNOM/DATGNOM `.out` paths written for this profile (typically a single stable ``gnom_best.out``).
+- `best_gnom_out_path`: Path to the selected best `.out` (always ``gnom_best.out`` under the sample dir — auto DATGNOM and manual refine share this name so re-runs overwrite).
+- `fit_distances_log_path`: Path to the extended run log YAML (`{base}_fit_distances_log.yml`) — candidates, ensemble rows, quality, failures.
+- `fit_params_path`: Path to a YAML file containing the fit parameters used for the final run.
+- `best_symlink_out_path`: Best-effort symlink path to the selected `.out` (may be missing on some filesystems).
+- `fits_csv_path`: Path to a CSV containing candidate scores/metadata.
+- `fit_vs_exp_png_path`: Fit-vs-experiment plot output.
+- `fit_vs_exp_png_error`: Error message if fit-vs-experiment plot failed.
+- `best_pr_png_path`: \(p(r)\) plot output or error message.
+- `best_pr_png_error`: Error message if \(p(r)\) plot failed.
+- `ensemble_dir`: Close-fits Dmax ensemble directory.
+- `ensemble_summary_path`: Close-fits Dmax ensemble CSV summary.
+- `close_fit_out_paths`: Saved GNOM `.out` paths for Dmax±10% close fits.
+- `force_zero_off_out_path`: Saved GNOM `.out` with `--force-zero-rmax=N` at Dmax.
+- `dmax_nm`: Maximum real-space size D_max (nm) from the selected GNOM/DATGNOM fit.
+- `rg_pr_nm`: Integral Rg from p(r) (GNOM-reported or computed from the distribution).
+- `i0_pr`: Integral I(0) from p(r).
+- `rg_guinier_nm`: Guinier Rg (nm) from in-process `fit_guinier` or user `rg_nm`.
+- `q_min_fit_nm`: Low-q bound (nm⁻¹) used in the GNOM fit (from the `.out` angular range when available).
+- `total_estimate`: GNOM Total Estimate of the selected fit.
+- `delta_rg_pct`: \|Rg_Guinier − Rg_P(r)\| / Rg_Guinier × 100.
+- `shannon_s_min`: Minimum Shannon sampling value.
+- `shannon_s_max`: Maximum Shannon sampling value ``(q_max · D_max) / π``.
+- `n_shannon`: Number of Shannon channels in the fitted q-window.
+- `shannon_class`: Shannon classification.
+- `shannon_ok`: Boolean indicating acceptable Shannon sampling.
+- `shannon_tip`: Shannon interpretation guide.
+- `wiggle_index`: Real-space high-frequency wiggle index (~0 clean, ~1 borderline, ≥2 high).
+- `wiggle_class`: ``low`` / ``acceptable`` / ``high`` / ``unknown``.
+- `detail_reliability_class`: Combined ``RELIABLE`` / ``SUSPICIOUS`` / ``unknown`` (indicator only).
+- `pr_quality_class`: `high_quality` \| `acceptable` \| `failed`.
+- `overall_status`: `HIGH QUALITY` \| `ACCEPTABLE` \| `FAILED` (quality passport label).
+- `quality_rationale`: List explaining the quality assessment.
+- `user_tips`: List of user tips about fit or data.
+- `quality_passport_path`: YAML path with the full quality block.
+
+### Python usage
+
+```python
+from autosaxs.skill import fit_distances
+
+out = fit_distances(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="distances",
+    use_cache=False,
+)
+
+print(out["best_gnom_out_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs fit_distances subtracted/sub_sample_01.dat --output-dir distances/
+autosaxs fit_distances subtracted/sub_sample_01.dat --rg-nm 10.0 --first 10 --last 100 --smooth 2.0 -o distances/
+autosaxs fit_distances subtracted/sub_sample_01.dat --dmax-nm 8.5 --first 10 --alpha 0.5 -o distances/
+```
 
 ---
 
 ## `fit_sizes`
 
-GNOM D(R) skill (``fit_sizes`` / ``autosaxs fit-sizes``).
+SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtain a size distribution function \(D(R)\) / \(D_v(R)\) for a polydisperse system from a 1D SAXS curve.
+
+**Auto path** (when `rmax_nm` is omitted, spheres / GNOM system=1): Guinier \(R_g\) (scale tool) → **Fast AutoGNOM** — Stage 1: H32 NumPy Tikhonov with the sphere volume-distribution operator over Shannon-bound \(R_{\max}\times\log_{10}\alpha\) (no ATSAS in the search loop; α in GNOM-printed units via locked H32 packaging) → pick by **`shape_tight_extent_dr`** (same soft-taper / non‑neg / low-wiggle / χ² philosophy as monodisperse `fit_distances`, with an adapted \(R_{\max}/R_g\) extent band) → Stage 2: ATSAS `gnom --system=1` probes the top NumPy candidates (+ optional short GNOM polish) → skill rewrites stable `gnom_best.out`, close-fits ensemble, force-zero-off (unless `minimal`), passport. Units: \(q\) in nm⁻¹, lengths in nm.
+
+**Refine path** (when `rmax_nm` is set): single GNOM `--rmax` at the given Rmax, plus Rmax±10% close-fits ensemble unless `minimal=True`.
+
+### Arguments
+
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where the outputs are written (one subdirectory per input profile).
+- `shape` (str, default `spheres`): Polydisperse system model. Options: `spheres` (GNOM `--system=1` volume distribution for solid spheres), `rods` (GNOM `--system=5` length distribution for long cylinders, requires `rad56_nm` cylinder radius, deprecated), `ellipsoids` (accepted for API compatibility but **not supported by GNOM command-line** (GNOM system 2 is interactive-only), the skill will raise a clear error if selected).
+- `rg_nm` (float | None): Optional Guinier Rg (nm) recorded in outputs. Auto search uses in-process `fit_guinier` Rg when `rmax_nm` is omitted (this argument alone does not drive the grid).
+- `rmin_nm` (float | None): GNOM `--rmin` (nm). If omitted, not passed to GNOM. When set on the auto path, also floors the Shannon Rmax grid.
+- `rmax_nm` (float | None): GNOM `--rmax` (nm). If omitted, Shannon×α search (see above). When set, skip Rmax search but still write the Rmax±10% close-fits ensemble (and force-zero-off when boundary conditions were on), unless `minimal=True`.
+- `rad56_nm` (float | None): GNOM `--rad56` for `shape=rods` (nm cylinder radius), deprecated. Ignored for spheres.
+- `first` (int | None): GNOM `--first` (1-based). If omitted, taken from `q_min` or the low-q end of the Guinier interval from `fit_guinier`.
+- `last` (int | None): GNOM `--last`. If omitted, taken from `q_max` when set; otherwise a safer default `q_max` is chosen (signal + Shannon caps) and mapped to `--last`.
+- `q_min` (float | None): Low-q fit bound (nm⁻¹). Indirect way to set `first` (nearest point). Do not pass together with `first`.
+- `q_max` (float | None): High-q fit bound (nm⁻¹). Indirect way to set `last` (nearest point). Do not pass together with `last`. When both `last` and `q_max` are omitted, a silent safer default is applied.
+- `alpha` (float | None): GNOM `--alpha`. On auto Fast AutoGNOM path: if omitted, searched on \(\log_{10}\alpha\in[-1,2.5]\); if set, Rmax is still Shannon-searched at that fixed α (NumPy Stage 1 + ATSAS Stage 2). On refine path: passed through (GNOM auto if omitted).
+- `nr` (int | None): GNOM `--nr` (number of real-space points). If omitted, GNOM chooses automatically.
+- `force_zero_rmin` (str | None): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
+- `force_zero_rmax` (str | None): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y`.
+- `minimal` (bool, default `False`): When `True` with `rmax_nm` set, write only the single refine `.out` and remove any previous `ensemble/` (no close-fits / force-zero-off probe).
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Short parameter list
+
+- shape: shape of the polydisperse system particles, currently only spheres supported
+- rad56_nm: deprecated, has no effect for spheres
+- alpha: regularization parameter; joint-searched on auto path if unset
+- nr: number of fitted points, stick to the default
+
+### Returns
+
+`dict[str, str | list[str]]` with:
+
+- `output_subdir`: Output subdirectory used for this sample.
+- `atsas_fit_ok`: `True` on success; on failure also includes `gnom_failed`, `failure_reason`, `failure_message`, `failure_txt_path`.
+- `gnom_out_paths`: List of `.out` files written by GNOM.
+- `best_gnom_out_path`: Path to the primary/best `.out` file.
+- `fit_sizes_path`: Compact YAML handoff for final fit, quality, and parametric hints.
+- `fit_sizes_log_path`: Extended YAML log with ensemble/candidate/diagnostics.
+- `best_summary_path`: Alias of `fit_sizes_log_path` (backward compatibility).
+- `fit_params_path` / `fit_sizes_hints_path` / `quality_passport_path`: Aliases of `fit_sizes_path` (backward compatibility).
+- `best_symlink_out_path`: Symlink (best-effort) pointing to the best `.out`.
+- `fit_vs_exp_png_path`: Path to fit-vs-experiment plot PNG.
+- `fit_vs_exp_png_error`: Error message (str) if plot failed, else empty string.
+- `best_dr_png_path`: Path to D(R) plot PNG.
+- `best_dr_png_error`: Error message (str) if plot failed, else empty string.
+- `ensemble_dir`: Directory with close-fit ensemble artifacts.
+- `ensemble_summary_path`: CSV/summary for the Rmax ensemble.
+- `close_fit_out_paths`: List of `.out` files for close Rmax fits.
+- `force_zero_off_out_path`: `.out` file for "force-zero-off" probe.
+- `force_zero_off_pathology`: `"true"` / `"false"` / `""` — D(R) tail pathology from force-zero-off.
+- `d_avg_nm`: Mean size (nm) from D(R).
+- `d_std_nm`: Standard deviation of size (nm) from D(R).
+- `pdi`: Polydispersity index σ/⟨R⟩.
+- `dr_peak_positions_nm`: List of D(R) peak positions (nm) as strings.
+- `dr_n_peaks`: Number of resolved D(R) peaks.
+- `modality_class`: One of `monodisperse`, `unimodal_polydisperse`, `multimodal`, or `unknown`.
+- `modality_confidence`: `high` or `low`, for peak/parametric agreement.
+- `dmax_nm`: Maximum real-space size from the selected GNOM fit (nm).
+- `rg_guinier_nm`: Guinier Rg (nm) from in-process analysis, if performed.
+- `q_min_fit_nm`: Low-q bound (nm⁻¹) used in the GNOM fit.
+- `total_estimate`: GNOM Total Estimate of the selected fit.
+- `shannon_s_min`: Minimum Shannon sampling value.
+- `shannon_s_max`: Maximum Shannon sampling value ``(q_max · R_max) / π``.
+- `n_shannon`: Number of Shannon channels in the fitted q-window.
+- `shannon_class`: Shannon classification.
+- `shannon_ok`: `"true"` / `"false"` / `""` — acceptable Shannon sampling.
+- `shannon_tip`: Shannon interpretation guide.
+- `wiggle_index`: Real-space high-frequency wiggle index (~0 clean, ~1 borderline, ≥2 high).
+- `wiggle_class`: ``low`` / ``acceptable`` / ``high`` / ``unknown``.
+- `detail_reliability_class`: Combined ``RELIABLE`` / ``SUSPICIOUS`` / ``unknown`` (indicator only).
+- `parametric_family`: Best-fit parametric family name (e.g. `normal`, `gamma`).
+- `parametric_R0_nm`: Parametric model center (nm).
+- `parametric_width_nm`: Parametric model width (nm).
+- `n_components_suggested`: Number of mixture components suggested by parametric fit.
+- `mixture_dist_hint`: Parametric mixture distribution hint for D(R).
+- `stability_class`: `stable`, `marginal`, `unstable`, or `unknown` Rmax/D(R) stability.
+- `sizes_quality_class`: `high_quality`, `acceptable`, or `failed` from quality rules.
+- `overall_status`: `HIGH QUALITY`, `ACCEPTABLE`, or `FAILED`.
+- `quality_rationale`: List of strings with quality assessment justifications.
+- `user_tips`: List of user-facing tips or warnings.
+
+### Python usage
+
+```python
+from autosaxs.skill import fit_sizes
+
+out = fit_sizes(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="sizes",
+    shape="spheres",
+    use_cache=False,
+)
+
+print(out["best_gnom_out_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs fit-sizes subtracted/sub_sample_01.dat --output-dir sizes/ 
+autosaxs fit-sizes subtracted/sub_sample_01.dat --shape spheres --rmin 2.0 --rmax 10.0 -o sizes/
+```
 
 ---
 
 ## `model_dr_mc`
 
-McSAS3 form-free D(R) skill (``model_dr_mc`` / ``autosaxs model-dr-mc``).
+SAXS / small-angle x-ray scattering: recover a form-free volume-weighted size distribution
+\(D(R)\) with per-bin uncertainties using McSAS3 Monte Carlo fitting.
+
+### Arguments
+
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where the outputs are written (one subdirectory per profile).
+- `config_path` (str | None, default `None`): Deprecated. YAML/config with a `model_dr_mc` section. When omitted, bundled defaults apply.
+- `q_min_nm` / `q_max_nm` (float | None): Optional q bounds (nm^-1) for the fit window.
+- `n_rep` (int, default `5`): Independent MC repetitions. Mean \(D(R)\) and per-bin \(\sigma\) come from this ensemble; use 50–100 for publication. Defaults to 5.
+- `n_contrib` (int, default `300`): Number of sphere contributions in each MC model. Defaults to 300.
+- `conv_crit` (float, default `1`): Reduced-\(\chi^2\) convergence target. Raise if experimental \(\sigma_I\) are too optimistic and runs never finish. Defaults to 1.
+- `n_cores` (int, default `0`): Parallel workers for repetitions (`0` = autodetect). Defaults to 0.
+- `nbins` (int, default `100`): Rebin count for input \(I(q)\) before fitting. Defaults to 100.
+- `n_bin` (int, default `50`): Number of bins in the post-fit log-\(R\) volume-weighted histogram. Defaults to 50.
+- `max_iter` (int, default `20000`): Max MC iterations per repetition. Defaults to 20000.
+- `sld` / `sld_solvent` (float): Scattering-length densities for absolute scaling (`1e-6 Å^-2`). Relative \(I(q)\) still yields a useful relative \(D(R)\). Defaults to 33.4 and 0.0 respectively.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Short parameter list
+
+- q_min_nm: start of fit region
+- q_max_nm: end of fit region
+- n_rep: number of independent MC repetitions; default: 5 (use 50–100 for publication)
+- n_contrib: number of sphere contributions per model; default: 300
+- conv_crit: reduced-chi2 convergence target; default: 1
+- n_cores: parallel workers for repetitions; default: 0 (autodetect)
+- nbins: rebin count for input I(q); default: 100
+- n_bin: number of D(R) histogram bins; default: 50
+- max_iter: max MC iterations per repetition; default: 20000
+- sld: particle scattering-length density (1e-6 Å^-2); default: 33.4
+- sld_solvent: solvent scattering-length density (1e-6 Å^-2); default: 0.0
+
+### Returns
+
+`dict` with:
+
+- `output_subdir`: Per-sample output directory.
+- `state_path`: McSAS3 HDF5/NeXus state (`.nxs`).
+- `dr_csv_path`: CSV of \(R\), \(dR\), \(D\), \(D_\mathrm{std}\).
+- `stats_path`: YAML with gof, modes, peaks, resolved limits.
+- `handoff_path`: Compact YAML hints for `model_mixture`.
+- `fit_png_path` / `dr_png_path`: Fit and D(R) plot paths.
+- `n_rep`, `r_min_nm`, `r_max_nm`, `q_min_nm`, `q_max_nm`, `n_components_suggested`.
+
+### Python usage
+
+```python
+from autosaxs.skill import model_dr_mc
+
+out = model_dr_mc(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="mcsas",
+    n_rep=5,
+    use_cache=False,
+)
+print(out["dr_png_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs model-dr-mc subtracted/sub_sample_01.dat --output-dir mcsas/ 
+autosaxs model-dr-mc subtracted/sub_sample_01.dat --q-min-nm 0.1 --q-max-nm 5.0 --n-rep 10 -o mcsas/
+```
 
 ---
 
 ## `calc_profile`
 
+SAXS / small-angle x-ray scattering: compute a theoretical I(q) from an atomic model via ATSAS CRYSOL.
 
+Accepts `.pdb` / `.cif` / `.ent` directly. For `.xyz`, writes a pseudo-PDB (element columns +
+`--implicit-hydrogen=0`) and then runs CRYSOL. Optional experimental `.dat` enables CRYSOL fit
+mode (`--units=2`, nm⁻¹).
+
+Output profile `.dat` uses autosaxs convention: **q in nm⁻¹**. CRYSOL subprocess I/O stays in
+Å / Å⁻¹ at the boundary (``smax`` is converted from ``smax_nm``).
+
+### Arguments
+
+- `structure` (str): Path expression for atomic coordinate file(s) (`.pdb`/`.cif`/`.ent`/`.xyz`).
+  Directories expand non-recursively to those extensions.
+- `output_dir` (str, default `.`): Directory where outputs are written.
+- `profile` (str | None, default `None`): Optional experimental 1D `.dat` for CRYSOL fit mode.
+- `config_path` (str | None, default `None`): Deprecated. Unused (reserved for skill-keyed config).
+- `n_points` (int, default `101`): CRYSOL `--ns` (number of calculated points).
+- `smax_nm` (float, default `5.0`): Maximum q in **nm⁻¹** (converted to Å⁻¹ for CRYSOL `--smax`).
+- `lm` (int, default `20`): Number of spherical harmonics (`--lm`).
+- `constant` (bool, default `False`): Enable CRYSOL constant subtraction when fitting.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict[str, str]` with:
+
+- `profile_path`: Theoretical I(q) as autosaxs `.dat` (q in nm⁻¹).
+- `int_path`: Raw CRYSOL `.int` (q in Å⁻¹).
+- `abs_path`: Raw CRYSOL `.abs` when present, else empty.
+- `log_path`: CRYSOL `.log`.
+- `fit_path`: Autosaxs-style fit comparison `.dat` when `profile` was given, else empty.
+- `fit_plot_path`: Overlay PNG when fitting, else empty.
+- `structure_used_path`: Coordinate file actually passed to CRYSOL (pseudo-PDB for `.xyz`).
+- `output_subdir`: Output directory for this sample.
+
+Requires ATSAS CRYSOL on `PATH` (see `autosaxs doctor`).
+
+### Python usage
+
+```python
+from autosaxs.skill import calc_profile
+
+out = calc_profile("model.pdb", output_dir="crysol_out", smax_nm=5.0)
+print(out["profile_path"])
+
+out_xyz = calc_profile("cluster.xyz", output_dir="crysol_xyz")
+out_fit = calc_profile("model.pdb", output_dir="crysol_fit", profile="exp.dat")
+```
+
+### CLI usage
+
+```bash
+autosaxs calc-profile model.pdb --output-dir crysol_out --smax-nm 5.0
+autosaxs calc-profile cluster.xyz -o crysol_xyz
+autosaxs calc-profile model.pdb --profile exp.dat -o crysol_fit
+```
 
 ---
 
 ## `model_lc`
 
+SAXS / small-angle x-ray scattering: fit an experimental profile as a nonnegative linear
+combination of library curves (custom NNLS — **not** ATSAS OLIGOMER).
 
+Library input is either:
+
+- one CSV: column 0 = q (nm⁻¹), remaining columns = component intensities; or
+- a path expression / directory / glob / comma-list of `.dat` curves.
+
+When the library has more curves than `n_components`, all combinations of size
+``k = 1..n_components`` are scored with NNLS and the lowest χ² wins.
+
+**Complexity:** for library size ``N`` and ``k_max = n_components``, the search evaluates
+``Σ_{k=1}^{k_max} C(N,k)`` NNLS problems, each roughly ``O(n_q · k²)``. Prefer
+``N ≲ 50`` for ``k_max=3`` (``C(50,3)=19600``). When ``N ≤ n_components``, a single
+NNLS on all columns is used (fast path).
+
+Curves are interpolated onto the experimental q grid (nm⁻¹). Points outside a component's
+q coverage are excluded from that component's column (set NaN → row dropped if any NaN).
+
+### Arguments
+
+- `profile` (str): Experimental 1D path expression (file/directory/glob → `.dat`).
+- `database` (str): Library CSV **or** `.dat` path expression / directory / glob / list.
+- `output_dir` (str, default `.`): Directory where outputs are written.
+- `config_path` (str | None, default `None`): Deprecated. Unused.
+- `n_components` (int, default `3`): Maximum number of library curves in the combination (1–3).
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict[str, str]` with:
+
+- `fit_path`: Fitted I(q) autosaxs `.dat` (q in nm⁻¹).
+- `residual_path`: Residual (I_exp − I_fit) `.dat`.
+- `weights_path`: CSV of chosen component names/indices and nonnegative weights.
+- `plot_path`: Overlay PNG (experiment vs fit ± components).
+- `components_used`: Comma-separated component labels chosen by the search.
+- `chi2`: Reduced χ² string (for CLI/path-dict stability).
+- `output_subdir`: Output directory for this sample.
+
+Does **not** require ATSAS.
+
+### Python usage
+
+```python
+from autosaxs.skill import model_lc
+
+out = model_lc(
+    profile="subtracted/sample.dat",
+    database="library/",           # dir of .dat
+    output_dir="lc_out",
+    n_components=3,
+)
+# or: database="ff_library.csv"
+print(out["weights_path"], out["components_used"])
+```
+
+### CLI usage
+
+```bash
+autosaxs model-lc subtracted/sample.dat library/ --output-dir lc_out --n-components 3
+autosaxs model-lc sample.dat ff_library.csv -o lc_out --n-components 2
+```
 
 ---
 
 ## `model_mixture`
 
+SAXS / small-angle x-ray scattering: run MIXTURE fits on a 1D subtracted curve, select the best model by BIC, and write a comparison plot, size distribution plot, and results CSV.
 
+### Arguments
+
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where the outputs are written.
+- `config_path` (str | None, default `None`): Deprecated. YAML/config with a `model_mixture` section. When omitted, bundled defaults apply.
+- `q_min_nm` / `q_max_nm` (float | None): Optional q bounds (nm^-1). Defaults to None.
+- `maxit` (int, default `100`): Number of optimization iterations. Defaults to 100.
+- `max_nph` (int, default `3`): Number of phases.
+- `plot_I_q` (bool, default `False`): Write I vs q fit comparison plot (labels show BIC).
+- `plot_logI_logq` (bool, default `False`): Write log I vs log q fit comparison plot (labels show BIC_log).
+- `plot_logI_q` (bool, default `True`): Write log I vs q fit comparison plot (labels show chi2).
+- `r_min` (float | None): Minimum radius (nm). Defaults to `0.1`. Converted to Å internally for ATSAS MIXTURE.
+- `r_max` (float | None): Maximum radius (nm). Defaults to `rmax_nm` from in-process `fit_sizes`.
+- `poly_min` (float | None): Minimum polydispersity (nm). Defaults to `0.05`.
+- `poly_max` (float | None): Maximum polydispersity (nm). Defaults to `0.5 × r_max`.
+- `init_radii_nm` (str | None): Comma-separated per-phase outer-radius starts in nm
+  (ATSAS MIXTURE ``Rout``). Example: ``"2.5,5.0"``. Overrides D(R) peak seeding.
+- `init_fractions` (str | None): Comma-separated per-phase volume-fraction starts
+  (normalized to sum 1). Example: ``"0.7,0.3"``.
+- `init_poly_nm` (str | None): Comma-separated per-phase polydispersity starts in nm.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+Component init priority: explicit ``init_*`` → fit_sizes ``peak_positions_nm`` (radii
+only) → skill defaults. ATSAS MIXTURE also fixes inner radius/contrast, outer
+contrast, sticky=0, and derives hard-sphere radius from Rout (not user-settable).
+
+### Short parameter list
+
+- q_min_nm: start of fit region
+- q_max_nm: end of fit region
+- maxit: number of optimization iterations, default: 100
+- r_min: size lower bound
+- r_max: size upper bound
+- poly_min: spread lower bound
+- poly_max: spread upper bound
+- init_radii_nm: comma-separated Rout starts (nm)
+- init_fractions: comma-separated volume fractions
+- init_poly_nm: comma-separated poly starts (nm)
+
+### Returns
+
+`dict[str, str]` with:
+
+- `output_subdir`: The subdirectory that contains MIXTURE outputs.
+- `comparison_path`: Path to the I vs q comparison plot (empty when `plot_I_q=False`).
+- `comparison_loglog_path`: Path to the log I vs log q comparison plot (empty when `plot_logI_logq=False`).
+- `comparison_log_path`: Path to the log I vs q comparison plot (empty when `plot_logI_q=False`).
+- `distributions_path`: Path to the MIXTURE size distributions plot.
+- `results_csv_path`: Path to the MIXTURE results CSV.
+- `r_max_nm` / `poly_max_nm`: Resolved MIXTURE radius bounds (nm), including defaults when omitted.
+- `r_min_nm` / `poly_min_nm`: Resolved MIXTURE radius/polydispersity floors (nm).
+
+### Python usage
+
+```python
+from autosaxs.skill import model_mixture
+
+out = model_mixture(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="mixture",
+    q_min_nm=0.8,
+    q_max_nm=2.5,
+    use_cache=False,
+)
+
+print(out["results_csv_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs model-mixture subtracted/sub_sample_01.dat --output-dir mixture/ 
+autosaxs model-mixture subtracted/sub_sample_01.dat--q-min-nm 0.8 --q-max-nm 2.5 --r-max 10.0 -o mixture/
+```
 
 ---
 
 ## `model_bodies`
 
+SAXS / small-angle x-ray scattering: run ATSAS `bodies` shape fitting for multiple candidate shapes on a 1D profile.
 
+### Arguments
+
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where the outputs are written.
+- `config_path` (str | None, default `None`): Deprecated. YAML/config with a `model_bodies` section. When omitted, bundled defaults apply.
+- `shapes` (list[str] | None, default `None`): Subset of body model names to fit. `None` or empty means fit **all** models (single `bodies` invocation). A non-empty list runs `bodies --body=...` per shape.
+- `first` (int | None, default `None`): Passed to `bodies` as `--first` (1-based data point index). If omitted, taken from the low-q end of the Guinier interval from in-process `fit_guinier`.
+- `last` (int | None, default `None`): Passed to `bodies` as `--last` (1-based data point index). Omitted when `None`.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict[str, str]` with:
+
+- `output_subdir`: Directory containing the exported `bodies` fit artifacts.
+
+The directory typically contains multiple per-shape FIT files plus aggregated `bodies_fits.yml` and `bodies_fits.csv` if any shapes successfully fit. Each fitted shape also gets `{shape}_pr.dat` and `{shape}_pr.png` (GNOM-style p(r) from the voxel DAM used for 3D views, via Monte Carlo bead-pair sampling).
+
+### Python usage
+
+```python
+from autosaxs.skill import model_bodies
+
+out = model_bodies(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="bodies",
+    shapes=["cylinder", "ellipsoid"],
+    first=10,
+    last=120,
+    use_cache=False,
+)
+
+print(out["output_subdir"])
+```
+
+### CLI usage
+
+```bash
+autosaxs model-bodies subtracted/sub_sample_01.dat --output-dir bodies --shapes cylinder ellipsoid --first 10 --last 120
+```
 
 ---
 
 ## `model_dam`
 
-Ab initio DAMMIF / DAMAVER bead-model skill (``model_dam`` / ``autosaxs model-dam``).
+SAXS / small-angle x-ray scattering: ab initio bead-model shape reconstruction with ATSAS DAMMIF, optionally followed by DAMAVER ensemble averaging. When no GNOM `.out` is supplied, `fit_distances` is run in-process to obtain one.
+
+### Arguments
+
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where the outputs are written.
+- `gnom_path` (str | None, default `None`): Optional path to a GNOM/DATGNOM `.out` file for DAMMIF. If omitted, `fit_distances` is run in-process on `profile` and its `best_gnom_out_path` is used.
+- `n_runs` (int, default `1`): Number of independent DAMMIF runs. When `>1`, DAMAVER is run on the particle models. Defaults to 1.
+- `dammif_mode` (str, default `fast`): DAMMIF annealing mode: `fast` or `slow`. Defaults to `fast`.
+- `visualize_all` (bool, default `False`): When True, write PNGs/GIFs under `{output}/visuals/` (synced per-run rotation GIFs, overlap, occupancy threshold; nm scale bar; no run/title captions). Defaults to `False`.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict[str, str | list[str]]` with:
+
+- `output_subdir`: Directory containing DAMMIF fit artifacts (FIR/CIF and summary files). Each replica also gets `{rep}_pr.dat` and `{rep}_pr.png` (GNOM-style p(r) from DAM bead pairs via Monte Carlo).
+- `best_cif_path`: `best.cif` convenience path (relative symlink, or a copy when symlink creation is blocked) pointing at the most probable particle CIF (the sole run when `n_runs=1`).
+- `best_view_path`: Path to ``best_view.png`` (isosurface + fit overlay for the best model); empty if unavailable.
+- `frequency_map_path`: Path to the DAMAVER frequency/occupancy map CIF (empty string when `n_runs=1`).
+- `visuals_dir`, `overlap_png`, `overlap_gif`, `occupancy_png`, `occupancy_gif`, `occupancy_thresholds_png`, `run_gifs` when `visualize_all=True` (empty strings / empty list otherwise).
+
+### Python usage
+
+```python
+from autosaxs.skill import model_dam
+
+out = model_dam(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="dammif",
+    gnom_path="guinier/sample_01_gnom.out",
+    n_runs=1,
+    dammif_mode="fast",
+    visualize_all=False,
+    use_cache=False,
+)
+
+print(out["output_subdir"], out["best_cif_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs model-dam subtracted/sub_sample_01.dat --output-dir dammif --n-runs 1 --dammif-mode fast
+autosaxs model-dam subtracted/sub_sample_01.dat --output-dir dammif --n-runs 5 --visualize-all
+```
 
 ---
 
 ## `model_density`
 
-Ab initio DENSS electron-density skill (``model_density`` / ``autosaxs model-density``).
+SAXS / small-angle x-ray scattering: ab initio continuous electron-density reconstruction with DENSS (Grant protocol; density map / FSC resolution / voxel σ map).
+
+### Arguments
+
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where the outputs are written.
+- `gnom_path` (str | None, default `None`): Optional GNOM/DATGNOM `.out` used only for \(D_{\max}\) (nm→Å). Smooth \(I(q)\) comes from the staged Å `.dat` (DENSS may fit internally).
+- `mode` (str, default `pilot`): Protocol stage: `pilot`, `average`, or `refined`. Defaults to `pilot`.
+- `denss_mode` (str, default `slow`): DENSS algorithm mode: `slow`, `fast`, or `membrane`. Defaults to `slow`.
+- `n_maps` (int, default `20`): Number of reconstructions for `average`/`refined` (ignored in `pilot`; must be ≥2 when used). Defaults to 20.
+- `n_jobs` (int, default `1`): Parallel cores for denss-all. Defaults to 1.
+- `visualize_all` (bool, default `True`): When True, write slice GIF/PNG and rotating density/σ GIFs under `{output}/visuals/`. Defaults to `True`.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Short parameter list
+
+- mode: Run mode: pilot - quick map view; average - average map across mutliple runs; refined - refined from averaged; default - pilot
+- denss_mode: Internal parameter, recommended not to change, default: slow
+- n_maps: Number of independent run for average; default 20
+- visualize_all: Run visualizations, default: true
+
+### Returns
+
+`dict[str, str]` with:
+
+- `output_subdir`: Directory containing DENSS artifacts for this sample.
+- `density_map_path`: Primary density MRC (pilot map, average map, or refined map).
+- `avg_map_path`: Averaged MRC path when averaging ran; empty string for `pilot`.
+- `sigma_map_path`: Voxel-wise density σ MRC from denss-all `*_aligned.mrc` stack when averaging ran; empty string for `pilot`.
+- `fsc_path`: FSC curve path when averaging ran; empty string otherwise.
+- `map_fit_path`: Calculated vs experimental fit file when present; else empty.
+- `denss_log_path`: Main log for the completed mode.
+- `visuals_dir`, `slices_gif`, `midplanes_png`, `density_rotate_gif`, `sigma_rotate_gif` when `visualize_all=True` (empty strings otherwise; `sigma_rotate_gif` empty in `pilot`).
+
+### Python usage
+
+```python
+from autosaxs.skill import model_density
+
+out = model_density(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="denss",
+    mode="pilot",
+    denss_mode="slow",
+    use_cache=False,
+)
+
+print(out["density_map_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs model-density subtracted/sub_sample_01.dat --output-dir denss/ 
+autosaxs model-density subtracted/sub_sample_01.dat --mode average --denss-mode slow --n-maps 10 --n-jobs 4 -o denss/
+```
 
 ---
 
 ## `process_monodisperse`
 
-Meta-skill: monodisperse single-profile quality pipeline (Guinier onward).
+SAXS / small-angle x-ray scattering: run the monodisperse single-profile quality pipeline
+(Guinier → dimensionless Kratky → DATGNOM p(r) / Shannon–ΔRg passport → optional DAMMIF
+when the shared modeling gate passes → per-sample PDF report).
 
-Wires existing leaf skills only — no reimplementation of Guinier / Kratky / GNOM / DAMMIF math.
-Sequence follows ``docs/saxs_quality_guide_newest.docx`` steps 4–7 and 9
-(omit calibration, radiation averaging, buffer subtraction, and polydisperse step 8).
-Optional ``model_dam`` when the shared modeling gate passes
-(``autosaxs.core.gnom_quality.allows_modeling``).
+**Modeling gate** (``allows_modeling`` on the fit_distances passport — same helper as
+poly MIXTURE): start DAMMIF only when **all** of the following hold:
+
+- Total Estimate **> 0.3** (hard floor; passport ``high_quality`` still uses ≥ 0.55)
+- Reduced χ² in the acceptable passport band [0.3, 2.5]
+  (``chi2_class`` ``high_quality`` or ``acceptable``)
+- ΔRg ≤ 15% (passport acceptable band; mono p(r) only)
+- ``detail_reliability_class`` is not ``SUSPICIOUS``
+- Shannon ``s_min`` < 2.0 (class not ``unreliable``)
+- ``n_shannon`` ≥ 8 (``DEFAULT_DETAIL_N_SHANNON_FLOOR``)
+
+**First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
+**and** a pipeline config is available (``config.conf`` in that dir, or
+``config_path`` / ``--conf``), run the TIFF full pipeline (calibrate → integrate →
+average as needed → pair/subtract via ``buffer_rules``) then analyze each
+profile (subtracted when paired; unsubtracted when RHS is ``""``). Unmatched
+curves are skipped. Otherwise treat ``profile`` as subtracted ``.dat``
+path(s) (backward compatible). TIFF dir without config → clear
+``FileNotFoundError`` (not silent fallthrough). Explicit folder+config
+router: ``process_full`` (reads ``analysis: mono|poly``).
+
+### Arguments
+
+- `profile` (str): Subtracted 1D path expression (file/directory/glob of `*.dat`),
+  **or** a TIFF frames directory (see inference above). Directories expand
+  non-recursively for ``.dat`` mode.
+- `output_dir` (str, default `.`): Pipeline root; leaf skills write under subdirectories here.
+- `config_path` (str | None, default `None`): Optional YAML config forwarded to leaf skills
+  (and required for TIFF full-pipeline inference when ``<dir>/config.conf`` is absent).
+- `first` / `last` (int | None): Optional fixed Guinier interval (1-based); both required together.
+  Guinier `first` is forwarded to DATGNOM; Guinier `last` is **not** passed to DATGNOM
+  (window too narrow for p(r)).
+- `smooth` (float | None, default `None`): Optional DATGNOM `--smooth` for `fit_distances`.
+- `n_runs` (int, default `5`): DAMMIF replica count for `model_dam` when the modeling gate passes.
+- `use_cache` (bool, default `False`): Forwarded to leaf skills.
+
+### Returns
+
+`dict` with:
+
+- `report_pdf_path`: Primary PDF quality passport (when written).
+- `assembled_report_md_path`: Merged Markdown report.
+- `pipeline_dir`: The `output_dir` used as the pipeline root.
+- `basename`: Sample basename used for report assembly.
+- `model_dam_ran`: Whether `model_dam` was invoked.
+- `model_dam_skip_reason`: Why DAMMIF was skipped (empty when run).
+- `fit_guinier`: Return dict from `fit_guinier`.
+- `analyze_kratky`: Return dict from `analyze_kratky`.
+- `fit_distances`: Return dict from `fit_distances`.
+- `model_dam`: Return dict from `model_dam` (empty dict when skipped).
+- `report_individual`: Return dict from `report_individual`.
+- `tiff_front` (only when TIFF full pipeline ran): TIFF front-end return dict.
+
+### Python usage
+
+```python
+from autosaxs.skill import process_monodisperse
+
+out = process_monodisperse(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="mono_out",
+)
+print(out["report_pdf_path"])
+
+# TIFF directory + config.conf (mono analysis after subtract):
+out = process_monodisperse("/data/run01", output_dir="mono_out")
+```
+
+### CLI usage
+
+```bash
+autosaxs process-monodisperse subtracted/sub_sample_01.dat --output-dir mono_out
+autosaxs process-monodisperse /data/run01 --conf /data/run01/config.conf -o mono_out
+# or explicit folder+config router (reads analysis: mono|poly):
+autosaxs process-full /data/run01 --conf /data/run01/config.conf -o mono_out
+```
 
 ---
 
 ## `process_polydisperse`
 
-Meta-skill: polydisperse single-profile quality pipeline (Guinier onward).
+SAXS / small-angle x-ray scattering: run the polydisperse single-profile quality pipeline
+(Guinier → GNOM D(R) / size-distribution passport → optional MIXTURE when requested and
+the shared modeling gate passes → per-sample PDF report).
 
-Wires existing leaf skills only — no reimplementation of Guinier / GNOM / MIXTURE math.
-Sequence: fit_guinier → fit_sizes → optional model_mixture (opt-in + modeling gate) →
-report_individual. Omits calibration, radiation averaging, buffer subtraction, and
-monodisperse-only steps (Kratky / DATGNOM / DAMMIF).
+**Modeling gate** (``allows_modeling`` on the fit_sizes passport — same helper as
+mono DAM): when ``run_mixture=True``, start MIXTURE only when **all** of the
+following hold:
+
+- Total Estimate **> 0.3** (hard floor; passport ``high_quality`` still uses ≥ 0.55)
+- Reduced χ² in the acceptable passport band [0.3, 2.5]
+  (``chi2_class`` ``high_quality`` or ``acceptable``)
+- ``detail_reliability_class`` is not ``SUSPICIOUS``
+- Shannon ``s_min`` < 2.0 (class not ``unreliable``)
+- ``n_shannon`` ≥ 8 (``DEFAULT_DETAIL_N_SHANNON_FLOOR``)
+
+ΔRg is mono p(r)-only and is skipped for D(R). ``run_mixture`` remains an
+independent opt-in (default ``False``).
+
+**First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
+**and** a pipeline config is available (``config.conf`` in that dir, or
+``config_path`` / ``--conf``), run the TIFF full pipeline (calibrate → integrate →
+average as needed → pair/subtract via ``buffer_rules``) then analyze each
+profile (subtracted when paired; unsubtracted when RHS is ``""``). Unmatched
+curves are skipped. Otherwise treat ``profile`` as subtracted ``.dat``
+path(s) (backward compatible). TIFF dir without config → clear
+``FileNotFoundError`` (not silent fallthrough). Explicit folder+config
+router: ``process_full`` (reads ``analysis: mono|poly``).
+
+### Arguments
+
+- `profile` (str): Subtracted 1D path expression (file/directory/glob of `*.dat`),
+  **or** a TIFF frames directory (see inference above). Directories expand
+  non-recursively for ``.dat`` mode.
+- `output_dir` (str, default `.`): Pipeline root; leaf skills write under subdirectories here.
+- `config_path` (str | None, default `None`): Optional YAML config forwarded to leaf skills
+  (and required for TIFF full-pipeline inference when ``<dir>/config.conf`` is absent).
+- `first` / `last` (int | None): Optional fixed Guinier interval (1-based); both required together.
+  Guinier `first` is forwarded to `fit_sizes` when set (or when auto-Guinier succeeds); Guinier
+  `last` is **not** passed to GNOM D(R) (same narrow-window rule as mono DATGNOM).
+- `shape` (str, default `spheres`): Forwarded to `fit_sizes` (currently spheres).
+- `q_min` / `q_max` (float | None): Optional `fit_sizes` q bounds (nm⁻¹). When set, they override
+  Guinier-first handoff for the corresponding end (do not combine `q_min` with an implicit first).
+- `run_mixture` (bool, default `False`): When `True`, run `model_mixture` if the shared
+  modeling gate passes. Default stays off to match liveview auto / real-data light
+  (MIXTURE is interactive Confirm in GUI).
+- `use_cache` (bool, default `False`): Forwarded to leaf skills.
+
+### Returns
+
+`dict` with:
+
+- `report_pdf_path`: Primary PDF quality passport (when written).
+- `assembled_report_md_path`: Merged Markdown report.
+- `pipeline_dir`: The `output_dir` used as the pipeline root.
+- `basename`: Sample basename used for report assembly.
+- `model_mixture_ran`: Whether `model_mixture` was invoked.
+- `model_mixture_skip_reason`: Why MIXTURE was skipped (empty when run).
+- `fit_guinier`: Return dict from `fit_guinier`.
+- `fit_sizes`: Return dict from `fit_sizes`.
+- `model_mixture`: Return dict from `model_mixture` (empty dict when skipped).
+- `report_individual`: Return dict from `report_individual`.
+- `tiff_front` (only when TIFF full pipeline ran): TIFF front-end return dict.
+
+### Python usage
+
+```python
+from autosaxs.skill import process_polydisperse
+
+out = process_polydisperse(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="poly_out",
+)
+print(out["report_pdf_path"])
+
+# TIFF directory + config.conf (poly analysis after subtract):
+out = process_polydisperse("/data/run01", output_dir="poly_out")
+```
+
+### CLI usage
+
+```bash
+autosaxs process-polydisperse subtracted/sub_sample_01.dat --output-dir poly_out
+autosaxs process-polydisperse /data/run01 --conf /data/run01/config.conf -o poly_out
+# or explicit folder+config router (reads analysis: mono|poly):
+autosaxs process-full /data/run01 --conf /data/run01/config.conf -o poly_out
+```
 
 ---
 
 ## `process_full`
 
-Meta-skill: YAML-driven TIFF directory → analysis PDF report(s).
+SAXS / small-angle x-ray scattering: process a directory of TIFF frames to
+per-sample PDF quality reports using a small YAML pipeline config.
 
-Thin router: load pipeline config (``analysis: mono|poly``) and delegate to
-``process_monodisperse`` / ``process_polydisperse`` with the frames directory as
-the first path argument. Those meta-skills infer the TIFF full pipeline from
-that path (see ``tiff_pipeline.resolve_frames_dir_for_tiff_pipeline``).
+This skill is the explicit **folder + config** entry. It requires top-level
+``analysis: mono|poly``, then delegates to ``process_monodisperse`` or
+``process_polydisperse`` with ``frames_dir`` as the first path argument. The
+meta-skill infers TIFF full-pipeline mode (calibrate → integrate → average
+as needed → subtract → analysis) when that directory contains TIFFs and a
+config is available.
+
+Equivalent to calling the mono/poly meta-skill directly with the frames
+directory as the first argument (and a matching analysis choice).
+
+### Config (``config.conf`` / ``.yaml`` in the frames directory, or ``--conf``)
+
+```yaml
+calibrant: "*AgBh*.tif"          # basename fnmatch glob (default)
+buffer_rules:                    # ordered sample_expr → buffer_expr ({capture} + *)
+  "*{stem}_sample*": "*{stem}_buffer*"
+  # "*protein*": ""              # explicit no-buffer sample (skip subtract, still analyze)
+analysis: mono                   # required: mono | poly
+# optional leaf overrides:
+# calibrate: { wavelength: 1.445 }
+# subtract: { q_min: 4.5, q_max: 5.5 }
+```
+
+Matching is basename ``*`` / ``{capture}`` patterns (no regex). Calibrant:
+lexicographically first match. Buffer pairing uses the shared
+``autosaxs.core.buffer_rules`` matcher. Outcomes: unique pair → subtract;
+RHS ``""`` → skip subtract but continue analysis on unsubtracted 1D; no
+sample-expr match → silent skip (not analyzed); multi-match / 0/>1 buffers →
+hard error with diagnostics. The old shared-single-buffer fallback is gone —
+write an explicit rule when one buffer serves many samples.
+
+### Arguments
+
+- `frames_dir` (str): Directory of TIFF frames (non-recursive ``*.tif`` / ``*.tiff``).
+- `output_dir` (str, default `.`): Pipeline root (`integrator/`, `averaged/`,
+  `subtracted/`, per-sample analysis trees).
+- `config_path` (str | None, default `None`): YAML config; default
+  ``<frames_dir>/config.conf``.
+- `use_cache` (bool, default `False`): Forwarded to leaf skills.
+- `n_runs` (int, default `5`): Forwarded to ``process_monodisperse`` (DAMMIF replicas).
+- `run_mixture` (bool, default `False`): Forwarded to ``process_polydisperse``.
+
+### Returns
+
+`dict` with the analysis meta-skill return keys, plus:
+
+- `analysis`: ``mono`` or ``poly``.
+- `config_path`: Resolved config path.
+- `frames_dir`: Absolute frames directory.
+- `report_pdf_path`: PDF path(s) from the analysis meta-skill.
+- `tiff_front`: Present when the TIFF front-end ran (usual for this entry).
+- `analysis_out`: Full return dict from ``process_monodisperse`` / ``process_polydisperse``.
+
+### Python usage
+
+```python
+from autosaxs.skill import process_full
+
+out = process_full("/data/run01", output_dir="/data/run01/out")
+print(out["report_pdf_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs process-full /data/run01
+autosaxs process-full /data/run01 --conf /data/run01/config.conf -o /data/run01/out
+# same TIFF inference via mono/poly first arg:
+autosaxs process-monodisperse /data/run01 --conf /data/run01/config.conf -o /data/run01/out
+```
 
 ---
 
 ## `report_individual`
 
+SAXS / small-angle x-ray scattering: build a per-sample report from an existing pipeline directory.
 
+Assembles decentralized ``*_report_individual.md`` fragments, writes
+``<pipeline>/reports/<basename>_assembled_report.md``, and builds the PDF with **ReportLab**
+from that Markdown (headings, text, images, simple tables).
+
+### Arguments
+
+- `directory` (str): Path to the existing pipeline output directory (the place where intermediate results live).
+- `basename` (str): Sample identifier used to match intermediate artifacts within `directory`.
+- `output_dir` (str, default `.`): Unused for default paths; PDF/MD default to ``<directory>/reports/``.
+- `output_path` (str | None, default `None`): Output PDF path; default ``<directory>/reports/<basename>_report.pdf``.
+- `output_md_path` (str | None, default `None`): Optional path for merged Markdown.
+- `write_pdf` (bool, default `True`): Whether to emit a PDF.
+- `use_cache` (bool, default `False`): Present for CLI parity; unused.
+
+### Returns
+
+`dict[str, Any]` with:
+
+- `report_pdf_path`: Path to the generated PDF when ``write_pdf`` is True.
+- `assembled_report_md_path`: Path to merged Markdown.
+- `fragments_found`: Number of fragment files merged.
+
+### Python usage
+
+```python
+from autosaxs.skill import report_individual
+
+out = report_individual(
+    directory="pipeline_out",
+    basename="sample_01",
+    output_dir="reports",
+)
+
+print(out["report_pdf_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs report-individual pipeline_out sample_01 --output-dir reports
+```
 
 ---
 
 ## `report_summary`
 
+SAXS / small-angle x-ray scattering: build a summary report for all samples in a pipeline directory.
 
+Merges decentralized ``*_report_summary.yaml`` files into Markdown under
+``<directory>/reports/summary_assembled_report.md`` and renders the PDF with **ReportLab**
+from that Markdown.
+
+### Arguments
+
+- `directory` (str): Path to the existing pipeline output directory.
+- `output_dir` (str, default `.`): Unused for default paths; outputs go under ``<directory>/reports/``.
+- `output_path` (str | None, default `None`): Output PDF path; default ``<directory>/reports/summary_report.pdf``.
+- `output_md_path` (str | None, default `None`): Output path for merged summary Markdown.
+- `write_pdf` (bool, default `True`): Whether to emit a PDF.
+- `use_cache` (bool, default `False`): Present for CLI parity; unused.
+
+### Returns
+
+`dict[str, Any]` with:
+
+- `report_pdf_path`: Path to the generated PDF when requested.
+- `assembled_summary_md_path`: Merged Markdown path.
+
+### Python usage
+
+```python
+from autosaxs.skill import report_summary
+
+out = report_summary(
+    directory="pipeline_out",
+    output_dir="reports",
+)
+
+print(out["report_pdf_path"])
+```
+
+### CLI usage
+
+```bash
+autosaxs report-summary pipeline_out --output-dir reports
+```
 
 ---

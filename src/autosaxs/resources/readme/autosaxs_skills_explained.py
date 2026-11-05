@@ -50,16 +50,11 @@ def _copy_readme_images(output_dir: Path) -> Path:
 def _skill_sections() -> str:
     from autosaxs import skill as skill_mod
 
-    skills = skill_mod.list_skills(include_reports=True)
-    names = list(getattr(skill_mod, "SKILL_ORDER", []))
-    for extra in sorted(set(skills) - set(names)):
-        names.append(extra)
-
+    # Use get_skill (eager) so docs come from real skill callables, not lazy stubs.
+    names = skill_mod.list_skill_names(include_reports=True)
     parts: list[str] = []
     for name in names:
-        fn = skills.get(name)
-        if fn is None:
-            continue
+        fn = skill_mod.get_skill(name)
         doc = inspect.getdoc(fn) or ""
         parts.append(f"\n## `{name}`\n\n{doc.rstrip()}\n\n---\n")
     return "".join(parts)
