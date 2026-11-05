@@ -5,6 +5,7 @@ this module for new code; ``utils`` re-exports these names temporarily.
 """
 from __future__ import annotations
 
+import re
 from io import StringIO
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Optional, Tuple
