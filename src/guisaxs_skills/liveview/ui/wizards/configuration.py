@@ -20,8 +20,6 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from guisaxs_skills.ui.style import COLOR_ACCENT, COLOR_MUTED_TEXT, COLOR_QUALITY_WARN
-
 from ...session.watchdir_config import (
     DEFAULT_CONFIG_SEED_TEXT,
     effective_config_path,
@@ -30,6 +28,12 @@ from ...session.watchdir_config import (
     validate_config_text,
     write_config_text,
 )
+
+# High-contrast colors for dark liveview editors (not shared style tokens —
+# COLOR_MUTED_TEXT / COLOR_QUALITY_WARN are too close to body text on #0f151d).
+_YAML_COLOR_COMMENT = "#7ee787"  # soft green comments
+_YAML_COLOR_KEY = "#79c0ff"  # bright keys
+_YAML_COLOR_STRING = "#ffa657"  # warm string values
 
 
 class _YamlHighlighter(QSyntaxHighlighter):
@@ -44,11 +48,11 @@ class _YamlHighlighter(QSyntaxHighlighter):
     def __init__(self, document) -> None:
         super().__init__(document)
         self._fmt_comment = QTextCharFormat()
-        self._fmt_comment.setForeground(QColor(COLOR_MUTED_TEXT))
+        self._fmt_comment.setForeground(QColor(_YAML_COLOR_COMMENT))
         self._fmt_key = QTextCharFormat()
-        self._fmt_key.setForeground(QColor(COLOR_ACCENT))
+        self._fmt_key.setForeground(QColor(_YAML_COLOR_KEY))
         self._fmt_string = QTextCharFormat()
-        self._fmt_string.setForeground(QColor(COLOR_QUALITY_WARN))
+        self._fmt_string.setForeground(QColor(_YAML_COLOR_STRING))
 
     def highlightBlock(self, text: str) -> None:  # noqa: N802 - Qt API
         key_m = self._RE_KEY.match(text)
@@ -75,12 +79,14 @@ class _YamlHighlighter(QSyntaxHighlighter):
 
 def _monospace_editor() -> QPlainTextEdit:
     editor = QPlainTextEdit()
+    editor.setObjectName("yamlConfigEditor")
     editor.setLineWrapMode(QPlainTextEdit.NoWrap)
     font = editor.font()
     font.setFamily("monospace")
     font.setStyleHint(font.Monospace)
     editor.setFont(font)
-    _YamlHighlighter(editor.document())
+    # Keep a Python ref: SIP can GC the highlighter if only the QObject parent holds it.
+    editor._yaml_highlighter = _YamlHighlighter(editor.document())  # type: ignore[attr-defined]
     return editor
 
 

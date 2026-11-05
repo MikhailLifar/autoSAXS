@@ -190,13 +190,24 @@ def _app_stylesheet(point_size: int) -> str:
 
         QSplitter::handle {{ background: #0f151d; }}
 
-        QLineEdit, QTextEdit, QPlainTextEdit,
+        /* QTextEdit / QPlainTextEdit: do NOT set ``color`` here — QSS color
+           overrides QTextCharFormat and kills QSyntaxHighlighter. Default text
+           color comes from the app QPalette (Text). */
+        QLineEdit,
         QComboBox, QSpinBox, QDoubleSpinBox {{
             background: #0f151d;
             border: 1px solid #2a3646;
             border-radius: {radius}px;
             padding: {pad}px;
             color: #e7eef6;
+            selection-background-color: #4c8dff;
+            selection-color: #ffffff;
+        }}
+        QTextEdit, QPlainTextEdit {{
+            background: #0f151d;
+            border: 1px solid #2a3646;
+            border-radius: {radius}px;
+            padding: {pad}px;
             selection-background-color: #4c8dff;
             selection-color: #ffffff;
         }}
