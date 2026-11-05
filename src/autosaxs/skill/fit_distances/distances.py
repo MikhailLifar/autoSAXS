@@ -66,13 +66,13 @@ def fit_distances(
     force_zero_rmin: Optional[str] = None,
     force_zero_rmax: Optional[str] = None,
     minimal: bool = False,
-    full_grid: bool = False,
+    full_grid: bool = True,
     use_cache: bool = False,
 ) -> Dict[str, Union[str, List[str]]]:
     r"""
     SAXS / small-angle x-ray scattering: obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve via ATSAS GNOM (real-space distance distribution).
 
-    **Auto path** (when `dmax_nm` is omitted): Guinier \(R_g\) (tool only) → **Fast AutoGNOM** — global NumPy Tikhonov search over Shannon-bound \(D_{\max}\times\log_{10}\alpha\), then local Nelder–Mead polish with ATSAS `gnom` as oracle → pick by interpretable **`shape_tight_extent`** score (soft taper, non‑negativity, low wiggle, χ² guardrail, extent band \(\sim 3.2\)–\(5\times R_g\)). Units: \(q\) in nm⁻¹, lengths in nm. Does **not** use Autorg→DATGNOM TOTAL selection (clarity over deposit‑Dmax matching). Pass `full_grid=True` to restore the legacy 31×11 serial ATSAS grid.
+    **Auto path** (when `dmax_nm` is omitted): Guinier \(R_g\) (tool only) → default **31×11 serial ATSAS ``gnom`` Shannon×α grid** (same quality path as remote ``main``) → pick by interpretable **`shape_tight_extent`** score. Units: \(q\) in nm⁻¹, lengths in nm. Does **not** use Autorg→DATGNOM TOTAL selection (clarity over deposit‑Dmax matching). Pass `full_grid=False` for experimental Fast AutoGNOM (NumPy Tikhonov global search + local ATSAS polish) — not the liveview default.
 
     **Refine path** (when `dmax_nm` is set): single GNOM `--rmax` run at the given Dmax (optional fixed `--alpha`), plus Dmax±10% close-fits ensemble unless `minimal=True`.
 
@@ -91,7 +91,7 @@ def fit_distances(
     - `force_zero_rmin` (str | None, default `None`): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
     - `force_zero_rmax` (str | None, default `None`): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y`.
     - `minimal` (bool, default `False`): When `True`, write only the selected `.out` and remove any previous `ensemble/` (no close-fits / force-zero-off probe). Applies to both auto and refine paths.
-    - `full_grid` (bool, default `False`): When `True` on the auto path, use the legacy 31×11 serial ATSAS `gnom` grid instead of Fast AutoGNOM (reproducibility / A/B).
+    - `full_grid` (bool, default `True`): On the auto path, use the 31×11 serial ATSAS `gnom` Shannon×α grid (default; matches remote-main quality). Set `False` for experimental Fast AutoGNOM.
     - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
     ### Returns
@@ -220,7 +220,7 @@ def _fit_distances_paths(
     force_zero_rmin: Optional[str] = None,
     force_zero_rmax: Optional[str] = None,
     minimal: bool = False,
-    full_grid: bool = False,
+    full_grid: bool = True,
     config: Optional[Dict] = None,
     event_bus: Optional[EventBus] = None,
     use_cache: bool = False,

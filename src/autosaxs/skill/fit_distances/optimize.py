@@ -4,7 +4,8 @@ Default auto path: two-stage Fast AutoGNOM
   1) global NumPy Tikhonov + ``shape_tight_extent`` (no ATSAS in the loop)
   2) local Nelder–Mead polish with ATSAS ``gnom`` as oracle (full 2D domain)
 
-Opt-in ``full_grid=True`` restores the legacy 31×11 serial ATSAS grid.
+Default ``full_grid=True`` is the 31×11 serial ATSAS grid (remote-main quality).
+``full_grid=False`` selects experimental Fast AutoGNOM.
 """
 
 from __future__ import annotations
@@ -238,7 +239,7 @@ def _search_shannon_alpha_pr_full_grid(
     sigma: Optional[np.ndarray] = None,
     event_bus: Optional[EventBus] = None,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
-    """Legacy 31×11 serial ATSAS ``gnom`` grid (opt-in via ``full_grid=True``)."""
+    """31×11 serial ATSAS ``gnom`` grid (default auto path when ``full_grid=True``)."""
     _ = I, sigma  # unused on the ATSAS-only grid path
     rg = float(rg_guinier_nm)
     if not (rg > 0 and np.isfinite(rg)):
@@ -875,7 +876,7 @@ def _search_shannon_alpha_pr(
     force_zero_rmax: str = "Y",
     n_dmax: int = DMAX_GRID_N,
     n_alpha: int = ALPHA_GRID_N,
-    full_grid: bool = False,
+    full_grid: bool = True,
     I: Optional[np.ndarray] = None,
     sigma: Optional[np.ndarray] = None,
     event_bus: Optional[EventBus] = None,
@@ -883,8 +884,8 @@ def _search_shannon_alpha_pr(
     """
     Joint Shannon-bound Dmax × log₁₀(α) monodisperse GNOM search.
 
-    Default: Fast AutoGNOM (NumPy global + local ATSAS polish).
-    ``full_grid=True``: legacy 31×11 serial ATSAS grid.
+    Default: 31×11 serial ATSAS ``gnom`` grid (``full_grid=True``).
+    ``full_grid=False``: experimental Fast AutoGNOM (NumPy global + local ATSAS polish).
 
     Selection: ``shape_tight_extent``. Returns ``(best, trials, failures, grid_meta)``.
     """

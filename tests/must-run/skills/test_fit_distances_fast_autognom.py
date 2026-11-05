@@ -192,10 +192,10 @@ def test_fit_distances_passes_full_grid(monkeypatch):
             output_dir=out_dir,
             first=None,
             rg_nm=None,
-            full_grid=True,
             minimal=True,
             use_cache=False,
         )
         assert len(search_kwargs) == 1
+        # Default auto path must stay on the ATSAS Shannon×α grid (remote-main quality).
         assert search_kwargs[0].get("full_grid") is True
         assert search_kwargs[0].get("I") is not None
