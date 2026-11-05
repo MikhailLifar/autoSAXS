@@ -87,9 +87,9 @@ class ConfigurationDialog(QDialog):
 
         lay = QVBoxLayout(self)
         hint = QLabel(
-            "Edit buffer_rules for this watchdir (process-full compatible). "
-            "Other YAML keys are preserved on Save. Comments are kept because "
-            "the editor saves your text as typed."
+            "Map sample filename patterns to buffer patterns under buffer_rules. "
+            "Empty right-hand side means no buffer. First matching rule wins. "
+            "Comments are kept — Save writes your text as typed."
         )
         hint.setWordWrap(True)
         lay.addWidget(hint)

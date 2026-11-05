@@ -113,7 +113,8 @@ class LiveviewLeftPanel(QWidget):
         self._cfg_group = QGroupBox("Configuration")
         self._cfg_open = QPushButton("Set configuration")
         self._cfg_open.setToolTip(
-            "Edit watchdir config.conf buffer_rules (hierarchical; nearest wins)"
+            "Edit sample↔buffer pairing rules in config.conf "
+            "(subdir config.conf overrides parent)"
         )
         self._cfg_hint = QLabel("config.conf — buffer pairing rules")
         self._cfg_hint.setWordWrap(True)

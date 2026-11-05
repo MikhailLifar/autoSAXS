@@ -21,13 +21,20 @@ from autosaxs.core.buffer_rules import (
 
 CONFIG_BASENAME = "config.conf"
 
+# Teaching comments only — no product internals (session.yaml, migration, etc.).
+_CONFIG_BUFFER_RULES_COMMENT_HEADER = (
+    "# Sample ↔ buffer pairing rules (first matching rule wins).\n"
+    "# Left side: sample filename glob. Right side: buffer filename glob.\n"
+    "# Use * wildcards and {name} capture tokens shared across both sides.\n"
+    '# Empty right side ("") = no buffer (skip subtract, still analyze).\n'
+    '# One buffer for everything:  "*": "my_buffer.dat"\n'
+    "# Example: samples named like runA_sample.dat pair with runA_buffer.dat\n"
+)
+
 DEFAULT_CONFIG_SEED_TEXT = (
-    "# autoSAXS liveview / process-full buffer pairing\n"
-    "# Patterns use * wildcards and {capture} tokens.\n"
-    '# Empty RHS ("") = explicit no-buffer sample (skip subtract, still analyze).\n'
-    "# Fixed one-buffer-for-all: add a literal catch-all, e.g. \"*\": \"my_buffer.dat\".\n"
-    "buffer_rules:\n"
-    '  "*{stem}_sample*": "*{stem}_buffer*"\n'
+    _CONFIG_BUFFER_RULES_COMMENT_HEADER
+    + "buffer_rules:\n"
+    + '  "*{stem}_sample*": "*{stem}_buffer*"\n'
 )
 
 
@@ -208,10 +215,8 @@ def migrate_session_rules_into_root_config(
         if existing is not None and existing != tuple(DEFAULT_BUFFER_RULES):
             # User/agent already customized root — do not overwrite.
             return False
-    lines = [
-        "# Migrated from legacy liveview session.yaml buffer_rules",
-        "buffer_rules:",
-    ]
+    # Same teaching comments as a fresh seed; migration itself stays silent.
+    lines = [_CONFIG_BUFFER_RULES_COMMENT_HEADER.rstrip("\n"), "buffer_rules:"]
     for lhs, rhs in pairs:
         lines.append(f'  "{lhs}": "{rhs}"')
     lines.append("")

@@ -25,6 +25,10 @@ CONFLICT → executor dispatch_hold → ApplicationModal Configuration editor
 - Coach: after calib pulse Set configuration until opened once; pulse Set buffer when current is UNMATCHED.
 - Left order: Configuration → Calibrate → Set mask → Set buffer.
 
+## End-user `config.conf` comments
+
+Seed and silent session→root migrate share one teaching header (`_CONFIG_BUFFER_RULES_COMMENT_HEADER`): how to map sample globs to buffer globs, empty RHS, order, examples. No migration/session.yaml/legacy banners in file text or Configuration UI copy.
+
 ## Code
 
 - Matcher SSOT: `autosaxs/core/buffer_rules.py`
