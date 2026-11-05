@@ -58,6 +58,22 @@ class FIFOQueue:
         """Re-insert at the head (e.g. after a plan-time conflict hold)."""
         self._q.appendleft(item)
 
+    def drop_path(self, path: str) -> int:
+        """Remove all queued items for ``path``; return how many were dropped."""
+        k = self._norm_key(path)
+        if not k:
+            return 0
+        kept: Deque[QueueItem] = collections.deque()
+        dropped = 0
+        for it in self._q:
+            if self._norm_key(it.path) == k:
+                dropped += 1
+                continue
+            kept.append(it)
+        if dropped:
+            self._q = kept
+        return dropped
+
     def put_revision(self, item: QueueItem) -> RevisionEnqueueResult:
         """
         Append a TIFF revision, or replace an existing queued entry for the same path in place.

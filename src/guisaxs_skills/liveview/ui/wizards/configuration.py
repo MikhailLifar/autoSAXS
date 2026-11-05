@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -201,8 +202,22 @@ class ConfigurationDialog(QDialog):
         self.accept()
 
 
+class ConflictDialogAction(str, Enum):
+    """How the hard-conflict dialog was dismissed (controller owns hold/queue)."""
+
+    RETRY_OK = "retry_ok"
+    SKIP = "skip"
+    ABORT = "abort"
+    EDIT = "edit"
+
+
 class ConfigurationConflictDialog(QDialog):
-    """ApplicationModal conflict loop: diagnostics + Configuration editor + Retry."""
+    """
+    Escapable hard-conflict dialog: diagnostics + Configuration editor + actions.
+
+    Window-modal (not an ApplicationModal trap). Esc / window close → Edit
+    configuration (clear hold; leave sample at queue front; open non-modal editor).
+    """
 
     def __init__(
         self,
@@ -216,11 +231,10 @@ class ConfigurationConflictDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Buffer rules conflict")
-        self.setWindowModality(Qt.ApplicationModal)
+        self.setWindowModality(Qt.WindowModal)
         self.setModal(True)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowCloseButtonHint)
         self._retry_check = retry_check
-        self._resolved = False
+        self._action: ConflictDialogAction | None = None
         self._on_saved = on_saved
 
         self._watchdir = watchdir.expanduser().resolve()
@@ -246,39 +260,80 @@ class ConfigurationConflictDialog(QDialog):
 
         retry = QPushButton("Save & Retry")
         retry.clicked.connect(self._on_retry)
+        skip = QPushButton("Skip")
+        skip.setToolTip("Drop this sample from the queue and continue.")
+        skip.clicked.connect(self._on_skip)
+        abort = QPushButton("Abort")
+        abort.setToolTip("Close the conflict dialog and exit the application.")
+        abort.clicked.connect(self._on_abort)
+        edit = QPushButton("Edit configuration")
+        edit.setToolTip("Leave this sample queued and open Configuration.")
+        edit.clicked.connect(self._on_edit)
+
+        buttons = QHBoxLayout()
+        buttons.addWidget(skip)
+        buttons.addWidget(abort)
+        buttons.addStretch(1)
+        buttons.addWidget(edit)
+        buttons.addWidget(retry)
 
         lay = QVBoxLayout(self)
         lay.addWidget(self._diag)
         lay.addWidget(QLabel(f"Editing: {self._path.name}"))
         lay.addWidget(self._editor_widget, 1)
         lay.addWidget(self._error)
-        lay.addWidget(retry)
+        lay.addLayout(buttons)
         self.resize(720, 560)
 
     def resolved(self) -> bool:
-        return self._resolved
+        """True when Retry cleared the conflict (legacy callers)."""
+        return self._action == ConflictDialogAction.RETRY_OK
 
-    def _on_retry(self) -> None:
+    def action(self) -> ConflictDialogAction | None:
+        return self._action
+
+    def _persist_draft_if_valid(self) -> bool:
         text = self._editor_widget.toPlainText()
         err = validate_config_text(text)
         if err:
             self._error.setText(err)
             self._error.setVisible(True)
-            return
+            return False
         self._error.setVisible(False)
         if self._on_saved is not None:
             self._on_saved(self._path, text)
         else:
             write_config_text(self._path, text)
+        return True
+
+    def _on_retry(self) -> None:
+        if not self._persist_draft_if_valid():
+            return
         conflict = self._retry_check()
         if conflict is not None:
             diagnostics = getattr(conflict, "diagnostics", None) or str(conflict)
             self._diag.setText(str(diagnostics))
             return
-        self._resolved = True
+        self._action = ConflictDialogAction.RETRY_OK
+        self.accept()
+
+    def _on_skip(self) -> None:
+        self._action = ConflictDialogAction.SKIP
+        self.accept()
+
+    def _on_abort(self) -> None:
+        self._action = ConflictDialogAction.ABORT
+        self.accept()
+
+    def _on_edit(self) -> None:
+        # Persist draft when valid so edits are not lost; invalid draft still escapes.
+        self._persist_draft_if_valid()
+        self._action = ConflictDialogAction.EDIT
         self.accept()
 
     def reject(self) -> None:
-        if not self._resolved:
-            return
+        # Esc / window X → same as Edit configuration (never silent no-op).
+        if self._action is None:
+            self._persist_draft_if_valid()
+            self._action = ConflictDialogAction.EDIT
         super().reject()

@@ -8,6 +8,7 @@ import pytest
 
 from autosaxs.core.buffer_rules import (
     DEFAULT_BUFFER_RULES,
+    BufferAwaiting,
     BufferMatchConflict,
     MatchKind,
     expand_pattern,
@@ -78,12 +79,13 @@ def test_multi_lhs_conflict(tmp_path: Path):
     assert "multiple sample expressions" in r.diagnostics
 
 
-def test_zero_buffer_hits_conflict(tmp_path: Path):
+def test_zero_buffer_hits_awaiting(tmp_path: Path):
     s = str(tmp_path / "ihs27_sample.dat")
     r = match_sample_to_buffer(s, [str(tmp_path / "other_buffer.dat")], DEFAULT_BUFFER_RULES)
-    assert r.kind == MatchKind.CONFLICT
+    assert r.kind == MatchKind.AWAITING_BUFFER
     assert r.buffer_hits == ()
     assert "matched 0 buffer" in r.diagnostics
+    assert "No matching buffer yet" in r.diagnostics
 
 
 def test_multi_buffer_hits_conflict(tmp_path: Path):
@@ -139,7 +141,7 @@ def test_pair_samples_and_raise(tmp_path: Path):
     assert paired == [(s1, b1)]
     assert none == [s2]
     assert unmatched == [s3]
-    with pytest.raises(BufferMatchConflict) as ei:
+    with pytest.raises(BufferAwaiting) as ei:
         pair_samples_with_rules(
             [s1, str(tmp_path / "b_sample.dat")], [b1], DEFAULT_BUFFER_RULES
         )
@@ -152,10 +154,26 @@ def test_raise_on_conflicts_aggregates(tmp_path: Path):
         [],
         DEFAULT_BUFFER_RULES,
     )
-    with pytest.raises(BufferMatchConflict) as ei:
+    with pytest.raises(BufferAwaiting) as ei:
         raise_on_conflicts(results)
     msg = str(ei.value)
     assert "a_sample" in msg and "b_sample" in msg
+
+
+def test_raise_on_conflicts_prefers_hard_conflict(tmp_path: Path):
+    """Hard CONFLICT wins over AWAITING_BUFFER in the same batch."""
+    awaiting = match_sample_to_buffer(
+        str(tmp_path / "a_sample.dat"), [], DEFAULT_BUFFER_RULES
+    )
+    conflict = match_sample_to_buffer(
+        str(tmp_path / "ab_sample.dat"),
+        [str(tmp_path / "ab_buffer.dat")],
+        [("*a*_sample*", "*a*_buffer*"), ("*b*_sample*", "*b*_buffer*")],
+    )
+    assert awaiting.kind == MatchKind.AWAITING_BUFFER
+    assert conflict.kind == MatchKind.CONFLICT
+    with pytest.raises(BufferMatchConflict):
+        raise_on_conflicts([awaiting, conflict])
 
 
 def test_default_rules_pair_int_prefixed(tmp_path: Path):

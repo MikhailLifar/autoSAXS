@@ -7,10 +7,14 @@ Shared SSOT for TIFF batch (``tiff_pipeline`` / ``process-full``) and liveview
 - ``PAIRED`` — exactly one sample-expr and exactly one buffer hit
 - ``NONE`` — sample-expr matched; RHS is ``""`` (explicit no-buffer sample)
 - ``UNMATCHED`` — no sample-expr matched (not claimed as a sample)
-- ``CONFLICT`` — multi sample-expr, or non-empty RHS with 0/>1 buffer hits
+- ``AWAITING_BUFFER`` — one sample-expr, non-empty RHS, 0 buffer hits
+- ``CONFLICT`` — multi sample-expr, or non-empty RHS with >1 buffer hits
 
 Patterns use ``*`` wildcards and zero or more ``{name}`` captures. Capture names
 must agree across LHS/RHS when RHS is non-empty. ``{`` / ``}`` are reserved.
+
+Liveview treats ``AWAITING_BUFFER`` as soft-wait (executor parks the sample).
+CLI / ``process-full`` hard-fails ``AWAITING_BUFFER`` (batch assumes a complete set).
 """
 
 from __future__ import annotations
@@ -34,11 +38,20 @@ class MatchKind(Enum):
     PAIRED = "paired"
     NONE = "none"
     UNMATCHED = "unmatched"
+    AWAITING_BUFFER = "awaiting_buffer"
     CONFLICT = "conflict"
 
 
 class BufferMatchConflict(RuntimeError):
     """Raised when ``match_sample_to_buffer`` yields ``CONFLICT`` (CLI / plan_for)."""
+
+    def __init__(self, result: "MatchResult") -> None:
+        self.result = result
+        super().__init__(result.diagnostics)
+
+
+class BufferAwaiting(RuntimeError):
+    """Raised when ``match_sample_to_buffer`` yields ``AWAITING_BUFFER`` (plan_for)."""
 
     def __init__(self, result: "MatchResult") -> None:
         self.result = result
@@ -285,6 +298,24 @@ def _diag_conflict_multi_lhs(
     )
 
 
+def _diag_awaiting_buffer(
+    sample: str,
+    *,
+    sample_expr: str,
+    buffer_expr: str,
+    expanded: str,
+    captures: Mapping[str, str],
+) -> str:
+    base = _basename(sample)
+    cap_txt = ", ".join(f"{k}={v!r}" for k, v in captures.items()) or "(none)"
+    return (
+        f"No matching buffer yet for sample {base!r}: rule "
+        f"{sample_expr!r} → {buffer_expr!r} (expanded buffer pattern "
+        f"{expanded!r}, captures: {cap_txt}) matched 0 buffer candidates. "
+        f"Add a matching buffer file or fix the rule."
+    )
+
+
 def _diag_conflict_buffers(
     sample: str,
     *,
@@ -297,13 +328,6 @@ def _diag_conflict_buffers(
     base = _basename(sample)
     hit_names = [_basename(h) for h in hits]
     cap_txt = ", ".join(f"{k}={v!r}" for k, v in captures.items()) or "(none)"
-    if not hits:
-        return (
-            f"Buffer rules conflict for sample {base!r}: rule "
-            f"{sample_expr!r} → {buffer_expr!r} (expanded buffer pattern "
-            f"{expanded!r}, captures: {cap_txt}) matched 0 buffer candidates. "
-            f"Add a matching buffer file or fix the rule."
-        )
     listed = ", ".join(repr(n) for n in hit_names)
     return (
         f"Buffer rules conflict for sample {base!r}: rule "
@@ -388,6 +412,25 @@ def match_sample_to_buffer(
             buffer_hits=(hits[0],),
         )
 
+    if not hits:
+        diag = _diag_awaiting_buffer(
+            sample,
+            sample_expr=sample_expr,
+            buffer_expr=buffer_expr,
+            expanded=expanded,
+            captures=captures,
+        )
+        return MatchResult(
+            kind=MatchKind.AWAITING_BUFFER,
+            sample=sample,
+            rule_index=idx,
+            sample_expr=sample_expr,
+            buffer_expr=buffer_expr,
+            captures=dict(captures),
+            diagnostics=diag,
+            buffer_hits=(),
+        )
+
     diag = _diag_conflict_buffers(
         sample,
         sample_expr=sample_expr,
@@ -425,16 +468,33 @@ def aggregate_conflict_diagnostics(results: Iterable[MatchResult]) -> str:
     return "\n".join(parts)
 
 
+def aggregate_awaiting_diagnostics(results: Iterable[MatchResult]) -> str:
+    """Join diagnostics for all ``AWAITING_BUFFER`` results (CLI hard-fail text)."""
+    parts = [
+        r.diagnostics for r in results if r.kind == MatchKind.AWAITING_BUFFER and r.diagnostics
+    ]
+    return "\n".join(parts)
+
+
 def raise_on_conflicts(results: Sequence[MatchResult]) -> None:
-    """Raise ``BufferMatchConflict`` with aggregated diagnostics if any conflict."""
+    """
+    Raise on hard batch failures.
+
+    ``CONFLICT`` → ``BufferMatchConflict``. ``AWAITING_BUFFER`` → ``BufferAwaiting``
+    (CLI / process-full assumes the file set is complete; soft-wait is liveview-only).
+    """
     conflicts = [r for r in results if r.kind == MatchKind.CONFLICT]
-    if not conflicts:
-        return
-    # Prefer the first conflict as ``.result``; message aggregates all.
-    msg = aggregate_conflict_diagnostics(conflicts)
-    err = BufferMatchConflict(conflicts[0])
-    err.args = (msg,)
-    raise err
+    if conflicts:
+        msg = aggregate_conflict_diagnostics(conflicts)
+        err = BufferMatchConflict(conflicts[0])
+        err.args = (msg,)
+        raise err
+    awaiting = [r for r in results if r.kind == MatchKind.AWAITING_BUFFER]
+    if awaiting:
+        msg = aggregate_awaiting_diagnostics(awaiting)
+        err = BufferAwaiting(awaiting[0])
+        err.args = (msg,)
+        raise err
 
 
 def pair_samples_with_rules(
@@ -447,6 +507,7 @@ def pair_samples_with_rules(
 
     Returns ``(paired, none_samples, unmatched_samples)``.
     Raises ``BufferMatchConflict`` if any sample is ``CONFLICT``.
+    Raises ``BufferAwaiting`` if any sample is ``AWAITING_BUFFER``.
     """
     results = match_all_samples(sample_paths, buffer_candidates, rules)
     raise_on_conflicts(results)

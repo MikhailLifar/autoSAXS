@@ -19,7 +19,7 @@ from ..session.sample_store import SampleStore
 from ..session.state import LiveviewSessionState, LiveviewWatchMode
 from ..session.watchdir_config import effective_config_path, load_effective_buffer_rules
 from ..ui.panels import LiveviewLeftPanel, LiveviewMiddlePanel, LiveviewRightPanel
-from ..ui.wizards.configuration import ConfigurationConflictDialog
+from ..ui.wizards.configuration import ConflictDialogAction, ConfigurationConflictDialog
 
 from .history import LiveviewHistoryHandler
 from .ingest import LiveviewIngestHandler
@@ -78,6 +78,9 @@ class LiveviewController(QObject):
 
         self.session.intake_changed.connect(self.ingest.on_intake_changed)
         self.session.buffer_changed.connect(self.session_handler.on_subtract_config_changed)
+        # Soft-wait rematch when rules or overlays change (session owns facts; executor owns waiters).
+        self.session.configuration_changed.connect(self._rematch_awaiting_buffers)
+        self.session.buffer_changed.connect(self._rematch_awaiting_buffers)
 
         self._connect_executor(self._executor)
         self._executor.start()
@@ -241,6 +244,11 @@ class LiveviewController(QObject):
         self._conflict_sample_path = sample_path
         self._open_buffer_rules_conflict_modal(diagnostics=diagnostics or "Buffer rules conflict.")
 
+    def _rematch_awaiting_buffers(self) -> None:
+        rematch = getattr(self._executor, "rematch_awaiting_buffers", None)
+        if callable(rematch):
+            rematch()
+
     def _open_buffer_rules_conflict_modal(self, *, diagnostics: str) -> None:
         parent = self._parent_widget
         sample = (self._conflict_sample_path or "").strip()
@@ -264,6 +272,7 @@ class LiveviewController(QObject):
             result = match_sample_to_buffer(sample, cands, rules)
             if result.kind == MatchKind.CONFLICT:
                 return result
+            # AWAITING_BUFFER / PAIRED / NONE / UNMATCHED: not a hard conflict.
             return None
 
         dlg = ConfigurationConflictDialog(
@@ -277,12 +286,28 @@ class LiveviewController(QObject):
         self._conflict_dialog = dlg
         dlg.exec_()
         self._conflict_dialog = None
-        if dlg.resolved():
+        action = dlg.action()
+        if action == ConflictDialogAction.RETRY_OK:
+            self._executor.set_dispatch_hold(False)
+            self._conflict_sample_path = ""
+            self._rematch_awaiting_buffers()
+        elif action == ConflictDialogAction.SKIP:
+            self._executor.skip_held_sample(sample)
+            self._conflict_sample_path = ""
+        elif action == ConflictDialogAction.ABORT:
+            self._executor.set_dispatch_hold(False)
+            self._conflict_sample_path = ""
+            if parent is not None:
+                parent.close()
+        else:
+            # EDIT (or Esc / window X): clear hold; leave sample at incoming front.
             self._executor.set_dispatch_hold(False)
             self._conflict_sample_path = ""
             if self._left is not None:
-                self._left.sync_buffer_preview_from_state()
-                self._left.refresh_attention_coach()
+                self._left.open_configuration_dialog()
+        if self._left is not None:
+            self._left.sync_buffer_preview_from_state()
+            self._left.refresh_attention_coach()
 
     # --- delegated public API (window wiring) ---
 

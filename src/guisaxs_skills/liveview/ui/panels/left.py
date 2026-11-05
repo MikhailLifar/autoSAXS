@@ -892,7 +892,15 @@ class LiveviewLeftPanel(QWidget):
                 self._buf_wizard._close_coach_armed = False  # noqa: SLF001
                 self.refresh_calibration_coach()
 
+    def open_configuration_dialog(self) -> None:
+        """Open the non-modal Configuration editor (also used after conflict Edit)."""
+        self._open_configuration_dialog()
+
     def _open_configuration_dialog(self) -> None:
+        if self._config_dialog is not None and self._config_dialog.isVisible():
+            self._config_dialog.raise_()
+            self._config_dialog.activateWindow()
+            return
         sample = self._samples.current() if self._samples is not None else None
         sample_path = sample.path if sample is not None else None
         cfg_path = (

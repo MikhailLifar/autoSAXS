@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from autosaxs.core.buffer_rules import (
+    BufferAwaiting,
     BufferMatchConflict,
     MatchKind,
     MatchResult,
@@ -40,7 +41,7 @@ from .report_pipeline import report_individual_step
 YamlOptionsLoader = Callable[[Optional[Path]], dict]
 
 # Re-export for executor / controller catch sites.
-__all__ = ["PipelinePlan", "plan_for", "BufferMatchConflict"]
+__all__ = ["PipelinePlan", "plan_for", "BufferAwaiting", "BufferMatchConflict"]
 
 
 def _remaining_steps(steps: List[JobStep], completed: CompletedWork | None) -> List[JobStep]:
@@ -171,7 +172,12 @@ def _match_for_sample(
     sample_curve: str,
     sample_output_root: Path,
 ) -> MatchResult:
-    """Run matcher (+ overlay); raise ``BufferMatchConflict`` on CONFLICT."""
+    """
+    Run matcher (+ overlay).
+
+    Raises ``BufferMatchConflict`` on hard ``CONFLICT`` and ``BufferAwaiting`` on
+    ``AWAITING_BUFFER`` (soft-wait; liveview executor parks without hold).
+    """
     result = resolve_match_for_sample(
         state,
         sample,
@@ -180,6 +186,8 @@ def _match_for_sample(
     )
     if result.kind == MatchKind.CONFLICT:
         raise BufferMatchConflict(result)
+    if result.kind == MatchKind.AWAITING_BUFFER:
+        raise BufferAwaiting(result)
     return result
 
 

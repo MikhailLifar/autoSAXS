@@ -25,6 +25,7 @@ import yaml
 
 from autosaxs.core.buffer_rules import (
     DEFAULT_BUFFER_RULES as _DEFAULT_BUFFER_RULE_PAIRS,
+    BufferAwaiting,
     BufferMatchConflict,
     normalize_buffer_rules,
     pair_samples_with_rules,
@@ -350,7 +351,8 @@ def pair_sample_buffer_1d(
     Returns only ``PAIRED`` (sample, buffer) tuples. ``NONE`` samples are omitted
     here (callers that need unsubtracted analysis should use
     :func:`pair_samples_with_rules` / :func:`match_sample_to_buffer`).
-    ``UNMATCHED`` is silent (omitted). ``CONFLICT`` raises ``BufferMatchConflict``.
+    ``UNMATCHED`` is silent (omitted). ``CONFLICT`` / ``AWAITING_BUFFER`` raise
+    as ``RuntimeError`` (batch assumes a complete buffer set).
 
     Breaking change: the old shared-single-buffer fallback is removed — write an
     explicit rule (or a broad RHS) instead.
@@ -362,7 +364,7 @@ def pair_sample_buffer_1d(
     rule_pairs = normalize_buffer_rules(rules)
     try:
         paired, _none, _unmatched = pair_samples_with_rules(samples, buffers, rule_pairs)
-    except BufferMatchConflict as e:
+    except (BufferMatchConflict, BufferAwaiting) as e:
         raise RuntimeError(str(e)) from e
     return paired
 
@@ -528,7 +530,7 @@ def run_tiff_to_subtracted(
         paired, none_samples, unmatched_samples = pair_samples_with_rules(
             sample_1d, buffer_1d, rule_pairs
         )
-    except BufferMatchConflict as e:
+    except (BufferMatchConflict, BufferAwaiting) as e:
         raise RuntimeError(str(e)) from e
 
     if unmatched_samples and bus:

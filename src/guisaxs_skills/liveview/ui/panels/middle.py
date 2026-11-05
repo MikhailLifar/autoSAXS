@@ -260,12 +260,20 @@ class LiveviewMiddlePanel(QWidget):
 
     def set_queue_status(self, status: LiveviewQueueStatus) -> None:
         rem = max(0, int(status.remaining))
-        if rem == 0:
+        awaiting = max(0, int(getattr(status, "awaiting_buffer_count", 0) or 0))
+        if rem == 0 and awaiting == 0:
             self._status_line.setText("Idle")
             self._current_line.setText("")
             self._current_line.setToolTip("")
             self._queue_bar.setRange(0, 1)
             self._queue_bar.setValue(0)
+            return
+        if rem == 0 and awaiting > 0:
+            # Soft-wait: no active queue work, but samples still need a buffer.
+            self._status_line.setText("Not all integrated. Waiting for buffer...")
+            self._current_line.setText("")
+            self._current_line.setToolTip("")
+            self._queue_bar.setRange(0, 0)  # keep indeterminate glow
             return
         self._status_line.setText(f"Queue · {rem}")
         cur = (status.current_path or "").strip()

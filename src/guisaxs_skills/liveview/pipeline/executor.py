@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
@@ -11,7 +12,7 @@ from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 from ...core.models import RunRequest
 from ...logic.runner_qprocess import RunOutcome, SkillRunner
 from autosaxs.skill.gnom_fit_common import failure_message_from_result
-from ..ingest.stability import FileStatSnapshot
+from ..ingest.stability import FileStatSnapshot, _try_stat
 from ..ingest.sample_revision import (
     SampleRevision,
     SampleRevisionSource,
@@ -34,7 +35,7 @@ from .monodisperse_pipeline import (
     FIT_GUINIER_MONO_STEP,
     FIT_GUINIER_POLY_STEP,
 )
-from .plan import BufferMatchConflict, plan_for
+from .plan import BufferAwaiting, BufferMatchConflict, plan_for
 from .polydisperse_pipeline import (
     PolydispersePipelineParts,
     build_polydisperse_steps,
@@ -59,6 +60,7 @@ class LiveviewQueueStatus:
     last_processed_path: str
     avg_seconds_per_item: float
     remaining: int
+    awaiting_buffer_count: int = 0
 
 
 class LiveviewJobExecutor(QObject):
@@ -104,6 +106,8 @@ class LiveviewJobExecutor(QObject):
         self._incoming_lock = threading.Lock()
         # Dedupe inotify+poll (and drop+watch) for the same path+stat; manual re-Process bypasses.
         self._last_accepted_stat: Dict[str, FileStatSnapshot] = {}
+        # Soft-wait: claimed samples with 0 buffer hits (memory-only; Sample.key → item).
+        self._awaiting_buffer: "OrderedDict[str, QueueItem]" = OrderedDict()
 
         self._jobs = JobQueue()
         self._current_job: Optional[Job] = None
@@ -173,6 +177,7 @@ class LiveviewJobExecutor(QObject):
         self._current_job = None
         self._job_step_idx = 0
         self._pending_step_name = None
+        self._awaiting_buffer.clear()
 
     def cancel_current(self) -> None:
         # Cancellation policy: by default we requeue the current job so users don't lose the file.
@@ -180,7 +185,11 @@ class LiveviewJobExecutor(QObject):
         self.cancel_running(requeue=True)
 
     def is_idle(self) -> bool:
-        """True when auto-processing and no skill, job, or incoming sample work is active."""
+        """True when auto-processing and no skill, job, or incoming sample work is active.
+
+        Soft-wait parkers alone do not block this (Auto/Manual resume unchanged);
+        status uses ``remaining`` + ``awaiting_buffer_count`` for the idle string.
+        """
         if not self._state.is_auto_processing():
             return False
         if self._runner.is_running():
@@ -194,6 +203,10 @@ class LiveviewJobExecutor(QObject):
     def is_processing_idle(self) -> bool:
         """True when no autosaxs skill subprocess is currently running."""
         return not self._runner.is_running()
+
+    @property
+    def awaiting_buffer_count(self) -> int:
+        return len(self._awaiting_buffer)
 
     @property
     def queue_suspended(self) -> bool:
@@ -381,6 +394,7 @@ class LiveviewJobExecutor(QObject):
                 last_processed_path=self._last_processed,
                 avg_seconds_per_item=avg,
                 remaining=rem,
+                awaiting_buffer_count=len(self._awaiting_buffer),
             )
         )
 
@@ -439,6 +453,67 @@ class LiveviewJobExecutor(QObject):
         )
         self.cancel_running(requeue=True)
 
+    def _park_awaiting_buffer(self, item: QueueItem) -> None:
+        """Park a soft-wait sample; keep first-mark FIFO order on refresh."""
+        key = normalize_sample_path(item.path)
+        if not key:
+            return
+        # Assignment to an existing OrderedDict key refreshes value, keeps position.
+        self._awaiting_buffer[key] = item
+
+    def rematch_awaiting_buffers(self) -> None:
+        """Public hook: rematch all soft-wait parkers (config / overlay change)."""
+        self._rematch_awaiting()
+
+    def skip_held_sample(self, sample_path: str) -> None:
+        """
+        Conflict modal Skip: drop the held sample from incoming + waiters and clear hold.
+        """
+        key = normalize_sample_path(sample_path)
+        if key:
+            self._awaiting_buffer.pop(key, None)
+            with self._incoming_lock:
+                self._incoming.drop_path(sample_path)
+        self.set_dispatch_hold(False)
+
+    def clear_awaiting_buffers(self) -> None:
+        """Drop all soft-wait parkers (watchdir rebind / teardown)."""
+        self._awaiting_buffer.clear()
+
+    def _rematch_awaiting(self) -> None:
+        """Rematch every waiter; requeue resolvable ones FIFO; hard CONFLICT holds."""
+        if not self._awaiting_buffer:
+            return
+        released: List[QueueItem] = []
+        for key, item in list(self._awaiting_buffer.items()):
+            sample_path = item.path
+            boarding = self._samples.boarding_for(sample_path) or self._state.intake_mode
+            try:
+                sample = Sample.from_path(sample_path, boarding=boarding)
+                plan_for(self._state, sample, load_yaml=load_yaml_options)
+            except BufferAwaiting:
+                continue
+            except BufferMatchConflict as e:
+                del self._awaiting_buffer[key]
+                with self._incoming_lock:
+                    self._incoming.put_front(item)
+                self._enter_buffer_rules_hold(e, sample_path=sample_path)
+                return
+            except Exception as e:
+                # Drop broken waiter so it cannot livelock rematch; surface error.
+                del self._awaiting_buffer[key]
+                self.error.emit(f"Cannot rematch awaiting sample: {sample_path}\n{e}")
+                continue
+            else:
+                # PAIRED / NONE / UNMATCHED (and any other non-exception outcome):
+                # requeue once so promote builds the normal plan.
+                del self._awaiting_buffer[key]
+                released.append(item)
+        # Oldest mark first at the front of incoming (put_front in reverse).
+        with self._incoming_lock:
+            for item in reversed(released):
+                self._incoming.put_front(item)
+
     def _promote_incoming_to_jobs(self) -> None:
         """Move settled admit-queue items into ``_jobs`` via ``plan_for``."""
         while True:
@@ -453,6 +528,9 @@ class LiveviewJobExecutor(QObject):
                 self._samples.remember(sample)
                 plan = plan_for(self._state, sample, load_yaml=load_yaml_options)
                 job = plan.to_job()
+            except BufferAwaiting:
+                self._park_awaiting_buffer(item)
+                continue
             except BufferMatchConflict as e:
                 # Push item back so it re-plans after rules are fixed.
                 with self._incoming_lock:
@@ -462,6 +540,10 @@ class LiveviewJobExecutor(QObject):
             except Exception as e:
                 self.error.emit(f"Cannot build job for sample: {sample_path}\n{e}")
                 continue
+            # If this path was soft-waiting, a fresh promote supersedes the park.
+            key = normalize_sample_path(sample_path)
+            if key:
+                self._awaiting_buffer.pop(key, None)
             self._register_job_outputs(job)
             self._jobs.drop_jobs_for_tiff_path(sample_path)
             self._jobs.put(job)
@@ -534,6 +616,17 @@ class LiveviewJobExecutor(QObject):
                 load_yaml=load_yaml_options,
                 completed=job.completed,
             )
+        except BufferAwaiting:
+            # Mid-job soft-wait is rare (buffer vanished); park and abort current.
+            snap = _try_stat(source) or FileStatSnapshot(size=0, mtime_ns=0)
+            self._park_awaiting_buffer(
+                QueueItem(
+                    path=source,
+                    detected_at_monotonic=time.monotonic(),
+                    observed_stat=snap,
+                )
+            )
+            return False
         except BufferMatchConflict as e:
             self._enter_buffer_rules_hold(e, sample_path=source)
             return False
@@ -621,6 +714,8 @@ class LiveviewJobExecutor(QObject):
         self._current_job = None
         self._job_step_idx = 0
         self._pending_step_name = None
+        # Buffer TIFF integrate (or any finish) may unblock soft-wait samples.
+        self._rematch_awaiting()
 
     def _start_next_job_step(self) -> None:
         assert self._current_job is not None

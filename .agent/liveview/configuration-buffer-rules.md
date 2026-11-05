@@ -14,13 +14,19 @@
 ```
 watchdir bind → seed root config.conf if missing → project root_rules
 Sample → effective rules (nearest) → matcher → if overlay[key]: force PAIRED
-CONFLICT → executor dispatch_hold → ApplicationModal Configuration editor
+AWAITING_BUFFER (0 hits) → executor parks in memory `_awaiting_buffer` (no hold)
+CONFLICT (multi-LHS / >1 hits) → dispatch_hold → escapable conflict dialog
 ```
+
+Soft-wait: rematch all waiters after each job finish and on `configuration_changed` /
+`buffer_changed`. Idle-with-waiters status: “Not all integrated. Waiting for buffer…”
+(keep glow; no soft-wait toasts). CLI/`process-full` hard-fails `AWAITING_BUFFER`.
 
 ## Invariants
 
 - Fixed everyone = literal catch-all rule in `config.conf` only.
-- Overlay wins over rules for that sample (escape hatch for CONFLICT / UNMATCHED).
+- Overlay wins over rules for that sample (escape hatch for CONFLICT / UNMATCHED / soft-wait).
+- Soft-wait is executor runtime only (not session / Sample / history).
 - Configuration does not drive analysis/arming.
 - Coach: after calib pulse Set configuration until opened once; pulse Set buffer when current is UNMATCHED.
 - Left order: Configuration → Calibrate → Set mask → Set buffer.
