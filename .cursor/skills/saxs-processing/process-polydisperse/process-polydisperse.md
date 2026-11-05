@@ -53,7 +53,21 @@ See the docstring section **Returns** below.
 
 SAXS / small-angle x-ray scattering: run the polydisperse single-profile quality pipeline
 (Guinier → GNOM D(R) / size-distribution passport → optional MIXTURE when requested and
-D(R) quality gates pass → per-sample PDF report).
+the shared modeling gate passes → per-sample PDF report).
+
+**Modeling gate** (``allows_modeling`` on the fit_sizes passport — same helper as
+mono DAM): when ``run_mixture=True``, start MIXTURE only when **all** of the
+following hold:
+
+- Total Estimate **> 0.3** (hard floor; passport ``high_quality`` still uses ≥ 0.55)
+- Reduced χ² in the acceptable passport band [0.3, 2.5]
+  (``chi2_class`` ``high_quality`` or ``acceptable``)
+- ``detail_reliability_class`` is not ``SUSPICIOUS``
+- Shannon ``s_min`` < 2.0 (class not ``unreliable``)
+- ``n_shannon`` ≥ 8 (``DEFAULT_DETAIL_N_SHANNON_FLOOR``)
+
+ΔRg is mono p(r)-only and is skipped for D(R). ``run_mixture`` remains an
+independent opt-in (default ``False``).
 
 **First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
 **and** a pipeline config is available (``config.conf`` in that dir, or
@@ -79,8 +93,9 @@ router: ``process_full`` (reads ``analysis: mono|poly``).
 - `shape` (str, default `spheres`): Forwarded to `fit_sizes` (currently spheres).
 - `q_min` / `q_max` (float | None): Optional `fit_sizes` q bounds (nm⁻¹). When set, they override
   Guinier-first handoff for the corresponding end (do not combine `q_min` with an implicit first).
-- `run_mixture` (bool, default `False`): When `True`, run `model_mixture` if D(R) is high quality.
-  Default stays off to match liveview auto / real-data light (MIXTURE is interactive Confirm in GUI).
+- `run_mixture` (bool, default `False`): When `True`, run `model_mixture` if the shared
+  modeling gate passes. Default stays off to match liveview auto / real-data light
+  (MIXTURE is interactive Confirm in GUI).
 - `use_cache` (bool, default `False`): Forwarded to leaf skills.
 
 ### Returns

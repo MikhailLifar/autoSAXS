@@ -53,7 +53,18 @@ See the docstring section **Returns** below.
 
 SAXS / small-angle x-ray scattering: run the monodisperse single-profile quality pipeline
 (Guinier → dimensionless Kratky → DATGNOM p(r) / Shannon–ΔRg passport → optional DAMMIF
-when quality gates pass → per-sample PDF report).
+when the shared modeling gate passes → per-sample PDF report).
+
+**Modeling gate** (``allows_modeling`` on the fit_distances passport — same helper as
+poly MIXTURE): start DAMMIF only when **all** of the following hold:
+
+- Total Estimate **> 0.3** (hard floor; passport ``high_quality`` still uses ≥ 0.55)
+- Reduced χ² in the acceptable passport band [0.3, 2.5]
+  (``chi2_class`` ``high_quality`` or ``acceptable``)
+- ΔRg ≤ 15% (passport acceptable band; mono p(r) only)
+- ``detail_reliability_class`` is not ``SUSPICIOUS``
+- Shannon ``s_min`` < 2.0 (class not ``unreliable``)
+- ``n_shannon`` ≥ 8 (``DEFAULT_DETAIL_N_SHANNON_FLOOR``)
 
 **First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
 **and** a pipeline config is available (``config.conf`` in that dir, or
@@ -77,7 +88,7 @@ router: ``process_full`` (reads ``analysis: mono|poly``).
   Guinier `first` is forwarded to DATGNOM; Guinier `last` is **not** passed to DATGNOM
   (window too narrow for p(r)).
 - `smooth` (float | None, default `None`): Optional DATGNOM `--smooth` for `fit_distances`.
-- `n_runs` (int, default `5`): DAMMIF replica count for `model_dam` when the quality gate passes.
+- `n_runs` (int, default `5`): DAMMIF replica count for `model_dam` when the modeling gate passes.
 - `use_cache` (bool, default `False`): Forwarded to leaf skills.
 
 ### Returns

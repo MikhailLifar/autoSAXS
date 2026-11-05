@@ -53,7 +53,7 @@ See the docstring section **Returns** below.
 
 SAXS / small-angle x-ray scattering: obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve via ATSAS GNOM (real-space distance distribution).
 
-**Auto path** (when `dmax_nm` is omitted): Guinier \(R_g\) (tool only) → Shannon-bound \(D_{\max}\) grid \(\times\) \(\log_{10}\alpha\) joint monodisperse GNOM search → pick by interpretable **`shape_tight_extent`** score (soft taper, non‑negativity, low wiggle, χ² guardrail, extent band \(\sim 3.2\)–\(5\times R_g\)). Units: \(q\) in nm⁻¹, lengths in nm. Does **not** use Autorg→DATGNOM TOTAL selection (clarity over deposit‑Dmax matching).
+**Auto path** (when `dmax_nm` is omitted): Guinier \(R_g\) (tool only) → **Fast AutoGNOM** — Stage 1: H32 NumPy Tikhonov over Shannon-bound \(D_{\max}\times\log_{10}\alpha\) (no ATSAS in the search loop; α in GNOM-printed units via locked H32 packaging) → pick by interpretable **`shape_tight_extent`** score (soft taper, non‑negativity, low wiggle, χ² guardrail, extent band \(\sim 3.2\)–\(5\times R_g\)) → Stage 2: ATSAS `gnom` at the Stage‑1 \((D_{\max},\alpha)\) writes stable `gnom_best.out`, close-fits ensemble, force-zero-off (unless `minimal`), passport. Units: \(q\) in nm⁻¹, lengths in nm. Does **not** use Autorg→DATGNOM TOTAL selection (clarity over deposit‑Dmax matching).
 
 **Refine path** (when `dmax_nm` is set): single GNOM `--rmax` run at the given Dmax (optional fixed `--alpha`), plus Dmax±10% close-fits ensemble unless `minimal=True`.
 
@@ -71,7 +71,7 @@ SAXS / small-angle x-ray scattering: obtain a pair distance distribution functio
 - `alpha` (float | None, default `None`): GNOM `--alpha` for the refine path. If omitted on refine, GNOM chooses automatically. On the auto Shannon×α path, α is searched on \(\log_{10}\alpha\in[-1,2.5]\) and this argument is ignored.
 - `force_zero_rmin` (str | None, default `None`): GNOM `--force-zero-rmin` (`Y`/`N`). Default `Y`.
 - `force_zero_rmax` (str | None, default `None`): GNOM `--force-zero-rmax` (`Y`/`N`). Default `Y`.
-- `minimal` (bool, default `False`): When `True` with `dmax_nm` set, write only the single refine `.out` and remove any previous `ensemble/` (no close-fits / force-zero-off probe).
+- `minimal` (bool, default `False`): When `True`, write only the selected `.out` and remove any previous `ensemble/` (no close-fits / force-zero-off probe). Applies to both auto and refine paths.
 - `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
 
 ### Returns
