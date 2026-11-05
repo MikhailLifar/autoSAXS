@@ -52,9 +52,6 @@ from ..widgets.plots import (
     open_image_2d_dialog,
 )
 from ..widgets.plots import mpl_navigation_toolbar
-from .buffer_rules import BufferRulesEditorDialog, BufferRulesStrip
-
-
 def _empty_hints():
     from ....logic.session_state import SessionPathHints
 
@@ -632,7 +629,6 @@ class BufferWizardDialog(QDialog):
         *,
         watchdir: Path,
         hints: SessionPathHints,
-        session,
         saved_state: dict | None = None,
         parent=None,
     ) -> None:
@@ -660,14 +656,12 @@ class BufferWizardDialog(QDialog):
             self.resize(1120, 720)
         self._watchdir = watchdir
         self._hints = hints
-        self._session = session
         self._dat_viewer = None
         self._apply_coach_dismissed = False
         self._close_coach_armed = False
         self._autofill_buffer_key = None
         self._auto_hinted_buffer_path: str | None = None
         self._q_mode_auto = True
-        self._rules_editor: BufferRulesEditorDialog | None = None
         self._btn_close = QPushButton("Close")
         self._btn_close.clicked.connect(self.close)
 
@@ -679,8 +673,6 @@ class BufferWizardDialog(QDialog):
         self._plot = LogCurvePlot()
         self._plot.mpl_connect("button_press_event", self._on_plot_click)
         self._splitter: QSplitter | None = None
-        self._rules_strip = BufferRulesStrip()
-        self._rules_strip.edit_requested.connect(self._open_buffer_rules_editor)
         self._q_mode_combo = QComboBox()
         self._q_mode_combo.addItem("Auto", True)
         self._q_mode_combo.addItem("Fixed", False)
@@ -723,7 +715,6 @@ class BufferWizardDialog(QDialog):
             right_lay = QVBoxLayout(right)
             right_lay.setContentsMargins(0, 0, 0, 0)
             right_lay.setSpacing(10)
-            right_lay.addWidget(self._rules_strip, 0)
             q_mode_row = QHBoxLayout()
             q_mode_row.setContentsMargins(0, 0, 0, 0)
             q_mode_row.addWidget(QLabel("q0 / q1:"))
@@ -743,7 +734,7 @@ class BufferWizardDialog(QDialog):
             row.addWidget(self._btn_close)
             right_lay.addLayout(row)
             footer = QLabel(
-                "Rules and subtract options are kept for this session and applied to new files."
+                "Per-sample buffer overlay and subtract options are kept for this session."
             )
             footer.setWordWrap(True)
             footer.setStyleSheet(f"color: {COLOR_MUTED_TEXT};")
@@ -753,7 +744,6 @@ class BufferWizardDialog(QDialog):
             splitter.setStretchFactor(1, 2)
             lay.addWidget(splitter, 1)
             self._attach_options_help_button()
-            self.sync_session_rules()
             self._sync_auto_hint_marker_from_field()
             self._autofill_q_range_from_buffer(force=False)
             self._apply_q_fields_enabled()
@@ -789,34 +779,6 @@ class BufferWizardDialog(QDialog):
 
     def update_path_hints(self, hints: SessionPathHints) -> None:
         self._hints = hints
-
-    def sync_session_rules(self) -> None:
-        """Refresh the compact rules strip from session ``buffer_rules``."""
-        rules = list(getattr(self._session.state, "buffer_rules", None) or [])
-        self._rules_strip.set_rules(rules)
-        if self._rules_editor is not None and self._rules_editor.isVisible():
-            self._rules_editor._editor.set_rules(rules)  # noqa: SLF001
-
-    def _open_buffer_rules_editor(self) -> None:
-        rules = list(getattr(self._session.state, "buffer_rules", None) or [])
-        if self._rules_editor is None:
-            self._rules_editor = BufferRulesEditorDialog(rules=rules, parent=self)
-            self._rules_editor.applied.connect(self._on_buffer_rules_applied)
-        else:
-            self._rules_editor._editor.set_rules(rules)  # noqa: SLF001
-        self._rules_editor.show()
-        self._rules_editor.raise_()
-        self._rules_editor.activateWindow()
-
-    def _on_buffer_rules_applied(self, rules: object) -> None:
-        try:
-            pairs = [(str(a), str(b)) for a, b in list(rules or [])]  # type: ignore[arg-type]
-            self._session.set_buffer_rules(pairs)
-            self.sync_session_rules()
-            self._apply_coach_dismissed = False
-            self.attention_context_changed.emit()
-        except Exception as e:
-            QMessageBox.critical(self, "Cannot apply buffer rules", str(e))
 
     def _on_q_mode_changed(self, _index: int = 0) -> None:
         self._q_mode_auto = bool(self._q_mode_combo.currentData())

@@ -18,13 +18,19 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from autosaxs.core.buffer_rules import MatchKind
+
+from ...pipeline.buffer_match import resolve_match_for_sample
 from ...services.calibration.display import refined_yml_display_rows
 from ...services.calibration.mask_preview import render_mask_overlay_png
 from ...services.calibration.masks import applied_mask_path
 from ...services.calibration.storage import calibration_subdir
 from ...session.api import LiveviewSession
+from ...session.sample_store import SampleStore
 from ...session.state import LiveviewIntakeMode, LiveviewSessionState
+from ...session.watchdir_config import effective_config_path
 from ..attention import AttentionPulse
+from ..wizards.configuration import ConfigurationDialog
 from ..wizards.left import BufferWizardDialog, CalibrationWizardDialog
 from ..wizards.mask import MaskWizardDialog
 from ....logic.session_state import SessionPathHints
@@ -96,11 +102,24 @@ class LiveviewLeftPanel(QWidget):
         super().__init__()
         self._session = session
         self._state = session.state
+        self._samples: SampleStore | None = None
         self._cal_wizard: CalibrationWizardDialog | None = None
         self._buf_wizard: BufferWizardDialog | None = None
         self._mask_wizard: MaskWizardDialog | None = None
+        self._config_dialog: ConfigurationDialog | None = None
         self._middle = None
         self._right = None
+
+        self._cfg_group = QGroupBox("Configuration")
+        self._cfg_open = QPushButton("Set configuration")
+        self._cfg_open.setToolTip(
+            "Edit watchdir config.conf buffer_rules (hierarchical; nearest wins)"
+        )
+        self._cfg_hint = QLabel("config.conf — buffer pairing rules")
+        self._cfg_hint.setWordWrap(True)
+        cfg_lay = QVBoxLayout(self._cfg_group)
+        cfg_lay.addWidget(self._cfg_open)
+        cfg_lay.addWidget(self._cfg_hint)
 
         self._cal_group = QGroupBox("Calibration")
         self._cal_open = QPushButton("Calibrate")
@@ -155,7 +174,10 @@ class LiveviewLeftPanel(QWidget):
         self._buf_group = QGroupBox("Buffer")
         self._buf_open = QPushButton("Set buffer")
         self._buf_reset = QPushButton("Reset")
-        self._buf_reset.setToolTip("Clear buffer and subtraction settings (state B), turn analysis Off, and reset the buffer wizard form")
+        self._buf_reset.setToolTip(
+            "Clear per-sample buffer overlays and subtraction settings; "
+            "config.conf rules are kept"
+        )
         self._buf_reset.clicked.connect(self.buffer_reset_requested.emit)
         self._buf_hint = QLabel("—")
         self._buf_hint.setWordWrap(True)
@@ -170,13 +192,16 @@ class LiveviewLeftPanel(QWidget):
         buf_lay.addWidget(self._buf_hint)
         buf_lay.addWidget(self._buf_preview, 1)
 
+        # Order: Configuration → Calibrate → Set mask → Set buffer
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._cfg_group)
         lay.addWidget(self._cal_group)
         lay.addWidget(self._mask_group)
         lay.addWidget(self._buf_group)
         lay.addStretch(1)
 
+        self._cfg_open.clicked.connect(self._open_configuration_dialog)
         self._cal_open.clicked.connect(self._open_calibration_wizard)
         self._mask_open.clicked.connect(self._open_mask_wizard)
         self._buf_open.clicked.connect(self._open_buffer_wizard)
@@ -190,29 +215,53 @@ class LiveviewLeftPanel(QWidget):
     def apply_intake_visibility(self, mode: LiveviewIntakeMode) -> None:
         """Show only left-column groups relevant to the current boarding mode."""
         if mode == LiveviewIntakeMode.FRAME_2D:
+            self._cfg_group.setVisible(True)
             self._cal_group.setVisible(True)
             self._mask_group.setVisible(True)
             self._buf_group.setVisible(True)
         elif mode == LiveviewIntakeMode.CURVE_1D:
+            self._cfg_group.setVisible(True)
             self._cal_group.setVisible(False)
             self._mask_group.setVisible(False)
             self._buf_group.setVisible(True)
         else:
+            self._cfg_group.setVisible(False)
             self._cal_group.setVisible(False)
             self._mask_group.setVisible(False)
             self._buf_group.setVisible(False)
         self.refresh_attention_coach()
+
+    def bind_sample_store(self, store: SampleStore | None) -> None:
+        """Allow coach to resolve UNMATCHED for ``SampleStore.current``."""
+        self._samples = store
 
     def set_coach_peers(self, *, middle, right) -> None:
         """Middle/right panels used for post-setup coaching (canvas + analysis icons)."""
         self._middle = middle
         self._right = right
 
+    def _current_sample_unmatched(self) -> bool:
+        if self._samples is None:
+            return False
+        sample = self._samples.current()
+        if sample is None:
+            return False
+        if sample.key in (self._state.buffer_overrides or {}):
+            return False
+        try:
+            match = resolve_match_for_sample(
+                self._state, sample, sample_curve=sample.path
+            )
+        except Exception:
+            return False
+        return match.kind == MatchKind.UNMATCHED
+
     def refresh_attention_coach(self) -> None:
-        """Pulse the next calibration / buffer / analysis setup control(s)."""
+        """Pulse calibration → configuration → unmatched Set buffer → analysis."""
         intake = self._state.intake_mode
         calibrated = self._state.integrator_dir is not None
-        buffer_ready = self._state.buffer_ready()
+        config_opened = bool(self._state.configuration_opened_once)
+        unmatched = self._current_sample_unmatched()
         targets: list = []
         cal = self._cal_wizard
         buf = self._buf_wizard
@@ -220,7 +269,6 @@ class LiveviewLeftPanel(QWidget):
         middle = self._middle
 
         if intake == LiveviewIntakeMode.CURVE_SUB:
-            # No left-column setup; coach drop canvas + optional analysis icons.
             if middle is not None:
                 if hasattr(middle, "curve_drop_host"):
                     targets.append(middle.curve_drop_host())
@@ -235,7 +283,9 @@ class LiveviewLeftPanel(QWidget):
                 if hasattr(right, "poly_analysis_button"):
                     targets.append(right.poly_analysis_button())
         elif intake == LiveviewIntakeMode.CURVE_1D:
-            if not buffer_ready:
+            if not config_opened:
+                targets.append(self._cfg_open)
+            elif unmatched:
                 if buf is not None and buf.isVisible():
                     if not buf.has_buffer_path():
                         targets.append(buf.buffer_browse_button())
@@ -263,8 +313,6 @@ class LiveviewLeftPanel(QWidget):
                 if hasattr(middle, "drop_hint_canvas"):
                     targets.append(middle.drop_hint_canvas())
         elif not calibrated:
-            # Calibration wizard coaching is independent of the middle column
-            # (proxy / sample TIFFs may already be shown there).
             if cal is not None and cal.isVisible():
                 mask_wiz = self._mask_wizard if self._mask_wizard is not None and self._mask_wizard.isVisible() else None
                 if mask_wiz is None:
@@ -283,7 +331,6 @@ class LiveviewLeftPanel(QWidget):
                         targets.append(calib_line)
                 elif not cal.run_coach_dismissed():
                     if not cal.has_mask():
-                        # Suggest Run without mask (auto) together with Configure mask + PathField.
                         targets.append(cal.run_button())
                         targets.append(cal.create_mask_button())
                         targets.append(cal.mask_browse_button())
@@ -294,9 +341,11 @@ class LiveviewLeftPanel(QWidget):
                         targets.append(cal.run_button())
             else:
                 targets.append(self._cal_open)
-        elif not buffer_ready:
+        elif not config_opened:
             if cal is not None and cal.isVisible() and cal.close_coach_armed():
                 targets.append(cal.close_button())
+            targets.append(self._cfg_open)
+        elif unmatched:
             if buf is not None and buf.isVisible():
                 if not buf.has_buffer_path():
                     targets.append(buf.buffer_browse_button())
@@ -320,7 +369,6 @@ class LiveviewLeftPanel(QWidget):
                     if hasattr(right, "poly_analysis_button"):
                         targets.append(right.poly_analysis_button())
 
-        # Central canvas: pulse when calibrated and empty (2D intake only).
         if (
             intake == LiveviewIntakeMode.FRAME_2D
             and calibrated
@@ -332,7 +380,6 @@ class LiveviewLeftPanel(QWidget):
             if hasattr(middle, "drop_hint_canvas"):
                 targets.append(middle.drop_hint_canvas())
 
-        # Manual mode: pulse Resume on both mono and poly analysis windows.
         if right is not None and hasattr(right, "auto_processing_paused") and right.auto_processing_paused():
             if hasattr(right, "mono_auto_button"):
                 targets.append(right.mono_auto_button())
@@ -658,7 +705,6 @@ class LiveviewLeftPanel(QWidget):
             self._buf_wizard = BufferWizardDialog(
                 watchdir=self._state.watchdir,
                 hints=hints,
-                session=self._session,
                 saved_state=saved,
                 parent=self,
             )
@@ -667,7 +713,6 @@ class LiveviewLeftPanel(QWidget):
         else:
             self._buf_wizard.rebuild(hints, saved_state=saved if not self._buf_wizard.has_buffer_path() else None)
         self._buf_wizard.update_path_hints(hints)
-        self._buf_wizard.sync_session_rules()
         self._buf_wizard.maybe_apply_empty_buffer_hint()
         self._buf_wizard.show()
         self._buf_wizard.raise_()
@@ -754,8 +799,24 @@ class LiveviewLeftPanel(QWidget):
                 self._cal_wizard.arm_close_coach()
         self.refresh_calibration_coach()
 
-    def _refresh_buffer_preview_from_state(self) -> None:
+    def _resolved_preview_buffer(self) -> Optional[Path]:
+        """Prefer current-sample overlay/match; else last-picked hint."""
+        sample = self._samples.current() if self._samples is not None else None
+        if sample is not None:
+            from ...pipeline.buffer_match import resolved_buffer_path_for_sample
+
+            resolved = resolved_buffer_path_for_sample(self._state, sample)
+            if resolved:
+                p = Path(resolved)
+                if p.is_file():
+                    return p
         buf = self._state.buffer_dat_path
+        if buf is not None and buf.is_file():
+            return buf
+        return None
+
+    def _refresh_buffer_preview_from_state(self) -> None:
+        buf = self._resolved_preview_buffer()
         opts = self._state.subtract_options if isinstance(self._state.subtract_options, dict) else {}
         q_min = opts.get("q_min")
         q_max = opts.get("q_max")
@@ -768,8 +829,6 @@ class LiveviewLeftPanel(QWidget):
             self._buf_hint.setText("—")
             self._buf_hint.setVisible(True)
         self._buf_preview.set_image_click_handler(self._open_buffer_wizard)
-        if self._buf_wizard is not None:
-            self._buf_wizard.sync_session_rules()
 
     def sync_buffer_preview_from_state(self) -> None:
         """Refresh buffer thumbnail from ``LiveviewSessionState`` (e.g. after watch-folder change)."""
@@ -814,9 +873,13 @@ class LiveviewLeftPanel(QWidget):
                 opts["q_min"] = float(q0)
                 opts["q_max"] = float(q1)
 
-            # Do not copy buffer.dat or write subtract.conf.
-            # Keep the selected buffer and subtract parameters in session state only.
-            self._session.set_buffer(buffer_path, dict(opts))
+            # Per-sample overlay bind (config.conf Fixed rules are separate).
+            sample = self._samples.current() if self._samples is not None else None
+            if sample is None:
+                # No current sample: keep last-picked hint + subtract options only.
+                self._session.set_buffer(buffer_path, dict(opts))
+            else:
+                self._session.set_buffer_for_sample(sample, buffer_path, dict(opts))
             self._refresh_buffer_preview_from_state()
             if self._buf_wizard is not None:
                 self._buf_wizard.arm_close_coach()
@@ -827,6 +890,33 @@ class LiveviewLeftPanel(QWidget):
                 self._buf_wizard._apply_coach_dismissed = False  # noqa: SLF001
                 self._buf_wizard._close_coach_armed = False  # noqa: SLF001
                 self.refresh_calibration_coach()
+
+    def _open_configuration_dialog(self) -> None:
+        sample = self._samples.current() if self._samples is not None else None
+        sample_path = sample.path if sample is not None else None
+        cfg_path = (
+            effective_config_path(sample_path, self._state.watchdir)
+            if sample_path
+            else None
+        )
+
+        def _on_saved(path: Path, text: str) -> None:
+            self._session.save_configuration_text(path, text)
+
+        dlg = ConfigurationDialog(
+            watchdir=self._state.watchdir,
+            config_path=cfg_path,
+            parent=self,
+            on_saved=_on_saved,
+        )
+        self._config_dialog = dlg
+        # Opening clears the post-calib Configuration coach pulse.
+        self._session.mark_configuration_opened()
+        self.refresh_attention_coach()
+        dlg.exec_()
+        self._config_dialog = None
+        self._refresh_buffer_preview_from_state()
+        self.refresh_attention_coach()
 
 
 def _sanitize_subtract_options(opts: Dict[str, Any]) -> Dict[str, Any]:

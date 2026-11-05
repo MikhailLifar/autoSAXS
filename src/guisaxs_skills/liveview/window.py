@@ -59,6 +59,7 @@ class LiveviewMainWindow(QMainWindow):
             middle=self._middle,
             right=self._right,
         )
+        self._left.bind_sample_store(self._controller.samples)
         self._left.refresh_attention_coach()
 
         container = QWidget()

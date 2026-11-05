@@ -123,6 +123,16 @@ class LiveviewSkillRunsHandler:
                 right.monodisperse_coordinator.sync_params_to_state()
             if self._c.state.polydisperse_armed:
                 right.polydisperse_coordinator.sync_params_to_state()
+        # Refresh per-sample overlay for the current (or sample_dat) path.
+        sample = self._c.samples.current()
+        if sample is None and sample_dat:
+            from ..session.sample import Sample
+            from ..session.state import LiveviewIntakeMode
+
+            sample = Sample.from_path(sample_dat, boarding=LiveviewIntakeMode.CURVE_1D)
+        if sample is not None and buffer_dat:
+            opts = dict(self._c.state.subtract_options or {})
+            self._c.session.set_buffer_for_sample(sample, buffer_dat, opts)
         self._c.session.stop()
         self._c.executor.cancel_current()
         job = self._c.executor.build_rerun_subtraction_job(

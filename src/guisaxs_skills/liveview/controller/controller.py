@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any, Optional
 
 from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import QMessageBox, QWidget
 
-from autosaxs.core.buffer_rules import (
-    MatchKind,
-    MatchResult,
-    match_sample_to_buffer,
-)
+from autosaxs.core.buffer_rules import MatchKind, MatchResult, match_sample_to_buffer
 
 from ...logic.runner_qprocess import SkillRunner
 from ..pipeline import LiveviewJobExecutor, LiveviewQueueStatus
@@ -21,8 +17,9 @@ from ..session.history_persistence import load_liveview_history, save_liveview_h
 from ..session.output_paths import analysis_output_root
 from ..session.sample_store import SampleStore
 from ..session.state import LiveviewSessionState, LiveviewWatchMode
+from ..session.watchdir_config import effective_config_path, load_effective_buffer_rules
 from ..ui.panels import LiveviewLeftPanel, LiveviewMiddlePanel, LiveviewRightPanel
-from ..ui.wizards.buffer_rules import BufferRulesConflictDialog
+from ..ui.wizards.configuration import ConfigurationConflictDialog
 
 from .history import LiveviewHistoryHandler
 from .ingest import LiveviewIngestHandler
@@ -68,7 +65,7 @@ class LiveviewController(QObject):
         self._middle: Optional[LiveviewMiddlePanel] = None
         self._right: Optional[LiveviewRightPanel] = None
         self._parent_widget: Optional[QWidget] = None
-        self._conflict_dialog: Optional[BufferRulesConflictDialog] = None
+        self._conflict_dialog: Optional[ConfigurationConflictDialog] = None
         self._conflict_sample_path: str = ""
 
         self.history = LiveviewHistoryHandler(self)
@@ -130,6 +127,7 @@ class LiveviewController(QObject):
         self._right = right
         self._parent_widget = parent
         self.session.bind_right_panel(right)
+        left.bind_sample_store(self.samples)
         self._wire_log_streams()
         self.session_handler.apply_loaded_to_ui()
         mode = self.state.intake_mode
@@ -245,39 +243,46 @@ class LiveviewController(QObject):
 
     def _open_buffer_rules_conflict_modal(self, *, diagnostics: str) -> None:
         parent = self._parent_widget
-        rules = list(self.state.buffer_rules or [])
+        sample = (self._conflict_sample_path or "").strip()
+        cfg_path = (
+            effective_config_path(sample, self.state.watchdir) if sample else None
+        )
 
-        def _retry(new_rules: Sequence[Tuple[str, str]]) -> Any:
-            # Persist candidate rules, then re-check the blocking sample (and scan
-            # any other known stems lightly via the same sample path).
-            self.session.set_buffer_rules(list(new_rules))
+        def _on_saved(path: Path, text: str) -> None:
+            self.session.save_configuration_text(path, text)
             if self._left is not None:
                 self._left.sync_buffer_preview_from_state()
-            sample = (self._conflict_sample_path or "").strip()
+
+        def _retry() -> Any:
             if not sample:
                 return None
+            rules = load_effective_buffer_rules(sample, self.state.watchdir)
+            # Overlay still wins — if Set buffer fixed this sample, clear conflict.
+            if sample in (self.state.buffer_overrides or {}):
+                return None
             cands = collect_buffer_candidates(self.state, exclude=[sample])
-            result = match_sample_to_buffer(sample, cands, list(new_rules))
+            result = match_sample_to_buffer(sample, cands, rules)
             if result.kind == MatchKind.CONFLICT:
                 return result
             return None
 
-        dlg = BufferRulesConflictDialog(
+        dlg = ConfigurationConflictDialog(
             diagnostics=diagnostics,
-            rules=rules,
+            watchdir=self.state.watchdir,
+            config_path=cfg_path,
             retry_check=_retry,
+            on_saved=_on_saved,
             parent=parent,
         )
         self._conflict_dialog = dlg
         dlg.exec_()
-        resolved = dlg.resolved_rules()
         self._conflict_dialog = None
-        if resolved is not None:
-            self.session.set_buffer_rules(resolved)
-            if self._left is not None:
-                self._left.sync_buffer_preview_from_state()
+        if dlg.resolved():
             self._executor.set_dispatch_hold(False)
             self._conflict_sample_path = ""
+            if self._left is not None:
+                self._left.sync_buffer_preview_from_state()
+                self._left.refresh_attention_coach()
 
     # --- delegated public API (window wiring) ---
 

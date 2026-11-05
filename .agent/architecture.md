@@ -35,6 +35,7 @@
 - 3D preview chrome: `LiveviewViewer3D` owns CIF/MRC path checks via `pathlib`; revealing folders is `ui/os_open.open_path_in_file_manager` (shared with DR).
 - 3D mesh QThread: `SaxsInteractive3DWidget` owns isosurface worker lifetime (`shutdown` / `_stop_mesh_worker` / `_on_mesh_thread_finished`); thread is **unparented**. Keep the Python owner ref until the OS thread has stopped — never drop it from `worker.finished` (still `isRunning()`; GC/`deleteLater` then aborts). Window/`LiveviewViewer3D` close must stop workers before widget-tree destroy.
 - Modeling mini-apps: `.agent/liveview/modeling-session-controls.md` (paths from context push; run knobs session-owned).
+- Configuration / buffer_rules: `.agent/liveview/configuration-buffer-rules.md` (`config.conf` policy + session overlay; Configuration editor SSOT).
 - Package import lightness: `.agent/package-imports.md`.
 - `core/utils.py` gradual split: `.agent/core-utils-split.md`.
 - Interactive `autosaxs.pipeline` (EventBus `Controller`) was removed; history: `docs/archive/legacy-interactive-pipeline.md`. Orchestration is skills + liveview `plan_for`.

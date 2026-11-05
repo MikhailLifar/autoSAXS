@@ -1,10 +1,12 @@
 """
-Persist calibration (integrator dir, curve preview path), buffer/subtract options,
-intake/watch mode, and mask paths under the watch directory so a restart restores
-them without re-entering wizards.
+Persist calibration (integrator dir, curve preview path), buffer overlays /
+subtract options, intake/watch mode, and mask paths under the watch directory.
 
 ``auto_processing`` (Auto/Manual) is intentionally not persisted — launches always
 start in Auto.
+
+``buffer_rules`` live only in hierarchical ``config.conf`` (not here). Legacy
+session ``buffer_rules`` are migrated once into the root config on load.
 
 Layout: ``<watchdir>/.guisaxs_liveview/session.yaml``
 """
@@ -16,17 +18,14 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from autosaxs.core.buffer_rules import (
-    rules_from_session_yaml,
-    seed_literal_rule_from_buffer_path,
-    session_rules_to_yaml,
-)
+from autosaxs.core.buffer_rules import rules_from_session_yaml
 
-from .state import (
-    DEFAULT_LIVEVIEW_BUFFER_RULES,
-    LiveviewIntakeMode,
-    LiveviewSessionState,
-    LiveviewWatchMode,
+from .state import LiveviewIntakeMode, LiveviewSessionState, LiveviewWatchMode
+from .watchdir_config import (
+    load_buffer_rules_from_config_path,
+    migrate_session_rules_into_root_config,
+    root_config_path,
+    seed_root_config_conf,
 )
 
 SESSION_DIR = ".guisaxs_liveview"
@@ -59,8 +58,41 @@ def _resolve_saved_path(watchdir: Path, s: Optional[str]) -> Optional[Path]:
     return out
 
 
+def _norm_sample_key(watchdir: Path, key: str) -> Optional[str]:
+    p = _resolve_saved_path(watchdir, key)
+    if p is None:
+        return None
+    try:
+        return str(p.resolve())
+    except OSError:
+        return str(p)
+
+
+def project_config_rules(state: LiveviewSessionState) -> None:
+    """Seed root config if needed and refresh ``root_rules`` / rules cache."""
+    try:
+        wd = state.watchdir.expanduser().resolve()
+    except (OSError, RuntimeError):
+        return
+    root = seed_root_config_conf(wd)
+    state.rules_by_config_dir.clear()
+    try:
+        rules = load_buffer_rules_from_config_path(root)
+    except ValueError:
+        rules = None
+    if rules is None:
+        from autosaxs.core.buffer_rules import DEFAULT_BUFFER_RULES
+
+        rules = tuple(DEFAULT_BUFFER_RULES)
+    state.root_rules = rules
+    state.rules_by_config_dir[str(root.parent.resolve())] = rules
+    # Default subtract options so PAIRED samples can run without Set buffer.
+    if state.subtract_options is None and state.root_rules:
+        state.subtract_options = {}
+
+
 def save_liveview_session_settings(state: LiveviewSessionState) -> None:
-    """Write session file; no-op if watchdir is unusable."""
+    """Write session file; no-op if watchdir is unusable. Never writes buffer_rules."""
     try:
         wd = state.watchdir.expanduser().resolve()
     except (OSError, RuntimeError):
@@ -69,6 +101,11 @@ def save_liveview_session_settings(state: LiveviewSessionState) -> None:
         out_dir = wd / SESSION_DIR
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / SESSION_FILE
+        overrides: Dict[str, str] = {}
+        for key, buf in (state.buffer_overrides or {}).items():
+            k_rel = _as_rel_if_under(wd, Path(key)) or key
+            b_rel = _as_rel_if_under(wd, Path(buf)) or buf
+            overrides[str(k_rel)] = str(b_rel)
         data: Dict[str, Any] = {
             "version": 1,
             "watch_mode": state.watch_mode.value,
@@ -76,7 +113,8 @@ def save_liveview_session_settings(state: LiveviewSessionState) -> None:
             "integrator_dir": _as_rel_if_under(wd, state.integrator_dir),
             "buffer_dat_path": _as_rel_if_under(wd, state.buffer_dat_path),
             "subtract_options": state.subtract_options,
-            "buffer_rules": session_rules_to_yaml(state.buffer_rules or DEFAULT_LIVEVIEW_BUFFER_RULES),
+            "buffer_overrides": overrides,
+            "configuration_opened_once": bool(state.configuration_opened_once),
             "calibration_curve_plot_path": _as_rel_if_under(wd, state.calibration_curve_plot_path),
             "calibration_refined_yml_path": _as_rel_if_under(wd, state.calibration_refined_yml_path),
             "mask_path": _as_rel_if_under(wd, state.mask_path),
@@ -93,22 +131,42 @@ def save_liveview_session_settings(state: LiveviewSessionState) -> None:
 def load_liveview_session_settings(state: LiveviewSessionState) -> bool:
     """
     Load from ``.guisaxs_liveview/session.yaml`` into ``state``.
-    Drops values whose paths are missing (stale session).
-    Returns True if the file existed and was read (even if all fields were cleared).
+
+    Seeds root ``config.conf``, migrates legacy session ``buffer_rules`` once,
+    and projects rules into ``state.root_rules``. Drops stale paths.
     """
     try:
         wd = state.watchdir.expanduser().resolve()
     except (OSError, RuntimeError):
         return False
+
     path = wd / SESSION_DIR / SESSION_FILE
-    if not path.is_file():
+    raw: Dict[str, Any] = {}
+    loaded = False
+    if path.is_file():
+        try:
+            parsed = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, yaml.YAMLError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            raw = parsed
+            loaded = True
+
+    # Migrate legacy session buffer_rules → root config.conf, then drop on save.
+    legacy_rules = None
+    if "buffer_rules" in raw:
+        try:
+            legacy_rules = rules_from_session_yaml(raw.get("buffer_rules"))
+        except (TypeError, ValueError):
+            legacy_rules = None
+        if legacy_rules is not None:
+            migrate_session_rules_into_root_config(wd, list(legacy_rules))
+
+    seed_root_config_conf(wd)
+
+    if not loaded and not path.is_file():
+        project_config_rules(state)
         return False
-    try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, yaml.YAMLError, TypeError):
-        return False
-    if not isinstance(raw, dict):
-        return True
 
     wm = raw.get("watch_mode")
     if wm == LiveviewWatchMode.FLAT.value:
@@ -123,8 +181,6 @@ def load_liveview_session_settings(state: LiveviewSessionState) -> bool:
     except ValueError:
         state.intake_mode = LiveviewIntakeMode.FRAME_2D
 
-    # auto_processing is in-memory only (always default Auto on launch).
-
     integ = _resolve_saved_path(wd, raw.get("integrator_dir") if raw.get("integrator_dir") else None)
     if integ is not None and integ.is_dir():
         state.integrator_dir = integ
@@ -137,25 +193,36 @@ def load_liveview_session_settings(state: LiveviewSessionState) -> bool:
     else:
         state.buffer_dat_path = None
 
-    try:
-        loaded_rules = rules_from_session_yaml(raw.get("buffer_rules"))
-    except (TypeError, ValueError):
-        loaded_rules = None
-    if loaded_rules is not None:
-        state.buffer_rules = list(loaded_rules)
-    elif state.buffer_dat_path is not None:
-        # Migrate old single-buffer sessions → literal catch-all rule.
-        state.buffer_rules = list(seed_literal_rule_from_buffer_path(state.buffer_dat_path))
-    else:
-        state.buffer_rules = list(DEFAULT_LIVEVIEW_BUFFER_RULES)
+    overrides_raw = raw.get("buffer_overrides")
+    state.buffer_overrides = {}
+    if isinstance(overrides_raw, dict):
+        for k, v in overrides_raw.items():
+            sk = _norm_sample_key(wd, str(k))
+            bp = _resolve_saved_path(wd, str(v) if v is not None else None)
+            if sk and bp is not None and bp.is_file():
+                state.buffer_overrides[sk] = str(bp.resolve())
+
+    # Legacy pin without overlays: keep as last-picked hint only (Fixed = config rule).
+    if (
+        not state.buffer_overrides
+        and state.buffer_dat_path is not None
+        and legacy_rules is None
+        and "buffer_overrides" not in raw
+    ):
+        # Older sessions used a global pin; migrate Fixed as catch-all into config once.
+        from autosaxs.core.buffer_rules import seed_literal_rule_from_buffer_path
+
+        migrate_session_rules_into_root_config(
+            wd, list(seed_literal_rule_from_buffer_path(state.buffer_dat_path))
+        )
 
     opts = raw.get("subtract_options")
-    has_rules_key = raw.get("buffer_rules") is not None
-    if isinstance(opts, dict) and (state.buffer_dat_path is not None or has_rules_key):
+    if isinstance(opts, dict):
         state.subtract_options = {str(k): v for k, v in opts.items()}
     else:
-        # Legacy: missing buffer path (and no rules key) drops subtract_options.
         state.subtract_options = None
+
+    state.configuration_opened_once = bool(raw.get("configuration_opened_once"))
 
     cal_png = _resolve_saved_path(
         wd, raw.get("calibration_curve_plot_path") if raw.get("calibration_curve_plot_path") else None
@@ -192,4 +259,10 @@ def load_liveview_session_settings(state: LiveviewSessionState) -> bool:
     else:
         state.mask_preview_path = None
 
-    return True
+    project_config_rules(state)
+
+    # Drop legacy buffer_rules from session.yaml on next save.
+    if "buffer_rules" in raw:
+        save_liveview_session_settings(state)
+
+    return loaded

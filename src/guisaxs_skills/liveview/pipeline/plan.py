@@ -11,7 +11,6 @@ from autosaxs.core.buffer_rules import (
     BufferMatchConflict,
     MatchKind,
     MatchResult,
-    match_sample_to_buffer,
 )
 
 from ...core.models import RunRequest
@@ -26,7 +25,7 @@ from ..session.output_paths import (
 from ..session.sample import Sample
 from ..session.state import LiveviewIntakeMode, LiveviewSessionState
 from ..services.calibration.masks import applied_mask_path
-from .buffer_match import collect_buffer_candidates
+from .buffer_match import resolve_match_for_sample
 from .jobs import (
     CompletedWork,
     Job,
@@ -90,7 +89,6 @@ class PipelinePlan:
             priority=0,
             steps=list(self.steps),
             context=ctx,
-            # completed defaults empty — Job owns progress from here on
         )
 
 
@@ -168,18 +166,18 @@ def _analysis_steps(
 
 def _match_for_sample(
     state: LiveviewSessionState,
+    sample: Sample,
     *,
     sample_curve: str,
     sample_output_root: Path,
 ) -> MatchResult:
-    """Run buffer_rules matcher; raise ``BufferMatchConflict`` on CONFLICT."""
-    rules = tuple(state.buffer_rules or ())
-    candidates = collect_buffer_candidates(
+    """Run matcher (+ overlay); raise ``BufferMatchConflict`` on CONFLICT."""
+    result = resolve_match_for_sample(
         state,
+        sample,
+        sample_curve=sample_curve,
         sample_output_root=sample_output_root,
-        exclude=[sample_curve],
     )
-    result = match_sample_to_buffer(sample_curve, candidates, rules)
     if result.kind == MatchKind.CONFLICT:
         raise BufferMatchConflict(result)
     return result
@@ -275,7 +273,7 @@ def _plan_frame(
     integrated_dat = str(integrated_dat_path(root=root, stem=stem, integrator_ready=True).resolve())
 
     if not state.buffer_ready():
-        # Buffer stage not configured: integrate then analysis on unsubtracted (legacy).
+        # Buffer stage not configured: integrate then analysis on unsubtracted.
         profile = integrated_dat
         _append_analysis_and_report(
             steps, state, profile=profile, output_root=root, stem=stem, load_yaml=load_yaml
@@ -289,12 +287,14 @@ def _plan_frame(
             sample_stem=stem,
         )
 
-    # Match against TIFF basename as well as predicted integrated curve so rules
-    # written for either naming style work. Prefer the curve path for pairing.
-    match = _match_for_sample(state, sample_curve=integrated_dat, sample_output_root=root)
+    match = _match_for_sample(
+        state, sample, sample_curve=integrated_dat, sample_output_root=root
+    )
     if match.kind == MatchKind.UNMATCHED:
         # Also try the source TIFF basename (rules often target *.tif pools).
-        match_tiff = _match_for_sample(state, sample_curve=tp, sample_output_root=root)
+        match_tiff = _match_for_sample(
+            state, sample, sample_curve=tp, sample_output_root=root
+        )
         if match_tiff.kind != MatchKind.UNMATCHED:
             match = match_tiff
         else:
@@ -372,7 +372,7 @@ def _plan_curve_1d(
             sample_stem=stem,
         )
 
-    match = _match_for_sample(state, sample_curve=dp, sample_output_root=root)
+    match = _match_for_sample(state, sample, sample_curve=dp, sample_output_root=root)
     if match.kind == MatchKind.UNMATCHED:
         return PipelinePlan(
             steps=steps,
