@@ -12,7 +12,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from ...ingest.sample_revision import is_dat_path, is_tiff_path, sample_stem_from_path
-from ...pipeline.buffer_match import resolved_buffer_path_for_sample
+from ...pipeline.buffer_match import (
+    effective_buffer_path_for_sample,
+    resolved_buffer_path_for_sample,
+)
 from ...session.output_paths import tiff_output_root
 from ...session.sample import Sample
 from ...session.state import LiveviewIntakeMode, LiveviewSessionState, LiveviewWatchMode
@@ -22,7 +25,7 @@ from ...session.stem_resolve import resolve_integrated_dat, resolve_subtracted_d
 def _sample_has_resolved_buffer(state: LiveviewSessionState, sample: Sample | None) -> bool:
     if sample is None:
         return False
-    return bool(resolved_buffer_path_for_sample(state, sample))
+    return effective_buffer_path_for_sample(state, sample) is not None
 
 
 def integrated_dat_for_tiff_stem(

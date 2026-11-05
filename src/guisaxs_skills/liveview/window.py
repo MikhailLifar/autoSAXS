@@ -403,8 +403,11 @@ class LiveviewMainWindow(QMainWindow):
         return True
 
     def _open_subtraction_wizard(self) -> None:
-        buf = self._state.buffer_dat_path
-        has_buffer = self._state.buffer_ready() and buf is not None and buf.is_file()
+        from .pipeline.buffer_match import effective_buffer_path_for_sample
+
+        sample = self._controller.samples.current()
+        effective_buf = effective_buffer_path_for_sample(self._state, sample)
+        has_buffer = self._state.buffer_ready() and effective_buf is not None
         if not has_buffer:
             QMessageBox.information(
                 self,
@@ -417,8 +420,8 @@ class LiveviewMainWindow(QMainWindow):
         buffer_dat = str(ctx.get("buffer_dat") or "")
         subtracted_dat = str(ctx.get("subtracted_dat") or "")
         subtract_options = ctx.get("subtract_options") if isinstance(ctx.get("subtract_options"), dict) else {}
-        if not buffer_dat and self._state.buffer_dat_path is not None:
-            buffer_dat = str(self._state.buffer_dat_path.resolve())
+        if not buffer_dat and effective_buf is not None:
+            buffer_dat = str(effective_buf)
         if not sample_dat:
             # Current middle sample has no curve — do not borrow session last_*.
             pass

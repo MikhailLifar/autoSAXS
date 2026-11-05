@@ -28,7 +28,14 @@ Soft-wait: rematch all waiters after each job finish and on `configuration_chang
 - Overlay wins over rules for that sample (escape hatch for CONFLICT / UNMATCHED / soft-wait).
 - Soft-wait is executor runtime only (not session / Sample / history).
 - Configuration does not drive analysis/arming.
-- Coach: after calib pulse Set configuration until opened once; pulse Set buffer when current is UNMATCHED.
+- **Effective buffer / match for current sample** is owned by `pipeline/buffer_match.py`
+  (`resolve_liveview_match`, `effective_buffer_path_for_sample`, `sample_needs_manual_buffer`):
+  same curve-identity probe as `plan_for` (planned `int_<stem>.dat`, then source).
+  `buffer_dat_path` is last-picked UI hint only — not the wizard/coach readiness fact.
+- Coach: after calib pulse Set configuration until opened once; pulse Set buffer **only**
+  when effective match is `UNMATCHED` (not `PAIRED` / `NONE` / soft-wait / conflict).
+- Subtraction wizard opens when `buffer_ready()` and effective buffer path resolves for
+  `SampleStore.current` (rules or overlay) — never requires a Set-buffer hint.
 - Left order: Configuration → Calibrate → Set mask → Set buffer.
 
 ## End-user `config.conf` comments
@@ -41,5 +48,5 @@ Configuration editor uses a small `QSyntaxHighlighter` (keys / comments / string
 
 - Matcher SSOT: `autosaxs/core/buffer_rules.py`
 - Hierarchy/seed: `guisaxs_skills/liveview/session/watchdir_config.py`
-- Overlay resolve: `guisaxs_skills/liveview/pipeline/buffer_match.py`
-- Plan: `guisaxs_skills/liveview/pipeline/plan.py`
+- Liveview effective match + buffer path: `guisaxs_skills/liveview/pipeline/buffer_match.py`
+- Plan: `guisaxs_skills/liveview/pipeline/plan.py` (raises CONFLICT / AWAITING on that match)

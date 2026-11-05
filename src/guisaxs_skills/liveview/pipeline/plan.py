@@ -26,7 +26,7 @@ from ..session.output_paths import (
 from ..session.sample import Sample
 from ..session.state import LiveviewIntakeMode, LiveviewSessionState
 from ..services.calibration.masks import applied_mask_path
-from .buffer_match import resolve_match_for_sample
+from .buffer_match import resolve_liveview_match
 from .jobs import (
     CompletedWork,
     Job,
@@ -165,30 +165,32 @@ def _analysis_steps(
     return steps
 
 
-def _match_for_sample(
-    state: LiveviewSessionState,
-    sample: Sample,
-    *,
-    sample_curve: str,
-    sample_output_root: Path,
-) -> MatchResult:
-    """
-    Run matcher (+ overlay).
-
-    Raises ``BufferMatchConflict`` on hard ``CONFLICT`` and ``BufferAwaiting`` on
-    ``AWAITING_BUFFER`` (soft-wait; liveview executor parks without hold).
-    """
-    result = resolve_match_for_sample(
-        state,
-        sample,
-        sample_curve=sample_curve,
-        sample_output_root=sample_output_root,
-    )
+def _raise_match_outcome(result: MatchResult) -> MatchResult:
+    """Raise hard CONFLICT / soft AWAITING_BUFFER; otherwise return ``result``."""
     if result.kind == MatchKind.CONFLICT:
         raise BufferMatchConflict(result)
     if result.kind == MatchKind.AWAITING_BUFFER:
         raise BufferAwaiting(result)
     return result
+
+
+def _match_for_sample(
+    state: LiveviewSessionState,
+    sample: Sample,
+    *,
+    sample_output_root: Path,
+) -> MatchResult:
+    """
+    Effective matcher (+ overlay) with plan/UI curve-identity probe order.
+
+    Raises ``BufferMatchConflict`` on hard ``CONFLICT`` and ``BufferAwaiting`` on
+    ``AWAITING_BUFFER`` (soft-wait; liveview executor parks without hold).
+    """
+    return _raise_match_outcome(
+        resolve_liveview_match(
+            state, sample, sample_output_root=sample_output_root
+        )
+    )
 
 
 def _append_analysis_and_report(
@@ -295,26 +297,17 @@ def _plan_frame(
             sample_stem=stem,
         )
 
-    match = _match_for_sample(
-        state, sample, sample_curve=integrated_dat, sample_output_root=root
-    )
+    match = _match_for_sample(state, sample, sample_output_root=root)
     if match.kind == MatchKind.UNMATCHED:
-        # Also try the source TIFF basename (rules often target *.tif pools).
-        match_tiff = _match_for_sample(
-            state, sample, sample_curve=tp, sample_output_root=root
+        # Not a claimed sample → stop after integrate (silent; no analysis).
+        return PipelinePlan(
+            steps=steps,
+            profile_path=integrated_dat,
+            output_root=root,
+            source_path=tp,
+            boarding=LiveviewIntakeMode.FRAME_2D,
+            sample_stem=stem,
         )
-        if match_tiff.kind != MatchKind.UNMATCHED:
-            match = match_tiff
-        else:
-            # Not a claimed sample → stop after integrate (silent; no analysis).
-            return PipelinePlan(
-                steps=steps,
-                profile_path=integrated_dat,
-                output_root=root,
-                source_path=tp,
-                boarding=LiveviewIntakeMode.FRAME_2D,
-                sample_stem=stem,
-            )
 
     if match.kind == MatchKind.PAIRED:
         assert match.buffer is not None
@@ -380,7 +373,7 @@ def _plan_curve_1d(
             sample_stem=stem,
         )
 
-    match = _match_for_sample(state, sample, sample_curve=dp, sample_output_root=root)
+    match = _match_for_sample(state, sample, sample_output_root=root)
     if match.kind == MatchKind.UNMATCHED:
         return PipelinePlan(
             steps=steps,

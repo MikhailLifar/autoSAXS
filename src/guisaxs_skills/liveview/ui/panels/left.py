@@ -18,9 +18,10 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from autosaxs.core.buffer_rules import MatchKind
-
-from ...pipeline.buffer_match import resolve_match_for_sample
+from ...pipeline.buffer_match import (
+    effective_buffer_path_for_sample,
+    sample_needs_manual_buffer,
+)
 from ...services.calibration.display import refined_yml_display_rows
 from ...services.calibration.mask_preview import render_mask_overlay_png
 from ...services.calibration.masks import applied_mask_path
@@ -241,28 +242,18 @@ class LiveviewLeftPanel(QWidget):
         self._middle = middle
         self._right = right
 
-    def _current_sample_unmatched(self) -> bool:
+    def _current_sample_needs_manual_buffer(self) -> bool:
+        """Coach Set buffer only when effective match is UNMATCHED."""
         if self._samples is None:
             return False
-        sample = self._samples.current()
-        if sample is None:
-            return False
-        if sample.key in (self._state.buffer_overrides or {}):
-            return False
-        try:
-            match = resolve_match_for_sample(
-                self._state, sample, sample_curve=sample.path
-            )
-        except Exception:
-            return False
-        return match.kind == MatchKind.UNMATCHED
+        return sample_needs_manual_buffer(self._state, self._samples.current())
 
     def refresh_attention_coach(self) -> None:
         """Pulse calibration → configuration → unmatched Set buffer → analysis."""
         intake = self._state.intake_mode
         calibrated = self._state.integrator_dir is not None
         config_opened = bool(self._state.configuration_opened_once)
-        unmatched = self._current_sample_unmatched()
+        unmatched = self._current_sample_needs_manual_buffer()
         targets: list = []
         cal = self._cal_wizard
         buf = self._buf_wizard
@@ -801,16 +792,12 @@ class LiveviewLeftPanel(QWidget):
         self.refresh_calibration_coach()
 
     def _resolved_preview_buffer(self) -> Optional[Path]:
-        """Prefer current-sample overlay/match; else last-picked hint."""
+        """Prefer current-sample effective buffer; else last-picked hint."""
         sample = self._samples.current() if self._samples is not None else None
         if sample is not None:
-            from ...pipeline.buffer_match import resolved_buffer_path_for_sample
-
-            resolved = resolved_buffer_path_for_sample(self._state, sample)
-            if resolved:
-                p = Path(resolved)
-                if p.is_file():
-                    return p
+            resolved = effective_buffer_path_for_sample(self._state, sample)
+            if resolved is not None:
+                return resolved
         buf = self._state.buffer_dat_path
         if buf is not None and buf.is_file():
             return buf
