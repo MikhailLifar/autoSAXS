@@ -5,33 +5,59 @@ description: Orchestrate SAXS data processing end-to-end — clarify goals, plan
 
 # SAXS processing (orchestrator)
 
-Use this skill as the **top-level SAXS orchestration layer** for the SAXS-specific skill bundle.
+Top-level router for the SAXS skill bundle. **Depth lives in playbooks and examples** — open those on demand; do not invent regime rules from memory when a linked playbook exists.
 
-Subskills live as ordinary markdown under `saxs-processing/<name>/<name>.md`. Only this orchestrator is a Cursor Agent Skill; open linked procedure docs when you need a step’s contract.
+Subskills: `saxs-processing/<name>/<name>.md`. Only this file is a Cursor Agent Skill.
 
 ## When to use
 
-- The user needs to **process, interpret, or fit SAXS data** (lab or synchrotron; 2D detector images or 1D reduced curves).
-- The task may be a **single operation** or a **sequence** of steps (e.g. geometry → integration → subtraction → modelling).
-- The user may **not** mention `autosaxs`; treat that name as the **default automation layer** for this bundle when you decide to run commands here.
+- Process, interpret, or fit SAXS data (2D frames or 1D curves).
+- Single step or a sequence; user may not say `autosaxs` — treat it as the default CLI for these leaves.
+
+## Units and metrics
+
+- **Units:** `q` in `nm^-1`; lengths (`R_g`, `D_max`, `R`, …) in `nm`.
+- **Metrics inform, never hard-gate** for interactive / agent-orchestrated single skills. Explain risk and caveats; proceed if the user chooses.
+- **Exception (D-ASX-001):** unattended `process-monodisperse` / `process-polydisperse` keep **hard quality gates** by default. Optional `gate_pass` (when implemented) bypasses gates while still recording the same checks as advice.
+
+## Sample-context intake (optional, non-blocking)
+
+Before locking a multi-step plan (skip if the user already stated the sample or asked for one mechanical command), ask this compact intake — or proceed immediately as **unknown**:
+
+1. **Sample family:** protein / nucleic acid / membrane-protein + detergent or nanodisc / LNP or micelle / inorganic nanoparticle / polymer or gel / unknown.
+2. **Dispersity & morphology:** monodisperse single species / discrete oligomer or conformer mixture / continuous size-polydisperse spheres / high-aspect rods, fibrils, or platelets / unknown.
+3. **Solvent & contrast:** matched dialysis/SEC buffer / high salt–glycerol–sucrose–ethanol / multiphase core–shell (possible negative contrast) / dry or unsubtracted.
+4. **Series variable (if many files):** concentration / SEC frames / T–pH–time–ligand / independent samples.
+
+If the user skips or is unsure → **`unknown — standard diagnostic triage`**: `plot` → `fit-guinier` → `analyze-kratky` → inspect log-log slope / oscillations → branch via `playbooks/INDEX.md`.
+
+When the user gives a sample label (e.g. `Pt-NPs`, `Lysozyme`), pass that **exact** label into CLI/metadata so local processing history stays clean.
+
+## Playbooks and examples (progressive disclosure)
+
+| Open | When |
+|---|---|
+| [`playbooks/INDEX.md`](playbooks/INDEX.md) | Route sample class × stage; load **at most one** sample + one stage playbook per run |
+| [`examples/INDEX.md`](examples/INDEX.md) | Match a worked archetype card (≤1–2 cards) |
+| [`playbooks/visual/visual-diagnosis.md`](playbooks/visual/visual-diagnosis.md) | Vision-capable harness only (see below) |
+
+Every playbook rule carries an inline literature citation (author/year + corpus pin or journal page). Prefer those cites over improvisation.
+
+## Visual diagnosis (capability gate)
+
+- If the harness **can** read PNGs: after numerical passports exist, optionally open `playbooks/visual/visual-diagnosis.md`. **Numbers own numbers** (passports/YAML); vision owns morphology only; state passport + visual + agree/conflict for each PNG.
+- If text-only / headless: **skip** visual diagnosis with zero steps (no error).
 
 ## What you do
 
-- Reframe the request in **scientific / data-flow terms** (what exists on disk, what is unknown, what quality checks matter).
-- Produce a **concise plan**: ordered list of subskills when more than one step is useful; note dependencies and optional branches.
-- **Open linked subskill `.md` files only when needed** for the step you are about to run or explain; refresh the plan as new artifacts appear.
-- Tell the user your plan - what are you going to do, what will be the resulting artifacts. Present your plan in a user-friendly form, avoiding autosaxs-specific terms (fit-sizes, fit-distances) and instead using popular scientific terms ("fitting size distribution D(R)", "fitting pair distances distribution function P(r), characterizing the shape of particles"). Make your plan detailed - you are not going to just "calibrate" or "subtract", but you wanna use a specific image for calibration and specific curve as a buffer, and so on.
-- Execute the plan upon agreement.
-- You may **reorder, skip, or repeat** subskills when the user’s goal or intermediate results justify it (not only strict linear pipelines).
-
-
-## What you should not do
-
-- Replace the leaf skills’ own procedures, safety checks, or argument contracts when executing a step. Your processing should rely on the subskills, not procedures made-up from scratch.
+- Reframe the request in scientific / data-flow terms; produce a concise plan (ordered subskills, dependencies, branches).
+- Tell the user the plan in friendly scientific language (not only CLI names); name concrete inputs (which frame for calibration, which buffer curve, …).
+- Open a linked leaf `.md` only when about to run or explain that step; execute after agreement; reorder/skip/repeat when justified.
+- Do **not** replace leaf procedures, safety checks, or argument contracts.
 
 ## Subskill catalog
 
-Each entry links to a procedure doc. Purpose and use-cases come from that file (and the embedded autosaxs docstring). Compact index (path → CLI hook → short teaser):
+Compact index (path → CLI hook → teaser). Purpose/use-cases live in each linked file:
 
 - [`calibrate/calibrate.md`](calibrate/calibrate.md) (`autosaxs calibrate`) — SAXS / small-angle x-ray scattering: calibrate detector geometry using calibrant image. This is a prerequisite for 'integrate' (azimuthal integration).
 - [`integrate/integrate.md`](integrate/integrate.md) (`autosaxs integrate`) — SAXS / small-angle x-ray scattering: integrate 2D SAXS images to 1D curves (q, I, sigma) using a calibrated integrator produced by 'calibrate' (azimuthal integration; q-space).
@@ -57,25 +83,13 @@ Each entry links to a procedure doc. Purpose and use-cases come from that file (
 - [`report-individual/report-individual.md`](report-individual/report-individual.md) (`autosaxs report-individual`) — SAXS / small-angle x-ray scattering: build a per-sample report from an existing pipeline directory.
 - [`report-summary/report-summary.md`](report-summary/report-summary.md) (`autosaxs report-summary`) — SAXS / small-angle x-ray scattering: build a summary report for all samples in a pipeline directory.
 
-## Sequencing
-
-- Common patterns: calibration / geometry → azimuthal integration → buffer subtraction (if the notion of buffer is applicable)  → plots → analysis / fits.  
-  - Typical monodisperse analysis: **fit-guinier → analyze-kratky → fit-distances → model-dam or model-density** (bead model vs continuous density; prefer model-dam as the most well-established approach)  
-  - Typical polydisperse analysis (assuming spherical shape of the particles): **fit-guinier → fit-sizes → model-dr-mc → model-mixture**. **fit-guinier** usually outputs low quality fit in polydisperse case, this is normal.  
-- State the sequence as explicit steps: **order → subskill path → rationale → what is still unknown or assumed**.  
-- After a step completes, **revisit the plan** before pulling in additional leaf skills.  
-
 ## Reports (fragment contract)
 
-- Processing skills write per-sample ``{basename}_report_individual.md`` and optional ``{basename}_report_summary.yaml`` next to their outputs (paths inside those files are relative to that directory).
-- ``report-individual`` merges all ``*_report_individual.md`` under the pipeline root for a basename; ``report-summary`` merges all ``*_report_summary.yaml``.
-
-## Inputs and outputs (orchestrator level)
-- **Execution is strict only where the leaf says so:** when you actually run a subskill, follow its linked `.md` procedure for required arguments, configs, and environment rules.
+Skills write `{basename}_report_individual.md` and optional `{basename}_report_summary.yaml` next to outputs. `report-individual` / `report-summary` merge those under the pipeline root.
 
 ## SAXS data I/O
 
-When you need to inspect, transform, or create SAXS data files from Python, prefer the canonical helpers in `autosaxs.core.utils` instead of ad-hoc parsing or serialization. Import from the installed package, e.g. `from autosaxs.core.utils import read_saxs, parse_gnom_out`.
+Prefer `autosaxs.core.utils` helpers (`read_saxs`, `parse_gnom_out`, …) over ad-hoc parsing:
 
 - `read_saxs(filename) -> (wavenumber, intensity, sigma, metadata)` — Read SAXS data and metadata from a file with YAML metadata and CSV data.
 - `load_saxs_1d_any(filename: str) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]` — Load q, I and optionally sigma from a SAXS 1D file.
@@ -84,17 +98,11 @@ When you need to inspect, transform, or create SAXS data files from Python, pref
 - `read_data(filename) -> (data, columns_as_arrays, metadata)` — Read generic tabular data and metadata from a file with YAML metadata and CSV data.
 - `write_data(filename, data: pd.DataFrame, metadata)` — Write generic tabular data and metadata to a file using YAML for metadata and CSV for data.
 
-- Preserve the pipeline unit convention from `autosaxs.core.utils`: `q` is in `nm^-1`, while `Rg`, `Dmax`, and other lengths are in `nm`.
-
-## Notes
-Some skills create per-sample dirs outputs within output dir, and some do not. Read the documentation carefully.  
-GNOM skills (`fit-distances`, `fit-sizes`) results are preliminary - don't ever present them as the final scientific results. Modeling skills results (`model-dam`, `model-density`, `model-mixture`) are the final.  
-GNOM quality checks are important indicators, which should not be ignored. By default, you should not run complex modeling if GNOM checks indicate poor data quality and unreliable fit. If the user insists on modeling, despite checks, then you should do it.
-
 ## Implementation note (`autosaxs`)
 
-Nested folders under `saxs-processing/` correspond to the **autosaxs** Python package / CLI. When this bundle is the chosen implementation, prefer `<env>/bin/autosaxs <command>` (or the Python API noted in each leaf). Other SAXS-capable tools remain valid if the user or environment requires them — this bundle does not mandate autosaxs for high-level reasoning, only for invoking these leaves.
+Prefer `<env>/bin/autosaxs <command>` (or the Python API in each leaf). Other tools remain valid if the user requires them.
 
 ## Provenance
 
 - Generated by `autosaxs get-skills` (autosaxs 3.8.0).
+- Static trees: bundled `playbooks/` + `examples/` (D-ASX-011).

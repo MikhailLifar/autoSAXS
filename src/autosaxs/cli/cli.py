@@ -172,16 +172,41 @@ def _read_subskill_ai_skill_template() -> str:
         ).read_text(encoding="utf-8")
 
 
-def _read_router_skill_template() -> str:
-    """Top-level router SKILL.md for the ``saxs-processing`` bundle."""
+def _ai_skills_resource_root() -> Path:
+    """Directory of bundled ``ai_skills`` templates + static playbooks/examples."""
     try:
         from importlib.resources import files
 
-        return (files("autosaxs.resources.ai_skills") / "router_template.md").read_text(encoding="utf-8")
+        return Path(str(files("autosaxs.resources.ai_skills")))
     except Exception:
-        return (
-            Path(__file__).resolve().parents[1] / "resources" / "ai_skills" / "router_template.md"
-        ).read_text(encoding="utf-8")
+        return Path(__file__).resolve().parents[1] / "resources" / "ai_skills"
+
+
+def _read_router_skill_template() -> str:
+    """Top-level router SKILL.md for the ``saxs-processing`` bundle."""
+    return (_ai_skills_resource_root() / "router_template.md").read_text(encoding="utf-8")
+
+
+def _copy_static_ai_skill_trees(bundle: Path) -> List[str]:
+    """
+    Copy bundled ``playbooks/`` and ``examples/`` into an export ``saxs-processing/`` dir.
+
+    Returns paths of copied top-level INDEX files (for CLI stdout listing).
+    """
+    src_root = _ai_skills_resource_root()
+    written: List[str] = []
+    for name in ("playbooks", "examples"):
+        src = src_root / name
+        if not src.is_dir():
+            raise FileNotFoundError(f"bundled ai_skills/{name}/ missing at {src}")
+        dest = bundle / name
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(src, dest)
+        index = dest / "INDEX.md"
+        if index.is_file():
+            written.append(str(index))
+    return written
 
 
 def _extract_frontmatter_field(md: str, field: str) -> Optional[str]:
@@ -448,7 +473,10 @@ def _add_get_docs_subparser(subparsers: argparse._SubParsersAction) -> None:
 def _add_get_skills_subparser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "get-skills",
-        help="Generate saxs-processing/ (orchestrator SKILL.md + nested <name>/<name>.md procedure docs)",
+        help=(
+            "Generate saxs-processing/ (orchestrator SKILL.md + nested procedure docs "
+            "+ static playbooks/ and examples/)"
+        ),
     )
     p.set_defaults(_autosaxs_internal_cmd="get-skills")
     p.add_argument(
@@ -850,6 +878,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         router_md_path = bundle / "SKILL.md"
         router_md_path.write_text(_router_skill_md(skill_fns, autosaxs_version=autosaxs_version), encoding="utf-8")
         written.append(str(router_md_path))
+
+        # Static curated trees (D-ASX-011): playbooks/ + examples/ next to generated leaves.
+        written.extend(_copy_static_ai_skill_trees(bundle))
 
         for p in sorted(written):
             print(p)

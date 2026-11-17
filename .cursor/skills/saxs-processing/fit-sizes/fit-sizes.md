@@ -57,6 +57,12 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtai
 
 **Refine path** (when `rmax_nm` is set): single GNOM `--rmax` at the given Rmax, plus Rmax±10% close-fits ensemble unless `minimal=True`.
 
+Quality passport (D-ASX-004 / D-ASX-007): Jacques & Trewhella (2010) ``p0`` /
+``p0_classification`` from ``--force-zero-rmin=N`` at selected Rmax (corpus
+``5-pro0019-0642.pdf`` journal p.649); ``powerlaw_exponent`` from high-q
+``I∝q^α`` (Li et al. 2016 Chem. Rev. letter G–H / ≈11134–11135 — warn near −1/−2
+for sphere kernels).
+
 ### Arguments
 
 - `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
@@ -106,6 +112,8 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtai
 - `close_fit_out_paths`: List of `.out` files for close Rmax fits.
 - `force_zero_off_out_path`: `.out` file for "force-zero-off" probe.
 - `force_zero_off_pathology`: `"true"` / `"false"` / `""` — D(R) tail pathology from force-zero-off.
+- `p0` / `p0_classification`: Jacques solvent check from force-zero-rmin-off probe.
+- `powerlaw_exponent`: High-q log–log slope α of I(q) (nm⁻¹).
 - `d_avg_nm`: Mean size (nm) from D(R).
 - `d_std_nm`: Standard deviation of size (nm) from D(R).
 - `pdi`: Polydispersity index σ/⟨R⟩.
