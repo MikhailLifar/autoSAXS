@@ -73,6 +73,13 @@ buffer alone. Legacy ``point_match`` / ``match_tail`` remain available via ``met
 ### Notes
 Correctness criteria: buffer and sample visually matched at the high-q tail / pre-knee region.
 Negative values in the subtracted curve are possible due to high variance at the tail.
+Passport negativity (D-ASX-003): ``frac_neg`` = fraction of points with ``I+σ<0``
+(same definition as legacy ``correctness``); ``q_first_neg_nm`` = smallest such ``q``.
+High-q mismatch / over-subtraction: Jacques & Trewhella (2010) *Protein Sci.* **19**:642–657,
+journal p.649 / corpus ``5-pro0019-0642.pdf`` PDF p.8. Under-/over-subtraction via **P(0)**
+belongs on ``fit_distances`` / ``fit_sizes`` (D-ASX-004), not here.
+Subtracted I(q) peak list (``iq_peaks``) is informational for Bragg / S(q) features
+(D-ASX-010; Spinozzi 2024 JCIS ~1.43–1.60 nm⁻¹ after Å→nm).
 
 ### Short parameter list
 
@@ -91,8 +98,10 @@ Negative values in the subtracted curve are possible due to high variance at the
 - `sub_plot_path`: Path to the subtracted curve PNG (log I vs q).
 - `diff_plot_path`: Path to a diff plot PNG.
 - `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
-Subtraction quality (`correct` or `over-subtracted`) is written into the subtracted `.dat` metadata
-(``subtract.correctness``) and into per-sample report fragments (individual Markdown and summary YAML).
+Subtraction quality is written into the subtracted `.dat` metadata
+(``subtract.correctness``, ``subtract.frac_neg``, ``subtract.q_first_neg_nm``) and into
+per-sample report fragments (individual Markdown and summary YAML), including
+``iq_peaks`` from :func:`autosaxs.core.profile_features.detect_iq_peaks`.
 The individual report shows subtraction quality, re-plots the log-scale difference
 curves from ``diff_log_*.dat``, then the subtracted curve (log I vs q) from the ``.dat``.
 

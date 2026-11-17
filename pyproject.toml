@@ -68,6 +68,8 @@ include = ["autosaxs*", "guisaxs_skills*", "guisaxs_liveview*", "guisaxs_shape*"
 autosaxs = [
     "resources/agent_quickstart.txt",
     "resources/ai_skills/*.md",
+    "resources/ai_skills/playbooks/**/*",
+    "resources/ai_skills/examples/**/*",
     "resources/config_base.conf",
     "resources/help/guisaxs_liveview/**/*",
     "resources/prompts/**/*.txt",

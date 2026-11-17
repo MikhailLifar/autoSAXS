@@ -144,7 +144,8 @@ autosaxs/
 | `config_base.conf` | Bundled skill-keyed YAML defaults (`calibrate:`, `subtract:`, …) |
 | `agent_quickstart.txt` | CLI epilog for agents |
 | `help/guisaxs_liveview/` | Bundled HTML help (manifest + pages) |
-| `ai_skills/`, `prompts/` | LLM / assistant templates |
+| `ai_skills/` | Router/subskill templates + static `playbooks/` + `examples/` (exported by `get-skills`, D-ASX-011) |
+| `prompts/` | LLM / assistant templates |
 | `readme/` | Source for generated README |
 
 ---

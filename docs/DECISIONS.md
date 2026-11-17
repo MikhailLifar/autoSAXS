@@ -130,6 +130,23 @@ Entries are append-only. Superseded decisions stay; mark `Status: superseded by 
 
 ---
 
+### D-ASX-011 — Bundle playbooks/examples via `get-skills`; thin SKILL.md router (2026-11-17)
+
+**Status:** accepted  
+**Context:** Phase 2 of the SAXS knowledge/playbooks design: curated Markdown under `src/autosaxs/resources/ai_skills/{playbooks,examples}/` must ship with the agent skill tree. Mikhail approved a **thin** `SKILL.md` router with depth in playbooks/examples (not a long inline workflow essay).
+
+**Decision:**
+
+1. `autosaxs get-skills` exports static `playbooks/` and `examples/` into `saxs-processing/` alongside generated leaf procedure docs.
+2. `router_template.md` → generated `SKILL.md` stays a thin orchestrator: sample-context intake, unknown-fallback triage, links to `playbooks/INDEX.md` + `examples/INDEX.md`, visual-diagnosis capability gate, and the D-ASX-001 `process_*` hard-gate note. Long workflow/regime prose lives only in playbooks/examples.
+3. Every playbook rule and archetype recommendation carries an **inline literature citation** (author/year + corpus pin and/or journal page from the harvest / `docs/code-change-citations.md` SSOT). No web search for pins at ship time. Units remain `nm` / `nm^-1`; metrics inform (except `process_*` per D-ASX-001).
+
+**Justification:** Progressive disclosure keeps agent token budgets small while still grounding recommendations in the offline corpus; one owner for export (`get-skills`) avoids a second packaging path.
+
+**Refs:** Mikhail approval (thin router); Project store `docs/saxs-knowledge-and-playbooks-design.md` Phase 2; harvest drafts under `saxsprocessing/knowledge_harvest/drafts/`; ASX-66.
+
+---
+
 ## GUI
 
 *(No new GUI decisions in this session.)*

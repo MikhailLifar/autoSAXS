@@ -14,7 +14,7 @@ Shipped commands (no input data required)
 -----------------------------------------
   doctor                       Check Python, autosaxs, pyFAI, GUI extras, and optional ATSAS.
   get-docs -o <dir>            Write README.md (short) and autosaxs-docs/skills_reference.md (detailed skills).
-  get-skills -o <dir>          Replace dir/saxs-processing/ entirely (orchestrator SKILL.md + <name>/<name>.md leaves).
+  get-skills -o <dir>          Replace dir/saxs-processing/ entirely (SKILL.md + leaves + playbooks/ + examples/).
   get-default-config -o <dir>  Copy bundled config_base.conf into <dir> (skill-keyed YAML template for overrides).
 
 Suggested first steps for an agent
