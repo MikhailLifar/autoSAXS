@@ -85,6 +85,10 @@ def _dr_quality_result_keys() -> List[str]:
         "ensemble_summary_path",
         "force_zero_off_out_path",
         "force_zero_off_pathology",
+        "p0",
+        "p0_classification",
+        "force_zero_rmin_off_out_path",
+        "powerlaw_exponent",
     ]
 
 
@@ -128,6 +132,10 @@ def _empty_dr_quality_fields() -> Dict[str, Any]:
         "ensemble_summary_path": "",
         "force_zero_off_out_path": "",
         "force_zero_off_pathology": False,
+        "p0": None,
+        "p0_classification": "unknown",
+        "force_zero_rmin_off_out_path": "",
+        "powerlaw_exponent": None,
     }
 
 
@@ -284,4 +292,14 @@ def _dr_quality_markdown(quality: Dict[str, Any]) -> str:
     stab = quality.get("stability_class")
     if stab and stab != "unknown":
         lines.append(f"\n- **Rmax stability:** {stab}")
+    p0 = quality.get("p0")
+    p0_cls = quality.get("p0_classification")
+    if p0 is not None or (p0_cls and str(p0_cls) != "unknown"):
+        if p0 is not None:
+            lines.append(f"\n- **P(0)** (force-zero-rmin off): {float(p0):.4g} ({p0_cls})")
+        else:
+            lines.append(f"\n- **P(0)** classification: {p0_cls}")
+    plexp = quality.get("powerlaw_exponent")
+    if plexp is not None:
+        lines.append(f"\n- **powerlaw_exponent:** {float(plexp):.3g}")
     return "".join(lines) + "\n"

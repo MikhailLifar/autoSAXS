@@ -15,6 +15,7 @@ import numpy as np
 from autosaxs.core.atsas_gnom import run_gnom_pr
 from autosaxs.core.gnom import candidate_score, distribution_arrays, parse_gnom_out
 from autosaxs.core.gnom_quality import rg_from_pr
+from autosaxs.core.profile_features import p0_solvent_from_distribution
 
 from ..deps import EventBus, EventType
 
@@ -26,6 +27,8 @@ _FORCE_ZERO_OFF_RMAX_FACTOR = 1.5
 GNOM_BEST_OUT = "gnom_best.out"
 DATGNOM_BEST_OUT = GNOM_BEST_OUT  # deprecated alias — same path so re-runs overwrite
 FORCE_ZERO_OFF_OUT = "gnom_force_zero_off.out"
+# Jacques P(0) solvent probe: release force-zero at r=0 (rmin), same Dmax (D-ASX-004).
+FORCE_ZERO_RMIN_OFF_OUT = "gnom_force_zero_rmin_off.out"
 
 
 def close_fit_out_name(rmax_factor: float) -> str:
@@ -149,13 +152,16 @@ def _run_dmax_close_fit_ensemble(
     alpha: Optional[float],
     event_bus: Optional[EventBus],
     run_force_zero_off: bool = True,
+    run_p0_probe: bool = True,
 ) -> Dict[str, Any]:
     """
-    Persist a Dmax±10% close-fits ensemble and optionally a force-zero-off validation .out.
+    Persist a Dmax±10% close-fits ensemble and optional validation probes.
 
     Close fits use ``--force-zero-rmax=Y`` at nearby Dmax values.
     The force-zero-off pathology probe uses an *extended* rmax (1.5× Dmax) with
     ``--force-zero-rmax=N`` (aggregation / repulsion check past the putative size).
+    The Jacques P(0) solvent probe uses the *selected* Dmax with
+    ``--force-zero-rmin=N`` (positive P(0)=under-, negative=over-subtraction).
     Alpha is left automatic for GNOM (DATGNOM Current ALPHA is not reused).
     """
     ensemble_dir, close_fits_dir = _prepare_ensemble_dirs(sample_output_dir)
@@ -284,6 +290,62 @@ def _run_dmax_close_fit_ensemble(
                 },
             )
 
+    p0: Optional[float] = None
+    p0_classification = "unknown"
+    force_zero_rmin_off_out_path = ""
+    if run_p0_probe:
+        p0_out = os.path.join(ensemble_dir, FORCE_ZERO_RMIN_OFF_OUT)
+        ok_p0, rc_p0, stderr_p0, out_text_p0 = _run_gnom_pr_once(
+            atsas_dat_path=atsas_dat_path,
+            output_dir=ensemble_dir,
+            rmax_nm=float(dmax_nm),
+            first=first,
+            last=last,
+            alpha=None,
+            force_zero_rmin="N",
+            force_zero_rmax="Y",
+            out_path=p0_out,
+        )
+        p0_row: Dict[str, Any] = {
+            "role": "force_zero_rmin_off",
+            "rmax_factor": 1.0,
+            "rmax_nm": float(dmax_nm),
+            "force_zero_rmin": "N",
+            "force_zero_rmax": "Y",
+            "ok": bool(ok_p0),
+            "returncode": int(rc_p0),
+            "stderr": stderr_p0,
+            "out_path": p0_out if ok_p0 else "",
+            "p0": None,
+            "p0_classification": "unknown",
+        }
+        if ok_p0:
+            force_zero_rmin_off_out_path = p0_out
+            parsed_p0 = parse_gnom_out(out_text_p0)
+            arrays_p0 = distribution_arrays(parsed_p0.get("distribution"))
+            if arrays_p0 is not None:
+                r_p0, p_p0, _err = arrays_p0
+                solvent = p0_solvent_from_distribution(
+                    np.asarray(r_p0, dtype=float),
+                    np.asarray(p_p0, dtype=float),
+                )
+                p0 = solvent.get("p0")
+                p0_classification = str(solvent.get("p0_classification") or "unknown")
+                p0_row["p0"] = p0
+                p0_row["p0_classification"] = p0_classification
+        rows.append(p0_row)
+        if event_bus:
+            status = "ok" if ok_p0 else f"failed rc={rc_p0}"
+            event_bus.publish(
+                EventType.MESSAGE,
+                {
+                    "text": (
+                        f"DATGNOM (fit_distances): P(0) force-zero-rmin-off probe "
+                        f"at Dmax={float(dmax_nm):.4g} nm ({status}; {p0_classification})"
+                    ),
+                },
+            )
+
     summary_path = os.path.join(ensemble_dir, "ensemble_summary.csv")
     with open(summary_path, "w", newline="") as fp:
         w = csv.writer(fp)
@@ -322,7 +384,10 @@ def _run_dmax_close_fit_ensemble(
         "ensemble_summary_path": summary_path,
         "close_fit_out_paths": close_fit_out_paths,
         "force_zero_off_out_path": force_zero_off_out_path,
+        "force_zero_rmin_off_out_path": force_zero_rmin_off_out_path,
         "ensemble_rows": rows,
         "force_zero_off_parsed": force_zero_off_parsed,
         "dmax_ref_nm": float(dmax_nm),
+        "p0": p0,
+        "p0_classification": p0_classification,
     }

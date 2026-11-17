@@ -11,6 +11,13 @@
 - **Purpose:** Light `import autosaxs`; lazy skill catalog; ATSAS probe only on doctor / first ATSAS skill.
 - **Owners / invariants:** `.agent/package-imports.md`.
 
+## Profile / passport diagnostics (D-ASX-003…010)
+
+- **Purpose:** Deterministic I(q)/IFT passport enrichments without new CLI skills.
+- **Owner:** `autosaxs.core.profile_features` (`frac_neg`/`q_first_neg_nm`, `powerlaw_exponent`, `detect_iq_peaks`, Jacques `p0` classify).
+- **Wiring:** `subtract` metadata + report (`frac_neg`, `q_first_neg_nm`, `iq_peaks`); `fit_distances` / `fit_sizes` quality YAML (`p0`, `p0_classification` from force-zero-**rmin**-off probe; `fit_sizes` also `powerlaw_exponent`). Existing force-zero-**rmax**-off pathology probe unchanged.
+- **Not owners:** Guinier residual_shape, average Rg/I0 drift, new Shannon/Kratky work (`docs/DECISIONS.md`).
+
 ## LiveView
 
 - **Purpose:** Single-window watchdir app; sequential `autosaxs` skills; middle/right plots follow session facts + on-disk artifacts.

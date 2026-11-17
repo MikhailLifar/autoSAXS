@@ -43,6 +43,10 @@ def _quality_handoff_block(dr_quality: Dict[str, Any]) -> Dict[str, Any]:
         "detail_reliability_class": dr_quality.get("detail_reliability_class"),
         "stability_class": dr_quality.get("stability_class"),
         "force_zero_off_pathology": bool(dr_quality.get("force_zero_off_pathology")),
+        "p0": dr_quality.get("p0"),
+        "p0_classification": dr_quality.get("p0_classification"),
+        "force_zero_rmin_off_out_path": dr_quality.get("force_zero_rmin_off_out_path") or "",
+        "powerlaw_exponent": dr_quality.get("powerlaw_exponent"),
         "quality_rationale": list(dr_quality.get("quality_rationale") or []),
         "user_tips": list(dr_quality.get("user_tips") or []),
     }

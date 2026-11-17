@@ -57,18 +57,17 @@ def subtraction_correctness(
     sigma_sub: Optional[np.ndarray],
 ) -> str:
     """
-    Classify buffer subtraction quality.
+    Classify buffer subtraction quality (legacy string API).
 
     Returns ``correct`` or ``over-subtracted``. Over-subtraction is detected when any point
     has ``I_subtracted + sigma_subtracted < 0``. Without uncertainties, returns ``correct``.
+
+    For ``frac_neg`` / ``q_first_neg_nm`` see
+    :func:`autosaxs.core.profile_features.assess_subtraction_negativity`.
     """
-    if sigma_sub is None:
-        return "correct"
-    I = np.asarray(I_sub, dtype=float)
-    sigma = np.asarray(sigma_sub, dtype=float)
-    if np.any((I + sigma) < 0):
-        return "over-subtracted"
-    return "correct"
+    from autosaxs.core.profile_features import assess_subtraction_negativity
+
+    return str(assess_subtraction_negativity(I_sub, sigma_sub)["correctness"])
 
 
 @contextmanager

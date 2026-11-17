@@ -12,7 +12,12 @@ from autosaxs.core.subtract_scale import (
     minimal_ratio_scale,
     pre_knee_q_window,
 )
-from autosaxs.core.utils import read_saxs, subtraction_correctness, write_data, write_saxs
+from autosaxs.core.profile_features import (
+    assess_subtraction_negativity,
+    detect_iq_peaks,
+    peaks_as_summary_rows,
+)
+from autosaxs.core.utils import read_saxs, write_data, write_saxs
 
 from .deps import (
     EventBus,
@@ -301,12 +306,16 @@ def subtract_buffer(
     except Exception:
         used_ops = None
 
+    neg = assess_subtraction_negativity(I_sub, sigma_sub, q)
     subtract_meta = {
         "method": method_key,
         "scaling_factor": float(scaling_factor),
         "manual_scaling_factor": bool(manual_scale is not None),
         "match_tail_ops": used_ops,
-        "correctness": subtraction_correctness(I_sub, sigma_sub),
+        # Legacy string + enriched negativity (Jacques high-q I+σ<0; D-ASX-003).
+        "correctness": neg["correctness"],
+        "frac_neg": neg["frac_neg"],
+        "q_first_neg_nm": neg["q_first_neg_nm"],
     }
     write_saxs(
         destpath,
@@ -381,6 +390,13 @@ def subtract(
     ### Notes
     Correctness criteria: buffer and sample visually matched at the high-q tail / pre-knee region.
     Negative values in the subtracted curve are possible due to high variance at the tail.
+    Passport negativity (D-ASX-003): ``frac_neg`` = fraction of points with ``I+σ<0``
+    (same definition as legacy ``correctness``); ``q_first_neg_nm`` = smallest such ``q``.
+    High-q mismatch / over-subtraction: Jacques & Trewhella (2010) *Protein Sci.* **19**:642–657,
+    journal p.649 / corpus ``5-pro0019-0642.pdf`` PDF p.8. Under-/over-subtraction via **P(0)**
+    belongs on ``fit_distances`` / ``fit_sizes`` (D-ASX-004), not here.
+    Subtracted I(q) peak list (``iq_peaks``) is informational for Bragg / S(q) features
+    (D-ASX-010; Spinozzi 2024 JCIS ~1.43–1.60 nm⁻¹ after Å→nm).
 
     ### Short parameter list
 
@@ -399,8 +415,10 @@ def subtract(
     - `sub_plot_path`: Path to the subtracted curve PNG (log I vs q).
     - `diff_plot_path`: Path to a diff plot PNG.
     - `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
-    Subtraction quality (`correct` or `over-subtracted`) is written into the subtracted `.dat` metadata
-    (``subtract.correctness``) and into per-sample report fragments (individual Markdown and summary YAML).
+    Subtraction quality is written into the subtracted `.dat` metadata
+    (``subtract.correctness``, ``subtract.frac_neg``, ``subtract.q_first_neg_nm``) and into
+    per-sample report fragments (individual Markdown and summary YAML), including
+    ``iq_peaks`` from :func:`autosaxs.core.profile_features.detect_iq_peaks`.
     The individual report shows subtraction quality, re-plots the log-scale difference
     curves from ``diff_log_*.dat``, then the subtracted curve (log I vs q) from the ``.dat``.
 
@@ -611,19 +629,41 @@ def _subtract_paths(
     )
     from autosaxs.core.report_fragments import write_skill_report_fragments
 
-    _, _, _sigma, meta = read_saxs(dest)
+    q_sub, I_sub_arr, _sigma_sub_arr, meta = read_saxs(dest)
     subtract_meta = meta.get("subtract") if isinstance(meta, dict) else {}
-    correctness = (
-        str(subtract_meta.get("correctness"))
-        if isinstance(subtract_meta, dict) and subtract_meta.get("correctness")
-        else "correct"
+    if not isinstance(subtract_meta, dict):
+        subtract_meta = {}
+    correctness = str(subtract_meta.get("correctness") or "correct")
+    frac_neg = subtract_meta.get("frac_neg")
+    q_first_neg = subtract_meta.get("q_first_neg_nm")
+    try:
+        frac_neg_f = float(frac_neg) if frac_neg is not None else None
+    except (TypeError, ValueError):
+        frac_neg_f = None
+    try:
+        q_first_neg_f = float(q_first_neg) if q_first_neg is not None else None
+    except (TypeError, ValueError):
+        q_first_neg_f = None
+    iq_peaks = peaks_as_summary_rows(
+        detect_iq_peaks(np.asarray(q_sub, dtype=float), np.asarray(I_sub_arr, dtype=float))
     )
     md_lines = [
         "### Buffer subtraction\n",
         f"Subtraction quality: **{correctness}**.\n",
-        f"![Difference log scale]({os.path.basename(diff_log_dat_path)})\n",
-        f"![Subtracted curve]({os.path.basename(dest)})\n",
     ]
+    if frac_neg_f is not None:
+        md_lines.append(f"- `frac_neg` (I+σ<0): {frac_neg_f:.4g}\n")
+    if q_first_neg_f is not None:
+        md_lines.append(f"- `q_first_neg_nm`: {q_first_neg_f:.4g} nm⁻¹\n")
+    if iq_peaks:
+        qs = ", ".join(f"{p['q_nm']:.3g}" for p in iq_peaks[:8])
+        md_lines.append(f"- I(q) peaks (nm⁻¹): {qs}\n")
+    md_lines.extend(
+        [
+            f"![Difference log scale]({os.path.basename(diff_log_dat_path)})\n",
+            f"![Subtracted curve]({os.path.basename(dest)})\n",
+        ]
+    )
     summary_refs = [
         {"role": "subtracted_curve", "path": os.path.basename(dest), "format": "saxs_dat", "display_name": "subtracted"},
     ]
@@ -633,7 +673,13 @@ def _subtract_paths(
         "subtract",
         "".join(md_lines),
         summary_references=summary_refs,
-        summary_extra={"correctness": correctness},
+        summary_extra={
+            "correctness": correctness,
+            "frac_neg": frac_neg_f,
+            "q_first_neg_nm": q_first_neg_f,
+            # Owner for detect_iq_peaks passport (D-ASX-010): subtract report / summary YAML.
+            "iq_peaks": iq_peaks,
+        },
     )
     return {
         "subtracted_1d": dest,
