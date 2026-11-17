@@ -71,9 +71,14 @@ def fit_distances(
     r"""
     SAXS / small-angle x-ray scattering: obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve via ATSAS GNOM (real-space distance distribution).
 
-    **Auto path** (when `dmax_nm` is omitted): Guinier \(R_g\) (tool only) → **Fast AutoGNOM** — Stage 1: H32 NumPy Tikhonov over Shannon-bound \(D_{\max}\times\log_{10}\alpha\) (no ATSAS in the search loop; α in GNOM-printed units via locked H32 packaging) → pick by interpretable **`shape_tight_extent`** score (soft taper, non‑negativity, low wiggle, χ² guardrail, extent band \(\sim 3.2\)–\(5\times R_g\)) → Stage 2: ATSAS `gnom` at the Stage‑1 \((D_{\max},\alpha)\) writes stable `gnom_best.out`, close-fits ensemble, force-zero-off (unless `minimal`), passport. Units: \(q\) in nm⁻¹, lengths in nm. Does **not** use Autorg→DATGNOM TOTAL selection (clarity over deposit‑Dmax matching).
+    **Auto path** (when `dmax_nm` is omitted): Guinier \(R_g\) (tool only) → **Fast AutoGNOM** — Stage 1: H32 NumPy Tikhonov over Shannon-bound \(D_{\max}\times\log_{10}\alpha\) (no ATSAS in the search loop; α in GNOM-printed units via locked H32 packaging) → pick by interpretable **`shape_tight_extent`** score (soft taper, non‑negativity, low wiggle, χ² guardrail, extent band \(\sim 3.2\)–\(5\times R_g\)) → Stage 2: ATSAS `gnom` at the Stage‑1 \((D_{\max},\alpha)\) writes stable `gnom_best.out`, close-fits ensemble, force-zero-off / Jacques P(0) probe (unless `minimal`), passport. Units: \(q\) in nm⁻¹, lengths in nm. Does **not** use Autorg→DATGNOM TOTAL selection (clarity over deposit‑Dmax matching).
 
     **Refine path** (when `dmax_nm` is set): single GNOM `--rmax` run at the given Dmax (optional fixed `--alpha`), plus Dmax±10% close-fits ensemble unless `minimal=True`.
+
+    Quality passport includes Jacques & Trewhella (2010) solvent check (D-ASX-004): release
+    ``--force-zero-rmin`` at the selected Dmax; ``p0`` and ``p0_classification``
+    (`under_subtracted` / `over_subtracted` / `ok`). Corpus pin: ``5-pro0019-0642.pdf``
+    journal p.649 / PDF p.8.
 
     ### Arguments
 
@@ -110,7 +115,9 @@ def fit_distances(
     - `ensemble_dir`: Close-fits Dmax ensemble directory.
     - `ensemble_summary_path`: Close-fits Dmax ensemble CSV summary.
     - `close_fit_out_paths`: Saved GNOM `.out` paths for Dmax±10% close fits.
-    - `force_zero_off_out_path`: Saved GNOM `.out` with `--force-zero-rmax=N` at Dmax.
+    - `force_zero_off_out_path`: Saved GNOM `.out` with `--force-zero-rmax=N` at extended Dmax.
+    - `p0` / `p0_classification`: Jacques solvent check from `--force-zero-rmin=N` at selected Dmax.
+    - `force_zero_rmin_off_out_path`: Saved GNOM `.out` for the P(0) probe.
     - `dmax_nm`: Maximum real-space size D_max (nm) from the selected GNOM/DATGNOM fit.
     - `rg_pr_nm`: Integral Rg from p(r) (GNOM-reported or computed from the distribution).
     - `i0_pr`: Integral I(0) from p(r).
@@ -416,8 +423,11 @@ def _fit_distances_paths(
             "ensemble_summary_path": "",
             "close_fit_out_paths": [],
             "force_zero_off_out_path": "",
+            "force_zero_rmin_off_out_path": "",
             "ensemble_rows": [],
             "force_zero_off_parsed": None,
+            "p0": None,
+            "p0_classification": "unknown",
         }
         dmax_validation: Optional[Dict[str, Any]] = None
         if not bool(minimal):
@@ -435,6 +445,7 @@ def _fit_distances_paths(
                 alpha=user_alpha,
                 event_bus=event_bus,
                 run_force_zero_off=(fz_rmax == "Y"),
+                run_p0_probe=(fz_rmin == "Y"),
             )
             dmax_validation = analyze_dmax_validation(
                 best_parsed=parse_gnom_out(out_text),
@@ -459,6 +470,11 @@ def _fit_distances_paths(
             suspicious=bool(best.get("suspicious")),
             event_bus=event_bus,
             dmax_validation=dmax_validation,
+            p0=ensemble_info.get("p0"),
+            p0_classification=ensemble_info.get("p0_classification"),
+            force_zero_rmin_off_out_path=str(
+                ensemble_info.get("force_zero_rmin_off_out_path") or ""
+            ),
         )
         return write_success_artifacts(
             profile=profile,
@@ -642,15 +658,18 @@ def _fit_distances_paths(
     best["grid_meta"] = grid_meta
     candidates.append(best)
 
-    # Close-fits Dmax ensemble + force-zero-off validation (saved artifacts),
+    # Close-fits Dmax ensemble + force-zero-off / P(0) validation (saved artifacts),
     # unless minimal (mirrors fit_sizes refine/auto behaviour).
     ensemble_info: Dict[str, Any] = {
         "ensemble_dir": "",
         "ensemble_summary_path": "",
         "close_fit_out_paths": [],
         "force_zero_off_out_path": "",
+        "force_zero_rmin_off_out_path": "",
         "ensemble_rows": [],
         "force_zero_off_parsed": None,
+        "p0": None,
+        "p0_classification": "unknown",
     }
     dmax_validation: Optional[Dict[str, Any]] = None
     if (not bool(minimal)) and np.isfinite(dmax_best_f) and dmax_best_f > 0:
@@ -668,6 +687,8 @@ def _fit_distances_paths(
             last=last_pt,
             alpha=alpha_f,
             event_bus=event_bus,
+            run_force_zero_off=(fz_rmax == "Y"),
+            run_p0_probe=(fz_rmin == "Y"),
         )
         dmax_validation = analyze_dmax_validation(
             best_parsed=best_parsed_for_alpha,
@@ -692,6 +713,11 @@ def _fit_distances_paths(
         last_pt=last_pt,
         suspicious=bool(best.get("suspicious")),
         event_bus=event_bus,
+        p0=ensemble_info.get("p0"),
+        p0_classification=ensemble_info.get("p0_classification"),
+        force_zero_rmin_off_out_path=str(
+            ensemble_info.get("force_zero_rmin_off_out_path") or ""
+        ),
         dmax_validation=dmax_validation,
     )
 

@@ -17,6 +17,7 @@ from autosaxs.core.gnom_quality import (
     classify_stability,
     dr_distribution_moments,
 )
+from autosaxs.core.profile_features import p0_solvent_from_distribution
 
 from ..deps import EventBus, EventType
 from .runners import _run_gnom_once
@@ -26,6 +27,7 @@ _FORCE_ZERO_OFF_RMAX_FACTOR = 1.5
 
 GNOM_BEST_OUT = "gnom_best.out"
 FORCE_ZERO_OFF_OUT = "gnom_force_zero_off.out"
+FORCE_ZERO_RMIN_OFF_OUT = "gnom_force_zero_rmin_off.out"
 
 
 def close_fit_out_name(rmax_factor: float) -> str:
@@ -139,8 +141,9 @@ def run_rmax_ensemble(
     best_parsed: Dict[str, Any],
     event_bus: Optional[EventBus],
     run_force_zero_off: bool = True,
+    run_p0_probe: bool = True,
 ) -> Dict[str, Any]:
-    """Persist Rmax±10% close fits and optionally a force-zero-off validation .out."""
+    """Persist Rmax±10% close fits and optional force-zero / Jacques P(0) probes."""
     ensemble_dir, close_fits_dir = _prepare_ensemble_dirs(sample_output_dir)
 
     rows: List[Dict[str, Any]] = []
@@ -232,6 +235,68 @@ def run_rmax_ensemble(
                 },
             )
 
+    p0: Optional[float] = None
+    p0_classification = "unknown"
+    force_zero_rmin_off_out_path = ""
+    if run_p0_probe:
+        p0_out = os.path.join(ensemble_dir, FORCE_ZERO_RMIN_OFF_OUT)
+        ok_p0, rc_p0, stderr_p0, out_text_p0 = _run_gnom_once(
+            atsas_dat_path=atsas_dat_path,
+            output_dir=ensemble_dir,
+            system=system,
+            rmin_nm=rmin_nm,
+            rmax_nm=float(best_rmax_nm),
+            rad56_nm=rad56_nm,
+            first=first,
+            last=last,
+            alpha=alpha,
+            nr=nr,
+            out_path=p0_out,
+            force_zero_rmin="N",
+            force_zero_rmax="Y",
+        )
+        p0_row = _row_from_out(
+            role="force_zero_rmin_off",
+            rmax_factor=1.0,
+            rmax_nm=float(best_rmax_nm),
+            force_zero_rmax="Y",
+            ok=ok_p0,
+            rc=rc_p0,
+            stderr=stderr_p0,
+            out_path=p0_out,
+            out_text=out_text_p0,
+            rmax_ref_nm=float(best_rmax_nm),
+        )
+        p0_row["force_zero_rmin"] = "N"
+        p0_row["p0"] = None
+        p0_row["p0_classification"] = "unknown"
+        if ok_p0:
+            force_zero_rmin_off_out_path = p0_out
+            parsed_p0 = parse_gnom_out(out_text_p0)
+            arrays_p0 = distribution_arrays(parsed_p0.get("distribution"))
+            if arrays_p0 is not None:
+                r_p0, p_p0, _err = arrays_p0
+                solvent = p0_solvent_from_distribution(
+                    np.asarray(r_p0, dtype=float),
+                    np.asarray(p_p0, dtype=float),
+                )
+                p0 = solvent.get("p0")
+                p0_classification = str(solvent.get("p0_classification") or "unknown")
+                p0_row["p0"] = p0
+                p0_row["p0_classification"] = p0_classification
+        rows.append(p0_row)
+        if event_bus:
+            status = "ok" if ok_p0 else f"failed rc={rc_p0}"
+            event_bus.publish(
+                EventType.MESSAGE,
+                {
+                    "text": (
+                        f"GNOM (fit_sizes): P(0) force-zero-rmin-off probe "
+                        f"at Rmax={float(best_rmax_nm):.4g} nm ({status}; {p0_classification})"
+                    ),
+                },
+            )
+
     summary_path = os.path.join(ensemble_dir, "ensemble_summary.csv")
     with open(summary_path, "w", newline="") as fp:
         w = csv.writer(fp)
@@ -283,9 +348,12 @@ def run_rmax_ensemble(
         "ensemble_summary_path": summary_path,
         "close_fit_out_paths": close_fit_out_paths,
         "force_zero_off_out_path": force_zero_off_out_path,
+        "force_zero_rmin_off_out_path": force_zero_rmin_off_out_path,
         "ensemble_rows": rows,
         "force_zero_off_parsed": force_zero_off_parsed,
         "rmax_ref_nm": float(best_rmax_nm),
         "rmax_validation": rmax_validation,
+        "p0": p0,
+        "p0_classification": p0_classification,
         "stability_class": stability_class,
     }

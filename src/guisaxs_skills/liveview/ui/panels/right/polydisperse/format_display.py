@@ -151,6 +151,27 @@ def format_sizes_passport_rows(
     if dmax is not None and dmax not in ("", None):
         rows.append((R_MAX_CAP, f"{format_display_number(dmax)} nm", False))
 
+    # Single P(0) row (D-ASX-004 UI): numeric value; bracket class only for under/over.
+    from autosaxs.core.profile_features import format_p0_passport_value
+
+    p0_raw = scalar_value(result.get("p0"))
+    p0_cls = scalar_value(result.get("p0_classification"))
+    if p0_raw is not None and p0_raw not in ("", None):
+        p0_val = format_p0_passport_value(
+            p0_raw,
+            p0_cls,
+            number_str=format_display_number(p0_raw),
+        )
+        if p0_val is not None:
+            cls_l = str(p0_cls or "").strip().lower()
+            rows.append(
+                (
+                    "P(0)",
+                    p0_val,
+                    cls_l in ("under_subtracted", "over_subtracted"),
+                )
+            )
+
     return rows
 
 

@@ -1355,6 +1355,7 @@ def apply_sizes_extended_quality(
     ensemble_info: Optional[Dict[str, Any]] = None,
     shape: str = "spheres",
     thresholds: Optional[DrQualityThresholds] = None,
+    powerlaw_exponent: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Merge parametric hints, ensemble stability, and rmax validation into quality dict."""
     t = thresholds or DrQualityThresholds()
@@ -1376,6 +1377,14 @@ def apply_sizes_extended_quality(
     ):
         if key in parametric:
             out[key] = parametric[key]
+
+    # Jacques P(0) solvent check (D-ASX-004) + high-q power-law slope (D-ASX-007).
+    out["p0"] = ensemble_info.get("p0")
+    out["p0_classification"] = str(ensemble_info.get("p0_classification") or "unknown")
+    out["force_zero_rmin_off_out_path"] = str(
+        ensemble_info.get("force_zero_rmin_off_out_path") or ""
+    )
+    out["powerlaw_exponent"] = powerlaw_exponent
 
     out["stability_class"] = stability_class
     out["ensemble_dir"] = ensemble_info.get("ensemble_dir") or ""
@@ -1431,6 +1440,30 @@ def apply_sizes_extended_quality(
     )
     for tip in detail_tips:
         if tip and tip not in out["user_tips"]:
+            out["user_tips"].append(tip)
+
+    # Append after rebuild so tips survive build_sizes_user_tips.
+    extra_tips: List[str] = []
+    p0_cls = str(out["p0_classification"])
+    if p0_cls == "under_subtracted":
+        extra_tips.append(
+            "P(0)>0 with force-zero at r=0 released — solvent likely under-subtracted "
+            "(Jacques & Trewhella 2010)."
+        )
+    elif p0_cls == "over_subtracted":
+        extra_tips.append(
+            "P(0)<0 with force-zero at r=0 released — solvent likely over-subtracted "
+            "(Jacques & Trewhella 2010)."
+        )
+    if powerlaw_exponent is not None and np.isfinite(float(powerlaw_exponent)):
+        alpha = float(powerlaw_exponent)
+        if -2.5 <= alpha <= -0.5:
+            extra_tips.append(
+                f"High-q power-law exponent ≈ {alpha:.2f} (near −1/−2): sphere-kernel "
+                "fit_sizes may be inappropriate (Li 2016) — treat D(R) as advisory."
+            )
+    for tip in extra_tips:
+        if tip not in out["user_tips"]:
             out["user_tips"].append(tip)
     return out
 

@@ -10,6 +10,7 @@ import numpy as np
 
 from autosaxs.core.gnom import distribution_arrays, parse_gnom_out
 from autosaxs.core.gnom_quality import apply_sizes_extended_quality
+from autosaxs.core.profile_features import powerlaw_exponent
 from autosaxs.core.stdio_utf8 import safe_print
 
 from ..common import (
@@ -76,6 +77,12 @@ def fit_sizes(
 
     **Refine path** (when `rmax_nm` is set): single GNOM `--rmax` at the given Rmax, plus Rmax±10% close-fits ensemble unless `minimal=True`.
 
+    Quality passport (D-ASX-004 / D-ASX-007): Jacques & Trewhella (2010) ``p0`` /
+    ``p0_classification`` from ``--force-zero-rmin=N`` at selected Rmax (corpus
+    ``5-pro0019-0642.pdf`` journal p.649); ``powerlaw_exponent`` from high-q
+    ``I∝q^α`` (Li et al. 2016 Chem. Rev. letter G–H / ≈11134–11135 — warn near −1/−2
+    for sphere kernels).
+
     ### Arguments
 
     - `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
@@ -125,6 +132,8 @@ def fit_sizes(
     - `close_fit_out_paths`: List of `.out` files for close Rmax fits.
     - `force_zero_off_out_path`: `.out` file for "force-zero-off" probe.
     - `force_zero_off_pathology`: `"true"` / `"false"` / `""` — D(R) tail pathology from force-zero-off.
+    - `p0` / `p0_classification`: Jacques solvent check from force-zero-rmin-off probe.
+    - `powerlaw_exponent`: High-q log–log slope α of I(q) (nm⁻¹).
     - `d_avg_nm`: Mean size (nm) from D(R).
     - `d_std_nm`: Standard deviation of size (nm) from D(R).
     - `pdi`: Polydispersity index σ/⟨R⟩.
@@ -586,8 +595,11 @@ def _fit_sizes_paths(
         "ensemble_summary_path": "",
         "close_fit_out_paths": [],
         "force_zero_off_out_path": "",
+        "force_zero_rmin_off_out_path": "",
+        "p0": None,
+        "p0_classification": "unknown",
     }
-    # Close-fits ensemble (+ force-zero-off when rmax boundary was on), unless minimal.
+    # Close-fits ensemble (+ force-zero-off / P(0) probes), unless minimal.
     if (not bool(minimal)) and np.isfinite(float(best_rmax_nm)) and float(best_rmax_nm) > 0:
         if event_bus:
             event_bus.publish(
@@ -609,15 +621,18 @@ def _fit_sizes_paths(
             best_parsed=best_parsed,
             event_bus=event_bus,
             run_force_zero_off=(fz_rmax == "Y"),
+            run_p0_probe=(fz_rmin == "Y"),
         )
     elif bool(minimal):
         clear_ensemble_dir(output_dir)
 
+    plexp = powerlaw_exponent(q_nm, I)
     dr_quality = apply_sizes_extended_quality(
         dr_quality,
         parametric=parametric,
         ensemble_info=ensemble_info,
         shape=shape,
+        powerlaw_exponent=plexp,
     )
 
     return write_success_artifacts(

@@ -39,6 +39,9 @@ def _pr_quality_result_keys() -> List[str]:
         "quality_rationale",
         "user_tips",
         "quality_passport_path",
+        "p0",
+        "p0_classification",
+        "force_zero_rmin_off_out_path",
     ]
 
 
@@ -68,6 +71,9 @@ def _empty_pr_quality_fields() -> Dict[str, Any]:
         "quality_rationale": [],
         "user_tips": [],
         "quality_passport_path": "",
+        "p0": None,
+        "p0_classification": "unknown",
+        "force_zero_rmin_off_out_path": "",
     }
 
 
@@ -93,6 +99,38 @@ def _serialize_quality_for_return(quality: Dict[str, Any]) -> Dict[str, Union[st
     return out
 
 
+def _merge_p0_solvent_into_quality(
+    quality: Dict[str, Any],
+    *,
+    p0: Optional[float] = None,
+    p0_classification: Optional[str] = None,
+    force_zero_rmin_off_out_path: str = "",
+) -> Dict[str, Any]:
+    """Attach Jacques P(0) solvent fields (D-ASX-004) without changing TE gates."""
+    out = dict(quality)
+    out["p0"] = p0
+    out["p0_classification"] = str(p0_classification or "unknown")
+    out["force_zero_rmin_off_out_path"] = force_zero_rmin_off_out_path or ""
+    tips = list(out.get("user_tips") or [])
+    cls = str(out["p0_classification"])
+    if cls == "under_subtracted":
+        tip = (
+            "P(0)>0 with force-zero at r=0 released — solvent likely under-subtracted "
+            "(Jacques & Trewhella 2010)."
+        )
+        if tip not in tips:
+            tips.append(tip)
+    elif cls == "over_subtracted":
+        tip = (
+            "P(0)<0 with force-zero at r=0 released — solvent likely over-subtracted "
+            "(Jacques & Trewhella 2010)."
+        )
+        if tip not in tips:
+            tips.append(tip)
+    out["user_tips"] = tips
+    return out
+
+
 def _assess_and_write_pr_quality(
     *,
     output_dir: str,
@@ -106,6 +144,9 @@ def _assess_and_write_pr_quality(
     event_bus: Optional[EventBus],
     dmax_validation: Optional[Dict[str, Any]] = None,
     last_pt: Optional[int] = None,
+    p0: Optional[float] = None,
+    p0_classification: Optional[str] = None,
+    force_zero_rmin_off_out_path: str = "",
 ) -> Dict[str, Any]:
     parsed = parse_gnom_out(out_text)
     quality = analyze_pr_quality(
@@ -117,6 +158,12 @@ def _assess_and_write_pr_quality(
         last_pt_1based=last_pt,
         suspicious=suspicious,
         dmax_validation=dmax_validation,
+    )
+    quality = _merge_p0_solvent_into_quality(
+        quality,
+        p0=p0,
+        p0_classification=p0_classification,
+        force_zero_rmin_off_out_path=force_zero_rmin_off_out_path,
     )
     passport_path = os.path.join(output_dir, f"{base}_fit_distances_quality.yml")
     passport_doc = {
@@ -180,6 +227,12 @@ def _pr_quality_markdown(quality: Dict[str, Any]) -> str:
     dmax = quality.get("dmax_nm")
     if dmax is not None:
         lines.append(f"\n- **D_max:** {float(dmax):.4g} nm")
+    from autosaxs.core.profile_features import format_p0_passport_value
+
+    p0_val = format_p0_passport_value(quality.get("p0"), quality.get("p0_classification"))
+    if p0_val is not None:
+        # Single passport row: numeric P(0); bracket class only for under/over.
+        lines.append(f"\n- **P(0):** {p0_val}")
     return "".join(lines) + "\n"
 
 
