@@ -58,11 +58,13 @@ Entries are append-only. Superseded decisions stay; mark `Status: superseded by 
 **Status:** accepted  
 **Context:** Jacques solvent test: release P(r)→0 at r=0; positive P(0)=under-, negative=over-subtraction.
 
-**Decision:** Emit **`p0`** and **`p0_classification`** (`under_subtracted` | `over_subtracted` | `ok` | `unknown`) on **`fit_distances` and `fit_sizes` quality passports**, from a force-zero-**rmin**-off probe (or equivalent) at the selected Dmax/Rmax. Not on `subtract`.
+**Decision:** Emit structured **`p0`** and **`p0_classification`** (`under_subtracted` | `over_subtracted` | `ok` | `unknown`) from a force-zero-**rmin**-off probe at the selected Dmax/Rmax on **`fit_distances` and `fit_sizes`**. Not on `subtract`.
 
-**Justification:** The literature test is an IFT boundary-condition probe, owned by the GNOM skills that already run force-zero ensembles. Subtract stays high-q negativity only (D-ASX-003).
+**Human-facing passport (clarified 2026-11-17):** exactly **one** new Metric/Value row. Metric = ``P(0)``. Value = numeric P0; append `` (under_subtracted)`` or `` (over_subtracted)`` **in the same cell only** when so classified. Do **not** show a separate classification row; do **not** bracket ``ok`` / ``unknown``. Example: ``P(0) = 0.012 (over_subtracted)`` or ``P(0) = 0.012``.
 
-**Refs:** Mikhail 2026-11-17; Jacques & Trewhella 2010 p.649 / `5-pro0019-0642.pdf` p.8.
+**Justification:** The literature test is an IFT boundary-condition probe, owned by the GNOM skills that already run force-zero ensembles. Subtract stays high-q negativity only (D-ASX-003). One passport row keeps the table scannable while still surfacing solvent mismatch when it matters.
+
+**Refs:** Mikhail 2026-11-17 (+ same-day UI correction); Jacques & Trewhella 2010 p.649 / `5-pro0019-0642.pdf` p.8.
 
 ---
 

@@ -18,6 +18,7 @@ from autosaxs.core.profile_features import (
     assess_subtraction_negativity,
     classify_p0_solvent,
     detect_iq_peaks,
+    format_p0_passport_value,
     p0_from_distribution,
     p0_solvent_from_distribution,
     powerlaw_exponent,
@@ -110,6 +111,19 @@ def test_p0_from_distribution_extrapolates():
     p = np.array([1.0, 2.0, 3.0], dtype=float)  # extrapolates to 0.0 at r=0
     assert p0_from_distribution(r, p) == pytest.approx(0.0)
     assert classify_p0_solvent(None)["p0_classification"] == "unknown"
+
+
+def test_format_p0_passport_value_single_row_rule():
+    assert format_p0_passport_value(0.012, "ok") == "0.012"
+    assert format_p0_passport_value(0.012, "unknown") == "0.012"
+    assert format_p0_passport_value(0.012, None) == "0.012"
+    assert format_p0_passport_value(0.012, "over_subtracted") == "0.012 (over_subtracted)"
+    assert format_p0_passport_value(0.012, "under_subtracted") == "0.012 (under_subtracted)"
+    assert format_p0_passport_value(None, "over_subtracted") is None
+    assert (
+        format_p0_passport_value(0.012, "over_subtracted", number_str="0.01")
+        == "0.01 (over_subtracted)"
+    )
 
 
 def test_merge_p0_into_fit_distances_quality():

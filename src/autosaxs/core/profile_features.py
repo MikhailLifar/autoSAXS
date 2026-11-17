@@ -287,3 +287,40 @@ def peaks_as_summary_rows(
         except (KeyError, TypeError, ValueError):
             continue
     return rows
+
+
+_P0_BRACKET_CLASSES = frozenset({"under_subtracted", "over_subtracted"})
+
+
+def format_p0_passport_value(
+    p0: Optional[float],
+    p0_classification: Optional[str] = None,
+    *,
+    number_str: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Human-facing **single-row** P(0) passport *value* (D-ASX-004 UI rule).
+
+    Metric label is always ``P(0)``; this returns only the value cell, e.g.
+    ``0.012 (over_subtracted)`` or ``0.012`` when classification is ``ok`` /
+    ``unknown`` / missing. Returns ``None`` when ``p0`` is absent.
+
+    Structured ``p0`` / ``p0_classification`` fields may still exist in YAML for
+    tests and agents; they must not appear as separate passport rows.
+    """
+    if p0 is None:
+        return None
+    try:
+        p0_f = float(p0)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(p0_f):
+        return None
+    if number_str is not None and str(number_str).strip():
+        body = str(number_str).strip()
+    else:
+        body = f"{p0_f:.4g}"
+    cls = str(p0_classification or "").strip().lower()
+    if cls in _P0_BRACKET_CLASSES:
+        return f"{body} ({cls})"
+    return body

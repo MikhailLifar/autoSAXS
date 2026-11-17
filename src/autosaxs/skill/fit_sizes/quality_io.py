@@ -292,13 +292,12 @@ def _dr_quality_markdown(quality: Dict[str, Any]) -> str:
     stab = quality.get("stability_class")
     if stab and stab != "unknown":
         lines.append(f"\n- **Rmax stability:** {stab}")
-    p0 = quality.get("p0")
-    p0_cls = quality.get("p0_classification")
-    if p0 is not None or (p0_cls and str(p0_cls) != "unknown"):
-        if p0 is not None:
-            lines.append(f"\n- **P(0)** (force-zero-rmin off): {float(p0):.4g} ({p0_cls})")
-        else:
-            lines.append(f"\n- **P(0)** classification: {p0_cls}")
+    from autosaxs.core.profile_features import format_p0_passport_value
+
+    p0_val = format_p0_passport_value(quality.get("p0"), quality.get("p0_classification"))
+    if p0_val is not None:
+        # Single passport row: numeric P(0); bracket class only for under/over.
+        lines.append(f"\n- **P(0):** {p0_val}")
     plexp = quality.get("powerlaw_exponent")
     if plexp is not None:
         lines.append(f"\n- **powerlaw_exponent:** {float(plexp):.3g}")
