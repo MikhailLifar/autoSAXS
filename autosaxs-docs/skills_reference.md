@@ -286,6 +286,13 @@ buffer alone. Legacy ``point_match`` / ``match_tail`` remain available via ``met
 ### Notes
 Correctness criteria: buffer and sample visually matched at the high-q tail / pre-knee region.
 Negative values in the subtracted curve are possible due to high variance at the tail.
+Passport negativity (D-ASX-003): ``frac_neg`` = fraction of points with ``I+σ<0``
+(same definition as legacy ``correctness``); ``q_first_neg_nm`` = smallest such ``q``.
+High-q mismatch / over-subtraction: Jacques & Trewhella (2010) *Protein Sci.* **19**:642–657,
+journal p.649 / corpus ``5-pro0019-0642.pdf`` PDF p.8. Under-/over-subtraction via **P(0)**
+belongs on ``fit_distances`` / ``fit_sizes`` (D-ASX-004), not here.
+Subtracted I(q) peak list (``iq_peaks``) is informational for Bragg / S(q) features
+(D-ASX-010; Spinozzi 2024 JCIS ~1.43–1.60 nm⁻¹ after Å→nm).
 
 ### Short parameter list
 
@@ -304,8 +311,10 @@ Negative values in the subtracted curve are possible due to high variance at the
 - `sub_plot_path`: Path to the subtracted curve PNG (log I vs q).
 - `diff_plot_path`: Path to a diff plot PNG.
 - `diff_log_plot_path`: Path to a diff plot PNG with log(I) vs q.
-Subtraction quality (`correct` or `over-subtracted`) is written into the subtracted `.dat` metadata
-(``subtract.correctness``) and into per-sample report fragments (individual Markdown and summary YAML).
+Subtraction quality is written into the subtracted `.dat` metadata
+(``subtract.correctness``, ``subtract.frac_neg``, ``subtract.q_first_neg_nm``) and into
+per-sample report fragments (individual Markdown and summary YAML), including
+``iq_peaks`` from :func:`autosaxs.core.profile_features.detect_iq_peaks`.
 The individual report shows subtraction quality, re-plots the log-scale difference
 curves from ``diff_log_*.dat``, then the subtracted curve (log I vs q) from the ``.dat``.
 
@@ -529,9 +538,14 @@ autosaxs analyze-kratky subtracted/sub_sample_01.dat --rg-nm 3.2 --i0 1.05 --out
 
 SAXS / small-angle x-ray scattering: obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve via ATSAS GNOM (real-space distance distribution).
 
-**Auto path** (when `dmax_nm` is omitted): Guinier \(R_g\) (tool only) → **Fast AutoGNOM** — Stage 1: H32 NumPy Tikhonov over Shannon-bound \(D_{\max}\times\log_{10}\alpha\) (no ATSAS in the search loop; α in GNOM-printed units via locked H32 packaging) → pick by interpretable **`shape_tight_extent`** score (soft taper, non‑negativity, low wiggle, χ² guardrail, extent band \(\sim 3.2\)–\(5\times R_g\)) → Stage 2: ATSAS `gnom` at the Stage‑1 \((D_{\max},\alpha)\) writes stable `gnom_best.out`, close-fits ensemble, force-zero-off (unless `minimal`), passport. Units: \(q\) in nm⁻¹, lengths in nm. Does **not** use Autorg→DATGNOM TOTAL selection (clarity over deposit‑Dmax matching).
+**Auto path** (when `dmax_nm` is omitted): Guinier \(R_g\) (tool only) → **Fast AutoGNOM** — Stage 1: H32 NumPy Tikhonov over Shannon-bound \(D_{\max}\times\log_{10}\alpha\) (no ATSAS in the search loop; α in GNOM-printed units via locked H32 packaging) → pick by interpretable **`shape_tight_extent`** score (soft taper, non‑negativity, low wiggle, χ² guardrail, extent band \(\sim 3.2\)–\(5\times R_g\)) → Stage 2: ATSAS `gnom` at the Stage‑1 \((D_{\max},\alpha)\) writes stable `gnom_best.out`, close-fits ensemble, force-zero-off / Jacques P(0) probe (unless `minimal`), passport. Units: \(q\) in nm⁻¹, lengths in nm. Does **not** use Autorg→DATGNOM TOTAL selection (clarity over deposit‑Dmax matching).
 
 **Refine path** (when `dmax_nm` is set): single GNOM `--rmax` run at the given Dmax (optional fixed `--alpha`), plus Dmax±10% close-fits ensemble unless `minimal=True`.
+
+Quality passport includes Jacques & Trewhella (2010) solvent check (D-ASX-004): release
+``--force-zero-rmin`` at the selected Dmax; ``p0`` and ``p0_classification``
+(`under_subtracted` / `over_subtracted` / `ok`). Corpus pin: ``5-pro0019-0642.pdf``
+journal p.649 / PDF p.8.
 
 ### Arguments
 
@@ -568,7 +582,9 @@ SAXS / small-angle x-ray scattering: obtain a pair distance distribution functio
 - `ensemble_dir`: Close-fits Dmax ensemble directory.
 - `ensemble_summary_path`: Close-fits Dmax ensemble CSV summary.
 - `close_fit_out_paths`: Saved GNOM `.out` paths for Dmax±10% close fits.
-- `force_zero_off_out_path`: Saved GNOM `.out` with `--force-zero-rmax=N` at Dmax.
+- `force_zero_off_out_path`: Saved GNOM `.out` with `--force-zero-rmax=N` at extended Dmax.
+- `p0` / `p0_classification`: Jacques solvent check from `--force-zero-rmin=N` at selected Dmax.
+- `force_zero_rmin_off_out_path`: Saved GNOM `.out` for the P(0) probe.
 - `dmax_nm`: Maximum real-space size D_max (nm) from the selected GNOM/DATGNOM fit.
 - `rg_pr_nm`: Integral Rg from p(r) (GNOM-reported or computed from the distribution).
 - `i0_pr`: Integral I(0) from p(r).
@@ -623,6 +639,12 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtai
 
 **Refine path** (when `rmax_nm` is set): single GNOM `--rmax` at the given Rmax, plus Rmax±10% close-fits ensemble unless `minimal=True`.
 
+Quality passport (D-ASX-004 / D-ASX-007): Jacques & Trewhella (2010) ``p0`` /
+``p0_classification`` from ``--force-zero-rmin=N`` at selected Rmax (corpus
+``5-pro0019-0642.pdf`` journal p.649); ``powerlaw_exponent`` from high-q
+``I∝q^α`` (Li et al. 2016 Chem. Rev. letter G–H / ≈11134–11135 — warn near −1/−2
+for sphere kernels).
+
 ### Arguments
 
 - `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
@@ -672,6 +694,8 @@ SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtai
 - `close_fit_out_paths`: List of `.out` files for close Rmax fits.
 - `force_zero_off_out_path`: `.out` file for "force-zero-off" probe.
 - `force_zero_off_pathology`: `"true"` / `"false"` / `""` — D(R) tail pathology from force-zero-off.
+- `p0` / `p0_classification`: Jacques solvent check from force-zero-rmin-off probe.
+- `powerlaw_exponent`: High-q log–log slope α of I(q) (nm⁻¹).
 - `d_avg_nm`: Mean size (nm) from D(R).
 - `d_std_nm`: Standard deviation of size (nm) from D(R).
 - `pdi`: Polydispersity index σ/⟨R⟩.
@@ -1173,7 +1197,7 @@ SAXS / small-angle x-ray scattering: run the monodisperse single-profile quality
 when the shared modeling gate passes → per-sample PDF report).
 
 **Modeling gate** (``allows_modeling`` on the fit_distances passport — same helper as
-poly MIXTURE): start DAMMIF only when **all** of the following hold:
+poly MIXTURE): by default start DAMMIF only when **all** of the following hold:
 
 - Total Estimate **> 0.3** (hard floor; passport ``high_quality`` still uses ≥ 0.55)
 - Reduced χ² in the acceptable passport band [0.3, 2.5]
@@ -1182,6 +1206,10 @@ poly MIXTURE): start DAMMIF only when **all** of the following hold:
 - ``detail_reliability_class`` is not ``SUSPICIOUS``
 - Shannon ``s_min`` < 2.0 (class not ``unreliable``)
 - ``n_shannon`` ≥ 8 (``DEFAULT_DETAIL_N_SHANNON_FLOOR``)
+
+With ``gate_pass=True`` (CLI ``--gate-pass``), a failed gate does **not** skip DAMMIF;
+the same failure text is still logged and returned as ``modeling_gate_advice``.
+Missing/unusable GNOM ``.out`` remains a hard skip even with ``gate_pass``.
 
 **First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
 **and** a pipeline config is available (``config.conf`` in that dir, or
@@ -1205,7 +1233,10 @@ router: ``process_full`` (reads ``analysis: mono|poly``).
   Guinier `first` is forwarded to DATGNOM; Guinier `last` is **not** passed to DATGNOM
   (window too narrow for p(r)).
 - `smooth` (float | None, default `None`): Optional DATGNOM `--smooth` for `fit_distances`.
-- `n_runs` (int, default `5`): DAMMIF replica count for `model_dam` when the modeling gate passes.
+- `n_runs` (int, default `5`): DAMMIF replica count for `model_dam` when modeling proceeds.
+- `gate_pass` (bool, default `False`): When `True`, bypass the modeling quality gate and still
+  run `model_dam`, while recording the same gate checks as advice (logs +
+  ``modeling_gate_advice``). Default keeps the hard gate for unattended batch (D-ASX-001).
 - `use_cache` (bool, default `False`): Forwarded to leaf skills.
 
 ### Returns
@@ -1218,6 +1249,8 @@ router: ``process_full`` (reads ``analysis: mono|poly``).
 - `basename`: Sample basename used for report assembly.
 - `model_dam_ran`: Whether `model_dam` was invoked.
 - `model_dam_skip_reason`: Why DAMMIF was skipped (empty when run).
+- `modeling_gate_advice`: Gate failure text when ``gate_pass`` forced modeling through a
+  failed gate (empty when the gate passed or modeling was skipped).
 - `fit_guinier`: Return dict from `fit_guinier`.
 - `analyze_kratky`: Return dict from `analyze_kratky`.
 - `fit_distances`: Return dict from `fit_distances`.
@@ -1245,6 +1278,8 @@ out = process_monodisperse("/data/run01", output_dir="mono_out")
 ```bash
 autosaxs process-monodisperse subtracted/sub_sample_01.dat --output-dir mono_out
 autosaxs process-monodisperse /data/run01 --conf /data/run01/config.conf -o mono_out
+# bypass modeling gate but keep advice:
+autosaxs process-monodisperse subtracted/sub_sample_01.dat -o mono_out --gate-pass
 # or explicit folder+config router (reads analysis: mono|poly):
 autosaxs process-full /data/run01 --conf /data/run01/config.conf -o mono_out
 ```
@@ -1258,7 +1293,7 @@ SAXS / small-angle x-ray scattering: run the polydisperse single-profile quality
 the shared modeling gate passes → per-sample PDF report).
 
 **Modeling gate** (``allows_modeling`` on the fit_sizes passport — same helper as
-mono DAM): when ``run_mixture=True``, start MIXTURE only when **all** of the
+mono DAM): when ``run_mixture=True``, by default start MIXTURE only when **all** of the
 following hold:
 
 - Total Estimate **> 0.3** (hard floor; passport ``high_quality`` still uses ≥ 0.55)
@@ -1269,7 +1304,9 @@ following hold:
 - ``n_shannon`` ≥ 8 (``DEFAULT_DETAIL_N_SHANNON_FLOOR``)
 
 ΔRg is mono p(r)-only and is skipped for D(R). ``run_mixture`` remains an
-independent opt-in (default ``False``).
+independent opt-in (default ``False``). With ``gate_pass=True`` (CLI ``--gate-pass``),
+a failed gate does **not** skip MIXTURE when ``run_mixture`` is on; the same failure
+text is still logged and returned as ``modeling_gate_advice``.
 
 **First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
 **and** a pipeline config is available (``config.conf`` in that dir, or
@@ -1296,8 +1333,12 @@ router: ``process_full`` (reads ``analysis: mono|poly``).
 - `q_min` / `q_max` (float | None): Optional `fit_sizes` q bounds (nm⁻¹). When set, they override
   Guinier-first handoff for the corresponding end (do not combine `q_min` with an implicit first).
 - `run_mixture` (bool, default `False`): When `True`, run `model_mixture` if the shared
-  modeling gate passes. Default stays off to match liveview auto / real-data light
-  (MIXTURE is interactive Confirm in GUI).
+  modeling gate passes (or ``gate_pass`` bypasses it). Default stays off to match liveview
+  auto / real-data light (MIXTURE is interactive Confirm in GUI).
+- `gate_pass` (bool, default `False`): When `True`, bypass the modeling quality gate and still
+  run `model_mixture` (if ``run_mixture``), while recording the same gate checks as advice
+  (logs + ``modeling_gate_advice``). Default keeps the hard gate for unattended batch
+  (D-ASX-001).
 - `use_cache` (bool, default `False`): Forwarded to leaf skills.
 
 ### Returns
@@ -1310,6 +1351,8 @@ router: ``process_full`` (reads ``analysis: mono|poly``).
 - `basename`: Sample basename used for report assembly.
 - `model_mixture_ran`: Whether `model_mixture` was invoked.
 - `model_mixture_skip_reason`: Why MIXTURE was skipped (empty when run).
+- `modeling_gate_advice`: Gate failure text when ``gate_pass`` forced MIXTURE through a
+  failed gate (empty when the gate passed, ``run_mixture`` is off, or modeling was skipped).
 - `fit_guinier`: Return dict from `fit_guinier`.
 - `fit_sizes`: Return dict from `fit_sizes`.
 - `model_mixture`: Return dict from `model_mixture` (empty dict when skipped).
@@ -1336,6 +1379,8 @@ out = process_polydisperse("/data/run01", output_dir="poly_out")
 ```bash
 autosaxs process-polydisperse subtracted/sub_sample_01.dat --output-dir poly_out
 autosaxs process-polydisperse /data/run01 --conf /data/run01/config.conf -o poly_out
+# bypass modeling gate but keep advice (still needs --run-mixture):
+autosaxs process-polydisperse subtracted/sub_sample_01.dat -o poly_out --run-mixture --gate-pass
 # or explicit folder+config router (reads analysis: mono|poly):
 autosaxs process-full /data/run01 --conf /data/run01/config.conf -o poly_out
 ```

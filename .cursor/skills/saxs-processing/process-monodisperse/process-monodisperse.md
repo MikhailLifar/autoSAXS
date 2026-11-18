@@ -56,7 +56,7 @@ SAXS / small-angle x-ray scattering: run the monodisperse single-profile quality
 when the shared modeling gate passes → per-sample PDF report).
 
 **Modeling gate** (``allows_modeling`` on the fit_distances passport — same helper as
-poly MIXTURE): start DAMMIF only when **all** of the following hold:
+poly MIXTURE): by default start DAMMIF only when **all** of the following hold:
 
 - Total Estimate **> 0.3** (hard floor; passport ``high_quality`` still uses ≥ 0.55)
 - Reduced χ² in the acceptable passport band [0.3, 2.5]
@@ -65,6 +65,10 @@ poly MIXTURE): start DAMMIF only when **all** of the following hold:
 - ``detail_reliability_class`` is not ``SUSPICIOUS``
 - Shannon ``s_min`` < 2.0 (class not ``unreliable``)
 - ``n_shannon`` ≥ 8 (``DEFAULT_DETAIL_N_SHANNON_FLOOR``)
+
+With ``gate_pass=True`` (CLI ``--gate-pass``), a failed gate does **not** skip DAMMIF;
+the same failure text is still logged and returned as ``modeling_gate_advice``.
+Missing/unusable GNOM ``.out`` remains a hard skip even with ``gate_pass``.
 
 **First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
 **and** a pipeline config is available (``config.conf`` in that dir, or
@@ -88,7 +92,10 @@ router: ``process_full`` (reads ``analysis: mono|poly``).
   Guinier `first` is forwarded to DATGNOM; Guinier `last` is **not** passed to DATGNOM
   (window too narrow for p(r)).
 - `smooth` (float | None, default `None`): Optional DATGNOM `--smooth` for `fit_distances`.
-- `n_runs` (int, default `5`): DAMMIF replica count for `model_dam` when the modeling gate passes.
+- `n_runs` (int, default `5`): DAMMIF replica count for `model_dam` when modeling proceeds.
+- `gate_pass` (bool, default `False`): When `True`, bypass the modeling quality gate and still
+  run `model_dam`, while recording the same gate checks as advice (logs +
+  ``modeling_gate_advice``). Default keeps the hard gate for unattended batch (D-ASX-001).
 - `use_cache` (bool, default `False`): Forwarded to leaf skills.
 
 ### Returns
@@ -101,6 +108,8 @@ router: ``process_full`` (reads ``analysis: mono|poly``).
 - `basename`: Sample basename used for report assembly.
 - `model_dam_ran`: Whether `model_dam` was invoked.
 - `model_dam_skip_reason`: Why DAMMIF was skipped (empty when run).
+- `modeling_gate_advice`: Gate failure text when ``gate_pass`` forced modeling through a
+  failed gate (empty when the gate passed or modeling was skipped).
 - `fit_guinier`: Return dict from `fit_guinier`.
 - `analyze_kratky`: Return dict from `analyze_kratky`.
 - `fit_distances`: Return dict from `fit_distances`.
@@ -128,6 +137,8 @@ out = process_monodisperse("/data/run01", output_dir="mono_out")
 ```bash
 autosaxs process-monodisperse subtracted/sub_sample_01.dat --output-dir mono_out
 autosaxs process-monodisperse /data/run01 --conf /data/run01/config.conf -o mono_out
+# bypass modeling gate but keep advice:
+autosaxs process-monodisperse subtracted/sub_sample_01.dat -o mono_out --gate-pass
 # or explicit folder+config router (reads analysis: mono|poly):
 autosaxs process-full /data/run01 --conf /data/run01/config.conf -o mono_out
 ```

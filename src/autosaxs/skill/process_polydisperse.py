@@ -4,7 +4,8 @@ Meta-skill: polydisperse single-profile quality pipeline (Guinier onward).
 Wires existing leaf skills only — no reimplementation of Guinier / GNOM / MIXTURE math.
 Sequence: fit_guinier → fit_sizes → optional model_mixture (opt-in + modeling gate) →
 report_individual. Omits calibration, radiation averaging, buffer subtraction, and
-monodisperse-only steps (Kratky / DATGNOM / DAMMIF).
+monodisperse-only steps (Kratky / DATGNOM / DAMMIF). ``gate_pass`` can bypass the
+modeling gate while still recording the same checks as advice (D-ASX-001).
 """
 
 from __future__ import annotations
@@ -91,6 +92,7 @@ def process_polydisperse(
     q_min: Optional[float] = None,
     q_max: Optional[float] = None,
     run_mixture: bool = False,
+    gate_pass: bool = False,
     use_cache: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -99,7 +101,7 @@ def process_polydisperse(
     the shared modeling gate passes → per-sample PDF report).
 
     **Modeling gate** (``allows_modeling`` on the fit_sizes passport — same helper as
-    mono DAM): when ``run_mixture=True``, start MIXTURE only when **all** of the
+    mono DAM): when ``run_mixture=True``, by default start MIXTURE only when **all** of the
     following hold:
 
     - Total Estimate **> 0.3** (hard floor; passport ``high_quality`` still uses ≥ 0.55)
@@ -110,7 +112,9 @@ def process_polydisperse(
     - ``n_shannon`` ≥ 8 (``DEFAULT_DETAIL_N_SHANNON_FLOOR``)
 
     ΔRg is mono p(r)-only and is skipped for D(R). ``run_mixture`` remains an
-    independent opt-in (default ``False``).
+    independent opt-in (default ``False``). With ``gate_pass=True`` (CLI ``--gate-pass``),
+    a failed gate does **not** skip MIXTURE when ``run_mixture`` is on; the same failure
+    text is still logged and returned as ``modeling_gate_advice``.
 
     **First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
     **and** a pipeline config is available (``config.conf`` in that dir, or
@@ -137,8 +141,12 @@ def process_polydisperse(
     - `q_min` / `q_max` (float | None): Optional `fit_sizes` q bounds (nm⁻¹). When set, they override
       Guinier-first handoff for the corresponding end (do not combine `q_min` with an implicit first).
     - `run_mixture` (bool, default `False`): When `True`, run `model_mixture` if the shared
-      modeling gate passes. Default stays off to match liveview auto / real-data light
-      (MIXTURE is interactive Confirm in GUI).
+      modeling gate passes (or ``gate_pass`` bypasses it). Default stays off to match liveview
+      auto / real-data light (MIXTURE is interactive Confirm in GUI).
+    - `gate_pass` (bool, default `False`): When `True`, bypass the modeling quality gate and still
+      run `model_mixture` (if ``run_mixture``), while recording the same gate checks as advice
+      (logs + ``modeling_gate_advice``). Default keeps the hard gate for unattended batch
+      (D-ASX-001).
     - `use_cache` (bool, default `False`): Forwarded to leaf skills.
 
     ### Returns
@@ -151,6 +159,8 @@ def process_polydisperse(
     - `basename`: Sample basename used for report assembly.
     - `model_mixture_ran`: Whether `model_mixture` was invoked.
     - `model_mixture_skip_reason`: Why MIXTURE was skipped (empty when run).
+    - `modeling_gate_advice`: Gate failure text when ``gate_pass`` forced MIXTURE through a
+      failed gate (empty when the gate passed, ``run_mixture`` is off, or modeling was skipped).
     - `fit_guinier`: Return dict from `fit_guinier`.
     - `fit_sizes`: Return dict from `fit_sizes`.
     - `model_mixture`: Return dict from `model_mixture` (empty dict when skipped).
@@ -177,6 +187,8 @@ def process_polydisperse(
     ```bash
     autosaxs process-polydisperse subtracted/sub_sample_01.dat --output-dir poly_out
     autosaxs process-polydisperse /data/run01 --conf /data/run01/config.conf -o poly_out
+    # bypass modeling gate but keep advice (still needs --run-mixture):
+    autosaxs process-polydisperse subtracted/sub_sample_01.dat -o poly_out --run-mixture --gate-pass
     # or explicit folder+config router (reads analysis: mono|poly):
     autosaxs process-full /data/run01 --conf /data/run01/config.conf -o poly_out
     ```
@@ -227,6 +239,7 @@ def process_polydisperse(
                     q_min=q_min,
                     q_max=q_max,
                     run_mixture=run_mixture,
+                    gate_pass=gate_pass,
                     use_cache=use_cache,
                 )
             )
@@ -281,7 +294,12 @@ def process_polydisperse(
     out_mix: Dict[str, Any] = {}
     model_mixture_ran = False
     model_mixture_skip_reason = ""
+    modeling_gate_advice = ""
     mix_dir = os.path.join(output_dir, "model_mixture")
+    gate_ok = allows_modeling(out_sizes)
+    gate_failure = (
+        "" if gate_ok else modeling_gate_skip_reason(out_sizes, kind="D(R)")
+    )
 
     if not run_mixture:
         model_mixture_skip_reason = "run_mixture=False (default; matches liveview auto / real-data light)"
@@ -290,16 +308,19 @@ def process_polydisperse(
                 EventType.MESSAGE,
                 {"text": f"process_polydisperse: skipping model_mixture ({model_mixture_skip_reason})"},
             )
-    elif not allows_modeling(out_sizes):
-        model_mixture_skip_reason = modeling_gate_skip_reason(
-            out_sizes, kind="D(R)"
-        )
-        if bus:
-            bus.publish(
-                EventType.MESSAGE,
-                {"text": f"process_polydisperse: skipping model_mixture ({model_mixture_skip_reason})"},
-            )
-    else:
+    elif gate_ok or gate_pass:
+        if (not gate_ok) and gate_pass:
+            modeling_gate_advice = gate_failure
+            if bus:
+                bus.publish(
+                    EventType.MESSAGE,
+                    {
+                        "text": (
+                            "process_polydisperse: gate_pass — proceeding with "
+                            f"model_mixture despite advice: {gate_failure}"
+                        )
+                    },
+                )
         r_max_nm = _rmax_nm_from_fit_sizes_out(out_sizes)
         mix_kwargs: Dict[str, Any] = {
             "config_path": config_path,
@@ -312,17 +333,25 @@ def process_polydisperse(
         if q_max is not None:
             mix_kwargs["q_max_nm"] = float(q_max)
         if bus:
+            status = "quality gate passed" if gate_ok else "gate_pass"
             bus.publish(
                 EventType.MESSAGE,
                 {
                     "text": (
                         "process_polydisperse: model_mixture "
-                        f"(quality gate passed, r_max={r_max_nm!r} nm)…"
+                        f"({status}, r_max={r_max_nm!r} nm)…"
                     )
                 },
             )
         out_mix = model_mixture(profile_path, mix_dir, **mix_kwargs)
         model_mixture_ran = True
+    else:
+        model_mixture_skip_reason = gate_failure
+        if bus:
+            bus.publish(
+                EventType.MESSAGE,
+                {"text": f"process_polydisperse: skipping model_mixture ({model_mixture_skip_reason})"},
+            )
 
     if bus:
         bus.publish(EventType.MESSAGE, {"text": "process_polydisperse: report_individual…"})
@@ -343,6 +372,7 @@ def process_polydisperse(
         "assembled_report_md_path": out_report.get("assembled_report_md_path"),
         "model_mixture_ran": model_mixture_ran,
         "model_mixture_skip_reason": model_mixture_skip_reason,
+        "modeling_gate_advice": modeling_gate_advice,
         "fit_guinier": out_guinier,
         "fit_sizes": out_sizes,
         "model_mixture": out_mix,

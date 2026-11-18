@@ -147,6 +147,19 @@ Entries are append-only. Superseded decisions stay; mark `Status: superseded by 
 
 ---
 
+### D-ASX-012 — `gate_pass` implemented on `process_*` (2026-11-18)
+
+**Status:** accepted  
+**Context:** Implements the optional bypass left open in D-ASX-001.
+
+**Decision:** `process_monodisperse` and `process_polydisperse` take boolean ``gate_pass`` (default ``False``; CLI ``--gate-pass`` / ``--no-gate-pass``). Default behavior unchanged: failed ``allows_modeling`` skips DAMMIF / MIXTURE. With ``gate_pass=True``, modeling proceeds despite a failed gate; the same ``modeling_gate_skip_reason`` text is logged and returned as ``modeling_gate_advice`` (not silent). Missing/unusable GNOM ``.out`` remains a hard skip. Poly ``run_mixture`` stays an independent opt-in.
+
+**Justification:** Settles D-ASX-001 naming/default; advice reuse matches existing EventBus + return-dict skip-reason patterns without a new diagnostic subsystem.
+
+**Refs:** D-ASX-001; ASX-68; Mikhail assignment 2026-11-18.
+
+---
+
 ## GUI
 
 *(No new GUI decisions in this session.)*

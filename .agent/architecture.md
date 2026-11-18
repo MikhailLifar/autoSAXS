@@ -23,7 +23,7 @@
 - **Purpose:** Ship Cursor-style `saxs-processing/` tree: thin `SKILL.md` router + generated leaf docs + static curated knowledge.
 - **Owner:** `autosaxs.cli.cli` `get-skills` (templates + copy from `resources/ai_skills/`).
 - **Static SSOT:** `resources/ai_skills/playbooks/` (8 samples, 6 stages, visual) and `resources/ai_skills/examples/` (~16 archetypes); packaged via `pyproject` package-data.
-- **Invariants:** units `nm`/`nm^-1`; metrics inform (except `process_*` hard gates — D-ASX-001); playbook rules carry inline corpus/journal cites; no runtime RAG/web fetch.
+- **Invariants:** units `nm`/`nm^-1`; metrics inform (except `process_*` hard gates — D-ASX-001 / D-ASX-012 `gate_pass` advisory bypass); playbook rules carry inline corpus/journal cites; no runtime RAG/web fetch.
 
 ## LiveView
 

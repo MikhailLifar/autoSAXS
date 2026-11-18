@@ -5,7 +5,8 @@ Wires existing leaf skills only — no reimplementation of Guinier / Kratky / GN
 Sequence follows ``docs/saxs_quality_guide_newest.docx`` steps 4–7 and 9
 (omit calibration, radiation averaging, buffer subtraction, and polydisperse step 8).
 Optional ``model_dam`` when the shared modeling gate passes
-(``autosaxs.core.gnom_quality.allows_modeling``).
+(``autosaxs.core.gnom_quality.allows_modeling``), or when ``gate_pass``
+bypasses that gate while still recording the same checks as advice (D-ASX-001).
 """
 
 from __future__ import annotations
@@ -80,6 +81,7 @@ def process_monodisperse(
     last: Optional[int] = None,
     smooth: Optional[float] = None,
     n_runs: int = _DEFAULT_MODEL_DAM_N_RUNS,
+    gate_pass: bool = False,
     use_cache: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -88,7 +90,7 @@ def process_monodisperse(
     when the shared modeling gate passes → per-sample PDF report).
 
     **Modeling gate** (``allows_modeling`` on the fit_distances passport — same helper as
-    poly MIXTURE): start DAMMIF only when **all** of the following hold:
+    poly MIXTURE): by default start DAMMIF only when **all** of the following hold:
 
     - Total Estimate **> 0.3** (hard floor; passport ``high_quality`` still uses ≥ 0.55)
     - Reduced χ² in the acceptable passport band [0.3, 2.5]
@@ -97,6 +99,10 @@ def process_monodisperse(
     - ``detail_reliability_class`` is not ``SUSPICIOUS``
     - Shannon ``s_min`` < 2.0 (class not ``unreliable``)
     - ``n_shannon`` ≥ 8 (``DEFAULT_DETAIL_N_SHANNON_FLOOR``)
+
+    With ``gate_pass=True`` (CLI ``--gate-pass``), a failed gate does **not** skip DAMMIF;
+    the same failure text is still logged and returned as ``modeling_gate_advice``.
+    Missing/unusable GNOM ``.out`` remains a hard skip even with ``gate_pass``.
 
     **First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
     **and** a pipeline config is available (``config.conf`` in that dir, or
@@ -120,7 +126,10 @@ def process_monodisperse(
       Guinier `first` is forwarded to DATGNOM; Guinier `last` is **not** passed to DATGNOM
       (window too narrow for p(r)).
     - `smooth` (float | None, default `None`): Optional DATGNOM `--smooth` for `fit_distances`.
-    - `n_runs` (int, default `5`): DAMMIF replica count for `model_dam` when the modeling gate passes.
+    - `n_runs` (int, default `5`): DAMMIF replica count for `model_dam` when modeling proceeds.
+    - `gate_pass` (bool, default `False`): When `True`, bypass the modeling quality gate and still
+      run `model_dam`, while recording the same gate checks as advice (logs +
+      ``modeling_gate_advice``). Default keeps the hard gate for unattended batch (D-ASX-001).
     - `use_cache` (bool, default `False`): Forwarded to leaf skills.
 
     ### Returns
@@ -133,6 +142,8 @@ def process_monodisperse(
     - `basename`: Sample basename used for report assembly.
     - `model_dam_ran`: Whether `model_dam` was invoked.
     - `model_dam_skip_reason`: Why DAMMIF was skipped (empty when run).
+    - `modeling_gate_advice`: Gate failure text when ``gate_pass`` forced modeling through a
+      failed gate (empty when the gate passed or modeling was skipped).
     - `fit_guinier`: Return dict from `fit_guinier`.
     - `analyze_kratky`: Return dict from `analyze_kratky`.
     - `fit_distances`: Return dict from `fit_distances`.
@@ -160,6 +171,8 @@ def process_monodisperse(
     ```bash
     autosaxs process-monodisperse subtracted/sub_sample_01.dat --output-dir mono_out
     autosaxs process-monodisperse /data/run01 --conf /data/run01/config.conf -o mono_out
+    # bypass modeling gate but keep advice:
+    autosaxs process-monodisperse subtracted/sub_sample_01.dat -o mono_out --gate-pass
     # or explicit folder+config router (reads analysis: mono|poly):
     autosaxs process-full /data/run01 --conf /data/run01/config.conf -o mono_out
     ```
@@ -211,6 +224,7 @@ def process_monodisperse(
                     last=last,
                     smooth=smooth,
                     n_runs=n_runs,
+                    gate_pass=gate_pass,
                     use_cache=use_cache,
                 )
             )
@@ -275,8 +289,25 @@ def process_monodisperse(
     out_dam: Dict[str, Any] = {}
     model_dam_ran = False
     model_dam_skip_reason = ""
+    modeling_gate_advice = ""
     dam_dir = os.path.join(output_dir, "model_dam")
-    if allows_modeling(out_distances):
+    gate_ok = allows_modeling(out_distances)
+    gate_failure = (
+        "" if gate_ok else modeling_gate_skip_reason(out_distances, kind="p(r)")
+    )
+    if gate_ok or gate_pass:
+        if (not gate_ok) and gate_pass:
+            modeling_gate_advice = gate_failure
+            if bus:
+                bus.publish(
+                    EventType.MESSAGE,
+                    {
+                        "text": (
+                            "process_monodisperse: gate_pass — proceeding with "
+                            f"model_dam despite advice: {gate_failure}"
+                        )
+                    },
+                )
         gnom_for_dam = _gnom_out_for_model_dam(
             out_distances, dam_dir=dam_dir, basename=basename
         )
@@ -288,13 +319,23 @@ def process_monodisperse(
                     {"text": f"process_monodisperse: skipping model_dam ({model_dam_skip_reason})"},
                 )
         else:
-            if bus:
+            if bus and gate_ok:
                 bus.publish(
                     EventType.MESSAGE,
                     {
                         "text": (
                             f"process_monodisperse: model_dam "
                             f"(n_runs={int(n_runs)}, modeling gate passed)…"
+                        )
+                    },
+                )
+            elif bus and not gate_ok:
+                bus.publish(
+                    EventType.MESSAGE,
+                    {
+                        "text": (
+                            f"process_monodisperse: model_dam "
+                            f"(n_runs={int(n_runs)}, gate_pass)…"
                         )
                     },
                 )
@@ -308,9 +349,7 @@ def process_monodisperse(
             )
             model_dam_ran = True
     else:
-        model_dam_skip_reason = modeling_gate_skip_reason(
-            out_distances, kind="p(r)"
-        )
+        model_dam_skip_reason = gate_failure
         if bus:
             bus.publish(
                 EventType.MESSAGE,
@@ -336,6 +375,7 @@ def process_monodisperse(
         "assembled_report_md_path": out_report.get("assembled_report_md_path"),
         "model_dam_ran": model_dam_ran,
         "model_dam_skip_reason": model_dam_skip_reason,
+        "modeling_gate_advice": modeling_gate_advice,
         "fit_guinier": out_guinier,
         "analyze_kratky": out_kratky,
         "fit_distances": out_distances,

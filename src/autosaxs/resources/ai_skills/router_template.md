@@ -18,7 +18,7 @@ Subskills: `saxs-processing/<name>/<name>.md`. Only this file is a Cursor Agent 
 
 - **Units:** `q` in `nm^-1`; lengths (`R_g`, `D_max`, `R`, …) in `nm`.
 - **Metrics inform, never hard-gate** for interactive / agent-orchestrated single skills. Explain risk and caveats; proceed if the user chooses.
-- **Exception (D-ASX-001):** unattended `process-monodisperse` / `process-polydisperse` keep **hard quality gates** by default. Optional `gate_pass` (when implemented) bypasses gates while still recording the same checks as advice.
+- **Exception (D-ASX-001):** unattended `process-monodisperse` / `process-polydisperse` keep **hard quality gates** by default. Optional `gate_pass` bypasses gates while still recording the same checks as advice.
 
 ## Sample-context intake (optional, non-blocking)
 

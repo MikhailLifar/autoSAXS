@@ -56,7 +56,7 @@ SAXS / small-angle x-ray scattering: run the polydisperse single-profile quality
 the shared modeling gate passes → per-sample PDF report).
 
 **Modeling gate** (``allows_modeling`` on the fit_sizes passport — same helper as
-mono DAM): when ``run_mixture=True``, start MIXTURE only when **all** of the
+mono DAM): when ``run_mixture=True``, by default start MIXTURE only when **all** of the
 following hold:
 
 - Total Estimate **> 0.3** (hard floor; passport ``high_quality`` still uses ≥ 0.55)
@@ -67,7 +67,9 @@ following hold:
 - ``n_shannon`` ≥ 8 (``DEFAULT_DETAIL_N_SHANNON_FLOOR``)
 
 ΔRg is mono p(r)-only and is skipped for D(R). ``run_mixture`` remains an
-independent opt-in (default ``False``).
+independent opt-in (default ``False``). With ``gate_pass=True`` (CLI ``--gate-pass``),
+a failed gate does **not** skip MIXTURE when ``run_mixture`` is on; the same failure
+text is still logged and returned as ``modeling_gate_advice``.
 
 **First-arg inference:** if ``profile`` is a directory containing ``.tif``/``.tiff``
 **and** a pipeline config is available (``config.conf`` in that dir, or
@@ -94,8 +96,12 @@ router: ``process_full`` (reads ``analysis: mono|poly``).
 - `q_min` / `q_max` (float | None): Optional `fit_sizes` q bounds (nm⁻¹). When set, they override
   Guinier-first handoff for the corresponding end (do not combine `q_min` with an implicit first).
 - `run_mixture` (bool, default `False`): When `True`, run `model_mixture` if the shared
-  modeling gate passes. Default stays off to match liveview auto / real-data light
-  (MIXTURE is interactive Confirm in GUI).
+  modeling gate passes (or ``gate_pass`` bypasses it). Default stays off to match liveview
+  auto / real-data light (MIXTURE is interactive Confirm in GUI).
+- `gate_pass` (bool, default `False`): When `True`, bypass the modeling quality gate and still
+  run `model_mixture` (if ``run_mixture``), while recording the same gate checks as advice
+  (logs + ``modeling_gate_advice``). Default keeps the hard gate for unattended batch
+  (D-ASX-001).
 - `use_cache` (bool, default `False`): Forwarded to leaf skills.
 
 ### Returns
@@ -108,6 +114,8 @@ router: ``process_full`` (reads ``analysis: mono|poly``).
 - `basename`: Sample basename used for report assembly.
 - `model_mixture_ran`: Whether `model_mixture` was invoked.
 - `model_mixture_skip_reason`: Why MIXTURE was skipped (empty when run).
+- `modeling_gate_advice`: Gate failure text when ``gate_pass`` forced MIXTURE through a
+  failed gate (empty when the gate passed, ``run_mixture`` is off, or modeling was skipped).
 - `fit_guinier`: Return dict from `fit_guinier`.
 - `fit_sizes`: Return dict from `fit_sizes`.
 - `model_mixture`: Return dict from `model_mixture` (empty dict when skipped).
@@ -134,6 +142,8 @@ out = process_polydisperse("/data/run01", output_dir="poly_out")
 ```bash
 autosaxs process-polydisperse subtracted/sub_sample_01.dat --output-dir poly_out
 autosaxs process-polydisperse /data/run01 --conf /data/run01/config.conf -o poly_out
+# bypass modeling gate but keep advice (still needs --run-mixture):
+autosaxs process-polydisperse subtracted/sub_sample_01.dat -o poly_out --run-mixture --gate-pass
 # or explicit folder+config router (reads analysis: mono|poly):
 autosaxs process-full /data/run01 --conf /data/run01/config.conf -o poly_out
 ```

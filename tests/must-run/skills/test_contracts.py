@@ -1524,7 +1524,107 @@ def test_process_monodisperse_model_dam_gated(monkeypatch):
         assert out_skip["model_dam_ran"] is False
         assert "quality gate" in str(out_skip["model_dam_skip_reason"]).lower()
         assert "SUSPICIOUS" in str(out_skip["model_dam_skip_reason"])
+        assert out_skip.get("modeling_gate_advice", "") == ""
         assert dam_calls == []
+
+        dam_calls.clear()
+        out_pass = mod.process_monodisperse(
+            profile_path,
+            os.path.join(tmp, "gate_pass"),
+            n_runs=1,
+            gate_pass=True,
+            use_cache=False,
+        )
+        # Failed gate + missing GNOM .out remains a hard skip even with gate_pass.
+        assert out_pass["model_dam_ran"] is False
+        assert "usable GNOM" in str(out_pass["model_dam_skip_reason"])
+        assert "quality gate" in str(out_pass["modeling_gate_advice"]).lower()
+        assert "SUSPICIOUS" in str(out_pass["modeling_gate_advice"])
+        assert dam_calls == []
+
+
+def test_process_monodisperse_gate_pass_runs_with_advice(monkeypatch, capsys):
+    """gate_pass=True runs model_dam on a failed gate and surfaces advice (D-ASX-001)."""
+    _stub_atsas_installed(monkeypatch)
+    mod = _process_monodisperse_mod()
+
+    dam_calls: list[dict] = []
+
+    def _fake_guinier(profile, output_dir, **kwargs):
+        os.makedirs(output_dir, exist_ok=True)
+        results = os.path.join(output_dir, "guinier_results.txt")
+        Path(results).write_text("Rg = 2.0\n", encoding="utf-8")
+        return {"results_path": results}
+
+    def _fake_parse(path):
+        _ = path
+        return {"rg": 2.0, "i0": 1.0, "first_point_1based": 2}
+
+    def _fake_kratky(profile, output_dir, **kwargs):
+        os.makedirs(output_dir, exist_ok=True)
+        return {"kratky_plot_path": os.path.join(output_dir, "k.png")}
+
+    def _fake_distances_fail_with_gnom(profile, output_dir, **kwargs):
+        os.makedirs(output_dir, exist_ok=True)
+        gnom = os.path.join(output_dir, "datgnom_best.out")
+        Path(gnom).write_text("GNOM OUTPUT\nTotal Estimate = 0.9\n", encoding="utf-8")
+        return {
+            "best_gnom_out_path": gnom,
+            "pr_quality_class": "high_quality",
+            "overall_status": "HIGH QUALITY",
+            **_modeling_gate_ok_passport(
+                total_estimate=0.9,
+                delta_rg_pct=5.0,
+                detail_reliability_class="SUSPICIOUS",
+            ),
+        }
+
+    def _fake_dam(profile, output_dir, **kwargs):
+        dam_calls.append(dict(kwargs))
+        os.makedirs(output_dir, exist_ok=True)
+        return {"dam_pdb_path": os.path.join(output_dir, "dam.pdb")}
+
+    def _fake_report(search_root, basename, **kwargs):
+        out_pdf = kwargs.get("output_path") or os.path.join(".", f"{basename}.pdf")
+        os.makedirs(os.path.dirname(out_pdf), exist_ok=True)
+        Path(out_pdf).write_text("%PDF-fake\n", encoding="utf-8")
+        return {"report_pdf_path": out_pdf, "assembled_report_md_path": ""}
+
+    monkeypatch.setattr(mod, "fit_guinier", _fake_guinier)
+    monkeypatch.setattr(mod, "parse_guinier_results_txt", _fake_parse)
+    monkeypatch.setattr(mod, "analyze_kratky", _fake_kratky)
+    monkeypatch.setattr(mod, "fit_distances", _fake_distances_fail_with_gnom)
+    monkeypatch.setattr(mod, "model_dam", _fake_dam)
+    monkeypatch.setattr(mod, "report_individual", _fake_report)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.05, 2.0, 40)
+        profile_path = os.path.join(tmp, "sample.dat")
+        write_saxs(profile_path, q, np.exp(-q**2), 0.02, {})
+
+        out_default = mod.process_monodisperse(
+            profile_path, os.path.join(tmp, "default"), n_runs=1, use_cache=False
+        )
+        assert out_default["model_dam_ran"] is False
+        assert "quality gate" in str(out_default["model_dam_skip_reason"]).lower()
+        assert out_default.get("modeling_gate_advice", "") == ""
+        assert dam_calls == []
+
+        out_pass = mod.process_monodisperse(
+            profile_path,
+            os.path.join(tmp, "pass"),
+            n_runs=1,
+            gate_pass=True,
+            use_cache=False,
+        )
+        assert out_pass["model_dam_ran"] is True
+        assert out_pass["model_dam_skip_reason"] == ""
+        assert "quality gate" in str(out_pass["modeling_gate_advice"]).lower()
+        assert "SUSPICIOUS" in str(out_pass["modeling_gate_advice"])
+        assert len(dam_calls) == 1
+        logged = capsys.readouterr().out
+        assert "gate_pass" in logged
+        assert "despite advice" in logged
 
 
 def test_process_polydisperse_run_mixture_gated(monkeypatch):
@@ -1600,7 +1700,80 @@ def test_process_polydisperse_run_mixture_gated(monkeypatch):
         )
         assert out_skip["model_mixture_ran"] is False
         assert "quality gate" in str(out_skip["model_mixture_skip_reason"]).lower()
+        assert out_skip.get("modeling_gate_advice", "") == ""
         assert mix_kwargs_seen == {}
+
+        mix_kwargs_seen.clear()
+        out_pass = mod.process_polydisperse(
+            profile_path,
+            os.path.join(tmp, "gate_pass"),
+            run_mixture=True,
+            gate_pass=True,
+            use_cache=False,
+        )
+        assert out_pass["model_mixture_ran"] is True
+        assert out_pass["model_mixture_skip_reason"] == ""
+        assert "quality gate" in str(out_pass["modeling_gate_advice"]).lower()
+        assert mix_kwargs_seen.get("r_max") is None  # fail passport has no handoff rmax
+
+
+def test_process_polydisperse_gate_pass_requires_run_mixture(monkeypatch):
+    """gate_pass alone does not opt into MIXTURE; run_mixture remains independent."""
+    _stub_atsas_installed(monkeypatch)
+    mod = _process_polydisperse_mod()
+
+    mix_calls: list[dict] = []
+
+    def _fake_guinier(profile, output_dir, **kwargs):
+        os.makedirs(output_dir, exist_ok=True)
+        results = os.path.join(output_dir, "guinier_results.txt")
+        Path(results).write_text("Rg = 2.0\n", encoding="utf-8")
+        return {"results_path": results}
+
+    def _fake_parse(path):
+        _ = path
+        return {"rg": 2.0, "i0": 1.0, "first_point_1based": 2}
+
+    def _fake_sizes_fail(profile, output_dir, **kwargs):
+        os.makedirs(output_dir, exist_ok=True)
+        return {
+            "fit_sizes_path": "",
+            "sizes_quality_class": "failed",
+            "overall_status": "FAILED",
+            **_modeling_gate_ok_passport(total_estimate=0.1, chi2_class="failed", chi2=5.0),
+        }
+
+    def _fake_mixture(profile, output_dir, **kwargs):
+        mix_calls.append(dict(kwargs))
+        return {"results_csv_path": os.path.join(output_dir, "mix.csv")}
+
+    def _fake_report(search_root, basename, **kwargs):
+        out_pdf = kwargs.get("output_path") or os.path.join(".", f"{basename}.pdf")
+        os.makedirs(os.path.dirname(out_pdf), exist_ok=True)
+        Path(out_pdf).write_text("%PDF-fake\n", encoding="utf-8")
+        return {"report_pdf_path": out_pdf, "assembled_report_md_path": ""}
+
+    monkeypatch.setattr(mod, "fit_guinier", _fake_guinier)
+    monkeypatch.setattr(mod, "parse_guinier_results_txt", _fake_parse)
+    monkeypatch.setattr(mod, "fit_sizes", _fake_sizes_fail)
+    monkeypatch.setattr(mod, "model_mixture", _fake_mixture)
+    monkeypatch.setattr(mod, "report_individual", _fake_report)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        q = np.linspace(0.05, 2.0, 40)
+        profile_path = os.path.join(tmp, "sample.dat")
+        write_saxs(profile_path, q, np.exp(-q**2), 0.02, {})
+        out = mod.process_polydisperse(
+            profile_path,
+            os.path.join(tmp, "out"),
+            run_mixture=False,
+            gate_pass=True,
+            use_cache=False,
+        )
+        assert out["model_mixture_ran"] is False
+        assert "run_mixture=False" in str(out["model_mixture_skip_reason"])
+        assert out.get("modeling_gate_advice", "") == ""
+        assert mix_calls == []
 
 
 def test_process_polydisperse_multi_profile_batch(monkeypatch):
