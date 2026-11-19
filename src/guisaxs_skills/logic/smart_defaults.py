@@ -19,8 +19,10 @@ INTEGRATOR_MARKERS = ("detector_params.json", "ai_params.json")
 
 ANALYSIS_SKILLS_WITH_PROFILE = frozenset(
     {
-        "plot",
         "fit_guinier",
+        "analyze_kratky",
+        "fit_porod",
+        "analyze_loglog",
         "model_mixture",
         "fit_distances",
         "model_bodies",

@@ -6,8 +6,8 @@ Primary scientific correctness lives under ``tests/must-run/real_data/``
 
 This module keeps:
   - cache / config / CLI plumbing
-  - skills absent from the real-data suite (plot, plot_2d, integrate_proxy,
-    model_mixture, model_bodies) and mocked fit_sizes edges
+  - skills absent from the real-data suite (fit_porod, analyze_loglog, plot_2d,
+    integrate_proxy, model_mixture, model_bodies) and mocked fit_sizes edges
   - edge cases and branching for skills that real-data already exercises on the happy path
     (validation errors, omitted-GNOM → fit_distances, Rg optimization, failure paths)
 """
@@ -44,9 +44,10 @@ from autosaxs.skill.fit_sizes import fit_sizes
 from autosaxs.skill.model_mixture import model_mixture
 from autosaxs.skill.fit_guinier import fit_guinier
 from autosaxs.skill.analyze_kratky import analyze_kratky
+from autosaxs.skill.fit_porod import fit_porod
+from autosaxs.skill.analyze_loglog import analyze_loglog
 from autosaxs.skill.integrate import integrate
 from autosaxs.skill.integrate_proxy import integrate_proxy
-from autosaxs.skill.plot import plot
 from autosaxs.skill.plot_2d import plot_2d
 from autosaxs.skill.subtract import subtract
 from autosaxs.core.utils import read_saxs, write_saxs
@@ -221,8 +222,8 @@ def test_run_with_cache_writes_cache():
         sigma = 0.01 * I
         profile_path = os.path.join(tmp, "profile.dat")
         write_saxs(profile_path, q, I, sigma, {})
-        out_dir = os.path.join(tmp, "plot_out")
-        plot(profile_path, output_dir=out_dir, use_cache=True)
+        out_dir = os.path.join(tmp, "loglog_out")
+        analyze_loglog(profile_path, output_dir=out_dir, rg_nm=2.0, use_cache=True)
         cache_path = os.path.join(out_dir, CACHE_FILENAME)
         assert os.path.isfile(cache_path)
         cache = read_cache(out_dir)
@@ -264,8 +265,10 @@ def test_cli_invocation_smoke(capsys):
         profile_path = os.path.join(tmp, "profile.dat")
         write_saxs(profile_path, q, I, sigma, {})
 
-        out_dir = os.path.join(tmp, "cli_plot_out")
-        rc = cli_main(["plot", profile_path, "--output-dir", out_dir, "--no-cache"])
+        out_dir = os.path.join(tmp, "cli_loglog_out")
+        rc = cli_main(
+            ["analyze-loglog", profile_path, "--output-dir", out_dir, "--rg-nm", "2.0", "--no-cache"]
+        )
         assert rc == 0
 
         captured = capsys.readouterr().out
@@ -273,8 +276,8 @@ def test_cli_invocation_smoke(capsys):
         assert framed is not None
         assert framed.get("process_ok") is True
         result = framed.get("result") or {}
-        assert "guinier_plot_path" in result
-        assert "kratky_plot_path" in result
+        assert "loglog_plot_path" in result
+        assert "dominant_mid_q_tag" in result
 
         # Kebab-case is the canonical CLI command form for skills.
         rc = cli_main(["fit-guinier", "--description"])
@@ -284,19 +287,111 @@ def test_cli_invocation_smoke(capsys):
         assert "autosaxs fit-guinier" in captured_desc
 
 
+def _synthetic_porod_profile(*, alpha: float = -4.0, B: float = 0.05, A: float = 2.0, rg_nm: float = 2.0):
+    """High-q power-law with optional background; includes low-q Guinier-ish rise for Rg context."""
+    q = np.linspace(0.05, 3.5, 180)
+    # Soft Guinier-like at low q + power-law + background at high q.
+    I_g = np.exp(-(q ** 2) * (rg_nm ** 2) / 3.0)
+    I_p = A * (q ** alpha)
+    # Blend: prefer Guinier at low q, power-law at high q.
+    w = 1.0 / (1.0 + np.exp(-(q * rg_nm - 2.0) * 4.0))
+    I = (1.0 - w) * I_g + w * I_p + B
+    sigma = 0.02 * I + 1e-6
+    return q, I, sigma
 
-def test_plot_contract():
+
+def test_fit_porod_contract_synthetic_minus4_background():
     with tempfile.TemporaryDirectory() as tmp:
-        q = np.linspace(0.1, 2.0, 20)
-        I = np.exp(-q**2)
-        sigma = 0.01 * I
-        profile_path = os.path.join(tmp, "profile.dat")
+        q, I, sigma = _synthetic_porod_profile(alpha=-4.0, B=0.08, A=1.5, rg_nm=2.0)
+        profile_path = os.path.join(tmp, "porod.dat")
         write_saxs(profile_path, q, I, sigma, {})
-        out_dir = os.path.join(tmp, "plots")
-        result = plot(profile_path, output_dir=out_dir, use_cache=False)
-        for key in ("guinier_plot_path", "kratky_plot_path", "loglog_plot_path", "guinier_dat_path"):
-            assert key in result, f"plot must return {key}"
-            assert os.path.isfile(str(result[key])), f"{key} must exist"
+        out_dir = os.path.join(tmp, "fit_porod")
+        result = fit_porod(
+            profile_path,
+            output_dir=out_dir,
+            rg_nm=2.0,
+            porod_volume_method="none",
+            use_cache=False,
+        )
+        for key in (
+            "results_path",
+            "porod_plot_path",
+            "porod_debye_plot_path",
+            "porod_fit_dat_path",
+            "alpha",
+            "background",
+            "porod_constant",
+            "porod_debye_plateau",
+            "porod_volume_method",
+        ):
+            assert key in result, f"fit_porod must return {key}"
+        assert result["porod_volume_method"] == "none"
+        assert "porod_volume_nm3" not in result
+        assert os.path.isfile(str(result["porod_plot_path"]))
+        assert os.path.isfile(str(result["porod_debye_plot_path"]))
+        alpha = result["alpha"][0] if isinstance(result["alpha"], list) else result["alpha"]
+        background = result["background"][0] if isinstance(result["background"], list) else result["background"]
+        assert abs(float(alpha) + 4.0) < 0.75
+        assert float(background) > 0.0
+
+
+def test_fit_porod_soft_non_minus4_alpha():
+    with tempfile.TemporaryDirectory() as tmp:
+        q, I, sigma = _synthetic_porod_profile(alpha=-2.0, B=0.02, A=0.8, rg_nm=2.0)
+        profile_path = os.path.join(tmp, "coilish.dat")
+        write_saxs(profile_path, q, I, sigma, {})
+        out_dir = os.path.join(tmp, "fit_porod_soft")
+        result = fit_porod(
+            profile_path,
+            output_dir=out_dir,
+            rg_nm=2.0,
+            use_cache=False,
+        )
+        # Soft success: artifacts written even when α is not −4.
+        assert os.path.isfile(str(result["results_path"]))
+        assert os.path.isfile(str(result["porod_plot_path"]))
+        alpha = result["alpha"][0] if isinstance(result["alpha"], list) else result["alpha"]
+        assert float(alpha) > -3.5  # clearly not classical −4
+
+
+def test_analyze_loglog_contract_mid_q_regimes():
+    with tempfile.TemporaryDirectory() as tmp:
+        # Piecewise: mid-q ~ q^{-1} then high-q ~ q^{-4}.
+        q1 = np.linspace(0.08, 0.6, 60)
+        q2 = np.linspace(0.6, 2.5, 80)
+        I1 = 3.0 * (q1 ** -1.0)
+        I2 = 3.0 * (0.6 ** -1.0) / (0.6 ** -4.0) * (q2 ** -4.0)
+        q = np.concatenate([q1, q2[1:]])
+        I = np.concatenate([I1, I2[1:]])
+        sigma = 0.02 * I
+        profile_path = os.path.join(tmp, "rodish.dat")
+        write_saxs(profile_path, q, I, sigma, {})
+        out_dir = os.path.join(tmp, "analyze_loglog")
+        result = analyze_loglog(profile_path, output_dir=out_dir, rg_nm=3.0, use_cache=False)
+        for key in (
+            "results_path",
+            "loglog_plot_path",
+            "loglog_dat_path",
+            "regimes",
+            "dominant_mid_q_tag",
+            "n_regimes",
+        ):
+            assert key in result, f"analyze_loglog must return {key}"
+        assert os.path.isfile(str(result["loglog_plot_path"]))
+        assert os.path.isfile(str(result["loglog_dat_path"]))
+        n_regimes = result["n_regimes"][0] if isinstance(result["n_regimes"], list) else result["n_regimes"]
+        assert int(n_regimes) >= 1
+        tag = result["dominant_mid_q_tag"]
+        if isinstance(tag, list):
+            tag = tag[0]
+        assert tag in {
+            "rod_like",
+            "disk_like",
+            "coil_like",
+            "compact_porod_like",
+            "fractal_like",
+            "unclear",
+        }
 
 
 

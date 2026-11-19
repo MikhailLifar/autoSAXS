@@ -20,6 +20,7 @@ from autosaxs.core.gnom_quality import allows_modeling, modeling_gate_skip_reaso
 from autosaxs.core.utils import _strip_sub_int_prefix
 
 from .analyze_kratky import analyze_kratky
+from .analyze_loglog import analyze_loglog
 from .common import (
     ConfigPathExpressionArg,
     DatPathExpressionArg,
@@ -28,6 +29,7 @@ from .common import (
 )
 from .fit_distances import fit_distances
 from .fit_guinier import fit_guinier, parse_guinier_results_txt
+from .fit_porod import fit_porod
 from .model_dam import model_dam
 from .report_individual import report_individual
 from .skill_wrap import require_atsas
@@ -84,8 +86,9 @@ def process_monodisperse(
 ) -> Dict[str, Any]:
     """
     SAXS / small-angle x-ray scattering: run the monodisperse single-profile quality pipeline
-    (Guinier → dimensionless Kratky → DATGNOM p(r) / Shannon–ΔRg passport → optional DAMMIF
-    when the shared modeling gate passes → per-sample PDF report).
+    (Guinier → Porod + log–log regime (soft/advisory when Rg known) → dimensionless Kratky →
+    DATGNOM p(r) / Shannon–ΔRg passport → optional DAMMIF when the shared modeling gate
+    passes → per-sample PDF report).
 
     **Modeling gate** (``allows_modeling`` on the fit_distances passport — same helper as
     poly MIXTURE): start DAMMIF only when **all** of the following hold:
@@ -134,6 +137,8 @@ def process_monodisperse(
     - `model_dam_ran`: Whether `model_dam` was invoked.
     - `model_dam_skip_reason`: Why DAMMIF was skipped (empty when run).
     - `fit_guinier`: Return dict from `fit_guinier`.
+    - `fit_porod`: Return dict from `fit_porod` (empty when Rg unavailable).
+    - `analyze_loglog`: Return dict from `analyze_loglog`.
     - `analyze_kratky`: Return dict from `analyze_kratky`.
     - `fit_distances`: Return dict from `fit_distances`.
     - `model_dam`: Return dict from `model_dam` (empty dict when skipped).
@@ -229,6 +234,8 @@ def process_monodisperse(
     os.makedirs(output_dir, exist_ok=True)
 
     guinier_dir = os.path.join(output_dir, "fit_guinier")
+    porod_dir = os.path.join(output_dir, "fit_porod")
+    loglog_dir = os.path.join(output_dir, "analyze_loglog")
     kratky_dir = os.path.join(output_dir, "analyze_kratky")
     distances_dir = os.path.join(output_dir, "fit_distances")
 
@@ -243,6 +250,47 @@ def process_monodisperse(
         use_cache=use_cache,
     )
     handoff = parse_guinier_results_txt(_as_single_path(out_guinier.get("results_path")))
+
+    # Soft / advisory only — never extend allows_modeling / gate_pass (D-ASX-001 / D-ASX-012).
+    out_porod: Dict[str, Any] = {}
+    if handoff.get("rg") is not None:
+        if bus:
+            bus.publish(EventType.MESSAGE, {"text": "process_monodisperse: fit_porod…"})
+        try:
+            out_porod = fit_porod(
+                profile_path,
+                porod_dir,
+                config_path=config_path,
+                rg_nm=float(handoff["rg"]),
+                porod_volume_method="none",
+                use_cache=use_cache,
+            )
+        except Exception as exc:
+            if bus:
+                bus.publish(
+                    EventType.MESSAGE,
+                    {"text": f"process_monodisperse: fit_porod soft-failed ({exc})"},
+                )
+            out_porod = {}
+
+    if bus:
+        bus.publish(EventType.MESSAGE, {"text": "process_monodisperse: analyze_loglog…"})
+    out_loglog: Dict[str, Any] = {}
+    try:
+        loglog_kwargs: Dict[str, Any] = {
+            "config_path": config_path,
+            "use_cache": use_cache,
+        }
+        if handoff.get("rg") is not None:
+            loglog_kwargs["rg_nm"] = float(handoff["rg"])
+        out_loglog = analyze_loglog(profile_path, loglog_dir, **loglog_kwargs)
+    except Exception as exc:
+        if bus:
+            bus.publish(
+                EventType.MESSAGE,
+                {"text": f"process_monodisperse: analyze_loglog soft-failed ({exc})"},
+            )
+        out_loglog = {}
 
     kratky_kwargs: Dict[str, Any] = {
         "config_path": config_path,
@@ -337,6 +385,8 @@ def process_monodisperse(
         "model_dam_ran": model_dam_ran,
         "model_dam_skip_reason": model_dam_skip_reason,
         "fit_guinier": out_guinier,
+        "fit_porod": out_porod,
+        "analyze_loglog": out_loglog,
         "analyze_kratky": out_kratky,
         "fit_distances": out_distances,
         "model_dam": out_dam,

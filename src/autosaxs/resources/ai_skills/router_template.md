@@ -37,9 +37,9 @@ Each entry links to a procedure doc. Purpose and use-cases come from that file (
 
 ## Sequencing
 
-- Common patterns: calibration / geometry → azimuthal integration → buffer subtraction (if the notion of buffer is applicable)  → plots → analysis / fits.  
-  - Typical monodisperse analysis: **fit-guinier → analyze-kratky → fit-distances → model-dam or model-density** (bead model vs continuous density; prefer model-dam as the most well-established approach)  
-  - Typical polydisperse analysis (assuming spherical shape of the particles): **fit-guinier → fit-sizes → model-dr-mc → model-mixture**. **fit-guinier** usually outputs low quality fit in polydisperse case, this is normal.  
+- Common patterns: calibration / geometry → azimuthal integration → buffer subtraction (if the notion of buffer is applicable) → analysis / fits.  
+  - Typical monodisperse analysis: **fit-guinier → fit-porod → analyze-loglog → analyze-kratky → fit-distances → model-dam or model-density** (bead model vs continuous density; prefer model-dam as the most well-established approach). Porod / log–log are soft advisory metrics.  
+  - Typical polydisperse analysis (assuming spherical shape of the particles): **fit-guinier → analyze-loglog → fit-sizes → model-dr-mc → model-mixture**. **fit-guinier** usually outputs low quality fit in polydisperse case, this is normal; mid-q −1/−2 tags from analyze-loglog advise against silent sphere kernels.  
 - State the sequence as explicit steps: **order → subskill path → rationale → what is still unknown or assumed**.  
 - After a step completes, **revisit the plan** before pulling in additional leaf skills.  
 

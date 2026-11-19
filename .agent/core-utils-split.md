@@ -10,6 +10,7 @@ Shrink the mixed `autosaxs.core.utils` hotspot by responsibility, without a big-
 |---------|--------------|------------------|
 | SAXS 1D / tabular I/O (`read_saxs`, `write_saxs`, ATSAS `.dat`, `ensure_q_nm`, `load_saxs_1d_any`, YAML+CSV `read_data`/`write_data`) | `autosaxs.core.saxs_io` | re-exported from `utils` |
 | YAML config load/save/update | `autosaxs.core.yaml_config` | re-exported from `utils` |
+| Power-law / Porod asymptote / Porod–Debye / log–log segments | `autosaxs.core.profile_features` | `find_porod_region` in `utils` delegates slope search here |
 | Remaining mixed helpers (geometry, shape density, pipeline path maps, report stem helpers, …) | `autosaxs.core.utils` | — |
 
 ## Invariants

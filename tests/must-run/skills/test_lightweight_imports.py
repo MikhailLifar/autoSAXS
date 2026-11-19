@@ -58,7 +58,7 @@ leaf_markers = (
     "autosaxs.skill.model_dam",
     "autosaxs.skill.fit_distances",
     "autosaxs.skill.subtract",
-    "autosaxs.skill.plot",
+    "autosaxs.skill.fit_porod",
 )
 loaded = [m for m in after - before if any(m == mark or m.startswith(mark + ".") for mark in leaf_markers)]
 # Also reject if leaves were already loaded somehow via list_skills path.

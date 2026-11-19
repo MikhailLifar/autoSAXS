@@ -36,12 +36,13 @@ SKILL_DEFAULT_ORDER: Dict[str, int] = {
     "integrate": 20,
     "average": 25,
     "subtract": 30,
-    "plot": 40,
-    "fit_guinier": 41,
-    "analyze_kratky": 42,
-    "fit_distances": 43,
-    "fit_sizes": 44,
-    "model_dr_mc": 45,
+    "fit_guinier": 40,
+    "analyze_kratky": 41,
+    "fit_porod": 42,
+    "analyze_loglog": 43,
+    "fit_distances": 44,
+    "fit_sizes": 45,
+    "model_dr_mc": 46,
     "model_mixture": 50,
     "fit_mixture": 50,  # deprecated alias id (legacy fragments)
     "model_bodies": 51,
@@ -931,13 +932,21 @@ def assemble_summary_markdown(
                 integrated.append((abs_p, base))
             elif role in ("subtracted_curve", "sub") and fmt in ("saxs_dat", "dat"):
                 subtracted.append((abs_p, base))
-            elif role == "guinier_dat":
+            elif role in ("guinier_dat", "guinier_fit_dat"):
                 guinier.append((abs_p, base))
+                # Legacy plot-skill sibling inference (guinier_*/kratky_*/loglog_* same dir).
                 k1, l1 = _infer_kratky_loglog_from_guinier(abs_p)
                 if k1:
                     kratky.append((k1, base))
                 if l1:
                     loglog.append((l1, base))
+            elif role in ("kratky_classical_dat", "kratky_dimensionless_dat") and fmt in ("dat", "saxs_dat"):
+                kratky.append((abs_p, base))
+            elif role in ("loglog_dat",) and fmt in ("dat", "saxs_dat"):
+                loglog.append((abs_p, base))
+            elif role in ("porod_fit_dat",) and fmt in ("dat", "saxs_dat"):
+                # Porod fit dat is windowed I(q); keep available for future overlays.
+                pass
             elif role == "dr_csv" and fmt == "csv":
                 dr_csv.append((abs_p, base))
 

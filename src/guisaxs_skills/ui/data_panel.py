@@ -84,10 +84,22 @@ class DataPanel(QWidget):
                 self._curve.plot_dat(sub, label="subtracted")
             return
 
-        if skill_name == "plot":
-            self._hint.setText("Standard plots (Guinier/Kratky/log-log).")
-            self._set_img(self._img_a, res.get("guinier_plot_path"))
-            self._set_img(self._img_b, res.get("kratky_plot_path") or res.get("loglog_plot_path"))
+        if skill_name == "fit_porod":
+            self._hint.setText("Porod window + Porod–Debye plot.")
+            self._set_img(self._img_a, res.get("porod_plot_path"))
+            self._set_img(self._img_b, res.get("porod_debye_plot_path"))
+            return
+
+        if skill_name == "analyze_loglog":
+            self._hint.setText("Annotated log–log regime plot.")
+            self._set_img(self._img_a, res.get("loglog_plot_path"))
+            self._set_img(self._img_b, None)
+            return
+
+        if skill_name == "analyze_kratky":
+            self._hint.setText("Classical + dimensionless Kratky.")
+            self._set_img(self._img_a, res.get("kratky_plot_path"))
+            self._set_img(self._img_b, res.get("kratky_dimensionless_plot_path"))
             return
 
         if skill_name in ("integrate", "integrate_proxy"):

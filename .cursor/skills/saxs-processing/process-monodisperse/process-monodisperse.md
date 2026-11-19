@@ -52,8 +52,9 @@ See the docstring section **Returns** below.
 ## Autosaxs skill docstring
 
 SAXS / small-angle x-ray scattering: run the monodisperse single-profile quality pipeline
-(Guinier → dimensionless Kratky → DATGNOM p(r) / Shannon–ΔRg passport → optional DAMMIF
-when the shared modeling gate passes → per-sample PDF report).
+(Guinier → Porod + log–log regime (soft/advisory when Rg known) → dimensionless Kratky →
+DATGNOM p(r) / Shannon–ΔRg passport → optional DAMMIF when the shared modeling gate
+passes → per-sample PDF report).
 
 **Modeling gate** (``allows_modeling`` on the fit_distances passport — same helper as
 poly MIXTURE): start DAMMIF only when **all** of the following hold:
@@ -102,6 +103,8 @@ router: ``process_full`` (reads ``analysis: mono|poly``).
 - `model_dam_ran`: Whether `model_dam` was invoked.
 - `model_dam_skip_reason`: Why DAMMIF was skipped (empty when run).
 - `fit_guinier`: Return dict from `fit_guinier`.
+- `fit_porod`: Return dict from `fit_porod` (empty when Rg unavailable).
+- `analyze_loglog`: Return dict from `analyze_loglog`.
 - `analyze_kratky`: Return dict from `analyze_kratky`.
 - `fit_distances`: Return dict from `fit_distances`.
 - `model_dam`: Return dict from `model_dam` (empty dict when skipped).

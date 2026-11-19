@@ -334,59 +334,6 @@ autosaxs subtract integration/int_sample_01.dat integration/int_buffer.dat \
 
 ---
 
-## `plot`
-
-SAXS / small-angle x-ray scattering: generate standard diagnostic plots for a 1D curve (Guinier, Kratky, log-log):
-
-- Guinier plot (log(I) vs q^2)
-- Kratky plot (I*q^2 vs q)
-- log-log plot (log(I) vs log(q))
-
-### Arguments
-
-- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
-- `output_dir` (str, default `.`): Directory where plot files are written.
-- `guinier_q_min` (float | None, default `None`): Lower q bound for selecting Guinier range (enables `guinier_dat_path`).
-- `guinier_q_max` (float | None, default `None`): Upper q bound for selecting Guinier range.
-- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
-
-Important constraint:
-
-- If you set `guinier_q_max`, you must also set `guinier_q_min` (otherwise the skill raises `ValueError`).
-
-### Returns
-
-dict[str, str] with:
-
-- `guinier_plot_path`: Path to the Guinier PNG.
-- `kratky_plot_path`: Path to the Kratky PNG.
-- `loglog_plot_path`: Path to the log-log PNG.
-- `guinier_dat_path`: Path to the Guinier `.dat` (q², ln(I)) written by the skill (always written; independent of `guinier_q_min/max`).
-
-### Python usage
-
-```python
-from autosaxs.skill import plot
-
-out = plot(
-    profile="subtracted/sub_sample_01.dat",
-    output_dir="plots",
-    guinier_q_min=0.01,
-    guinier_q_max=0.05,
-    use_cache=False,
-)
-
-print(out["guinier_dat_path"])
-```
-
-### CLI usage
-
-```bash
-autosaxs plot subtracted/sub_sample_01.dat --output-dir plots --guinier-q-min 0.01 --guinier-q-max 0.05
-```
-
----
-
 ## `plot_2d`
 
 SAXS / small-angle x-ray scattering: render 2D SAXS TIFF image(s) to PNG using log-intensity scaling (2D detector view).
@@ -521,6 +468,141 @@ print(out["classification"])
 ```bash
 autosaxs analyze-kratky subtracted/sub_sample_01.dat --output-dir kratky
 autosaxs analyze-kratky subtracted/sub_sample_01.dat --rg-nm 3.2 --i0 1.05 --output-dir kratky
+```
+
+---
+
+## `fit_porod`
+
+SAXS / small-angle x-ray scattering: high-q Porod asymptote + Porod–Debye diagnostic.
+
+Fits a background-aware model ``I(q) ≈ B + A·q^α`` on a high-q window
+(Pauw 2013; Li 2016 Chem. Rev. letter H / PDF p.8 — sharp-interface solids → q⁻⁴
+when q ≫ π/Rg; Jacques & Trewhella 2010 PDF p.8 — blank errors dominate high q).
+Emits a Porod–Debye ``q⁴I`` vs ``q⁴`` plateau score (Rambo & Tainer 2011 Biopolymers
+PDF pp.3,5,16). Soft metrics only — never hard-gates modeling.
+
+**Primary fit:** ``alpha_mode=free`` (α floated near ``alpha_nominal``, default −4).
+A secondary fixed-α=−4 fit always reports classical ``porod_constant`` ≡ lim q⁴(I−B)
+as a diagnostic companion. ``porod_volume_nm3`` is **omitted by default**
+(``porod_volume_method=none``); raw truncated / regularized invariant paths are
+not enabled in v1 (Trewhella 2017; Rambo & Tainer 2013).
+
+Units: ``q`` in nm⁻¹, lengths in nm.
+
+### Arguments
+
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where outputs are written.
+- `config_path` (str | None, default `None`): Deprecated YAML/`fit_porod` section; ignored.
+- `rg_nm` (float | None, default `None`): Radius of gyration in nm. If omitted, taken from in-process Guinier.
+- `alpha_mode` (str, default `free`): Primary asymptote mode — `free` or `fixed_minus4`.
+- `alpha_nominal` (float, default `-4.0`): Target exponent for window search / free-mode seed.
+- `alpha_tol` (float, default `0.5`): Acceptance band around `alpha_nominal` for a porod-like window.
+- `fit_background` (bool, default `True`): Fit constant background ``B`` in ``B + A q^α``.
+- `qR_min` (float, default `2.0`): Theoretical gate ``q ≥ qR_min / Rg`` when Rg is known.
+- `n_min` / `max_pts` (int): Min / max points in the Porod window search.
+- `porod_volume_method` (str, default `none`): `none` (omit volume) | reserved `raw_truncated` /
+  `regularized_from_pr` (not implemented in v1 — raises if requested).
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict` with:
+
+- `results_path`: Text passport mirror.
+- `porod_plot_path`: Windowed log–log / model PNG.
+- `porod_debye_plot_path`: Porod–Debye ``q⁴I`` vs ``q⁴`` PNG.
+- `porod_fit_dat_path`: Tabular ``q, I, I_fit`` companion.
+- Passport fields: `q_min_nm`, `q_max_nm`, `n_points`, `alpha`, `alpha_mode`,
+  `porod_amplitude`, `porod_constant`, `background`, `fit_r2`,
+  `theoretical_range_used`, `theoretical_range_absent`, `porod_debye_plateau`,
+  `porod_volume_method`, optional `blank_sensitivity_hint`.
+  `porod_volume_nm3` is omitted when method is `none`.
+
+### Python usage
+
+```python
+from autosaxs.skill import fit_porod
+
+out = fit_porod(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="porod",
+    rg_nm=3.2,
+    use_cache=False,
+)
+print(out["alpha"], out["porod_debye_plateau"])
+```
+
+### CLI usage
+
+```bash
+autosaxs fit-porod subtracted/sub_sample_01.dat --output-dir porod
+autosaxs fit-porod subtracted/sub_sample_01.dat --rg-nm 3.2 --output-dir porod
+```
+
+---
+
+## `analyze_loglog`
+
+SAXS / small-angle x-ray scattering: whole-curve log–log regime analysis.
+
+Provides the initial log[I] vs log[q] inspection after buffer subtraction
+(Jacques & Trewhella 2010 PDF p.8) and soft-tags dimensionality / Porod-exponent
+regimes −1 / −2 / −4 (rod / disk / sphere; Li 2016 Chem. Rev. letter H PDF pp.8–9)
+plus polymer / fractal-like bands (Putnam 2007; Jeffries primer). Fits slopes on
+original I(q) then annotates the log–log figure (Pauw 2013 linearization caution).
+
+Soft metrics only — never hard-gates modeling. Replaces the former ``plot`` skill's
+dumb ``loglog_*.png`` with an annotated whole-curve artifact + passport.
+
+**Regime tags** (``regimes[*].tag`` / ``dominant_mid_q_tag``):
+``rod_like`` | ``disk_like`` | ``coil_like`` | ``compact_porod_like`` |
+``fractal_like`` | ``unclear``.
+
+Units: ``q`` in nm⁻¹, lengths in nm. Shared slope math lives in
+``autosaxs.core.profile_features`` (same SSOT as ``powerlaw_exponent`` / ``fit_porod``).
+
+### Arguments
+
+- `profile` (str): 1D path expression (file/directory/glob). Directories expand to `*.dat` (non-recursive).
+- `output_dir` (str, default `.`): Directory where outputs are written.
+- `config_path` (str | None, default `None`): Deprecated YAML/`analyze_loglog` section; ignored.
+- `rg_nm` (float | None, default `None`): Optional Rg (nm) for Guinier-band annotation only.
+  If omitted, a light in-process Guinier is attempted; failure is soft (no band).
+- `n_min` (int, default `8`): Minimum points per slope window.
+- `max_segments` (int, default `6`): Cap on retained regime segments.
+- `use_cache` (bool, default `False`): Enable/disable caching for this skill run.
+
+### Returns
+
+`dict` with:
+
+- `results_path`: Text passport mirror (`regimes`, tags).
+- `loglog_plot_path`: Annotated whole-curve log–log PNG.
+- `loglog_dat_path`: Tabular ``q, I`` companion (optional segment id).
+- Passport fields: `regimes` (JSON string of segment list), `dominant_mid_q_tag`,
+  `n_regimes`, `n_dropped_nonpositive`, `low_q_plateau_hint`,
+  optional `blank_sensitivity_hint`, `rg_nm_context`.
+
+### Python usage
+
+```python
+from autosaxs.skill import analyze_loglog
+
+out = analyze_loglog(
+    profile="subtracted/sub_sample_01.dat",
+    output_dir="loglog",
+    use_cache=False,
+)
+print(out["dominant_mid_q_tag"], out["n_regimes"])
+```
+
+### CLI usage
+
+```bash
+autosaxs analyze-loglog subtracted/sub_sample_01.dat --output-dir loglog
+autosaxs analyze-loglog subtracted/sub_sample_01.dat --rg-nm 3.2 --output-dir loglog
 ```
 
 ---
@@ -1169,8 +1251,9 @@ autosaxs model-density subtracted/sub_sample_01.dat --mode average --denss-mode 
 ## `process_monodisperse`
 
 SAXS / small-angle x-ray scattering: run the monodisperse single-profile quality pipeline
-(Guinier → dimensionless Kratky → DATGNOM p(r) / Shannon–ΔRg passport → optional DAMMIF
-when the shared modeling gate passes → per-sample PDF report).
+(Guinier → Porod + log–log regime (soft/advisory when Rg known) → dimensionless Kratky →
+DATGNOM p(r) / Shannon–ΔRg passport → optional DAMMIF when the shared modeling gate
+passes → per-sample PDF report).
 
 **Modeling gate** (``allows_modeling`` on the fit_distances passport — same helper as
 poly MIXTURE): start DAMMIF only when **all** of the following hold:
@@ -1219,6 +1302,8 @@ router: ``process_full`` (reads ``analysis: mono|poly``).
 - `model_dam_ran`: Whether `model_dam` was invoked.
 - `model_dam_skip_reason`: Why DAMMIF was skipped (empty when run).
 - `fit_guinier`: Return dict from `fit_guinier`.
+- `fit_porod`: Return dict from `fit_porod` (empty when Rg unavailable).
+- `analyze_loglog`: Return dict from `analyze_loglog`.
 - `analyze_kratky`: Return dict from `analyze_kratky`.
 - `fit_distances`: Return dict from `fit_distances`.
 - `model_dam`: Return dict from `model_dam` (empty dict when skipped).

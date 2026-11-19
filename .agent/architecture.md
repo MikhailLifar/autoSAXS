@@ -38,4 +38,5 @@
 - Configuration / buffer_rules: `.agent/liveview/configuration-buffer-rules.md` (`config.conf` policy + session overlay; Configuration editor SSOT; soft-wait `AWAITING_BUFFER` vs hard `CONFLICT`).
 - Package import lightness: `.agent/package-imports.md`.
 - `core/utils.py` gradual split: `.agent/core-utils-split.md`.
+- 1D analysis skills (no bag `plot`): `fit_guinier`, `analyze_kratky`, `fit_porod`, `analyze_loglog`. Slope/Porod math SSOT: `core/profile_features.py`. Soft metrics only in `process_monodisperse` (no liveview auto-wire yet). Decision: `docs/DECISIONS.md` D-ASX-013.
 - Interactive `autosaxs.pipeline` (EventBus `Controller`) was removed; history: `docs/archive/legacy-interactive-pipeline.md`. Orchestration is skills + liveview `plan_for`.

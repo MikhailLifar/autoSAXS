@@ -226,6 +226,8 @@ def find_porod_region(
     the result will have theoretical_range_checked=False.
 
     Fits log(I) vs log(q); slope should be ≈ -4.
+    Slope math is owned by ``autosaxs.core.profile_features`` (shared with
+    ``fit_porod`` / ``analyze_loglog`` / ``powerlaw_exponent``).
     Assumes q and Rg in consistent units (e.g. q in 1/nm, Rg in nm).
 
     Returns:
@@ -235,70 +237,44 @@ def find_porod_region(
             theoretical_range_absent=True, q_min_required, q_max_data, Rg.
         When no valid slope found: None.
     """
-    q = np.asarray(q, dtype=float)
-    I = np.asarray(I, dtype=float)
-    valid = (q > 0) & (I > 0)
-    if np.sum(valid) < n_min:
+    from autosaxs.core.profile_features import powerlaw_exponent, select_porod_window
+
+    win = select_porod_window(
+        q,
+        I,
+        n_min=n_min,
+        alpha_nominal=slope_nominal,
+        alpha_tol=slope_tol,
+        max_pts=max_pts,
+        rg_nm=Rg,
+        qR_min=qR_min,
+    )
+    if win.get("theoretical_range_absent"):
+        return {
+            "theoretical_range_absent": True,
+            "q_min_required": win.get("q_min_required"),
+            "q_max_data": win.get("q_max_data"),
+            "Rg": win.get("Rg", Rg),
+        }
+    if not win.get("porod_like"):
         return None
-    q, I = q[valid], I[valid]
-    idx = np.argsort(q)
-    q, I = q[idx], I[idx]
-    n = len(q)
-    q_max_data = float(q[-1])
-
+    q_min = float(win["q_min_nm"])
+    q_max = float(win["q_max_nm"])
+    fit = powerlaw_exponent(q, I, q_min=q_min, q_max=q_max, n_min=n_min)
+    if fit is None:
+        return None
+    best: Dict = {
+        "slope": float(fit["alpha"]),
+        "K": float(fit["amplitude"]),
+        "q_min": q_min,
+        "q_max": q_max,
+        "n_points": int(fit["n_points"]),
+    }
     if Rg is not None and Rg > 0:
-        q_min_theory = qR_min / Rg
-        if q_max_data < q_min_theory:
-            return {
-                'theoretical_range_absent': True,
-                'q_min_required': q_min_theory,
-                'q_max_data': q_max_data,
-                'Rg': Rg,
-            }
-        mask = q >= q_min_theory
-        q_porod = q[mask]
-        I_porod = I[mask]
-        n_porod = len(q_porod)
-        if n_porod < n_min:
-            return {
-                'theoretical_range_absent': True,
-                'q_min_required': q_min_theory,
-                'q_max_data': q_max_data,
-                'Rg': Rg,
-            }
-        q, I, n = q_porod, I_porod, n_porod
+        best["theoretical_range_used"] = True
+        best["q_min_required"] = win.get("q_min_required")
     else:
-        q_min_theory = None
-
-    best = None
-    best_err = np.inf
-    for n_pts in range(n_min, min(n, max_pts) + 1):
-        q_sub = q[-n_pts:]
-        I_sub = I[-n_pts:]
-        x = np.log(q_sub)
-        y = np.log(I_sub)
-        try:
-            coeffs = np.polyfit(x, y, 1)
-        except Exception:
-            continue
-        slope, logK = coeffs[0], coeffs[1]
-        if abs(slope - slope_nominal) > slope_tol:
-            continue
-        err = abs(slope - slope_nominal)
-        if err < best_err:
-            best_err = err
-            best = {
-                'slope': float(slope),
-                'K': float(np.exp(logK)),
-                'q_min': float(q_sub[0]),
-                'q_max': float(q_sub[-1]),
-                'n_points': n_pts,
-            }
-            if Rg is not None and Rg > 0:
-                best['theoretical_range_used'] = True
-                best['q_min_required'] = q_min_theory
-            else:
-                best['theoretical_range_checked'] = False
+        best["theoretical_range_checked"] = False
     return best
 
 

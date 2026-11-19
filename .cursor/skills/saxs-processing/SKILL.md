@@ -38,10 +38,11 @@ Each entry links to a procedure doc. Purpose and use-cases come from that file (
 - [`average/average.md`](average/average.md) (`autosaxs average`) — SAXS / small-angle x-ray scattering: radiation-damage-aware averaging of per-frame 1D SAXS curves.
 - [`integrate-proxy/integrate-proxy.md`](integrate-proxy/integrate-proxy.md) (`autosaxs integrate-proxy`) — SAXS / small-angle x-ray scattering: integrate 2D TIFF image(s) to a 1D curve without detector calibration, using radial averaging in pixel-radius space (quick-look / debugging; not q-calibrated).
 - [`subtract/subtract.md`](subtract/subtract.md) (`autosaxs subtract`) — SAXS / small-angle x-ray scattering: subtract a buffer curve from a sample 1D profile (background subtraction).
-- [`plot/plot.md`](plot/plot.md) (`autosaxs plot`) — SAXS / small-angle x-ray scattering: generate standard diagnostic plots for a 1D curve (Guinier, Kratky, log-log):
 - [`plot-2d/plot-2d.md`](plot-2d/plot-2d.md) (`autosaxs plot-2d`) — SAXS / small-angle x-ray scattering: render 2D SAXS TIFF image(s) to PNG using log-intensity scaling (2D detector view).
 - [`fit-guinier/fit-guinier.md`](fit-guinier/fit-guinier.md) (`autosaxs fit-guinier`) — SAXS / small-angle x-ray scattering: Do Guinier analysis on a 1D profile (Rg, I(0), Rg span, Guinier interval, quality).
 - [`analyze-kratky/analyze-kratky.md`](analyze-kratky/analyze-kratky.md) (`autosaxs analyze-kratky`) — SAXS / small-angle x-ray scattering: dimensionless Kratky conformation analysis on a 1D profile.
+- [`fit-porod/fit-porod.md`](fit-porod/fit-porod.md) (`autosaxs fit-porod`) — SAXS / small-angle x-ray scattering: high-q Porod asymptote + Porod–Debye diagnostic.
+- [`analyze-loglog/analyze-loglog.md`](analyze-loglog/analyze-loglog.md) (`autosaxs analyze-loglog`) — SAXS / small-angle x-ray scattering: whole-curve log–log regime analysis.
 - [`fit-distances/fit-distances.md`](fit-distances/fit-distances.md) (`autosaxs fit-distances`) — SAXS / small-angle x-ray scattering: obtain a pair distance distribution function \(p(r)\) for a monodisperse system from a 1D SAXS curve via ATSAS GNOM (real-space distance distribution).
 - [`fit-sizes/fit-sizes.md`](fit-sizes/fit-sizes.md) (`autosaxs fit-sizes`) — SAXS / small-angle x-ray scattering: run ATSAS GNOM (system=1, spheres) to obtain a size distribution function \(D(R)\) / \(D_v(R)\) for a polydisperse system from a 1D SAXS curve.
 - [`model-dr-mc/model-dr-mc.md`](model-dr-mc/model-dr-mc.md) (`autosaxs model-dr-mc`) — SAXS / small-angle x-ray scattering: recover a form-free volume-weighted size distribution
@@ -59,9 +60,9 @@ Each entry links to a procedure doc. Purpose and use-cases come from that file (
 
 ## Sequencing
 
-- Common patterns: calibration / geometry → azimuthal integration → buffer subtraction (if the notion of buffer is applicable)  → plots → analysis / fits.  
-  - Typical monodisperse analysis: **fit-guinier → analyze-kratky → fit-distances → model-dam or model-density** (bead model vs continuous density; prefer model-dam as the most well-established approach)  
-  - Typical polydisperse analysis (assuming spherical shape of the particles): **fit-guinier → fit-sizes → model-dr-mc → model-mixture**. **fit-guinier** usually outputs low quality fit in polydisperse case, this is normal.  
+- Common patterns: calibration / geometry → azimuthal integration → buffer subtraction (if the notion of buffer is applicable) → analysis / fits.  
+  - Typical monodisperse analysis: **fit-guinier → fit-porod → analyze-loglog → analyze-kratky → fit-distances → model-dam or model-density** (bead model vs continuous density; prefer model-dam as the most well-established approach). Porod / log–log are soft advisory metrics.  
+  - Typical polydisperse analysis (assuming spherical shape of the particles): **fit-guinier → analyze-loglog → fit-sizes → model-dr-mc → model-mixture**. **fit-guinier** usually outputs low quality fit in polydisperse case, this is normal; mid-q −1/−2 tags from analyze-loglog advise against silent sphere kernels.  
 - State the sequence as explicit steps: **order → subskill path → rationale → what is still unknown or assumed**.  
 - After a step completes, **revisit the plan** before pulling in additional leaf skills.  
 

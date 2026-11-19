@@ -129,13 +129,13 @@ def test_session_anchor_dir_from_positional_arg(tmp_path: Path) -> None:
     assert session_anchor_dir_from_positional_arg(expr, tmp_path) == str(sub.resolve())
 
 
-def test_plot_profile_reads_global_one_d_profile_dir_hint(tmp_path: Path) -> None:
+def test_fit_porod_profile_reads_global_one_d_profile_dir_hint(tmp_path: Path) -> None:
     """Analysis skills use the same ``one_d_profile_dir`` hint regardless of how it was set."""
     hints = SessionPathHints()
     subdir = tmp_path / "profiles"
     subdir.mkdir()
     hints.one_d_profile_dir = str(subdir.resolve())
-    h = session_hint_for_positional_path("plot", "profile", hints, tmp_path)
+    h = session_hint_for_positional_path("fit_porod", "profile", hints, tmp_path)
     assert h == str(subdir.resolve())
 
 

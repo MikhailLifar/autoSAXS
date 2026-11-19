@@ -97,10 +97,11 @@ autosaxs/
 | average | `skill/average.py` | CorMap frame selection |
 | integrate_proxy | `skill/integrate_proxy.py` | Quick-look without calibration |
 | subtract | `skill/subtract.py` | Buffer subtraction |
-| plot | `skill/plot.py` | Guinier / Kratky / log-log |
 | plot_2d | `skill/plot_2d.py` | 2D detector PNGs |
 | fit_guinier | `skill/fit_guinier/` | Adaptive Guinier region |
 | analyze_kratky | `skill/analyze_kratky.py` | Dimensionless Kratky conformation analysis |
+| fit_porod | `skill/fit_porod.py` | High-q Porod asymptote + Porod–Debye (soft) |
+| analyze_loglog | `skill/analyze_loglog.py` | Whole-curve log–log regime tags (soft) |
 | fit_distances | `skill/fit_distances/` | DATGNOM monodisperse p(r); GNOM refine+ensemble when `dmax_nm` set (`minimal` skips ensemble) |
 | fit_sizes | `skill/fit_sizes/` | GNOM polydisperse D(R); refine+ensemble when `rmax_nm` set (`minimal` skips ensemble) |
 | calc_profile | `skill/calc_profile.py` | ATSAS CRYSOL I(q) from PDB/CIF/ENT; `.xyz` → pseudo-PDB adapter; q out in nm⁻¹ |
@@ -123,6 +124,8 @@ autosaxs/
 | `integrator.py` | `IntegratorExtended` (pyFAI wrapper; geometry in `integrator/`, masks alongside as `effective_mask.npy` / `auto_mask.npy`) |
 | `detector_shape.py` | Frame/mask `(H,W)` helpers; `require_mask_matches_frame` (skills + liveview gates) |
 | `guinier.py` | Pure Guinier math |
+| `kratky.py` | Dimensionless Kratky math |
+| `profile_features.py` | Power-law / Porod asymptote / Porod–Debye / log–log segments (SSOT) |
 | `gnom.py` | GNOM `.out` parsing, candidate scoring |
 | `pddf.py` | p(r) from BODIES/DAMMIF shapes |
 | `viewer.py` | Matplotlib plotting (`PLTViewer`) |
